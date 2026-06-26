@@ -136,9 +136,11 @@ The clean close in step 3 is what protects training data from being
 polluted with non-style work.
 
 If you ever force-replaced when you didn't mean to (and the prior
-session's pairs were not yet committed to git), the data is gone.
-Conservative practice: commit `_training_pairs/pairs.jsonl` to git after
-each substantial save so git history is the recovery backstop.
+session's pairs were not yet backed up), the data is gone.
+Conservative practice: back up `$STYLEBOT_DATA_DIR/pairs.jsonl` after each
+substantial save. The corpus is gitignored in the public code repo, so its
+recovery backstop is the out-of-band private backup, not this repo's git
+history (see `_training_pairs/README.md`).
 
 `tidy [source]` is the retroactive cleanup if you used `--append`
 recklessly and want to keep only the latest save per source.
@@ -193,8 +195,12 @@ pairs for a given `--source` first.
 State on disk
 ------------------------------------------------------------------------
 
-    _training_pairs/snapshots/<rel-path>.json   # open sessions (gitignored)
-    _training_pairs/pairs.jsonl                 # saved pairs (in git)
+    $STYLEBOT_DATA_DIR/snapshots/<rel-path>.json   # open sessions (gitignored)
+    $STYLEBOT_DATA_DIR/pairs.jsonl                 # saved pairs (gitignored)
+
+`STYLEBOT_DATA_DIR` defaults to `_training_pairs` relative to cwd. The whole
+directory is gitignored: the corpus is private and lives outside the public
+code repo, backed up out-of-band.
 
 The on-disk directory for open sessions is still called `snapshots/`
 because the file *is* a snapshot of the source's initial state — that
@@ -237,6 +243,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -247,8 +254,16 @@ import click
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.lib import read_w_frontmatter_text
 
-# Repo-relative root for all logged state. Resolved relative to cwd by default.
-TRAINING_PAIRS_DIR = Path("_training_pairs")
+# Root for all logged state (the corpus). Resolved from $STYLEBOT_DATA_DIR if
+# set, else cwd-relative `_training_pairs` (the historical default, preserved
+# so the logger keeps working unchanged inside the prose working tree).
+#
+# Why configurable: the corpus is the project's valuable, *private* asset. The
+# stylebot code repo is public, so the corpus must live outside it. The logger
+# runs in the blog repo and writes there; downstream phases (synthesis,
+# training) run in this repo and point STYLEBOT_DATA_DIR at the same corpus.
+# Both default and override are gitignored. See `_training_pairs/README.md`.
+TRAINING_PAIRS_DIR = Path(os.environ.get("STYLEBOT_DATA_DIR", "_training_pairs"))
 SNAPSHOTS_DIR = TRAINING_PAIRS_DIR / "snapshots"
 PAIRS_PATH = TRAINING_PAIRS_DIR / "pairs.jsonl"
 

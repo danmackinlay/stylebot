@@ -1,0 +1,38 @@
+# Phase 4 · Inference CLI — 📋 PLANNED
+
+Wrap the trained adapter as a text transformer Dan runs over AI drafts.
+Gated on a trained adapter existing (Phase 3).
+
+## Inputs
+
+- A served/loadable LoRA adapter (Fireworks-hosted, scale-to-zero).
+- `FIREWORKS_API_KEY` (or whichever serving path Phase 3 settles on).
+- `STYLE_SYSTEM` from `stylebot.ai_core` (the same system prompt seen in
+  training — must match, or the adapter sees out-of-distribution input).
+
+## Target UX
+
+```sh
+uv run ai-style <file>        # rewrite a draft into Dan's voice, in place / to stdout
+```
+
+- Chunk the input the same way Phase 1 chunks (paragraph regions), transform
+  each chunk, reassemble — so inference matches training-time granularity.
+- Preserve markdown structure verbatim (code fences, math, links, headings,
+  list markers, blank lines) — already mandated by `STYLE_SYSTEM`.
+- Preserve any `〈MASKED_*〉` tokens verbatim (per `STYLE_SYSTEM`).
+
+## Outputs
+
+- Rewritten prose (in place with backup, or to stdout — decide; default to
+  stdout, `--write` to edit in place).
+- Optional: best-of-N candidate selection using the eval harness's distilled
+  detector as a cheap reward signal (post §eval) — a later enhancement.
+
+## Done-criteria
+
+- [ ] `ai-style <file>` round-trips a real draft: structure preserved, prose
+      shifted toward Dan's voice.
+- [ ] Scale-to-zero serving confirmed (no idle spend).
+- [ ] Eval-harness scores on its output beat the prompt-only baseline.
+- [ ] Registered as a `[project.scripts]` entry.

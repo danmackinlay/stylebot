@@ -218,3 +218,14 @@ __marimo__/
 .streamlit/secrets.toml
 
 .vscode/
+
+# ---- stylebot corpus & secrets (never commit; this repo is public) ----
+# The training corpus is the project's private asset and is backed up
+# out-of-band (see _training_pairs/README.md). Ignore the whole data dir
+# but keep its README under version control.
+/_training_pairs/*
+!/_training_pairs/README.md
+# Honour a custom $STYLEBOT_DATA_DIR pointed inside the repo, just in case.
+/stylebot_data/
+# .env is already covered above; reassert intent next to the secrets policy.
+.env
