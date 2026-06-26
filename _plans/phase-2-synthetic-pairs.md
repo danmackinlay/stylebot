@@ -10,8 +10,10 @@ a sample of Dan's paragraphs. Does not need a trained model.
 ## Inputs
 
 - `--blog-root` (read): Dan's authored prose (the ~1.6M-word corpus of
-  human-written posts; the slop-free ones are marked in frontmatter). The
-  *caller* selects which files; this phase operates on what it's handed.
+  human-written posts). Pure-human targets are selected via
+  `is_human_authored(meta)` — the `automation: 0` seam (see OVERVIEW
+  "boundary"), the lone blog-specific predicate. The *caller* may also just
+  hand in an explicit file list; this phase operates on what it's given.
 - `--data-dir` (write): where the resulting `pairs.jsonl` is appended.
 - LLM API keys (multi-source by design): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
   and a local/utility base model (`LOCAL_LLM_*`). See `.env.example`.

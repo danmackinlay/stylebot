@@ -68,11 +68,36 @@ whole pipeline from its own build.
   the wrong or empty corpus.
 - **Caller decides *which* files; stylebot decides *what to do* with them.**
   New phases take file lists / roots as arguments rather than rediscovering the
-  blog's conventions. (Blog-specific knowledge already in `lib.py` —
-  `is_valid_qmd_file`, `is_auxiliary_post`, slop-free frontmatter markers —
-  **stays for now** by decision; we generalise it back to the blog as the
-  boundary firms up. The rule is only: don't add *new* blog-knowledge to
-  stylebot.)
+  blog's conventions.
+
+### Where the blog/generic boundary actually falls
+
+Most of what we imported is *generic*, not Dan-specific. The boundary:
+
+- **Generic core (keep, treat as reusable):** frontmatter + markdown loading
+  (`read_/write_w_frontmatter`), date parsing, content-file discovery. Quarto's
+  `.qmd` is just YAML-frontmatter markdown — the same code serves Hugo/Jekyll/
+  any frontmatter blog. The only "blog-ness" in `is_valid_qmd_file` /
+  `gather_qmd_files` is the hardcoded `.qmd` extension and build-dir skip-list;
+  those are parameters, not Dan-knowledge. Generalise by making the glob/
+  extension an argument when a phase needs it.
+- **The one real Dan seam — `automation`.** A frontmatter level recording how
+  much AI touched a post; `automation: 0` means pure-human. This is how
+  stylebot picks **clean training targets and reference prose**, so corpus
+  quality depends on it. Build it as a *single configurable predicate*, not
+  scattered `meta["automation"]` reads:
+
+  ```python
+  def is_human_authored(meta, *, field="automation", max_level=0) -> bool: ...
+  ```
+
+  Defaults encode Dan's convention; field/threshold are arguments so another
+  blog retargets it in one call. This is the *only* blog-specific knowledge
+  stylebot is allowed to carry.
+- **Blog-build cruft — NOT stylebot's job.** `migrate_ai_dates` (custom
+  `date-ai-*` keys) and `is_auxiliary_post` / `AUXILIARY_TYPES` (`digest`,
+  `about` post types) are blog-build concerns. No phase should depend on them;
+  they belong back in the blog, not here.
 
 ## The shared data contract (the seams)
 
