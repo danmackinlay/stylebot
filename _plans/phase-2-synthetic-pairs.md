@@ -9,11 +9,17 @@ a sample of Dan's paragraphs. Does not need a trained model.
 
 ## Inputs
 
-- Dan's authored prose (the ~1.6M-word corpus of human-written posts; the
-  slop-free ones are marked in frontmatter).
+- `--blog-root` (read): Dan's authored prose (the ~1.6M-word corpus of
+  human-written posts; the slop-free ones are marked in frontmatter). The
+  *caller* selects which files; this phase operates on what it's handed.
+- `--data-dir` (write): where the resulting `pairs.jsonl` is appended.
 - LLM API keys (multi-source by design): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
   and a local/utility base model (`LOCAL_LLM_*`). See `.env.example`.
 - `STYLE_SYSTEM` from `stylebot.ai_core` (must match Phase 1 verbatim).
+
+Interface: a `stylebot.synth` function over explicit paths; `ai-style synth`
+is the thin CLI wrapper. Paths resolved via `stylebot.config` (flag > env >
+default), per OVERVIEW "Interfaces".
 
 ## Method (from the post)
 

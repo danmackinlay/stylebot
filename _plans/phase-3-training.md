@@ -5,9 +5,15 @@ the prompt. Data-gated: needs enough pairs, not more engineering.
 
 ## Inputs
 
-- `$STYLEBOT_DATA_DIR/pairs.jsonl` (Phase 1 real + Phase 2 synthetic, mixed).
+- `--data-dir` (**required, no default**): the `pairs.jsonl` to train on
+  (Phase 1 real + Phase 2 synthetic, mixed). Expensive + stateful, so the path
+  is always explicit — it's the reproducibility record (see OVERVIEW
+  "Interfaces"). No `--blog-root`: training reads the corpus, not raw prose.
 - `TOGETHER_API_KEY` (default trainer) / `FIREWORKS_API_KEY` / `TINKER_API_KEY`.
 - Base model: start **Qwen3 8B**; escalate to 70B only if 8B lacks headroom.
+
+Interface: `stylebot.train.run_training(...)` over explicit params; `ai-style
+train` is the thin CLI. The blog build can import the function directly.
 
 ## Method / decisions (from the post)
 

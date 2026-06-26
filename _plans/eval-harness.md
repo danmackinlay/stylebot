@@ -7,11 +7,16 @@ and it needs only sample prose, not a trained model.
 
 ## Inputs
 
-- Candidate prose (styler input, styler output, and pure-Dan reference).
+- Candidate prose passed by path/list (styler input, styler output, and
+  pure-Dan reference) — the caller supplies the files.
+- `--blog-root` (optional, read): to pull pure-Dan reference paragraphs.
 - Test corpus (small): ~10 paragraphs of styler input, ~10 of styler output,
   ~10 of pure-Dan prose.
 - `PANGRAM_API_KEY` (only if the paid detector wins the audition below).
 - Vale + the existing Vale ruleset / slop catalogue.
+
+Interface: `stylebot.eval` functions over supplied files; `ai-style eval` is
+the thin CLI. Paths resolved via `stylebot.config`.
 
 ## The four signals
 

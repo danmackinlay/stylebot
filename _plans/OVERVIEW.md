@@ -31,13 +31,48 @@ and the contracts *between* stages matter more than internal abstraction. So:
 3. **Phases talk through file schemas, not shared code.** Every phase's I/O is
    a documented on-disk format (below). That's what lets phases be built in
    parallel against a few fixture rows, and farmed out to subagents.
-4. **The corpus and secrets never enter this public repo.** Corpus lives under
-   `$STYLEBOT_DATA_DIR` (gitignored, manually backed up — see
-   `_training_pairs/README.md`); keys live in `.env` (gitignored — see
-   `.env.example`).
+4. **The corpus and secrets never enter this public repo.** The corpus is
+   gitignored and manually backed up (see `_training_pairs/README.md`); keys
+   live in `.env` (gitignored — see `.env.example`).
 5. **Verify with a number, never with vibes.** "Does the styler work" is
    exactly where an ML project rots. The eval harness is therefore an *early*
    parallel track, not a final step.
+
+## Interfaces — library-first, explicit paths
+
+stylebot is a **tool the blog depends on**, not a repo with a fixed home for
+your data. The dependency arrow points one way (blog → stylebot) and stays
+acyclic: stylebot never hardcodes a blog location, and the blog can run the
+whole pipeline from its own build.
+
+- **Library first, CLI second.** Each phase is a module with a typed function
+  taking explicit paths/params (`stylebot.train.run_training(...)`). The CLI is
+  a thin `click` wrapper that parses flags and calls it. The blog build can
+  `import` the function directly — no subprocess/parse tax — *or* shell out to
+  the CLI. Build the function; the CLI is a shell over it.
+- **One entry point, subcommands** — `ai-style synth | split | train | eval`
+  plus the shipped `ai-style-log` — not a scatter of loose scripts. Shared
+  option parsing, one `--help` tree; loose scripts drift in flag conventions.
+- **Two distinct path inputs, never collapsed:**
+  - `--blog-root` — a *read* source (authored `.qmd` prose, sample paragraphs).
+  - `--data-dir` — *read/write* state (the `pairs.jsonl` corpus, manifests).
+  Phase 2 reads blog-root, writes data-dir; train reads data-dir only.
+- **Option precedence: `--flag` > `$STYLEBOT_DATA_DIR` (env) > default.**
+  Resolved in one place, `stylebot.config`. The env var is a convenience for
+  interactive use, not the primary mechanism.
+- **Defaults where a mistake is cheap; required flags where it isn't.**
+  `ai-style-log` keeps a cwd-relative default `--data-dir` (run dozens of times
+  a day against the focused file — zero friction). The expensive/stateful
+  commands (`train`, `split`) take **no default `--data-dir`**: an explicit
+  path is the reproducibility record, and you never want to silently train on
+  the wrong or empty corpus.
+- **Caller decides *which* files; stylebot decides *what to do* with them.**
+  New phases take file lists / roots as arguments rather than rediscovering the
+  blog's conventions. (Blog-specific knowledge already in `lib.py` —
+  `is_valid_qmd_file`, `is_auxiliary_post`, slop-free frontmatter markers —
+  **stays for now** by decision; we generalise it back to the blog as the
+  boundary firms up. The rule is only: don't add *new* blog-knowledge to
+  stylebot.)
 
 ## The shared data contract (the seams)
 

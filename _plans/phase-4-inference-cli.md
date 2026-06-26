@@ -13,8 +13,11 @@ Gated on a trained adapter existing (Phase 3).
 ## Target UX
 
 ```sh
-uv run ai-style <file>        # rewrite a draft into Dan's voice, in place / to stdout
+uv run ai-style run <file>    # rewrite a draft into Dan's voice, to stdout / --write
 ```
+
+A subcommand of the one `ai-style` entry point (see OVERVIEW "Interfaces"),
+a thin CLI over a `stylebot.infer` library function the blog build can import.
 
 - Chunk the input the same way Phase 1 chunks (paragraph regions), transform
   each chunk, reassemble — so inference matches training-time granularity.

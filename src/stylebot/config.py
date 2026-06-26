@@ -38,14 +38,30 @@ def load() -> None:
     _LOADED = True
 
 
-def data_dir() -> Path:
-    """Resolve the corpus directory: $STYLEBOT_DATA_DIR or ./_training_pairs.
+def resolve_data_dir(flag: str | os.PathLike | None = None) -> Path:
+    """Resolve the corpus directory by precedence: flag > env > default.
 
-    Kept in sync with `bin/ai_style_log.py`, which reads the same env var
-    directly (it predates this module and must stay import-light).
+    The single home for the precedence ladder every CLI/library entry shares:
+
+      1. an explicit ``--data-dir`` value (``flag``), if given — wins always;
+      2. else ``$STYLEBOT_DATA_DIR`` from the environment / ``.env``;
+      3. else the cwd-relative default ``_training_pairs``.
+
+    Convenience commands (the interactive ``ai-style-log``) call this with no
+    argument and happily take the env/default. Expensive, stateful commands
+    (``train``, ``split``) should instead make ``--data-dir`` a *required*
+    option and pass it here, so a run can never silently target the wrong or
+    empty corpus — the explicit path is the reproducibility record.
     """
+    if flag is not None:
+        return Path(flag)
     load()
     return Path(os.environ.get("STYLEBOT_DATA_DIR", "_training_pairs"))
+
+
+def data_dir() -> Path:
+    """Back-compat shorthand for ``resolve_data_dir()`` (env > default)."""
+    return resolve_data_dir()
 
 
 def get_key(name: str) -> str | None:
