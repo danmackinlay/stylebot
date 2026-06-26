@@ -1,0 +1,144 @@
+references:
+- id: Antoun2023Text
+  author:
+  - family: Antoun
+    given: Wissam
+  - family: Sagot
+    given: Benoît
+  - family: Seddah
+    given: Djamé
+  citation-key: Antoun2023Text
+  issued:
+  - year: 2023
+    month: 9
+    day: 23
+  title: 'From Text to Source: Results in Detecting Large Language Model-Generated
+    Content'
+  type: article
+  URL: https://arxiv.org/abs/2309.13322
+- id: Attar2026Systematic
+  author:
+  - family: Attar
+    given: Yassir El
+  - family: Dönmez
+    given: Esra
+  - family: Maurer
+    given: Maximilian
+  - family: Falenska
+    given: Agnieszka
+  citation-key: Attar2026Systematic
+  issued:
+  - year: 2026
+    month: 6
+    day: 2
+  title: A Systematic Analysis of Linguistic Features in AI-Generated Text Detection
+    Across Domains and Models
+  type: article
+  URL: https://arxiv.org/abs/2606.04177
+- id: Emi2024Technical
+  author:
+  - family: Emi
+    given: Bradley
+  - family: Spero
+    given: Max
+  citation-key: Emi2024Technical
+  issued:
+  - year: 2024
+    month: 2
+    day: 21
+  title: Technical Report on the Pangram AI-Generated Text Classifier
+  type: article
+  URL: https://arxiv.org/abs/2402.14873
+- id: Jabarian2025Artificial
+  author:
+  - family: Jabarian
+    given: Brian
+  - family: Imas
+    given: Alex
+  citation-key: Jabarian2025Artificial
+  issued:
+  - year: 2025
+    month: 8
+    day: 26
+  number: BFI Working Paper No. 2025-116
+  title: Artificial Writing and Automated Detection
+  type: report
+  URL: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5407424
+- id: Laban2025LLMs
+  accessed:
+  - year: 2026
+    month: 6
+    day: 25
+  author:
+  - family: Laban
+    given: Philippe
+  - family: Hayashi
+    given: Hiroaki
+  - family: Zhou
+    given: Yingbo
+  - family: Neville
+    given: Jennifer
+  citation-key: Laban2025LLMs
+  DOI: 10.48550/arXiv.2505.06120
+  issued:
+  - year: 2025
+    month: 5
+    day: 9
+  number: arXiv:2505.06120
+  publisher: arXiv
+  title: LLMs Get Lost In Multi-Turn Conversation
+  type: article
+  URL: http://arxiv.org/abs/2505.06120
+- id: Levy2024Same
+  accessed:
+  - year: 2026
+    month: 6
+    day: 25
+  author:
+  - family: Levy
+    given: Mosh
+  - family: Jacoby
+    given: Alon
+  - family: Goldberg
+    given: Yoav
+  citation-key: Levy2024Same
+  DOI: 10.48550/arXiv.2402.14848
+  issued:
+  - year: 2024
+    month: 7
+    day: 10
+  number: arXiv:2402.14848
+  publisher: arXiv
+  title: 'Same Task, More Tokens: the Impact of Input Length on the Reasoning Performance
+    of Large Language Models'
+  type: article
+  URL: http://arxiv.org/abs/2402.14848
+- id: Paneru2026Please
+  author:
+  - family: Paneru
+    given: Utsav
+  citation-key: Paneru2026Please
+  issued:
+  - year: 2026
+    month: 4
+    day: 13
+  title: 'Please Make it Sound like Human: Encoder-Decoder vs. Decoder-Only Transformers
+    for AI-to-Human Text Style Transfer'
+  type: article
+  URL: https://arxiv.org/abs/2604.11687
+- id: Soto2025Attacks
+  author:
+  - family: Soto
+    given: Rafael Rivera
+  - family: Chen
+    given: Barry
+  - family: Andrews
+    given: Nicholas
+  citation-key: Soto2025Attacks
+  issued:
+  - year: 2025
+    month: 5
+    day: 20
+  title: Attacks on Machine-Text Detectors Retain Stylistic Fingerprints
+  type: article
+  URL: https://arxiv.org/abs/2505.14608

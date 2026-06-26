@@ -1,0 +1,343 @@
+---
+title: Fine-tuning danbot
+date: '2026-05-26T13:00:00+10:00'
+date-modified: '2026-05-30T09:07:20-07:00'
+categories:
+- AI
+- diy
+- economics
+- faster pussycat
+- language
+- NLP
+- premature optimization
+- stringology
+- UI
+- workflow
+- writing
+slug: fine_tuning_danbot
+zotcollpath: _project/fine_tuning_danbot
+link-citations: true
+bibliography: fine_tuning_danbot.yaml
+csl: minimalist.csl
+reference-section-title: References
+polish: 0
+novelty: 1
+certainty: 1
+usefulness: 2
+automation: 2
+date-ai-edit: '2026-06-20T14:38:59+00:00'
+description: "In Which Before-and-After Prose Pairs Are Harvested From Manual Edits, a LoRA Adapter Is Trained on Qwen3 8B via Together AI, and a Four-Signal Evaluation Harness Is Assembled."
+date-ai-summary: '2026-06-20T14:39:56+00:00'
+quality: 8.8
+date-ai-quality: '2026-06-20T14:39:56+00:00'
+nocite:
+- '@*'
+image: /generated_thumbnails/site_previews/images/kitsugi_RP-P-1987-8.thumbnail.avif
+open-graph:
+  image: /generated_thumbnails/opengraph_previews/images/kitsugi_RP-P-1987-8.og.jpg
+  image-width: 1200
+  image-height: 630
+---
+
+![](/images/kitsugi_RP-P-1987-8.avif){#fig-kitsugi .figure .illustration .right}
+
+Claude is a bad ghostwriter for me.
+Not unintelligible, not slow, not even particularly inaccurate — just wrong in the way LinkedIn posts are wrong: smooth, hedging, structurally signposted, breathlessly enthusiastic in flat places.
+I have tried the standard ladder of prompt-side fixes: a hand-tuned `/dan-voice` skill with a banned-words list and a structural slop catalogue, a Vale ruleset as a mechanical safety net, in-context examples of my own prose stuffed into the system prompt as few-shot exemplars, multiple rounds of “rewrite this in Dan’s voice” against a frontier model.
+The output comes out marginally more Dan-shaped each iteration and still smells like a press release.
+There is a floor on how much taste we can install via prompt engineering, and currently I am still trapped, according to this metaphor, in the taste basement.
+No matter what I do, I cannot dissuade Claude from poorly chosen mixed metaphors like “standard ladder of prompt-side fixes” or the “floor on how much taste we can install via prompt engineering.”
+The text pudding is laced with choke-hazard “dan-shaped”, and “load-bearing” tuppences.
+
+Look, I’m not claiming my style is _perfect_.
+But I am claiming that
+
+1. It is mine, and
+2. that when I write something on Monday in my own style, it is composed in such a manner that reading it back on Friday, I discern my own intent without excessive strain.
+
+Both these are untrue of Claude’s output.
+
+If I could train a small specialist model that bakes the style into weights rather than pleading for it via prompt, every AI draft I touch could pass through it and come out sounding like me, or at least, hopefully not substantially worse despite having been interfered with by an LLM.
+
+So!
+Fine-tuning danbot!
+
+My policy on this blog is that slop should be disclosed, not concealed — see the three robots marker at the top of this post?
+That means it is slop af.
+
+My policy is not to have no AI.
+Sometimes it is useful to sketch stuff out with AI.
+It is not useful to pretend that AI is a human, or specifically that it is me.
+That does not mean that it should be horrible to read.
+
+## Goals
+
+* Less onerous clean-up of AI edits.
+* More comprehensible prose
+
+## Non-goals
+
+* Full dan impersonation
+* Evading slop detectors
+
+## Methods
+
+The plan is to train a small LoRA adapter on top of a mid-sized open-weights model and treat it as a specialist *prose styler*: feed it AI-flavoured draft text, get back something closer to my own voice.
+Four steps:
+
+1. **Collect real edit pairs.**
+   Every time I rewrite an AI draft, capture the (before, after) diff at paragraph.
+   [I already shipped this](#phase-1) below.
+2. **Synthesise more pairs.**
+   Ask the LLM (ideally several LLMs) to paraphrase paragraphs of my own prose, and then use the slop paraphrase as the source, and the original as the target.
+   This might be lower-signal than the actual edit pairs, so I imagine down-weighting them in the training set.
+   But: easy to generate these.
+3. **Train a LoRA.**
+   Run LoRA SFT on some small, non-tool-using model (e.g. Qwen3 8B) in a managed cloud pipeline (~$10 per training run for the 8B, cheap enough to iterate freely).
+4. **Wrap it in a CLI.**
+   `uv run ai-style <file>` runs the LoRA model as a text transformer.
+
+What could go wrong: the 8B might not have the headroom to learn the style without losing general fluency (then we try the 70B), the synthetic paraphrase slop might not match the distribution of real Claude output I hit in practice (then we mix in more real pairs from the logger), or fine-tuning might just be a dead end and the right answer is a stronger prompt against a frontier model.
+In the last case we still have a labelled corpus of my own prose that is useful for other things.
+
+### Whose slop?
+
+I have a lot of examples of my style.
+There are about 1.6M words of prose I authored with my human hands on this site, for example, the the slop free ones marked clearly.
+
+If I want to turn these into training data, I need to turn them in to slop.
+So I take a sample of my paragraphs, and for each one, ask an LLM to turn it into slop (“rewrite this passage to be clearer and more polished”).
+The output of that process is the example slop I wish to eliminate.
+Looking at the LoRAs out there, I imagine that a few thousand such examples might be enough to nudge the model towards my style.
+A smaller secondary set is generated by explicitly asking for the worst slop patterns from my own slop catalogue; that covers the long-tail mannerisms the paraphrase pipeline tends to underrepresent.
+
+I suspect, from the literature that Both sheer input length [@Levy2024Same] and accumulated conversation turns [@Laban2025LLMs] degrade AI output.
+If I want to capture the worse of the slop I probably want to see “late stage” slop from an LLM already gravid with context.
+Proposal: So I generate some of the slop across one growing session rather than a paragraph at a time: feed a fresh, unrelated paragraph each turn and keep the rewrite, so the examples span the range from empty- to exhausted-context.
+If I tag each with how full the context was, I can see where the slop gets worse and weight those examples up, or at least just see how important this factor is.
+
+Now, which model?
+I use Claude a lot, so maybe I could just undo Claude?
+But I use other models too.
+
+Slop seems to come in two layers.
+There’s a deep humus under-layer — throat-clearing, “it’s worth noting”, the rule-of-three, “not only X but Y”, signposting, **marking key phrases in bold** — that every RLHF’d model produces.
+Atop that is the litter inhabited by model-specific tics: GPT’s “delve” and “tapestry”, Claude’s particular hedging cadence, and so on.
+@Attar2026Systematic study 284 interpretable linguistic features across 27 LLMs and 10 text domains.
+They argue that most signals are model- or domain-specific.
+This suggests multi-source training might be the go.
+
+Let us call the target here a *Dan-ifier* rather than a de-Claude-er: rewrite the input as I’d write it, whatever the source.
+@Soto2025Attacks argues that mimicking a specific human author’s style is a strong method for removing obvious AI tics, so we have hope that this is feasible.
+
+Moreover, I would be training a small [open-source model](./local_llm_mac.qmd) to do this text transformation, i.e. not Claude.
+It will have its own tics to squish.
+@Antoun2023Text argue that small open models are easier to detect— by machine admittedly, but I assume humans also could find it easy.
+As such, it seems especially important to generate some of the slop using specifically my own utility base-model.
+
+In any case I don’t want to fix on Claude, because even Claude isn’t one thing, but family of various models and version.
+
+**tl;dr** We generate training slop from a plural set of LLMs.
+
+There is at least one example of this in the wild.
+@Paneru2026Please build a 25,140-pair AI→human corpus and fine-tune BART and Mistral-7B (QLoRA) , arguing that “using two generators rather than one reduces the risk that a trained humanizer learns to undo one model’s idiosyncratic habits rather than AI-style writing more broadly”.
+They also target multiple human-target domains for the same reason, which I cbf doing so I hope that part is not important.
+They don’t run a single-source vs. multi-source ablation, so the value of this multiple model approach is unknown.
+Maybe I can publish that ablation if I find time?
+@Paneru2026Please also observe some interesting failure modes — for example we can learn the correct style transform, but *overcorrect*, which looks great on metrics but probably not on human inspection.
+
+### Where to train and serve
+
+There are many ways to train an open-weight LoRA.
+Broadly we distinguish between managed cloud and DIY.
+[Together](https://www.together.ai/pricing) and [Fireworks](https://fireworks.ai/pricing) are the default turnkey cloud options, [Tinker](https://thinkingmachines.ai/tinker/) a slightly fancier one, and [Unsloth](https://unsloth.ai) is the DIY route on a rented GPU.
+They have comparable prices— Together is $0.48/1M training tokens for ≤16B LoRA SFT, Fireworks $0.50/1M, Tinker ~$0.40/1M at 8B.
+The affordances for inference are different though.
+
+Together makes it [easy to extract the LoRA](https://docs.together.ai/reference/get-finetune-download).
+Fireworks is built around serving the fine-tune *on Fireworks*, so they have some serious vendor lock-in.
+
+Accordingly, Fireworks is cheaper on serving inference.
+Together hosts a fine-tune *only* as a [dedicated endpoint](https://docs.together.ai/docs/deploying-a-fine-tuned-model) — $6.49/hr for an H100.
+That would be fine for a production workload, but paying \$4,000/month if I forgot to turn it off would suck.
+Fireworks dedicated deployments [scale to zero](https://docs.fireworks.ai/deployments/autoscaling), which is way better for a personal CLI tool.
+
+OTOH, Fireworks allows us to upload LoRAs, so they are not a crazy place to serve Together fine-tunes.
+
+One caveat on Together: AFAICT they retain training data for their own unspecified uses per default, so don’t forget to switch to zero data retention.
+
+[Tinker](https://thinkingmachines.ai/tinker/) (Thinking Machines’ managed-training API) also looks excellent.
+It’s just a bit newer so concomitantly a bit more annoying to vibe-code to.
+However, its API exposes useful things `forward_backward`, `sample`, and `optim_step` as low-level primitives, so I could use them to shape an RL or DPO loop if I ever preference-tune the styler, rather than the vanilla SFT of the other options.
+
+Unsloth is the DIY alternative — a Python framework around hand-tuned CUDA kernels (the headline “2× faster training with 70% less VRAM”).
+If I want to do hectic hyperparam optimization, this might be cheaper than paying per token?
+
+### A multi-signal eval harness
+
+Training and serving settle the pipeline; knowing whether the styler actually works is a separate problem with separate machinery.
+The eval harness runs *offline* — it scores candidate output, and it is not wired into the Together/Fireworks trainer or baked into the served adapter.
+It has four signals.
+Vale catches mechanical slop (banned words, indefinite “you”, -ize spelling); LLM-as-judge catches “is this Dan-shaped” at the voice level; a statistical detector catches “would an external classifier flag this”; my eyeball is the veto channel.
+
+The statistical signal is the one that needs picking.
+[Pangram](https://www.pangram.com/solutions/api) is an AI-text-detector — a transformer-based supervised classifier trained on ~1M human/AI documents with hard-negative mining and active learning [@Emi2024Technical], not a perplexity heuristic.
+The strongest independent evidence is [@Jabarian2025Artificial], a Chicago Booth working paper benchmarking it against OriginalityAI, GPTZero, and RoBERTa: Pangram is *“the only detector that meets a stringent policy cap (FPR ≤ 0.005) without compromising the ability to accurately detect AI text.”* Its strong regime is fully AI-generated single passages; its weak regime is lightly-humanised long-form, exactly where styler output sits (cf. [@Soto2025Attacks] on fingerprint recovery at multi-document scale).
+
+Before paying for it, the open-weights options deserve an audition.
+[Binoculars](https://github.com/ahans30/Binoculars) (cross-perplexity heuristic, MIT, ~70–90% AUROC depending on regime), [Ghostbuster](https://github.com/vivek3141/ghostbuster) (Berkeley, perplexity-feature classifier), [RADAR](https://huggingface.co/TrustSafeAI/RADAR-Vicuna-7B) (adversarially-trained, Apache-2.0), and OpenAI’s deprecated RoBERTa-base detector all run for free.
+The test corpus is small: ~10 paragraphs of styler input, ~10 of styler output, ~10 of pure-Dan prose.
+If any of them tracks Pangram’s judgements well enough on single-paragraph lightly-humanised text — the regime I care about — the paid spend is wasted and the open-weights model goes straight into the harness instead.
+My prior is that none of them will be good enough at *this* regime, but the audition is one afternoon’s work.
+
+If Pangram does win the audition, what makes it cheap is distillation.
+Spend ~$50 once labelling ~10,000 paragraphs from my corpus plus held-out AI text, then train a small local classifier on those labels (DistilBERT-class, <100ms inference).
+That classifier is a free reward signal callable from anywhere on my side of the pipeline — eval, inference-time best-of-N candidate selection, possibly a future DPO loop — and it never touches the adapter served on Fireworks.
+One ~$50 spend, no more API calls.
+
+One thing this *isn’t*: a tool for evading slop detection.
+My policy on this blog (see [Non-goals](#non-goals)) is that AI involvement should be disclosed, not concealed.
+The reason Pangram is useful here is that the patterns it trips on — uniform sentence rhythm, hedging, signposting, generic vocabulary, structural tics — are almost exactly the patterns my [slop catalogue](https://github.com/danmackinlay/livingthing/blob/master/_voices/slop_patterns.md) already targets.
+So a styler that learns to lower its Pangram score has, as a side effect, learned to write less like a press release.
+The standard reward-hacking worry — model learns to evade the detector without becoming better prose — would require constructing a “passes-Pangram-but-still-bad” output, which turns out to be hard.
+The score going down is a consequence of writing more like Dan, not the target.
+
+All in, around $80 in setup costs and ~$1 per run.
+
+### Where we are now {#phase-1}
+
+Phase 1 has shipped.
+There is a manual pair-logger (`uv run ai-style-log`) wired in such that every time I rewrite an AI draft into my own voice, the (before, after) diff is captured at paragraph level into a JSONL file.
+So even before we run a single training step, the corpus accumulates with each notebook I clean up.
+To make the corpus more representative, I have also stripped the automatic slop-removal pass out of the `/dan-voice` skill: drafts Claude generates in my voice now leak realistic AI tics, which is exactly what we want as training input.
+Manual cleanup is now via the separate `/slop-hunter` skill, invoked when I want a clean draft rather than a training-data candidate.
+
+## Appendix: Wiring it into VS Code
+
+Typing `uv run ai-style-log open notebook/foo.qmd` over and over is friction.
+VS Code already knows which file is currently focused; we can lean on that via its task system, which substitutes the editor’s path into a shell command at run time.
+
+Drop a `.vscode/tasks.json` in the workspace:
+
+```json
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ai-style-log: open current file",
+      "type": "shell",
+      "command": "uv run ai-style-log open '${relativeFile}'",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "ai-style-log: save current file",
+      "type": "shell",
+      "command": "uv run ai-style-log save '${relativeFile}'",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "ai-style-log: save --keep-open current file",
+      "type": "shell",
+      "command": "uv run ai-style-log save --keep-open '${relativeFile}'",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "ai-style-log: drop current file",
+      "type": "shell",
+      "command": "uv run ai-style-log drop '${relativeFile}'",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "ai-style-log: list",
+      "type": "shell",
+      "command": "uv run ai-style-log list",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "problemMatcher": []
+    }
+  ]
+}
+```
+
+Then in (user-level) `keybindings.json`:
+
+```json
+[
+  { "key": "cmd+k cmd+o", "command": "workbench.action.tasks.runTask",
+    "args": "ai-style-log: open current file",
+  },
+  { "key": "cmd+k cmd+s", "command": "workbench.action.tasks.runTask",
+    "args": "ai-style-log: save current file",
+  },
+  { "key": "cmd+k cmd+i", "command": "workbench.action.tasks.runTask",
+    "args": "ai-style-log: save --keep-open current file",
+  },
+  { "key": "cmd+k cmd+d", "command": "workbench.action.tasks.runTask",
+    "args": "ai-style-log: drop current file"
+  },
+  { "key": "cmd+k cmd+l", "command": "workbench.action.tasks.runTask",
+    "args": "ai-style-log: list"
+  }
+]
+```
+
+
+`${relativeFile}` is the editor’s path relative to the workspace root.
+`Cmd+K` is VS Code’s chord prefix, already used for `Cmd+K Z` and similar, so chord-style bindings do not collide with single-key editing shortcuts.
+Mnemonics: O for open, S for save, I for interim (keep-open), D for drop, L for list.
+We could scope these using a clause like `”when”: “resourceLangId == ‘quarto’ || resourceLangId == ‘markdown’”`.
+This would restrict them to qmd or markdown buffers so I cannot accidentally open a session on a Python file.
+But *I* like living dangerously.
+
+The workflow becomes: edit a draft, `Cmd+K Cmd+O` to begin a session, edit more, `Cmd+K Cmd+S` to save and close.
+No copying paths, no terminal context switch.
+
+## Appendix: the problem {#appendix}
+
+Why am I doing this?
+Because I recently had the following conversation with Claude:
+
+>This document is crammed with overwrought, rambling, almost schizophrenically-dense, confusing prose.
+>I need you to help me tidy it up.
+>I will show you one example of how the text started out ("original") and how I tidied it up ("tidied")
+>
+>original:
+>
+>>The one thing maths rewards that ordinary agentic work does not is what makes the cloud earn its keep.
+>>A single solve is irreducibly sequential — each code block depends on the last, and no hardware shortens that chain.
+>>The parallelism is across *samples* and *problems*: the [maj@k](./ai_reasoning.qmd#test-time-scaling) draws are independent, a problem set's entries are independent, and a prover's Pass@32 is thirty-two independent chains.
+>>That is the axis to fan out along, and the binding constraint is almost never the GPU.
+>>The [three roles](#reasoning-harnesses) parallelize unevenly: the model server already batches many chains against one card (vLLM, SGLang), the orchestrator is just $k$ async loops, and the laggard is the **executor** — a hand-rolled loop holds one kernel, a bare lean-repl compiles one proof at a time.
+>>So the question a workflow answers is not "how big a GPU" but "how do we run many executors cheaply".
+>
+>tidied:
+>
+>>One weird trick to make provers go better is to sample several  independent attempts at solving the same problem, and choosing the most popular solution.
+>>This is the so called [maj@k](./ai_reasoning.qmd#test-time-scaling)-trick.
+>>Provers have an equivalent one parallel trick, called Pass@k.
+>>Either way you can run a lot of these fuckers at once.
+>>The LLM tokens are delivered over the network and as such are parallel.
+>>So our agentic loop handles $k$ conversations with the model.
+>>The executors may as well be run in parallel too, ideally on $k$ different machines running whatever tool is needed for that chain.
+>
+>Do you see what I mean? The first one was full of baffling unclarity, introducing things in needlessly complicated, even incoherent ways, and ultimately after reading it I felt much stupider than before.
+>The second version omits needless bullshit and communicates, in context, what the reader needs to understand.
+>Do you think you can go through the notebook section-by-section and edit each bit so it sound less batshit raving insane?
+>This is a long document, and you do have a tendency for, let us say, prolixity, so, don’t worry about matching my voice or whatever right now, forget all that shit.
+>Just do your best to turn this ululating turd-burger into something humans can read in order to become elucidated thereby.
+>Delete info that doesn’t help them. Drop useless crap. Don’t forget they can look up things in the attached git repo.
+>Here is not a time for falling in the info latrine while info dumping.
+>Rather, it is a time to stop, take a breath, and consider what we need to say.
+>
+>Do you think you can do that?
+
+The answer was ofc that Claude _thought_ he could do that.
+However, Claude managed to stay tidy for about three paragraphs before descending once again into shoggothy litany.
+
+## References
+
+::: {#refs}
+:::
