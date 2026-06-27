@@ -9,11 +9,16 @@ a sample of Dan's paragraphs. Does not need a trained model.
 
 ## Inputs
 
-- `--blog-root` (read): Dan's authored prose (the ~1.6M-word corpus of
-  human-written posts). Pure-human targets are selected via
-  `is_human_authored(meta)` — the `automation: 0` seam (see OVERVIEW
-  "boundary"), the lone blog-specific predicate. The *caller* may also just
-  hand in an explicit file list; this phase operates on what it's given.
+- Training targets — supplied one of two ways (see OVERVIEW "Selection is a
+  user-supplied policy"):
+  1. **a pre-selected file list** the caller built itself, or
+  2. **`--blog-root` + an injected `selector` / `sort_key`** so stylebot does
+     the discover→filter→sort→sample walk. The function signature takes
+     `selector: Callable[[dict], bool] = is_human_authored` and an optional
+     `sort_key` / `sampler`; the CLI exposes the bundled default, library
+     callers pass their own.
+  `is_human_authored` (the `automation: 0` example) is only the default — Phase
+  2 must accept the selector as an argument, never hardcode the predicate.
 - `--data-dir` (write): where the resulting `pairs.jsonl` is appended.
 - LLM API keys (multi-source by design): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
   and a local/utility base model (`LOCAL_LLM_*`). See `.env.example`.

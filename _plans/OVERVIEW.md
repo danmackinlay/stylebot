@@ -69,6 +69,21 @@ whole pipeline from its own build.
 - **Caller decides *which* files; stylebot decides *what to do* with them.**
   New phases take file lists / roots as arguments rather than rediscovering the
   blog's conventions.
+- **Selection is a user-supplied policy, not a built-in gate.** *How* a user
+  picks and orders their training/reference prose — filter, sort, sample — is
+  theirs to define. Because stylebot is a library, supporting that needs no
+  plugin system or config DSL: the user just passes a function. Two supported
+  levels, both first-class:
+  1. **Pre-selected list.** The caller does its own discover→filter→sort→sample
+     and hands stylebot the resulting file list. Zero stylebot machinery; works
+     with any user logic.
+  2. **Injected policy.** For callers who want stylebot to do the walking, the
+     phase entry points accept callables — `selector: Callable[[dict], bool]`
+     and a `sort_key` / `sampler` — defaulting to bundled examples. You swap the
+     default by passing your own; ordering is in scope, not just inclusion.
+  `stylebot.lib.is_human_authored` is a **shipped example** of such a selector,
+  not a mandated path. The contract is "bring your own callable"; we ship one
+  that happens to encode Dan's `automation: 0` convention.
 
 ### Where the blog/generic boundary actually falls
 
@@ -81,21 +96,22 @@ Most of what we imported is *generic*, not Dan-specific. The boundary:
   `gather_qmd_files` is the hardcoded `.qmd` extension and build-dir skip-list;
   those are parameters, not Dan-knowledge. Generalise by making the glob/
   extension an argument when a phase needs it.
-- **The one real Dan seam — `automation`.** A frontmatter level recording how
-  much AI touched a post; `automation: 0` means pure-human. This is how
-  stylebot picks **clean training targets and reference prose**, so corpus
-  quality depends on it. Build it as a *single configurable predicate*, not
-  scattered `meta["automation"]` reads:
+- **The bundled selector example — `automation`.** It is *acceptable* to ship
+  a little blog-specific code here as a worked example. `automation` is a
+  frontmatter level recording how much AI touched a post; `automation: 0` means
+  pure-human, the prose we want as clean training targets / reference.
 
   ```python
   def is_human_authored(meta, *, field="automation", max_level=0) -> bool: ...
   ```
 
-  Defaults encode Dan's convention; field/threshold are arguments so another
-  blog retargets it in one call. This is the *only* blog-specific knowledge
-  stylebot is allowed to carry. **Built** in `stylebot.lib.is_human_authored`
-  (conservative: missing/unparseable → excluded), tested in
-  `tests/test_selection.py`.
+  **Built** in `stylebot.lib.is_human_authored` (conservative: missing/
+  unparseable → excluded), tested in `tests/test_selection.py`. Its `field` /
+  `max_level` knobs are the *shallow* retarget; the *real* extension story is
+  the bullet above — a user passes their own `selector` / `sort_key`. This
+  function is the default that ships, not a gate stylebot imposes. Phases must
+  therefore never call it directly on a hardcoded path: they accept a selector
+  argument and use this only as the default value.
 - **Blog-build cruft — NOT stylebot's job.** `migrate_ai_dates` (custom
   `date-ai-*` keys) and `is_auxiliary_post` / `AUXILIARY_TYPES` (`digest`,
   `about` post types) are blog-build concerns. No phase should depend on them;
