@@ -93,7 +93,9 @@ Most of what we imported is *generic*, not Dan-specific. The boundary:
 
   Defaults encode Dan's convention; field/threshold are arguments so another
   blog retargets it in one call. This is the *only* blog-specific knowledge
-  stylebot is allowed to carry.
+  stylebot is allowed to carry. **Built** in `stylebot.lib.is_human_authored`
+  (conservative: missing/unparseable → excluded), tested in
+  `tests/test_selection.py`.
 - **Blog-build cruft — NOT stylebot's job.** `migrate_ai_dates` (custom
   `date-ai-*` keys) and `is_auxiliary_post` / `AUXILIARY_TYPES` (`digest`,
   `about` post types) are blog-build concerns. No phase should depend on them;

@@ -256,3 +256,31 @@ def is_auxiliary_post(meta: dict) -> bool:
     """
     post_type = str(meta.get("type", "")).strip().lower()
     return post_type in AUXILIARY_TYPES
+
+
+def is_human_authored(
+    meta: dict, *, field: str = "automation", max_level: int = 0
+) -> bool:
+    """True if frontmatter marks this content as human-written (no/low AI).
+
+    This is the **one** blog-specific seam stylebot is allowed to carry (see
+    `_plans/OVERVIEW.md`). Everything else about loading prose — frontmatter +
+    markdown — is generic across Quarto/Hugo/Jekyll/etc. Dan's blog records an
+    ``automation`` level per post; ``automation: 0`` means no AI was involved,
+    which is exactly the pure-human prose we want as training *targets* and
+    reference. Another blog retargets this by passing its own ``field`` /
+    ``max_level`` — the defaults encode Dan's convention, nothing more.
+
+    Conservative by design: a missing or unparseable field is treated as NOT
+    human-authored. The clean posts are *marked* (low ``automation``); absence
+    means "unknown", and we would rather under-select clean prose than poison
+    the training corpus with AI-touched text. Returns True only when the field
+    is present and parses to ``<= max_level``.
+    """
+    raw = meta.get(field)
+    if raw is None:
+        return False
+    try:
+        return int(raw) <= max_level
+    except (TypeError, ValueError):
+        return False
