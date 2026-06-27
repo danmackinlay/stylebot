@@ -38,6 +38,8 @@ train` is the thin CLI. The blog build can import the function directly.
 
 ## Done-criteria
 
+- [ ] Input `pairs.jsonl` passes `stylebot.pairs.validate_pairs_file` before
+      the run (don't spend money training on a malformed corpus).
 - [ ] One reproducible training run end-to-end (data → adapter), manifest
       committed.
 - [ ] Held-out val split; report the eval-harness numbers (Phase E) on it.

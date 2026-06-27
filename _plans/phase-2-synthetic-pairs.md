@@ -55,8 +55,9 @@ Append to the same `$STYLEBOT_DATA_DIR/pairs.jsonl`:
 
 ## Done-criteria
 
-- [ ] A few thousand synthetic pairs in `pairs.jsonl`, schema-validated against
-      the Phase 1 contract (a validator script that round-trips every record).
+- [ ] A few thousand synthetic pairs in `pairs.jsonl`, schema-validated with
+      `stylebot.pairs.validate_pairs_file` (empty result == pass) against the
+      Phase 1 contract.
 - [ ] Pairs from ≥2 distinct generators, distinguishable by `meta.generator`.
 - [ ] Idempotent + resumable: re-running doesn't duplicate; tracks which source
       paragraphs are already done.
