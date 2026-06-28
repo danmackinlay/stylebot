@@ -29,6 +29,25 @@ REQUIRED_META_KEYS = (
 )
 
 
+def build_pair_content(context: str, body: str) -> str:
+    """Assemble a pair message body: heading context (verbatim) + the prose body.
+
+    The **shared contract** between Phase 1 (`ai-style-log`) and Phase 2
+    (`stylebot.synth`): `context` — a section heading the body sits under — is
+    prepended *identically* to both the user (slop) and assistant (target) sides
+    so the styler learns to preserve the heading and restyle only the body
+    beneath it (matching `STYLE_SYSTEM`'s preserve-structure clause). Empty
+    context returns the body unchanged, so heading-less pairs are unaffected.
+
+    Both producers MUST build message content through this one function, and
+    record the same `context` under `meta.context`, so real and synthetic pairs
+    stay shape-compatible. See `_plans/heading-context.md`.
+    """
+    context = (context or "").strip()
+    body = body or ""
+    return f"{context}\n\n{body}" if context else body
+
+
 def validate_pair_record(rec: object) -> list[str]:
     """Return a list of human-readable problems with one pair record.
 
@@ -66,6 +85,19 @@ def validate_pair_record(rec: object) -> list[str]:
         for key in REQUIRED_META_KEYS:
             if key not in meta:
                 errors.append(f"meta missing required key {key!r}")
+
+        # Heading-context invariant (shared contract): if a pair declares
+        # meta.context, that heading must be the verbatim prefix of BOTH the
+        # user and assistant content — i.e. it was added as fixed context via
+        # build_pair_content, not paraphrased into the slop. Catches accidental
+        # heading-rewriting. Only enforced when context is present and the
+        # message triple parsed cleanly above.
+        context = meta.get("context")
+        if context and isinstance(msgs, list) and len(msgs) == 3:
+            for role_idx, label in ((1, "user"), (2, "assistant")):
+                content = msgs[role_idx].get("content") if isinstance(msgs[role_idx], dict) else None
+                if not (isinstance(content, str) and content.startswith(context)):
+                    errors.append(f"{label} content does not start with meta.context (heading must be a verbatim prefix)")
 
     return errors
 

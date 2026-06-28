@@ -72,3 +72,8 @@ Contract rules that downstream phases (esp. Phase 2 and 3) MUST honour:
   pairs relative to these real ones (currently absent — see OVERVIEW open Qs).
 - No automated test of the chunk-diff coalescing rules yet → see
   `tests/` (Phase 0 added a smoke test only).
+- **Heading context (planned):** captured chunks are heading-stripped, so many
+  are under-determined in isolation. [`heading-context.md`](heading-context.md)
+  specs adding the section heading as fixed context (verbatim on both sides),
+  shared with Phase 2 via `stylebot.pairs.build_pair_content`. Forward-only:
+  existing pairs stay context-less; trade-off + default discussed there.
