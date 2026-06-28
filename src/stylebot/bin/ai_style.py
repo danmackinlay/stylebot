@@ -2,8 +2,9 @@
 
 Per OVERVIEW "Interfaces": one command, subcommands `synth | split | train |
 eval` — not a scatter of loose scripts. Each subcommand is a thin `click`
-wrapper that parses flags and calls a typed library function. Only `synth` is
-built so far (Phase 2); the rest land with their phases.
+wrapper that parses flags and calls a typed library function. `synth` (Phase 2)
+and `eval` (the offline scorer, `stylebot.eval`) are built; `split` / `train`
+land with their phases.
 
 The shipped `ai-style-log` (Phase 1) stays its own console script — it is
 daily-used and its CLI predates this group.
@@ -20,13 +21,11 @@ import click
 from stylebot import config, synth
 from stylebot.lib import is_human_authored
 
-# Preset slop generators selectable on the CLI. Library callers inject their own
-# `synth.Generator`s; these are the bundled defaults (multi-source by design).
-_GENERATOR_FACTORIES = {
-    "claude": lambda models: synth.anthropic_generator(model=models["claude"]),
-    "gpt": lambda models: synth.openai_generator(model=models["gpt"]),
-    "local": lambda models: synth.local_generator(model=models["local"] or None),
-}
+# Direct-API slop-generator presets selectable on the CLI (each needs that
+# provider's own key). OpenRouter models are selected separately via
+# --openrouter-model (one key, many upstream models). Library callers inject
+# their own `synth.Generator`s.
+_PRESETS = ("claude", "gpt", "local")
 
 
 def _sort_key(name: str):
@@ -81,11 +80,33 @@ def main() -> None:
 @click.option(
     "--generator",
     "generator_names",
-    type=click.Choice(list(_GENERATOR_FACTORIES)),
+    type=click.Choice(_PRESETS),
     multiple=True,
-    default=("claude", "gpt"),
+    default=(),
     show_default=True,
-    help="Slop generators to rotate across (repeat for ≥2; multi-source by design).",
+    help="Direct-API slop generators to rotate across (repeatable; each needs that provider's key). "
+    "Combine with or replace by --openrouter-model.",
+)
+@click.option(
+    "--openrouter-model",
+    "openrouter_models",
+    multiple=True,
+    help="OpenRouter model id to generate slop with (repeatable), e.g. anthropic/claude-opus-4-8. "
+    "One key ($OPENROUTER_API_KEY) reaches many upstream models — ideal for multi-source rotation.",
+)
+@click.option(
+    "--slop-strategy",
+    default=synth.DEFAULT_STRATEGY,
+    show_default=True,
+    help=f"Named slop-prompt flavour ({', '.join(synth.STRATEGIES)}); recorded as meta.slop_strategy "
+    "and folded into synth_key. With --slop-system-file the name is just a label.",
+)
+@click.option(
+    "--slop-system-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Override the slop system prompt with this file's contents (e.g. an author's own slop "
+    "catalogue), labelled by --slop-strategy. Keeps blog-specific prompts out of stylebot.",
 )
 @click.option("--claude-model", default="claude-opus-4-8", show_default=True)
 @click.option("--gpt-model", default="gpt-4o", show_default=True)
@@ -118,6 +139,9 @@ def synth_cmd(
     report_max_rows: int,
     sample_n: int | None,
     generator_names: tuple[str, ...],
+    openrouter_models: tuple[str, ...],
+    slop_strategy: str,
+    slop_system_file: Path | None,
     claude_model: str,
     gpt_model: str,
     local_model: str,
@@ -182,6 +206,22 @@ def synth_cmd(
             click.echo(f"wrote report -> {written}")
         return
 
+    # At least one slop source is required (no silent default — synth spends money
+    # and may hit a provider key the operator hasn't configured).
+    if not generator_names and not openrouter_models:
+        raise click.UsageError(
+            "no generators selected: pass --generator {claude,gpt,local} and/or "
+            "--openrouter-model MODEL (synth needs at least one slop source)"
+        )
+    # Resolve the slop prompt once (fail fast on a bad strategy name).
+    try:
+        strategy_label, slop_system = synth.resolve_strategy(
+            slop_strategy,
+            slop_system_file.read_text(encoding="utf-8") if slop_system_file else None,
+        )
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--slop-strategy")
+
     # Resolve the corpus location: explicit flag > $STYLEBOT_DATA_DIR. Refuse the
     # bare cwd default — synth costs money and grows the corpus; be explicit.
     if data_dir is None and not config.get_key("STYLEBOT_DATA_DIR"):
@@ -191,18 +231,23 @@ def synth_cmd(
         )
     resolved_dir = config.resolve_data_dir(data_dir)
 
-    models = {"claude": claude_model, "gpt": gpt_model, "local": local_model}
     if dry_run:
         # Name-only stubs — no API clients, no keys needed to vet selection.
-        generators = [
-            synth.Generator(
-                name={"claude": claude_model, "gpt": gpt_model, "local": f"local-{local_model or 'local'}"}[g]
-            )
-            for g in generator_names
-        ]
+        preset_names = {"claude": claude_model, "gpt": gpt_model, "local": f"local-{local_model or 'local'}"}
+        generators = [synth.Generator(name=preset_names[g], strategy=strategy_label) for g in generator_names]
+        generators += [synth.Generator(name=f"openrouter/{m}", strategy=strategy_label) for m in openrouter_models]
     else:
         try:
-            generators = [_GENERATOR_FACTORIES[g](models) for g in generator_names]
+            generators = []
+            for g in generator_names:
+                if g == "claude":
+                    generators.append(synth.anthropic_generator(model=claude_model, strategy=strategy_label, system=slop_system))
+                elif g == "gpt":
+                    generators.append(synth.openai_generator(model=gpt_model, strategy=strategy_label, system=slop_system))
+                elif g == "local":
+                    generators.append(synth.local_generator(model=local_model or None, strategy=strategy_label, system=slop_system))
+            for m in openrouter_models:
+                generators.append(synth.openrouter_generator(model=m, strategy=strategy_label, system=slop_system))
         except RuntimeError as exc:  # missing key, surfaced by config.require_key
             raise click.ClickException(str(exc))
 
@@ -242,6 +287,90 @@ def synth_cmd(
         for key, msg in result.errors[:10]:
             click.echo(f"  {key}: {msg}", err=True)
         sys.exit(1)
+
+
+@main.command("eval")
+@click.option("--pairs", "pairs_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path), help="The pairs.jsonl corpus to score (slop + Dan sides of every pair).")
+@click.option("--field", "fields", type=click.Choice(["slop", "target"]), multiple=True, default=(), help="Which side(s) to score (repeatable; default both). slop=messages[1], target=Dan/messages[2].")
+@click.option("--judge/--no-judge", default=False, show_default=True, help="Run the LLM judge (needs $OPENROUTER_API_KEY); off = Vale + null detector, no spend.")
+@click.option("--judge-model", default="anthropic/claude-opus-4-8", show_default=True, help="OpenRouter model id for the judge.")
+@click.option("--vale-config", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Vale config (.vale.ini); omitted = Vale's own discovery (or Vale absent -> skipped).")
+@click.option("--max-workers", default=8, show_default=True, type=int, help="Concurrent scoring workers (judge/Vale are IO-bound).")
+@click.option("--out", "out_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="scores.jsonl to append (default: <pairs-dir>/scores.jsonl). Resumable — scored ids are skipped.")
+@click.option("--summary", "summary_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Also write the aggregate summary JSON here.")
+@click.option("--by", "by", default=None, help="Facet the summary by a meta key, e.g. slop_strategy or generator.")
+@click.option("--limit", type=int, default=None, help="Cap pairs scored (smoke / cost control).")
+def eval_cmd(
+    pairs_path: Path,
+    fields: tuple[str, ...],
+    judge: bool,
+    judge_model: str,
+    vale_config: Path | None,
+    max_workers: int,
+    out_path: Path | None,
+    summary_path: Path | None,
+    by: str | None,
+    limit: int | None,
+) -> None:
+    """Score a pairs.jsonl corpus across the eval signals (offline, batched).
+
+    Reads the corpus, scores the slop and Dan sides of each pair, and appends one
+    id-keyed record per pair to scores.jsonl (joinable back to the corpus, and
+    resumable — re-running skips already-scored ids). Runs keyless by default
+    (Vale + null detector); add --judge to score voice via OpenRouter. The
+    summary aggregates per field, and per --by facet (e.g. slop_strategy) so you
+    can compare strategies with a number. A Phase-4 styler run scores the same way
+    once it emits an output-bearing JSONL (add an "output" field then).
+    """
+    import json
+
+    from stylebot import eval as ev
+
+    out = out_path or (pairs_path.parent / "scores.jsonl")
+    score_fields = fields or ("slop", "target")
+
+    try:
+        judge_fn = ev.openrouter_judge(model=judge_model) if judge else None
+    except RuntimeError as exc:  # missing key, surfaced by config.require_key
+        raise click.ClickException(str(exc))
+
+    def _progress(i: int, total: int) -> None:
+        if i == 1 or i % 25 == 0 or i == total:
+            click.echo(f"  ... {i}/{total} scored", err=True)
+
+    result = ev.score_pairs_file(
+        pairs_path,
+        out,
+        fields=score_fields,
+        judge=judge_fn,
+        vale_config=vale_config,
+        max_workers=max_workers,
+        limit=limit,
+        on_progress=_progress,
+    )
+    click.echo(
+        f"scored {result.written} pair(s) "
+        f"({result.skipped_existing} already scored, skipped) -> {out}"
+    )
+    if result.errors:
+        click.echo(f"{len(result.errors)} scoring error(s):", err=True)
+        for rid, msg in result.errors[:10]:
+            click.echo(f"  {rid}: {msg}", err=True)
+
+    summary = ev.summarize_scores(out, by=by)
+    for name, agg in summary["fields"].items():
+        click.echo(
+            f"{name}: n={agg['n']} judge={agg['mean_judge_score']} "
+            f"vale_alerts={agg['mean_vale_alerts']} detector={agg['mean_detector_score']}"
+        )
+    if by is not None:
+        click.echo(f"by {by}:")
+        for facet, fld in summary["by"].items():
+            parts = ", ".join(f"{fn}={a['mean_judge_score']}" for fn, a in fld.items())
+            click.echo(f"  {facet}: {parts}")
+    if summary_path is not None:
+        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+        click.echo(f"wrote summary -> {summary_path}")
 
 
 if __name__ == "__main__":

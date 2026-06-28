@@ -88,7 +88,7 @@ Phase 0 (scaffolding) and Phase 1 (`ai-style-log`, daily-used) are done; Phase 1
 now also captures **heading context** (default ON; see below).
 
 Phase 2 (synthetic pairs) is **built and curated** — `ai-style synth` /
-`train-targets` over `stylebot.synth`, tested green (76 stylebot + 11 blog).
+`train-targets` over `stylebot.synth`, tested green (89 stylebot + 13 blog).
 The target-curation pipeline (all generic mechanism in `stylebot`, policy in the
 blog's `livingthing.training_targets`):
 - prose-only extraction (`segment_for_edit`), hygiene (min/max chars, tables,
@@ -102,8 +102,25 @@ blog's `livingthing.training_targets`):
 - a read-only **report**/`--sample` visualiser (`stylebot.report`).
 Real-blog dry-run: ~3.6k passages from 492 quality>6 posts, 85% heading-framed.
 
-**The only remaining Phase-2 step is the at-scale paid generation run** (gated on
-LLM keys + operator go-ahead): `cd ~/Source/livingthing && uv run train-targets
---limit 3000` (idempotent/resumable; `--dry-run`/`--report` first). The **Eval
-harness** is the next unbuilt track. Phase 3/4 are data-/adapter-gated. See
-OVERVIEW for the next move.
+**Slop strategy + OpenRouter (built 2026-06-28).** The slop *prompt* is a knob:
+`STRATEGIES` / `--slop-strategy` (`polish`|`engaging`|`catalogue`) /
+`--slop-system-file`, recorded as `meta.slop_strategy` and folded into `synth_key`.
+`openrouter_generator` / `--openrouter-model` reach many models off one
+**`OPENROUTER_API_KEY`** (the blog's `train-targets` now defaults to an OpenRouter
+rotation). Add `OPENROUTER_API_KEY` to `.env` / `.envrc` (gitignored).
+
+**Eval harness (built 2026-06-28; batched 2026-06-28).** `stylebot.eval` +
+`ai-style eval` — the offline four-signal scorer (Vale, OpenRouter LLM-judge,
+pluggable detector, eyeball), keyless by default. **JSONL-native + batched:**
+`ai-style eval --pairs PATH.jsonl` scores the slop/Dan *fields* of every pair
+(heading-context stripped) and appends an **id-keyed** `scores.jsonl`
+(`score_pairs_file`, concurrent + resumable, joins back via `synth_key`/
+`capture_id`); `summarize_scores(by="slop_strategy")` gives per-strategy means.
+The **statistical-detector audition** is the one remaining eval signal (deferred —
+GPU/$$, operator's call).
+
+**The active step is the experimental Phase-2 generation loop**, not a one-shot
+paid run: per `--slop-strategy`, generate a small batch into a *scratch*
+`--data-dir`, eyeball (`--report`/`--sample`), score with `ai-style eval`, promote
+a winner into the real corpus. Then the corpus run is `cd ~/Source/livingthing &&
+uv run train-targets --limit N`. Phase 3/4 are data-/adapter-gated. See OVERVIEW.

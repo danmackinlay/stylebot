@@ -127,7 +127,7 @@ notify downstream.
 | `pairs.jsonl` | Phase 1 (real), Phase 2 (synthetic) | Phase 3 | chat-completion JSONL, `{messages:[system,user,assistant], meta:{...}}` — schema in `phase-1-pair-capture.md` |
 | trained adapter | Phase 3 | Phase 4, eval | LoRA weights (Together download / Fireworks-hosted) |
 | candidate text | Phase 4 | eval harness | plain prose in, plain prose out |
-| eval scores | eval harness | humans | JSON: `{vale, judge, detector, ...}` per candidate |
+| `scores.jsonl` | eval harness | humans, Phase 3/4 | id-keyed (`synth_key`/`capture_id:idx`) per-pair `{meta, scores:{field:{vale,judge,detector}}}`; joins back to `pairs.jsonl` |
 
 The crucial deliberate choice: **Phase 1 and Phase 2 emit the *same*
 `pairs.jsonl` schema**, chunked the same way, so training data from real edits
@@ -139,15 +139,17 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 |-------|------|--------|-----------|
 | 0 · Scaffolding | this repo's pyproject/.env/_plans | ✅ done | — |
 | 1 · Pair capture | [`phase-1-pair-capture.md`](phase-1-pair-capture.md) | ✅ shipped (daily use) + heading context | — |
-| 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | 🔧 built + curated (`ai-style synth` / `train-targets`); **scale paid run cost-gated** | corpus schema (have it) |
+| 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | 🔧 built + curated; slop-strategy knob + OpenRouter multi-source; **experimental generation loop is the active step** | corpus schema (have it) |
 | — · Heading context | [`heading-context.md`](heading-context.md) | 🔧 built (both producers; immediate depth) | — |
 | 3 · LoRA training | [`phase-3-training.md`](phase-3-training.md) | 📋 planned | enough pairs |
 | 4 · Inference CLI | [`phase-4-inference-cli.md`](phase-4-inference-cli.md) | 📋 planned | a trained adapter |
-| E · Eval harness | [`eval-harness.md`](eval-harness.md) | 📋 planned — **next unbuilt track** | only sample prose |
+| E · Eval harness | [`eval-harness.md`](eval-harness.md) | 🔧 built (`stylebot.eval` / `ai-style eval`); **detector audition pending** | only sample prose |
 
-**Next move:** either kick off the cost-gated Phase-2 paid run
-(`train-targets --limit N`), or build the **eval harness** (the ground truth
-every later phase reports against). Both unblocked; eval is the bigger lever.
+**Next move:** the two open tracks run in parallel — (a) **iterate the Phase-2
+slop experiments** (small batches per `--slop-strategy` into a scratch dir, eyeball,
+score with `ai-style eval`, promote a winner), and (b) the **detector audition**
+(the one remaining eval signal). Both need only sample prose + an OpenRouter key.
+The data-gated tail (Phase 3/4) waits on corpus volume + an adapter.
 
 ## Sequencing — what's parallel vs serial
 

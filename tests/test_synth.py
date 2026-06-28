@@ -165,6 +165,69 @@ def test_context_changes_synth_key(tmp_path):
     assert _synth_key("g", "body") != _synth_key("g", "body", "## H")
 
 
+def test_strategy_changes_synth_key():
+    # Same generator/context/body, different slop strategy -> different key, so
+    # iterating on the prompt regenerates rather than colliding on resume.
+    from stylebot.synth import _synth_key
+
+    assert _synth_key("g", "body") != _synth_key("g", "body", "", "catalogue")
+    assert _synth_key("g", "body", "", "engaging") != _synth_key("g", "body", "", "catalogue")
+
+
+def test_meta_records_slop_strategy(tmp_path):
+    import json
+
+    data_dir = tmp_path / "corpus"
+    target = synth.Target(text="A paragraph long enough to be a worthwhile target.", source="post/x.qmd", chunk_index=0, chunk_total=1)
+    gen = synth.Generator(name="m", generate=lambda t: "[slop] " + t, strategy="catalogue")
+
+    result = synth.synthesize_pairs([target], data_dir, [gen])
+    assert result.written == 1
+    rec = json.loads((data_dir / "pairs.jsonl").read_text().splitlines()[0])
+    assert rec["meta"]["slop_strategy"] == "catalogue"
+    assert validate_pairs_file(data_dir / "pairs.jsonl") == []
+
+
+def test_strategies_coexist_no_collision(tmp_path):
+    # The same target generated under two strategies (same model name) yields two
+    # distinct pairs in one file — the experimental "one run per strategy" loop.
+    import json
+
+    data_dir = tmp_path / "corpus"
+    target = synth.Target(text="A paragraph long enough to be a worthwhile target.", source="post/x.qmd", chunk_index=0, chunk_total=1)
+
+    def make(strategy):
+        return synth.Generator(name="m", generate=lambda t: f"[{strategy}] " + t, strategy=strategy)
+
+    synth.synthesize_pairs([target], data_dir, [make("polish")])
+    second = synth.synthesize_pairs([target], data_dir, [make("catalogue")])  # must NOT be skipped
+    assert second.written == 1
+
+    recs = [json.loads(ln) for ln in (data_dir / "pairs.jsonl").read_text().splitlines() if ln.strip()]
+    assert {r["meta"]["slop_strategy"] for r in recs} == {"polish", "catalogue"}
+
+
+def test_resolve_strategy():
+    label, system = synth.resolve_strategy("polish")
+    assert label == "polish" and system == synth.STRATEGIES["polish"]
+    # An explicit system overrides the registry under any label.
+    label, system = synth.resolve_strategy("dan-catalogue", "CUSTOM PROMPT")
+    assert label == "dan-catalogue" and system == "CUSTOM PROMPT"
+    # Unknown name with no custom prompt is an error.
+    import pytest
+
+    with pytest.raises(ValueError):
+        synth.resolve_strategy("nonsense")
+
+
+def test_openrouter_generator_name_and_strategy():
+    # Construction is offline (no request); pass an explicit key so it doesn't
+    # require OPENROUTER_API_KEY from the environment.
+    gen = synth.openrouter_generator(model="anthropic/claude-opus-4-8", api_key="x", strategy="catalogue")
+    assert gen.name == "openrouter/anthropic/claude-opus-4-8"
+    assert gen.strategy == "catalogue"
+
+
 def test_dry_run_writes_nothing(tmp_path):
     root = _make_blog(tmp_path)
     data_dir = tmp_path / "corpus"

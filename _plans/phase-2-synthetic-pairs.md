@@ -62,6 +62,34 @@ sides; slop generated from the body only) via `Target.context` +
 with Phase 1. CLI `--heading-context immediate` / `--context-dropout`; blog
 policy `HEADING_CONTEXT="immediate"`. See [`heading-context.md`](heading-context.md).
 
+**Slop strategy + multi-source via OpenRouter (✅ built 2026-06-28).** The slop
+*prompt* is a first-class knob, so the right kind of slop is found by experiment,
+not guessed once:
+
+- `STRATEGIES` (`stylebot.synth`) maps a label → a system-prompt flavour:
+  `polish` (neutral baseline), `engaging` (hooks/signposting), `catalogue` (the
+  stereotypical hedged LLM register, on purpose). The label is recorded as
+  `meta.slop_strategy` **and folded into `synth_key`** (now
+  `hash(generator, strategy, context, target)`), so iterating a prompt
+  regenerates rather than colliding on resume, and flavours stay distinguishable
+  for ablation. A custom/author-specific prompt is injected via
+  `--slop-system-file` (library `system=`) under any label — keeping a specific
+  slop catalogue out of generic stylebot.
+- `openrouter_generator(model=…)` reaches many upstream models off **one**
+  `OPENROUTER_API_KEY` (OpenAI-compatible; tagged `openrouter/<model>` in
+  `meta.generator`), making multi-source rotation a single-credential affair.
+  CLI: `--openrouter-model <id>` (repeatable) on both `ai-style synth` and the
+  blog's `train-targets` (whose default is now an OpenRouter rotation — see
+  `livingthing.training_targets.OPENROUTER_MODELS` / `SLOP_STRATEGY`).
+- **Work the loop, not a one-shot run:** generate a small batch per strategy into
+  a scratch `--data-dir`, eyeball via `--report`/`--sample`, then score it with
+  `ai-style eval --pairs <scratch>/pairs.jsonl --judge --by slop_strategy` (the
+  judge works today; the detector signal lands with the audition) to compare
+  flavours by a number. Promote a chosen strategy into the real corpus only after
+  it earns it. Because `synth_key`
+  carries the strategy, "one run per strategy into the same dir" accumulates
+  distinct, non-colliding pairs.
+
 ## Method (from the post)
 
 1. Sample paragraphs of Dan's own prose → these are the **targets**.
@@ -96,21 +124,32 @@ Append to the same `$STYLEBOT_DATA_DIR/pairs.jsonl`:
       (round-robin rotation by default; `--per-generator` for every-target ×
       every-generator). Tested.
 - [x] Idempotent + resumable: each pair carries `meta.synth_key`
-      (`hash(generator, target)`); assignments already in the file are skipped,
-      so re-running never duplicates and a crash resumes. Tested.
+      (`hash(generator, strategy, context, target)`); assignments already in the
+      file are skipped, so re-running never duplicates and a crash resumes. Tested.
+- [x] Slop *prompt* is a knob (`STRATEGIES` / `--slop-strategy` /
+      `--slop-system-file`, recorded as `meta.slop_strategy`); multi-source via
+      `openrouter_generator` / `--openrouter-model` off one key. Tested.
 - [x] Documented entrypoint: `uv run ai-style synth` (thin wrapper) /
       `stylebot.synth.synthesize_pairs` (library). `--dry-run` vets selection
-      with no API spend.
-- [ ] **Not yet run at scale** — the actual paid generation of a few thousand
-      pairs is gated on `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` and the operator
-      kicking it off (it spends money and grows the private corpus). The blog
-      offers **26,813** human-authored target chunks across 1,592 posts (verified
-      via `--dry-run`), so the volume is there. Run, e.g.:
+      with no API spend; `--report` / `--sample` eyeball targets.
+- [ ] **Experimental generation loop (the active step).** Don't batch a one-shot
+      paid run; iterate. Per strategy, generate a small batch into a *scratch*
+      `--data-dir`, eyeball (`--report`/`--sample`), then score the slop with
+      `ai-style eval` (once the detector audition lands). Promote a strategy into
+      the real corpus only once it earns it. The blog offers ~10k clean
+      quality>6 targets (merged), so volume is there. Example experiment:
 
       ```sh
+      # one strategy, into a throwaway dir, off the OpenRouter key:
       uv run ai-style synth --blog-root ~/Source/livingthing \
-        --data-dir ~/Source/livingthing/_training_pairs --limit 3000
+        --data-dir /tmp/slop-experiments --slop-strategy catalogue \
+        --openrouter-model anthropic/claude-opus-4-8 \
+        --openrouter-model openai/gpt-4o --limit 40 --report /tmp/exp.html
       ```
+
+      Once a strategy (or mix) is chosen, the corpus run is
+      `cd ~/Source/livingthing && uv run train-targets --limit N` (defaults to the
+      OpenRouter rotation; `--dry-run`/`--report` first).
 
 ## Risks / notes
 

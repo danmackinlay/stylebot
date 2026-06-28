@@ -13,6 +13,7 @@ The schema is defined in `_plans/phase-1-pair-capture.md` and produced by
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 from stylebot.ai_core import STYLE_SYSTEM
@@ -125,3 +126,28 @@ def validate_pairs_file(path: str | Path) -> list[tuple[int, list[str]]]:
             if errs:
                 problems.append((lineno, errs))
     return problems
+
+
+def iter_pairs(path: str | Path) -> Iterator[dict]:
+    """Yield each JSON object from a `pairs.jsonl`, one per non-blank line.
+
+    The shared, tolerant line-by-line reader for the corpus schema (UTF-8, blank
+    lines skipped, undecodable / non-object lines skipped rather than raising) —
+    the same idiom as `synth.existing_synth_keys`. Yields the raw parsed dict;
+    callers validate with `validate_pair_record` if they need the contract
+    enforced. A missing file yields nothing.
+    """
+    path = Path(path)
+    if not path.exists():
+        return
+    with path.open(encoding="utf-8") as fp:
+        for line in fp:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                yield rec

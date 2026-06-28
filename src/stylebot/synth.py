@@ -13,8 +13,8 @@ Output is the **same** `pairs.jsonl` schema as Phase 1
 (`stylebot.pairs.validate_pairs_file`), chunked the same way
 (`stylebot.lib.split_paragraphs`), so real and synthetic pairs are mixable. Each
 synthetic record additionally carries `meta.synthetic: true`,
-`meta.generator: "<model>"`, `meta.synth_key` (for idempotent resume), and
-`meta.tags` provenance.
+`meta.generator: "<model>"`, `meta.slop_strategy: "<which slop prompt>"`,
+`meta.synth_key` (for idempotent resume), and `meta.tags` provenance.
 
 Selection is a user-supplied policy (OVERVIEW "Selection is a user-supplied
 policy"): `iter_targets` takes a `selector` defaulting to
@@ -22,9 +22,15 @@ policy"): `iter_targets` takes a `selector` defaulting to
 own, or hand in a pre-selected file list and skip the walk entirely.
 
 The generators are injected, not hardcoded: tests pass plain callables; the
-`anthropic_generator` / `openai_generator` / `local_generator` factories build
-real provider-backed ones (multi-source by design — rotate ≥2 so the styler
-learns to undo AI writing broadly, not one model's tics).
+`anthropic_generator` / `openai_generator` / `local_generator` /
+`openrouter_generator` factories build real provider-backed ones (multi-source by
+design — rotate ≥2 so the styler learns to undo AI writing broadly, not one
+model's tics; OpenRouter reaches many upstream models off a single key).
+
+The slop *prompt* is itself a knob: `STRATEGIES` maps a label → a system prompt
+flavour, recorded as `meta.slop_strategy` and folded into `synth_key`, so you can
+generate, eyeball, and ablate different flavours of slop without them colliding
+on resume or blurring together in the corpus.
 """
 
 from __future__ import annotations
@@ -52,14 +58,69 @@ from stylebot.pairs import build_pair_content
 # It mirrors STYLE_SYSTEM's structure-preservation clause so the synthetic
 # source differs from the target in *style*, not markdown shape — we want the
 # styler to learn the voice transform, not a reformatting.
-SLOP_SYSTEM = (
-    "You are a writing assistant that polishes prose. Rewrite the user's "
-    "passage to be clearer, more professional, and more engaging. "
+# Shared tail for every slop strategy: the formatting contract (preserve
+# structure, return only the passage). Identical across strategies so the only
+# thing that varies between them is the *flavour* of slop requested.
+_SLOP_PRESERVE = (
     "Preserve all markdown structure (code fences, math, links, headings, "
     "list markers, blank lines) verbatim. "
     "Preserve any 〈MASKED_*〉 tokens verbatim if present. "
     "Return only the rewritten passage, nothing else."
 )
+
+# Named slop strategies: label -> the system prompt that produces that flavour of
+# slop. The label is recorded as `meta.slop_strategy` and folded into `synth_key`,
+# so pairs from different strategies neither collide on resume nor blur together —
+# you can ablate "which flavour of slop teaches the styler best". These are
+# GENERIC AI-prose flavours; an author's own slop catalogue is injected as a
+# custom prompt (CLI `--slop-system-file` / library `system=`), keeping stylebot
+# free of any one author's slop definition.
+SLOP_SYSTEM = (  # "polish": the neutral baseline (clearer / more professional)
+    "You are a writing assistant that polishes prose. Rewrite the user's "
+    "passage to be clearer, more professional, and more engaging. " + _SLOP_PRESERVE
+)
+SLOP_SYSTEM_ENGAGING = (  # "engaging": hooks, signposting, surfaced takeaways
+    "You are an enthusiastic content editor. Rewrite the user's passage to be "
+    "maximally engaging and accessible to a broad audience: open with a hook, "
+    "add helpful signposting, surface the key takeaways, and keep the reader "
+    "moving. " + _SLOP_PRESERVE
+)
+SLOP_SYSTEM_CATALOGUE = (  # "catalogue": the stereotypical LLM register, on purpose
+    "You are a typical AI writing assistant. Rewrite the user's passage in the "
+    "default polished register of a large language model: smooth, measured, and "
+    "explanatory. Lean into the characteristic moves — open with throat-clearing "
+    "context ('In today's world', 'It's worth noting that'), add signposting and "
+    "a tidy summary, prefer abstract Latinate vocabulary and rule-of-three "
+    "phrasing, hedge claims ('can', 'may', 'often', 'arguably'), and even out the "
+    "rhythm so sentences land at a similar measured length. " + _SLOP_PRESERVE
+)
+
+STRATEGIES: dict[str, str] = {
+    "polish": SLOP_SYSTEM,
+    "engaging": SLOP_SYSTEM_ENGAGING,
+    "catalogue": SLOP_SYSTEM_CATALOGUE,
+}
+DEFAULT_STRATEGY = "polish"
+
+
+def resolve_strategy(name: str, system: str | None = None) -> tuple[str, str]:
+    """Resolve a strategy name to ``(label, system_prompt)``.
+
+    An explicit ``system`` overrides the registry, so a caller can inject a custom
+    (e.g. blog-specific) slop prompt under any label without stylebot needing to
+    know that author's catalogue. A name absent from the registry is an error
+    *unless* an explicit ``system`` is supplied.
+    """
+    if system is not None:
+        return name, system
+    try:
+        return name, STRATEGIES[name]
+    except KeyError:
+        known = ", ".join(sorted(STRATEGIES))
+        raise ValueError(
+            f"unknown slop strategy {name!r}; known: {known} "
+            f"(or pass an explicit system prompt / --slop-system-file)"
+        ) from None
 
 # Chunk hygiene. There is no voice transform to learn from a bare heading, a
 # fenced code block, a link list, or a stub paragraph — so trim them.
@@ -450,10 +511,17 @@ def iter_targets(
 
 @dataclass
 class Generator:
-    """A named slop producer. `name` becomes `meta.generator` on each pair."""
+    """A named slop producer.
+
+    `name` becomes `meta.generator` (the model id); `strategy` becomes
+    `meta.slop_strategy` (which slop *prompt* produced the pair). Both feed the
+    `synth_key`, so the same model under two strategies yields distinct,
+    non-colliding pairs.
+    """
 
     name: str
     generate: Callable[[str], str] | None = None
+    strategy: str = DEFAULT_STRATEGY
 
     def __call__(self, target_text: str) -> str:
         if self.generate is None:
@@ -464,7 +532,8 @@ class Generator:
 def anthropic_generator(
     *,
     model: str = "claude-opus-4-8",
-    system: str = SLOP_SYSTEM,
+    strategy: str = DEFAULT_STRATEGY,
+    system: str | None = None,
     max_tokens: int = DEFAULT_SLOP_MAX_TOKENS,
     api_key: str | None = None,
 ) -> Generator:
@@ -473,6 +542,7 @@ def anthropic_generator(
 
     from stylebot import config
 
+    label, system = resolve_strategy(strategy, system)
     client = anthropic.Anthropic(api_key=api_key or config.require_key("ANTHROPIC_API_KEY"))
 
     def generate(text: str) -> str:
@@ -488,13 +558,14 @@ def anthropic_generator(
             raise RuntimeError(f"slop truncated at max_tokens={max_tokens} (raise it)")
         return "".join(b.text for b in resp.content if b.type == "text").strip()
 
-    return Generator(name=model, generate=generate)
+    return Generator(name=model, generate=generate, strategy=label)
 
 
 def openai_generator(
     *,
     model: str = "gpt-4o",
-    system: str = SLOP_SYSTEM,
+    strategy: str = DEFAULT_STRATEGY,
+    system: str | None = None,
     max_tokens: int = DEFAULT_SLOP_MAX_TOKENS,
     api_key: str | None = None,
     base_url: str | None = None,
@@ -502,13 +573,14 @@ def openai_generator(
 ) -> Generator:
     """OpenAI-compatible slop generator (`openai` SDK; key `OPENAI_API_KEY`).
 
-    `base_url` repoints at any OpenAI-compatible endpoint — `local_generator`
-    uses that to drive a utility/base model.
+    `base_url` repoints at any OpenAI-compatible endpoint — `local_generator` and
+    `openrouter_generator` use that to drive a base model / OpenRouter.
     """
     import openai
 
     from stylebot import config
 
+    label, system = resolve_strategy(strategy, system)
     client = openai.OpenAI(
         api_key=api_key or config.require_key("OPENAI_API_KEY"),
         base_url=base_url,
@@ -529,15 +601,16 @@ def openai_generator(
             raise RuntimeError(f"slop truncated at max_tokens={max_tokens} (raise it)")
         return (choice.message.content or "").strip()
 
-    return Generator(name=name or model, generate=generate)
+    return Generator(name=name or model, generate=generate, strategy=label)
 
 
 def local_generator(
     *,
     model: str | None = None,
+    strategy: str = DEFAULT_STRATEGY,
     base_url: str | None = None,
     api_key: str | None = None,
-    system: str = SLOP_SYSTEM,
+    system: str | None = None,
     max_tokens: int = DEFAULT_SLOP_MAX_TOKENS,
 ) -> Generator:
     """Local/utility base-model generator via an OpenAI-compatible endpoint.
@@ -553,11 +626,46 @@ def local_generator(
     api_key = api_key or config.get_key("LOCAL_LLM_API_KEY") or "not-needed"
     return openai_generator(
         model=model,
+        strategy=strategy,
         system=system,
         max_tokens=max_tokens,
         api_key=api_key,
         base_url=base_url,
         name=f"local-{model}",
+    )
+
+
+def openrouter_generator(
+    *,
+    model: str,
+    strategy: str = DEFAULT_STRATEGY,
+    system: str | None = None,
+    max_tokens: int = DEFAULT_SLOP_MAX_TOKENS,
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> Generator:
+    """OpenRouter slop generator — one key, many upstream models.
+
+    OpenRouter is OpenAI-compatible, so this is `openai_generator` pointed at the
+    OpenRouter endpoint. `model` is an OpenRouter model id (e.g.
+    ``anthropic/claude-opus-4-8``, ``openai/gpt-4o``, ``google/gemini-2.0-flash``),
+    which makes multi-source slop rotation a single-credential affair. Tagged
+    ``openrouter/<model>`` in `meta.generator` so its pairs stay distinguishable.
+
+    Reads `OPENROUTER_API_KEY` (required) and optional `OPENROUTER_BASE_URL`
+    (default ``https://openrouter.ai/api/v1``) from the environment / `.env`.
+    """
+    from stylebot import config
+
+    base_url = base_url or config.get_key("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+    return openai_generator(
+        model=model,
+        strategy=strategy,
+        system=system,
+        max_tokens=max_tokens,
+        api_key=api_key or config.require_key("OPENROUTER_API_KEY"),
+        base_url=base_url,
+        name=f"openrouter/{model}",
     )
 
 
@@ -570,14 +678,23 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
-def _synth_key(generator_name: str, target_text: str, context: str = "") -> str:
-    """Stable id for a (generator, context, target) pair — the resume/dedup key.
+def _synth_key(
+    generator_name: str,
+    target_text: str,
+    context: str = "",
+    strategy: str = DEFAULT_STRATEGY,
+) -> str:
+    """Stable id for a (generator, strategy, context, target) pair — resume/dedup key.
 
-    Context is part of the key so toggling/changing heading context regenerates
-    (a context-less pair and a context-prefixed pair are different training data).
+    Generator name, slop strategy, and context are all part of the key: a
+    context-less vs context-prefixed pair, and the same target under a different
+    slop *prompt*, are different training data, so each regenerates rather than
+    being skipped on resume.
     """
     h = hashlib.sha256()
     h.update(generator_name.encode("utf-8"))
+    h.update(b"\x00")
+    h.update(strategy.encode("utf-8"))
     h.update(b"\x00")
     h.update(context.encode("utf-8"))
     h.update(b"\x00")
@@ -598,9 +715,9 @@ def _effective_context(target: Target, context_dropout: float) -> str:
     return "" if bucket < context_dropout * 1000 else target.context
 
 
-def _capture_id(source: str, generator_name: str) -> str:
-    """Group a post's chunks from one generator under one capture id."""
-    h = hashlib.sha256(f"{source}\x00{generator_name}".encode("utf-8"))
+def _capture_id(source: str, generator_name: str, strategy: str = DEFAULT_STRATEGY) -> str:
+    """Group a post's chunks from one generator+strategy under one capture id."""
+    h = hashlib.sha256(f"{source}\x00{generator_name}\x00{strategy}".encode("utf-8"))
     return h.hexdigest()[:8]
 
 
@@ -631,19 +748,21 @@ def _build_record(
     target: Target,
     generator_name: str,
     synth_key: str,
+    strategy: str = DEFAULT_STRATEGY,
     context: str = "",
     extra_tags: Sequence[str] = (),
 ) -> dict:
     meta = {
         "source": target.source,
         "captured_at": _now_iso(),
-        "capture_id": _capture_id(target.source, generator_name),
+        "capture_id": _capture_id(target.source, generator_name, strategy),
         "chunk_index": target.chunk_index,
         "chunk_total": target.chunk_total,
         "before_chars": len(slop),  # body lengths (the transform), excluding the heading prefix
         "after_chars": len(target.text),
         "synthetic": True,
         "generator": generator_name,
+        "slop_strategy": strategy,
         "synth_key": synth_key,
         "tags": ["synthetic", "paraphrase", *extra_tags],
     }
@@ -676,35 +795,37 @@ class SynthResult:
 
 def _assign(
     targets: Sequence[Target],
-    generator_names: Sequence[str],
+    generators: Sequence[Generator],
     *,
     per_generator: bool,
     context_dropout: float = 0.0,
-) -> list[tuple[Target, str, str, str]]:
+) -> list[tuple[Target, Generator, str, str]]:
     """Pair targets with generators → ``(target, generator, synth_key, context)``.
 
     Default (rotate, `per_generator=False`): round-robin — target *i* goes to
     generator *i % n*. Cheap, and across the corpus yields ≥2 generators.
     `per_generator=True`: every target × every generator (n× the pairs/cost).
     `context` is the effective heading context after dropout; the `synth_key`
-    incorporates it so toggling context regenerates.
+    incorporates the generator name, its slop strategy, and the context, so
+    toggling any of them regenerates rather than colliding on resume.
     """
-    if not generator_names:
+    if not generators:
         return []
-    out: list[tuple[Target, str, str, str]] = []
+    out: list[tuple[Target, Generator, str, str]] = []
 
-    def assign_one(t: Target, name: str) -> None:
+    def assign_one(t: Target, gen: Generator) -> None:
         ctx = _effective_context(t, context_dropout)
-        out.append((t, name, _synth_key(name, t.text, ctx), ctx))
+        key = _synth_key(gen.name, t.text, ctx, gen.strategy)
+        out.append((t, gen, key, ctx))
 
     if per_generator:
         for t in targets:
-            for name in generator_names:
-                assign_one(t, name)
+            for gen in generators:
+                assign_one(t, gen)
     else:
-        n = len(generator_names)
+        n = len(generators)
         for i, t in enumerate(targets):
-            assign_one(t, generator_names[i % n])
+            assign_one(t, generators[i % n])
     return out
 
 
@@ -722,8 +843,8 @@ def synthesize_pairs(
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
     Idempotent and resumable: each pair carries a `meta.synth_key`
-    (`hash(generator, context, target)`); assignments whose key is already in the
-    file are skipped, so re-running never duplicates and a crashed run resumes
+    (`hash(generator, strategy, context, target)`); assignments whose key is already
+    in the file are skipped, so re-running never duplicates and a crashed run resumes
     where it stopped (records are appended one-per-line, flushed as they go).
 
     When targets carry heading `context` (`iter_targets(heading_context=...)`),
@@ -739,10 +860,8 @@ def synthesize_pairs(
     """
     data_dir = Path(data_dir)
     pairs_path = data_dir / "pairs.jsonl"
-    names = [g.name for g in generators]
-    by_name = {g.name: g for g in generators}
 
-    assignments = _assign(targets, names, per_generator=per_generator, context_dropout=context_dropout)
+    assignments = _assign(targets, generators, per_generator=per_generator, context_dropout=context_dropout)
     result = SynthResult(planned=len(assignments))
 
     seen = existing_synth_keys(pairs_path)
@@ -750,21 +869,21 @@ def synthesize_pairs(
     result.skipped_existing = len(assignments) - len(todo)
 
     if dry_run:
-        for _, name, _, _ in todo:
-            result.per_generator[name] = result.per_generator.get(name, 0) + 1
+        for _, gen, _, _ in todo:
+            result.per_generator[gen.name] = result.per_generator.get(gen.name, 0) + 1
         return result
 
     data_dir.mkdir(parents=True, exist_ok=True)
     written_keys: set[str] = set()
     total = len(todo)
     with pairs_path.open("a", encoding="utf-8") as fp:
-        for idx, (target, name, key, context) in enumerate(todo, start=1):
+        for idx, (target, gen, key, context) in enumerate(todo, start=1):
             if on_progress is not None:
                 on_progress(idx, total)
             if key in written_keys:  # guard within-run dup (same target listed twice)
                 continue
             try:
-                slop = by_name[name](target.text)
+                slop = gen(target.text)
             except Exception as exc:  # API error etc. — record and continue
                 result.errors.append((key, f"{type(exc).__name__}: {exc}"))
                 continue
@@ -774,8 +893,9 @@ def synthesize_pairs(
             record = _build_record(
                 slop=slop,
                 target=target,
-                generator_name=name,
+                generator_name=gen.name,
                 synth_key=key,
+                strategy=gen.strategy,
                 context=context,
                 extra_tags=extra_tags,
             )
@@ -783,6 +903,6 @@ def synthesize_pairs(
             fp.flush()
             written_keys.add(key)
             result.written += 1
-            result.per_generator[name] = result.per_generator.get(name, 0) + 1
+            result.per_generator[gen.name] = result.per_generator.get(gen.name, 0) + 1
 
     return result
