@@ -37,9 +37,12 @@ def format_sample(targets: Sequence[Target]) -> str:
     """Plain-text rendering of targets for stdout (source · length · text)."""
     out: list[str] = []
     for t in targets:
+        context = getattr(t, "context", "") or ""
         out.append("─" * 78)
         out.append(f"{t.source}  ·  {len(t.text)} chars  ·  chunk {t.chunk_index + 1}/{t.chunk_total}")
         out.append("")
+        if context:
+            out.append(f"  ⌜ {context} ⌟")  # the heading the passage sits under
         out.append(t.text)
     return "\n".join(out)
 
