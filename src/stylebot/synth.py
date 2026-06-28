@@ -46,6 +46,7 @@ from stylebot.lib import (
     read_w_frontmatter_text,
     split_paragraphs,
 )
+from stylebot.pairs import build_pair_content
 
 # Instruction we hand a generic LLM to manufacture "slop" from Dan's prose.
 # It mirrors STYLE_SYSTEM's structure-preservation clause so the synthetic
@@ -90,12 +91,19 @@ DEFAULT_SLOP_MAX_TOKENS = 8192
 
 @dataclass(frozen=True)
 class Target:
-    """One paragraph-chunk of human-authored prose (a pair's target)."""
+    """One paragraph-chunk (or merged passage) of human-authored prose.
+
+    `context` is the section heading this passage sits under (verbatim, possibly
+    empty) — prepended identically to both sides of the pair at synthesis time so
+    the styler restyles the body conditioned on the heading. See
+    `_plans/heading-context.md`.
+    """
 
     text: str
     source: str  # path of the post it came from (relative to blog-root if known)
     chunk_index: int
     chunk_total: int
+    context: str = ""
 
 
 _HEADER_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)\s*$")
@@ -201,25 +209,29 @@ def _load_meta_body(path: Path) -> tuple[dict, str]:
     return (meta or {}), body
 
 
-def _split_sections(text: str) -> list[str]:
-    """Split a body into header-delimited section bodies.
+def _split_sections(text: str) -> list[tuple[str, str]]:
+    """Split a body into ``(heading, section_body)`` pairs.
 
     A header line (`_HEADER_RE`) starts a new section and is itself **excluded**
-    (headers carry no paragraph voice and must never pack with prose). Run this
-    *after* `editable_prose` so code-comment ``#`` lines — already stripped as
-    protected blocks — can't be mistaken for headers.
+    from the body (headers carry no paragraph voice and must never pack with
+    prose) — instead it becomes the `heading` of the section that *follows* it
+    (the immediate heading the section sits under). The pre-first-header preamble
+    has an empty heading. Run this *after* `editable_prose` so code-comment ``#``
+    lines — already stripped as protected blocks — can't be mistaken for headers.
     """
-    sections: list[str] = []
+    sections: list[tuple[str, str]] = []
+    heading = ""
     cur: list[str] = []
     for line in text.splitlines(keepends=True):
         if _HEADER_RE.match(line):
             if cur:
-                sections.append("".join(cur))
+                sections.append((heading, "".join(cur)))
                 cur = []
+            heading = line.strip()  # frames the next section
         else:
             cur.append(line)
     if cur:
-        sections.append("".join(cur))
+        sections.append((heading, "".join(cur)))
     return sections
 
 
@@ -260,6 +272,7 @@ def _post_targets(
     stop_at_headers: Sequence[str],
     merge: bool,
     merge_max_chars: int,
+    heading_context: str,
 ) -> list[Target]:
     _, body = _load_meta_body(path)
     # Cut trailing dump sections (e.g. "## Incoming") before anything else.
@@ -268,27 +281,29 @@ def _post_targets(
     # splitting, so they never become targets and chunk boundaries match what
     # the blog's own edit pipeline sees.
     text = editable_prose(body) if prose_only else body
+    want_context = heading_context == "immediate"
 
-    if not merge:
-        chunks = [
-            c
-            for c in split_paragraphs(text)
-            if _keep_chunk(
-                c,
-                min_chars=min_chars,
-                max_chars=max_chars,
-                ignore_markers=ignore_markers,
-                drop_link_dumps=drop_link_dumps,
-                drop_list_items=drop_list_items,
-            )
-        ]
-    else:
-        # Section-aware packing: within each header-delimited section, keep prose
-        # paragraphs (no min/max floor yet — short prose survives to be rescued;
-        # junk paragraphs dropped pre-pack), greedily pack to the budget, then
-        # gate the packed block on min/max/link-list.
-        chunks = []
-        for section in _split_sections(text):
+    # Both modes iterate header-delimited sections (so the section heading is
+    # available as context, and so a passage never packs across a header). The
+    # heading is attached to each emitted chunk when heading_context is on.
+    chunks: list[tuple[str, str]] = []  # (text, context)
+    for heading, section in _split_sections(text):
+        ctx = heading if want_context else ""
+        if not merge:
+            for c in split_paragraphs(section):
+                if _keep_chunk(
+                    c,
+                    min_chars=min_chars,
+                    max_chars=max_chars,
+                    ignore_markers=ignore_markers,
+                    drop_link_dumps=drop_link_dumps,
+                    drop_list_items=drop_list_items,
+                ):
+                    chunks.append((c, ctx))
+        else:
+            # Keep prose paragraphs (no min/max floor yet — short prose survives
+            # to be rescued; junk dropped pre-pack), greedily pack to the budget,
+            # then gate the packed block on min/max/link-list.
             paras = [
                 p
                 for p in split_paragraphs(section)
@@ -310,10 +325,13 @@ def _post_targets(
                     drop_link_dumps=drop_link_dumps,
                     drop_list_items=drop_list_items,
                 ):
-                    chunks.append(block)
+                    chunks.append((block, ctx))
 
     total = len(chunks)
-    return [Target(text=c, source=source, chunk_index=i, chunk_total=total) for i, c in enumerate(chunks)]
+    return [
+        Target(text=t, source=source, chunk_index=i, chunk_total=total, context=c)
+        for i, (t, c) in enumerate(chunks)
+    ]
 
 
 def _source_label(path: Path, blog_root: Path | None) -> str:
@@ -340,6 +358,7 @@ def iter_targets(
     merge: bool = False,
     merge_max_chars: int = MERGE_MAX_CHUNK_CHARS,
     stop_at_headers: Sequence[str] = (),
+    heading_context: str = "none",
     sort_key: Callable[[Target], object] | None = None,
 ) -> list[Target]:
     """Collect prose chunks to use as synthesis targets.
@@ -379,6 +398,10 @@ def iter_targets(
       header (level-agnostic, case-insensitive), dropping everything after it —
       e.g. a trailing ``"## Incoming"`` dump of quotes/links with no authored
       signal.
+    - `heading_context` (``"none"`` | ``"immediate"``): when ``"immediate"``,
+      populate ``Target.context`` with the section heading each chunk sits under,
+      so `synthesize_pairs` can prepend it verbatim to both sides of the pair.
+      ``"none"`` (default) leaves context empty (unchanged behaviour).
 
     `sort_key` orders the resulting chunks. Returns a flat list of `Target`s.
     """
@@ -399,6 +422,7 @@ def iter_targets(
         stop_at_headers=stop_at_headers,
         merge=merge,
         merge_max_chars=merge_max_chars,
+        heading_context=heading_context,
     )
 
     if files is not None:
@@ -546,13 +570,32 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
-def _synth_key(generator_name: str, target_text: str) -> str:
-    """Stable id for a (generator, target) pair — the resume/dedup key."""
+def _synth_key(generator_name: str, target_text: str, context: str = "") -> str:
+    """Stable id for a (generator, context, target) pair — the resume/dedup key.
+
+    Context is part of the key so toggling/changing heading context regenerates
+    (a context-less pair and a context-prefixed pair are different training data).
+    """
     h = hashlib.sha256()
     h.update(generator_name.encode("utf-8"))
     h.update(b"\x00")
+    h.update(context.encode("utf-8"))
+    h.update(b"\x00")
     h.update(target_text.encode("utf-8"))
     return h.hexdigest()[:16]
+
+
+def _effective_context(target: Target, context_dropout: float) -> str:
+    """The context to actually use for a target, applying deterministic dropout.
+
+    Dropping a deterministic fraction (keyed on the body hash, so resume is
+    stable) keeps some pairs heading-less, so the styler doesn't *require* a
+    heading at inference.
+    """
+    if not target.context or context_dropout <= 0:
+        return target.context
+    bucket = int(hashlib.sha256(target.text.encode("utf-8")).hexdigest(), 16) % 1000
+    return "" if bucket < context_dropout * 1000 else target.context
 
 
 def _capture_id(source: str, generator_name: str) -> str:
@@ -588,6 +631,7 @@ def _build_record(
     target: Target,
     generator_name: str,
     synth_key: str,
+    context: str = "",
     extra_tags: Sequence[str] = (),
 ) -> dict:
     meta = {
@@ -596,18 +640,24 @@ def _build_record(
         "capture_id": _capture_id(target.source, generator_name),
         "chunk_index": target.chunk_index,
         "chunk_total": target.chunk_total,
-        "before_chars": len(slop),
+        "before_chars": len(slop),  # body lengths (the transform), excluding the heading prefix
         "after_chars": len(target.text),
         "synthetic": True,
         "generator": generator_name,
         "synth_key": synth_key,
         "tags": ["synthetic", "paraphrase", *extra_tags],
     }
+    if context:
+        # Shared contract: identical heading prefix on both sides (see
+        # stylebot.pairs.build_pair_content); the styler restyles the body
+        # conditioned on, but never rewriting, the heading.
+        meta["context"] = context
+        meta["context_mode"] = "immediate"
     return {
         "messages": [
             {"role": "system", "content": STYLE_SYSTEM},
-            {"role": "user", "content": slop},
-            {"role": "assistant", "content": target.text},
+            {"role": "user", "content": build_pair_content(context, slop)},
+            {"role": "assistant", "content": build_pair_content(context, target.text)},
         ],
         "meta": meta,
     }
@@ -629,25 +679,32 @@ def _assign(
     generator_names: Sequence[str],
     *,
     per_generator: bool,
-) -> list[tuple[Target, str, str]]:
-    """Pair targets with generators.
+    context_dropout: float = 0.0,
+) -> list[tuple[Target, str, str, str]]:
+    """Pair targets with generators → ``(target, generator, synth_key, context)``.
 
     Default (rotate, `per_generator=False`): round-robin — target *i* goes to
     generator *i % n*. Cheap, and across the corpus yields ≥2 generators.
     `per_generator=True`: every target × every generator (n× the pairs/cost).
+    `context` is the effective heading context after dropout; the `synth_key`
+    incorporates it so toggling context regenerates.
     """
     if not generator_names:
         return []
-    out: list[tuple[Target, str, str]] = []
+    out: list[tuple[Target, str, str, str]] = []
+
+    def assign_one(t: Target, name: str) -> None:
+        ctx = _effective_context(t, context_dropout)
+        out.append((t, name, _synth_key(name, t.text, ctx), ctx))
+
     if per_generator:
         for t in targets:
             for name in generator_names:
-                out.append((t, name, _synth_key(name, t.text)))
+                assign_one(t, name)
     else:
         n = len(generator_names)
         for i, t in enumerate(targets):
-            name = generator_names[i % n]
-            out.append((t, name, _synth_key(name, t.text)))
+            assign_one(t, generator_names[i % n])
     return out
 
 
@@ -659,14 +716,21 @@ def synthesize_pairs(
     per_generator: bool = False,
     dry_run: bool = False,
     extra_tags: Sequence[str] = (),
+    context_dropout: float = 0.0,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
     Idempotent and resumable: each pair carries a `meta.synth_key`
-    (`hash(generator, target)`); assignments whose key is already in the file
-    are skipped, so re-running never duplicates and a crashed run resumes where
-    it stopped (records are appended one-per-line, flushed as they go).
+    (`hash(generator, context, target)`); assignments whose key is already in the
+    file are skipped, so re-running never duplicates and a crashed run resumes
+    where it stopped (records are appended one-per-line, flushed as they go).
+
+    When targets carry heading `context` (`iter_targets(heading_context=...)`),
+    the heading is prepended verbatim to both sides of the pair via
+    `stylebot.pairs.build_pair_content`, and the slop is generated from the body
+    only (so the heading is never paraphrased). `context_dropout` keeps a
+    deterministic fraction heading-less.
 
     `dry_run` plans the assignment and reports counts without calling any
     generator or writing — use it to vet selection against the real blog with
@@ -678,15 +742,15 @@ def synthesize_pairs(
     names = [g.name for g in generators]
     by_name = {g.name: g for g in generators}
 
-    assignments = _assign(targets, names, per_generator=per_generator)
+    assignments = _assign(targets, names, per_generator=per_generator, context_dropout=context_dropout)
     result = SynthResult(planned=len(assignments))
 
     seen = existing_synth_keys(pairs_path)
-    todo = [(t, name, key) for (t, name, key) in assignments if key not in seen]
+    todo = [a for a in assignments if a[2] not in seen]
     result.skipped_existing = len(assignments) - len(todo)
 
     if dry_run:
-        for _, name, _ in todo:
+        for _, name, _, _ in todo:
             result.per_generator[name] = result.per_generator.get(name, 0) + 1
         return result
 
@@ -694,7 +758,7 @@ def synthesize_pairs(
     written_keys: set[str] = set()
     total = len(todo)
     with pairs_path.open("a", encoding="utf-8") as fp:
-        for idx, (target, name, key) in enumerate(todo, start=1):
+        for idx, (target, name, key, context) in enumerate(todo, start=1):
             if on_progress is not None:
                 on_progress(idx, total)
             if key in written_keys:  # guard within-run dup (same target listed twice)
@@ -712,6 +776,7 @@ def synthesize_pairs(
                 target=target,
                 generator_name=name,
                 synth_key=key,
+                context=context,
                 extra_tags=extra_tags,
             )
             fp.write(json.dumps(record, ensure_ascii=False) + "\n")

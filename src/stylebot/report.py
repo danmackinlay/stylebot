@@ -23,6 +23,7 @@ import statistics
 from collections.abc import Sequence
 from pathlib import Path
 
+from stylebot.pairs import build_pair_content
 from stylebot.synth import Target
 
 
@@ -93,13 +94,17 @@ def _render_rows(targets: Sequence[Target], *, max_rows: int | None) -> str:
     rows = []
     shown = targets if max_rows is None else targets[:max_rows]
     for t in shown:
-        full = html.escape(t.text, quote=True)
+        context = getattr(t, "context", "") or ""
+        full = html.escape(build_pair_content(context, t.text), quote=True)
         preview = t.text if len(t.text) <= 500 else t.text[:500] + "…"
+        # The heading context (the verbatim prefix the pair will carry) shown
+        # muted above the body, so heading+passage units are eyeball-able.
+        ctx_html = f'<div class=ctx>{html.escape(context)}</div>' if context else ""
         rows.append(
             f'<tr data-src="{html.escape(t.source, quote=True)}" data-len="{len(t.text)}">'
             f"<td class=src>{html.escape(t.source)}</td>"
             f"<td class=len>{len(t.text)}</td>"
-            f'<td class=txt title="{full}">{html.escape(preview)}</td></tr>'
+            f'<td class=txt title="{full}">{ctx_html}{html.escape(preview)}</td></tr>'
         )
     return "\n".join(rows)
 
@@ -121,6 +126,7 @@ th{cursor:pointer;user-select:none;position:sticky;top:0;background:var(--bg)}
 .src{white-space:nowrap;color:var(--muted);font-size:12px}
 .len{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
 .txt{max-width:60ch}
+.ctx{color:var(--muted);font-size:12px;font-weight:600;margin-bottom:3px}
 .note{color:var(--muted);font-size:12px;margin:6px 0}
 """
 

@@ -21,13 +21,16 @@ P3 = "Third paragraph rounding out the section with another substantial sentence
 # --- unit-level helpers ---------------------------------------------------
 
 
-def test_split_sections_excludes_headers():
+def test_split_sections_excludes_headers_and_carries_heading():
     body = "pre\n\n## A\n\npara a\n\n### B\n\npara b\n"
-    secs = _split_sections(body)
-    joined = "\n".join(secs)
-    assert "## A" not in joined and "### B" not in joined
-    assert any("para a" in s for s in secs) and any("para b" in s for s in secs)
-    assert any("pre" in s for s in secs)
+    secs = _split_sections(body)  # list of (heading, body)
+    bodies = "\n".join(b for _, b in secs)
+    assert "## A" not in bodies and "### B" not in bodies  # headers excluded from bodies
+    assert ("", "pre\n") in [(h, b) for h, b in secs] or any(h == "" and "pre" in b for h, b in secs)
+    # Each section carries its immediate heading.
+    by_heading = {h: b for h, b in secs}
+    assert "para a" in by_heading["## A"]
+    assert "para b" in by_heading["### B"]
 
 
 def test_pack_respects_budget():
@@ -126,6 +129,22 @@ def test_merge_chunk_index_sequential(tmp_path):
     blocks = synth.iter_targets(blog_root=root, min_chars=50, merge=True, merge_max_chars=300)
     assert [b.chunk_index for b in blocks] == list(range(len(blocks)))
     assert all(b.chunk_total == len(blocks) for b in blocks)
+
+
+def test_heading_context_attached_immediate(tmp_path):
+    root = tmp_path / "blog"
+    body = f"---\ntitle: t\nautomation: 0\n---\n\n{P1}\n\n## A Section\n\n{P2}\n"
+    _write(root, "post/hc.qmd", body)
+    # Default: no context.
+    plain = synth.iter_targets(blog_root=root, min_chars=50, merge=True, merge_max_chars=5000)
+    assert all(t.context == "" for t in plain)
+    # immediate: the section's paragraph carries its heading; preamble stays "".
+    ctx = synth.iter_targets(
+        blog_root=root, min_chars=50, merge=True, merge_max_chars=5000, heading_context="immediate"
+    )
+    by_ctx = {t.context for t in ctx}
+    assert "## A Section" in by_ctx  # P2's section heading
+    assert "" in by_ctx  # P1 preamble has no heading
 
 
 def test_drop_list_items_both_modes(tmp_path):

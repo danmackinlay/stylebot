@@ -72,6 +72,8 @@ def main() -> None:
 @click.option("--drop-list-items/--keep-list-items", default=False, show_default=True, help="Drop chunks that are entirely markdown list items.")
 @click.option("--merge/--no-merge", default=False, show_default=True, help="Pack consecutive prose paragraphs within a section into multi-paragraph passages.")
 @click.option("--merge-max-chars", default=synth.MERGE_MAX_CHUNK_CHARS, show_default=True, type=int, help="Soft char budget per packed passage (merge mode).")
+@click.option("--heading-context", type=click.Choice(["none", "immediate"]), default="none", show_default=True, help="Prepend the section heading (verbatim) to both sides of each pair as fixed context.")
+@click.option("--context-dropout", default=0.0, show_default=True, type=float, help="Fraction of pairs to keep heading-less (deterministic) so the styler doesn't require a heading.")
 @click.option("--sort", "sort_name", type=click.Choice(["none", "length", "source"]), default="none", show_default=True)
 @click.option("--report", "report_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Write a self-contained HTML report of the selected targets and exit (no generation).")
 @click.option("--report-max-rows", default=2000, show_default=True, type=int, help="Cap table rows in the HTML report (0 = all).")
@@ -109,6 +111,8 @@ def synth_cmd(
     drop_list_items: bool,
     merge: bool,
     merge_max_chars: int,
+    heading_context: str,
+    context_dropout: float,
     sort_name: str,
     report_path: Path | None,
     report_max_rows: int,
@@ -152,6 +156,7 @@ def synth_cmd(
         drop_list_items=drop_list_items,
         merge=merge,
         merge_max_chars=merge_max_chars,
+        heading_context=heading_context,
         sort_key=_sort_key(sort_name),
     )
     if limit is not None:
@@ -212,6 +217,7 @@ def synth_cmd(
         per_generator=per_generator,
         dry_run=dry_run,
         extra_tags=tags,
+        context_dropout=context_dropout,
         on_progress=None if dry_run else _progress,
     )
 

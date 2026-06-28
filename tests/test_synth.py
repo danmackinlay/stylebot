@@ -118,6 +118,53 @@ def test_per_generator_mode_doubles_pairs(tmp_path):
     assert result.written == 2 * len(targets)
 
 
+def test_heading_context_prepended_both_sides(tmp_path):
+    # A target carrying context -> heading is the verbatim prefix of BOTH the
+    # slop (user) and the Dan body (assistant); slop is generated from the body
+    # only (the fake echoes its input, so the heading must NOT appear in the
+    # generated portion).
+    import json
+
+    from stylebot.pairs import validate_pairs_file
+
+    data_dir = tmp_path / "corpus"
+    target = synth.Target(
+        text="A real paragraph of prose long enough to be a worthwhile target here.",
+        source="post/x.qmd",
+        chunk_index=0,
+        chunk_total=1,
+        context="## A Heading",
+    )
+    # Fake generator echoes the body it is GIVEN — assert it was given the body,
+    # not the heading.
+    given = {}
+
+    def gen(body):
+        given["arg"] = body
+        return "[slop] " + body
+
+    result = synth.synthesize_pairs(
+        [target], data_dir, [synth.Generator("g", generate=gen)]
+    )
+    assert result.written == 1
+    assert "## A Heading" not in given["arg"]  # generator saw the body only
+
+    pairs_path = data_dir / "pairs.jsonl"
+    assert validate_pairs_file(pairs_path) == []  # incl. the context-prefix invariant
+    rec = json.loads(pairs_path.read_text().splitlines()[0])
+    assert rec["messages"][1]["content"].startswith("## A Heading\n\n")
+    assert rec["messages"][2]["content"].startswith("## A Heading\n\n")
+    assert rec["meta"]["context"] == "## A Heading"
+    assert rec["meta"]["context_mode"] == "immediate"
+
+
+def test_context_changes_synth_key(tmp_path):
+    # Same body, different context -> different synth_key (regenerates).
+    from stylebot.synth import _synth_key
+
+    assert _synth_key("g", "body") != _synth_key("g", "body", "## H")
+
+
 def test_dry_run_writes_nothing(tmp_path):
     root = _make_blog(tmp_path)
     data_dir = tmp_path / "corpus"
