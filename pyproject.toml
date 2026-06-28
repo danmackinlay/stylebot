@@ -9,10 +9,13 @@ dependencies = [
     "ruamel-yaml>=0.19.1",
     "python-dateutil>=2.9.0",
     "python-dotenv>=1.0.1",
+    "anthropic>=0.49.0",
+    "openai>=1.60.0",
 ]
 
 [project.scripts]
 ai-style-log = "stylebot.bin.ai_style_log:main"
+ai-style = "stylebot.bin.ai_style:main"
 
 [dependency-groups]
 dev = [

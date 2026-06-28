@@ -139,7 +139,7 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 |-------|------|--------|-----------|
 | 0 · Scaffolding | this repo's pyproject/.env/_plans | ✅ done | — |
 | 1 · Pair capture | [`phase-1-pair-capture.md`](phase-1-pair-capture.md) | ✅ shipped (daily use) | — |
-| 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | 📋 planned | corpus schema (have it) |
+| 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | 🔧 built (`ai-style synth`); scale run cost-gated | corpus schema (have it) |
 | 3 · LoRA training | [`phase-3-training.md`](phase-3-training.md) | 📋 planned | enough pairs |
 | 4 · Inference CLI | [`phase-4-inference-cli.md`](phase-4-inference-cli.md) | 📋 planned | a trained adapter |
 | E · Eval harness | [`eval-harness.md`](eval-harness.md) | 📋 planned | only sample prose |

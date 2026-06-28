@@ -1,4 +1,4 @@
-# Phase 2 · Synthetic pairs — 📋 PLANNED
+# Phase 2 · Synthetic pairs — 🔧 BUILT (scale run cost-gated)
 
 Bulk up the corpus by manufacturing `(slop → Dan)` pairs: take Dan's own
 real prose as the *target*, ask LLMs to paraphrase it into slop as the
@@ -6,6 +6,12 @@ real prose as the *target*, ask LLMs to paraphrase it into slop as the
 
 **Parallelisable now** — depends only on the `pairs.jsonl` schema (have it) and
 a sample of Dan's paragraphs. Does not need a trained model.
+
+**Blog specifics (wired in 2026-06-27, see `CLAUDE.md` → BLOG INTEGRATION):**
+`--blog-root ~/Source/livingthing`; targets are `automation: 0` posts under
+`post/`+`notebook/` (`is_human_authored` defaults match, no retarget); corpus at
+`~/Source/livingthing/_training_pairs/pairs.jsonl`
+(`STYLEBOT_DATA_DIR=~/Source/livingthing/_training_pairs`).
 
 ## Inputs
 
@@ -27,6 +33,26 @@ a sample of Dan's paragraphs. Does not need a trained model.
 Interface: a `stylebot.synth` function over explicit paths; `ai-style synth`
 is the thin CLI wrapper. Paths resolved via `stylebot.config` (flag > env >
 default), per OVERVIEW "Interfaces".
+
+**Mechanism vs policy split (built 2026-06-28).** stylebot owns generic
+*mechanism*; the blog owns *policy*:
+
+- *stylebot (generic):* `iter_targets` extracts **prose only** via
+  `stylebot.lib.editable_prose` / `segment_for_edit` (a stdlib fork of the
+  blog's `qmd_core.segment_for_edit`) — dropping fenced code, `$$math$$`,
+  `:::` divs/callouts, blockquotes — then applies generic chunk hygiene:
+  `min_chars`, `max_chars` (drop, never truncate), `ignore_markers`
+  (drop chunks containing a literal stub marker), and link-dump dropping. CLI:
+  `--prose-only/--no-prose-only`, `--max-chars`, `--ignore-marker`,
+  `--drop-link-dumps/--keep-link-dumps`.
+- *livingthing (blog policy):* a thin module supplies the composite
+  `selector(meta)` = `automation:0 ∧ quality>6 ∧ not draft ∧ not auxiliary`
+  (reusing the blog's quality/`is_auxiliary_post` helpers + stylebot's
+  `is_human_authored`) and passes `ignore_markers=["🚧TODO🚧"]`. Posts are
+  marked with `🚧TODO🚧` on stub paragraphs.
+
+Measured on the live blog: naive `automation:0`-only ≈ 27.4k junky chunks;
+prose-only + hygiene ≈ 19.5k; + quality>6/draft selector ≈ 10k clean targets.
 
 ## Method (from the post)
 
@@ -55,14 +81,28 @@ Append to the same `$STYLEBOT_DATA_DIR/pairs.jsonl`:
 
 ## Done-criteria
 
-- [ ] A few thousand synthetic pairs in `pairs.jsonl`, schema-validated with
-      `stylebot.pairs.validate_pairs_file` (empty result == pass) against the
-      Phase 1 contract.
-- [ ] Pairs from ≥2 distinct generators, distinguishable by `meta.generator`.
-- [ ] Idempotent + resumable: re-running doesn't duplicate; tracks which source
-      paragraphs are already done.
-- [ ] A documented entrypoint, e.g. `ai-style-synth` or
-      `uv run python -m stylebot.synth`.
+- [x] **Built** (2026-06-27): `stylebot.synth.synthesize_pairs` library function
+      over explicit paths + the `ai-style synth` CLI. Output gated through
+      `validate_pairs_file` in `tests/test_synth.py` (empty result == pass).
+- [x] Pairs from ≥2 distinct generators, distinguishable by `meta.generator`
+      (round-robin rotation by default; `--per-generator` for every-target ×
+      every-generator). Tested.
+- [x] Idempotent + resumable: each pair carries `meta.synth_key`
+      (`hash(generator, target)`); assignments already in the file are skipped,
+      so re-running never duplicates and a crash resumes. Tested.
+- [x] Documented entrypoint: `uv run ai-style synth` (thin wrapper) /
+      `stylebot.synth.synthesize_pairs` (library). `--dry-run` vets selection
+      with no API spend.
+- [ ] **Not yet run at scale** — the actual paid generation of a few thousand
+      pairs is gated on `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` and the operator
+      kicking it off (it spends money and grows the private corpus). The blog
+      offers **26,813** human-authored target chunks across 1,592 posts (verified
+      via `--dry-run`), so the volume is there. Run, e.g.:
+
+      ```sh
+      uv run ai-style synth --blog-root ~/Source/livingthing \
+        --data-dir ~/Source/livingthing/_training_pairs --limit 3000
+      ```
 
 ## Risks / notes
 

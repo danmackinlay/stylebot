@@ -119,6 +119,125 @@ def read_w_frontmatter(fname: Path) -> tuple[dict, str]:
     return metadata, "".join(lines)
 
 
+def split_paragraphs(text: str) -> list[str]:
+    """Split prose into paragraphs on blank-line boundaries.
+
+    A "paragraph" is the natural chunk for prose diffing and synthesis: a run
+    of non-blank lines with no internal blank line. List items, headings, and
+    code-fence blocks each become their own paragraph block. Trailing newlines
+    inside a block are stripped.
+
+    This is the **shared** chunk shape for the corpus: Phase 1 (`ai-style-log`)
+    diffs against it and Phase 2 (`stylebot.synth`) samples it, so real edit
+    pairs and synthetic paraphrase pairs are the same granularity and mixable.
+    Keep both producers calling this one splitter.
+    """
+    paras: list[str] = []
+    current: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if line.strip() == "":
+            if current:
+                paras.append("".join(current).rstrip("\n"))
+                current = []
+        else:
+            current.append(line)
+    if current:
+        paras.append("".join(current).rstrip("\n"))
+    return paras
+
+
+# --- Markdown prose/structure segmentation -------------------------------
+#
+# Ported (generic, stdlib-only) from livingthing's `qmd_core.py`
+# `segment_for_edit` — the blog's canonical editable/protected splitter. This is
+# generic markdown tooling (no frontmatter / blog knowledge), so per the
+# OVERVIEW boundary it lives here alongside `split_paragraphs` / `gather_qmd_files`.
+# SIBLING: `livingthing/src/livingthing/qmd_core.py::segment_for_edit` — keep
+# behaviour in sync; the segmenter tests in `tests/test_segment.py` pin it.
+
+# Protected spans the styler must not paraphrase (preserved verbatim per
+# STYLE_SYSTEM): fenced code, display math, blockquotes.
+CODE_FENCE_RE = re.compile(
+    r"^[ \t]*```.*?$.*?^[ \t]*```[ \t]*$(?:\n|\Z)", re.MULTILINE | re.DOTALL
+)
+MATH_BLOCK_RE = re.compile(r"\$\$.*?\$\$[ \t]*(?:\{[^}\n]*\})?", re.DOTALL)
+BLOCKQUOTE_RE = re.compile(r"^(?:[ \t]{0,3}>[^\n]*\n?)+", re.MULTILINE)
+
+
+def _find_div_blocks(content: str) -> list[tuple[int, int]]:
+    """Find all ``:::`` div/callout blocks, nesting-aware.
+
+    Returns ``(start, end)`` char spans (end includes the trailing newline).
+    Pandoc rule: a closing fence is a line that is exactly ``:::`` (whitespace
+    allowed); a ``:::`` line with arguments opens a nested div.
+    """
+    spans: list[tuple[int, int]] = []
+    lines = content.splitlines(keepends=True)
+    i = 0
+    current_pos = 0
+    while i < len(lines):
+        line_content = lines[i]
+        if line_content.strip().startswith(":::"):
+            start_pos = current_pos
+            depth = 1
+            j = i + 1
+            while j < len(lines) and depth > 0:
+                inner = lines[j].strip()
+                if inner.startswith(":::"):
+                    if inner == ":::":
+                        depth -= 1
+                    else:
+                        depth += 1
+                j += 1
+            if depth == 0:
+                end_pos = start_pos + sum(len(lines[k]) for k in range(i, j))
+                spans.append((start_pos, end_pos))
+                current_pos = end_pos
+                i = j
+                continue
+        current_pos += len(line_content)
+        i += 1
+    return spans
+
+
+def segment_for_edit(content: str) -> list[tuple[str, bool]]:
+    """Split markdown into ``(text, editable)`` spans, losslessly.
+
+    ``editable`` is False for protected blocks — fenced code, ``$$math$$``,
+    ``:::`` divs/callouts, and blockquotes — which must pass through verbatim.
+    Concatenating every ``text`` reproduces ``content`` exactly.
+    """
+    spans: list[tuple[int, int]] = []
+    for pattern in (CODE_FENCE_RE, MATH_BLOCK_RE, BLOCKQUOTE_RE):
+        for m in pattern.finditer(content):
+            spans.append((m.start(), m.end()))
+    spans.extend(_find_div_blocks(content))
+    spans.sort()
+
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    out: list[tuple[str, bool]] = []
+    i = 0
+    for s, e in merged:
+        if i < s:
+            out.append((content[i:s], True))
+        out.append((content[s:e], False))
+        i = e
+    if i < len(content):
+        out.append((content[i:], True))
+    return out
+
+
+def editable_prose(content: str) -> str:
+    """Return only the editable prose of ``content`` (protected blocks dropped)."""
+    return "".join(seg for seg, editable in segment_for_edit(content) if editable)
+
+
 def is_valid_qmd_file(path: Path) -> bool:
     """Return True if this path qualifies as a valid .qmd file."""
     if path.is_dir():

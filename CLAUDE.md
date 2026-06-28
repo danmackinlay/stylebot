@@ -15,6 +15,7 @@ Narrative/rationale: [`docs/fine_tuning_danbot.qmd`](docs/fine_tuning_danbot.qmd
 uv sync                 # install (incl. dev group: pytest, ruff)
 uv run pytest -q        # must stay green
 uv run ai-style-log --help
+uv run ai-style --help  # synth (Phase 2); split/train/eval land with their phases
 ```
 
 ## Architecture rules (don't violate without updating the plan)
@@ -57,23 +58,35 @@ Sanity-check before any commit: `git status` must never show `.env` or
 Phase 1 schema contract (roles, frozen system prompt, required `meta`). Run it
 as the done-criteria gate for Phase 2 output and the Phase 3 input check.
 
-## BLOG INTEGRATION — fill in on first run with blog access
+## BLOG INTEGRATION — filled in 2026-06-27 (Dan's blog)
 
-The data-heavy phases need the prose corpus. These specifics are unknown until
-the blog is wired in; record them here (and in `_plans/phase-2-synthetic-pairs.md`)
-the first time an agent has blog access:
+The data-heavy phases need the prose corpus. Wired in against Dan's live blog:
 
-- [ ] Blog repo location / clone path:
-- [ ] Post file glob & layout (e.g. `posts/**/*.qmd`):
-- [ ] Frontmatter conventions: `automation` level meaning; how slop-free posts
-      are marked; any fields the selector should read.
-- [ ] Where the **already-captured** `pairs.jsonl` currently lives, and the
-      `STYLEBOT_DATA_DIR` to point downstream phases at.
-- [ ] Confirm `is_human_authored` defaults match the real frontmatter (adjust
-      `field`/`max_level`, or pass a custom selector).
+- [x] Blog repo location / clone path: `~/Source/livingthing`
+      (remote `git@github.com:danmackinlay/danmackinlay.github.io.git`, "The
+      Living Thing"). Pass as `--blog-root`.
+- [x] Post file glob & layout: Quarto `.qmd`, default glob `**/*.qmd`. Posts
+      live under `post/` (~73) and `notebook/` (~1600); `digest/` is auxiliary
+      (`type: digest`). Build dirs to skip: `_site`, `_freeze`, `_`-prefixed
+      dirs/files, `.`-prefixed (incl. `.claude/worktrees/…` clones). The
+      `is_valid_qmd_file` / `gather_qmd_files` skip-list already covers these.
+- [x] Frontmatter conventions: `automation:` is an int level of how much AI
+      touched a post — `0` = pure human (1591 posts), `1` (58), `2` (61).
+      `automation: 0` is the slop-free target prose. Auxiliary posts carry
+      `type: digest`/`about` (see `is_auxiliary_post`).
+- [x] Where the **already-captured** `pairs.jsonl` lives:
+      `~/Source/livingthing/_training_pairs/pairs.jsonl` (254 records as of
+      2026-06-27, validates clean). Point downstream phases at it with
+      `STYLEBOT_DATA_DIR=~/Source/livingthing/_training_pairs` (or
+      `--data-dir`).
+- [x] `is_human_authored` defaults (`field="automation"`, `max_level=0`) match
+      the real frontmatter exactly — no retarget needed.
 
 ## Current status
 
 Phase 0 (scaffolding) and Phase 1 (`ai-style-log`, daily-used) are done.
-**Buildable now, no trained model needed:** Phase 2 (synthetic pairs) and the
-Eval harness. Phase 3/4 are data-/adapter-gated. See OVERVIEW for the next move.
+Phase 2 (synthetic pairs) is **built** — `ai-style synth` over
+`stylebot.synth.synthesize_pairs`, tested green; the at-scale paid generation
+run is the only remaining step (gated on LLM keys + operator go-ahead). The
+**Eval harness** is the next unbuilt track. Phase 3/4 are data-/adapter-gated.
+See OVERVIEW for the next move.

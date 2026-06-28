@@ -252,7 +252,7 @@ from pathlib import Path
 import click
 
 from stylebot.ai_core import STYLE_SYSTEM
-from stylebot.lib import read_w_frontmatter_text
+from stylebot.lib import read_w_frontmatter_text, split_paragraphs
 
 # Root for all logged state (the corpus). Resolved from $STYLEBOT_DATA_DIR if
 # set, else cwd-relative `_training_pairs` (the historical default, preserved
@@ -308,24 +308,12 @@ def _split_frontmatter(text: str) -> tuple[dict, str]:
 
 
 def _split_paragraphs(text: str) -> list[str]:
-    """Split text into paragraphs on blank-line boundaries.
+    """Blank-line paragraph split — delegates to the shared splitter.
 
-    Multi-line paragraphs (no internal blank line) stay as single strings.
-    A "paragraph" here is the natural chunk for prose diffing: list items,
-    headings, and code fences each become their own paragraph block.
+    The canonical implementation lives in `stylebot.lib.split_paragraphs` so
+    Phase 1 (this logger) and Phase 2 (`stylebot.synth`) chunk identically.
     """
-    paras: list[str] = []
-    current: list[str] = []
-    for line in text.splitlines(keepends=True):
-        if line.strip() == "":
-            if current:
-                paras.append("".join(current).rstrip("\n"))
-                current = []
-        else:
-            current.append(line)
-    if current:
-        paras.append("".join(current).rstrip("\n"))
-    return paras
+    return split_paragraphs(text)
 
 
 def diff_chunks(before: str, after: str) -> list[tuple[str, str]]:
