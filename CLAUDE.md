@@ -82,11 +82,28 @@ The data-heavy phases need the prose corpus. Wired in against Dan's live blog:
 - [x] `is_human_authored` defaults (`field="automation"`, `max_level=0`) match
       the real frontmatter exactly — no retarget needed.
 
-## Current status
+## Current status (as of 2026-06-28)
 
-Phase 0 (scaffolding) and Phase 1 (`ai-style-log`, daily-used) are done.
-Phase 2 (synthetic pairs) is **built** — `ai-style synth` over
-`stylebot.synth.synthesize_pairs`, tested green; the at-scale paid generation
-run is the only remaining step (gated on LLM keys + operator go-ahead). The
-**Eval harness** is the next unbuilt track. Phase 3/4 are data-/adapter-gated.
-See OVERVIEW for the next move.
+Phase 0 (scaffolding) and Phase 1 (`ai-style-log`, daily-used) are done; Phase 1
+now also captures **heading context** (default ON; see below).
+
+Phase 2 (synthetic pairs) is **built and curated** — `ai-style synth` /
+`train-targets` over `stylebot.synth`, tested green (76 stylebot + 11 blog).
+The target-curation pipeline (all generic mechanism in `stylebot`, policy in the
+blog's `livingthing.training_targets`):
+- prose-only extraction (`segment_for_edit`), hygiene (min/max chars, tables,
+  prose-residual **link-list** guard, **list-item** drop), `stop_at_headers`
+  (cuts `## Incoming`), stub-marker drop (`🚧TODO🚧`);
+- **merge** mode (section-aware paragraph packing into ~1.5k-char passages);
+- **heading context** — the section heading prepended verbatim+identically to
+  both sides of every pair, shared by Phase 1 + 2 via
+  `stylebot.pairs.build_pair_content` / `meta.context` (see
+  [`_plans/heading-context.md`](_plans/heading-context.md));
+- a read-only **report**/`--sample` visualiser (`stylebot.report`).
+Real-blog dry-run: ~3.6k passages from 492 quality>6 posts, 85% heading-framed.
+
+**The only remaining Phase-2 step is the at-scale paid generation run** (gated on
+LLM keys + operator go-ahead): `cd ~/Source/livingthing && uv run train-targets
+--limit 3000` (idempotent/resumable; `--dry-run`/`--report` first). The **Eval
+harness** is the next unbuilt track. Phase 3/4 are data-/adapter-gated. See
+OVERVIEW for the next move.

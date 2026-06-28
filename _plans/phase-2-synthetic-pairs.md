@@ -55,11 +55,12 @@ Measured on the live blog: naive `automation:0`-only ≈ 27.4k junky chunks;
 prose-only + hygiene ≈ 19.5k; + quality>6/draft selector ≈ 10k clean targets;
 merged into passages ≈ 3.6k (median ~620 chars).
 
-**Heading context (planned):** 85% of passages sit under a heading that frames
-them; [`heading-context.md`](heading-context.md) specs attaching the heading as
-fixed context (verbatim on both sides; slop generated from the body only) via
-`Target.context` + `synthesize_pairs`, on the shared
-`stylebot.pairs.build_pair_content` contract with Phase 1.
+**Heading context (✅ built):** 85% of passages sit under a heading that frames
+them, so the section heading is attached as fixed context (verbatim on both
+sides; slop generated from the body only) via `Target.context` +
+`synthesize_pairs`, on the shared `stylebot.pairs.build_pair_content` contract
+with Phase 1. CLI `--heading-context immediate` / `--context-dropout`; blog
+policy `HEADING_CONTEXT="immediate"`. See [`heading-context.md`](heading-context.md).
 
 ## Method (from the post)
 

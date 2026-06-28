@@ -138,11 +138,16 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 | Phase | File | Status | Blocked by |
 |-------|------|--------|-----------|
 | 0 · Scaffolding | this repo's pyproject/.env/_plans | ✅ done | — |
-| 1 · Pair capture | [`phase-1-pair-capture.md`](phase-1-pair-capture.md) | ✅ shipped (daily use) | — |
-| 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | 🔧 built (`ai-style synth`); scale run cost-gated | corpus schema (have it) |
+| 1 · Pair capture | [`phase-1-pair-capture.md`](phase-1-pair-capture.md) | ✅ shipped (daily use) + heading context | — |
+| 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | 🔧 built + curated (`ai-style synth` / `train-targets`); **scale paid run cost-gated** | corpus schema (have it) |
+| — · Heading context | [`heading-context.md`](heading-context.md) | 🔧 built (both producers; immediate depth) | — |
 | 3 · LoRA training | [`phase-3-training.md`](phase-3-training.md) | 📋 planned | enough pairs |
 | 4 · Inference CLI | [`phase-4-inference-cli.md`](phase-4-inference-cli.md) | 📋 planned | a trained adapter |
-| E · Eval harness | [`eval-harness.md`](eval-harness.md) | 📋 planned | only sample prose |
+| E · Eval harness | [`eval-harness.md`](eval-harness.md) | 📋 planned — **next unbuilt track** | only sample prose |
+
+**Next move:** either kick off the cost-gated Phase-2 paid run
+(`train-targets --limit N`), or build the **eval harness** (the ground truth
+every later phase reports against). Both unblocked; eval is the bigger lever.
 
 ## Sequencing — what's parallel vs serial
 

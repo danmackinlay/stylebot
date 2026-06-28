@@ -1,5 +1,29 @@
 # Design — heading context for training pairs
 
+## Status — 🔧 BUILT (2026-06-28)
+
+Implemented in **both** producers on the shared contract, default behaviour
+gated so nothing changed until opted in:
+
+- **Contract:** `stylebot.pairs.build_pair_content(context, body)` + `meta.context`
+  / `meta.context_mode`; `validate_pair_record` enforces the heading is the
+  verbatim prefix of both sides. Existing 254 pairs (no `meta.context`) stay valid.
+- **Phase 2:** `Target.context`; `iter_targets(heading_context="immediate")` (a
+  unified section-aware path); `synthesize_pairs` generates slop from the body
+  only, `synth_key` includes context, `context_dropout` (deterministic) keeps a
+  fraction heading-less; CLI `--heading-context` / `--context-dropout`;
+  `stylebot.report` shows the heading. Blog policy: `HEADING_CONTEXT="immediate"`,
+  `CONTEXT_DROPOUT=0.1` in `livingthing.training_targets`.
+- **Phase 1:** `ai-style-log` `diff_chunks(..., heading_context=)` resolves the
+  nearest preceding heading; default **ON** (`--no-heading-context` to opt out);
+  `--whole`/preamble carry none; forward-only.
+- Tested: cross-producer pairs are byte-identical for the same heading. 85% of
+  real-blog passages carry a heading.
+
+**Deferred (the "Open choices" below):** breadcrumb depth (only `immediate`
+shipped), title/subtitle as context for preamble, and tuning `context_dropout`.
+The design below is the original spec, kept for rationale.
+
 ## Motivation
 
 Dan leans on section headings to set context for the paragraphs beneath them, so
