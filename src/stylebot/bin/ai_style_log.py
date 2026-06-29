@@ -481,6 +481,19 @@ def _iter_pairs() -> list[dict]:
     return out
 
 
+def _corpus_confirmation() -> str:
+    """One-line 'it landed where training reads' confirmation for write commands.
+
+    Resolves the data-dir to an ABSOLUTE path (a relative default like
+    ``_training_pairs/`` otherwise hides *where* pairs went) and reports the
+    running corpus size plus heading-context coverage, so each save visibly
+    accumulates in the corpus you expect rather than a stray cwd dir.
+    """
+    pairs = _iter_pairs()
+    with_ctx = sum(1 for r in pairs if (r.get("meta", {}).get("context") or "").strip())
+    return f"corpus now: {len(pairs)} pair(s) ({with_ctx} with heading context) -> {PAIRS_PATH.resolve()}"
+
+
 def _write_pairs_atomic(records: list[dict]) -> None:
     """Atomic rewrite of pairs.jsonl from the given record list."""
     PAIRS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -831,9 +844,9 @@ def save_session(
     status = "session kept open" if keep_open else "session closed"
     click.echo(
         f"saved {len(written)} pair(s) for {file} "
-        f"({mode}; {total_before} -> {total_after} chars total; {status}) "
-        f"-> {PAIRS_PATH}"
+        f"({mode}; {total_before} -> {total_after} chars total; {status})"
     )
+    click.echo(_corpus_confirmation())
 
     # Post-save reporting of preserved cross-session / appended pairs
     if disposition == "smart" and other_session:
@@ -1078,8 +1091,9 @@ def pair(
     mode = "whole-input" if whole else "chunk-by-chunk"
     click.echo(
         f"saved {len(written)} pair(s) "
-        f"({mode}; {total_before} -> {total_after} chars total) -> {PAIRS_PATH}"
+        f"({mode}; {total_before} -> {total_after} chars total)"
     )
+    click.echo(_corpus_confirmation())
     _remind_open_sessions(ctx)
 
 
