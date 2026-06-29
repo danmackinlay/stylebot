@@ -586,8 +586,13 @@ def score_pairs_file(
     return result
 
 
-def _load_score_records(scores: str | Path | Iterable[dict]) -> list[dict]:
-    """Load score records from a `scores.jsonl` path or accept them in-memory."""
+def load_scores(scores: str | Path | Iterable[dict]) -> list[dict]:
+    """Load score records from a `scores.jsonl` path (or accept them in-memory).
+
+    The shared reader for the scores artifact — mirrors `stylebot.pairs.iter_pairs`
+    for `pairs.jsonl`. A path is read line-by-line (UTF-8, blank/undecodable lines
+    skipped); an iterable is returned as a list unchanged.
+    """
     if isinstance(scores, (str, Path)):
         path = Path(scores)
         out: list[dict] = []
@@ -628,7 +633,7 @@ def summarize_scores(scores: str | Path | Iterable[dict], *, by: str | None = No
     — `by="slop_strategy"` gives per-strategy means, the experimental-loop view
     that turns "is catalogue slop better than polish" into a number.
     """
-    records = _load_score_records(scores)
+    records = load_scores(scores)
     summary: dict = {
         "schema_version": SCHEMA_VERSION,
         "pairs": len(records),

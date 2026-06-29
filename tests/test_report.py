@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 
-from stylebot import report
+from stylebot import eval as ev
+from stylebot import report, synth
 from stylebot.synth import Target
 
 
@@ -62,3 +63,97 @@ def test_sample_targets_seeded_deterministic():
 def test_sample_targets_caps_at_population():
     ts = _targets(3)
     assert len(report.sample_targets(ts, 10)) == 3
+
+
+# --- scores report (joins pairs.jsonl + scores.jsonl) -----------------------
+
+
+def _judge(text):
+    # slop side (the fake generator prefixes "slop: ") scores low; Dan scores high.
+    return {"score": 1 if text.startswith("slop:") else 4, "rationale": "ok <b>tag</b>"}
+
+
+def _make_scored(tmp_path, *, judge=None):
+    """Build a 2-pair corpus (2 strategies, one heading, one with <script>) and score it."""
+    d = tmp_path / "corpus"
+    specs = [
+        ("Body prose under a heading, terse and idiosyncratic, the Dan target here.", "## A Heading", "catalogue"),
+        ("<script>alert(1)</script> and then a real authored paragraph after the tag.", None, "polish"),
+    ]
+    for i, (text, context, strategy) in enumerate(specs):
+        t = synth.Target(text=text, source=f"post/p{i}.qmd", chunk_index=0, chunk_total=1, context=context or "")
+        g = synth.Generator(name="m", generate=lambda s: "slop: " + s, strategy=strategy)
+        synth.synthesize_pairs([t], d, [g])
+    pairs, scores = d / "pairs.jsonl", tmp_path / "scores.jsonl"
+    ev.score_pairs_file(pairs, scores, judge=judge)
+    return pairs, scores
+
+
+def test_scores_report_self_contained(tmp_path):
+    pairs, scores = _make_scored(tmp_path, judge=_judge)
+    p = tmp_path / "r.html"
+    report.render_scores_report(scores, pairs, p)
+    h = p.read_text()
+    assert "<svg" in h
+    assert "http://" not in h and "https://" not in h  # no network assets
+    assert "<script src=" not in h
+    assert h.count("<script>") == 1  # only the report's own JS block
+
+
+def test_scores_report_escapes_text(tmp_path):
+    pairs, scores = _make_scored(tmp_path, judge=_judge)
+    p = tmp_path / "r.html"
+    report.render_scores_report(scores, pairs, p, max_rows=None)
+    h = p.read_text()
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in h  # Dan-side text escaped
+    assert "<script>alert(1)" not in h
+    assert "ok &lt;b&gt;tag&lt;/b&gt;" in h  # judge rationale escaped too
+
+
+def test_scores_report_joins_and_headlines(tmp_path):
+    pairs, scores = _make_scored(tmp_path, judge=_judge)
+    p = tmp_path / "r.html"
+    report.render_scores_report(scores, pairs, p)
+    h = p.read_text()
+    assert "terse and idiosyncratic" in h  # joined Dan body text (heading stripped)
+    assert "catalogue" in h and "polish" in h  # per-strategy headline
+    assert 'data-delta="3"' in h  # Dan 4 - slop 1
+
+
+def test_scores_report_sort_attributes(tmp_path):
+    pairs, scores = _make_scored(tmp_path, judge=_judge)
+    p = tmp_path / "r.html"
+    report.render_scores_report(scores, pairs, p)
+    h = p.read_text()
+    for attr in ("data-strategy=", "data-delta=", "data-slop=", "data-dan="):
+        assert attr in h
+
+
+def test_scores_report_keyless_no_crash(tmp_path):
+    pairs, scores = _make_scored(tmp_path, judge=None)  # no judge -> scores None
+    p = tmp_path / "r.html"
+    report.render_scores_report(scores, pairs, p)
+    h = p.read_text()
+    assert 'data-delta=""' in h  # delta unavailable -> empty (sorts last)
+    assert "—" in h  # placeholder badge / delta
+
+
+def test_scores_report_max_rows_caps(tmp_path):
+    d = tmp_path / "c"
+    for i in range(6):
+        t = synth.Target(text=f"Paragraph number {i} of authored prose to be scored now.", source=f"post/p{i}.qmd", chunk_index=0, chunk_total=1)
+        synth.synthesize_pairs([t], d, [synth.Generator(name="m", generate=lambda s: "slop: " + s, strategy="polish")])
+    pairs, scores = d / "pairs.jsonl", tmp_path / "s.jsonl"
+    ev.score_pairs_file(pairs, scores, judge=_judge)
+    p = tmp_path / "r.html"
+    report.render_scores_report(scores, pairs, p, max_rows=3)
+    h = p.read_text()
+    assert h.count("<tr data-strategy") == 3  # table capped (headline rows have no data-strategy)
+    assert "of 6" in h  # note states the full count
+
+
+def test_format_scores_sample_seeded(tmp_path):
+    pairs, scores = _make_scored(tmp_path, judge=_judge)
+    a = report.format_scores_sample(scores, pairs, 2, seed=3)
+    b = report.format_scores_sample(scores, pairs, 2, seed=3)
+    assert a == b and "slop" in a and "target" in a

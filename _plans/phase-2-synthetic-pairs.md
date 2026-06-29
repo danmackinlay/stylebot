@@ -83,10 +83,11 @@ not guessed once:
   `livingthing.training_targets.OPENROUTER_MODELS` / `SLOP_STRATEGY`).
 - **Work the loop, not a one-shot run:** generate a small batch per strategy into
   a scratch `--data-dir`, eyeball via `--report`/`--sample`, then score it with
-  `ai-style eval --pairs <scratch>/pairs.jsonl --judge --by slop_strategy` (the
-  judge works today; the detector signal lands with the audition) to compare
-  flavours by a number. Promote a chosen strategy into the real corpus only after
-  it earns it. Because `synth_key`
+  `ai-style eval --pairs <scratch>/pairs.jsonl --judge --by slop_strategy --report
+  scores.html` (the judge works today; the detector signal lands with the audition)
+  to compare flavours by a number *and* eyeball the slop↔Dan pairs + rationales in
+  the HTML report. Promote a chosen strategy into the real corpus only after it
+  earns it. Because `synth_key`
   carries the strategy, "one run per strategy into the same dir" accumulates
   distinct, non-colliding pairs.
 

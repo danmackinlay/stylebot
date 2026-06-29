@@ -116,6 +116,10 @@ pluggable detector, eyeball), keyless by default. **JSONL-native + batched:**
 (heading-context stripped) and appends an **id-keyed** `scores.jsonl`
 (`score_pairs_file`, concurrent + resumable, joins back via `synth_key`/
 `capture_id`); `summarize_scores(by="slop_strategy")` gives per-strategy means.
+A read-only **scores visualiser** (`--report scores.html` /
+`stylebot.report.render_scores_report`) joins pairs+scores into self-contained
+HTML — slop↔Dan + judge score/rationale, sortable by slop→Dan delta, faceted by
+strategy (reuses the targets-report infra; generic over score fields for Phase 4).
 The **statistical-detector audition** is the one remaining eval signal (deferred —
 GPU/$$, operator's call).
 

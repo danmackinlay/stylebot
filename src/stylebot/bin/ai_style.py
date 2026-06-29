@@ -300,6 +300,9 @@ def synth_cmd(
 @click.option("--summary", "summary_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Also write the aggregate summary JSON here.")
 @click.option("--by", "by", default=None, help="Facet the summary by a meta key, e.g. slop_strategy or generator.")
 @click.option("--limit", type=int, default=None, help="Cap pairs scored (smoke / cost control).")
+@click.option("--report", "report_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Write a self-contained HTML scores report (slop↔Dan + judge scores, sortable, faceted by strategy).")
+@click.option("--report-max-rows", default=2000, show_default=True, type=int, help="Cap rows in the HTML report (0 = all).")
+@click.option("--sample", "sample_n", type=int, default=None, help="Print N random scored pairs (slop vs Dan + scores) to stdout.")
 def eval_cmd(
     pairs_path: Path,
     fields: tuple[str, ...],
@@ -311,6 +314,9 @@ def eval_cmd(
     summary_path: Path | None,
     by: str | None,
     limit: int | None,
+    report_path: Path | None,
+    report_max_rows: int,
+    sample_n: int | None,
 ) -> None:
     """Score a pairs.jsonl corpus across the eval signals (offline, batched).
 
@@ -371,6 +377,20 @@ def eval_cmd(
     if summary_path is not None:
         summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
         click.echo(f"wrote summary -> {summary_path}")
+
+    # Read-only visualisations over the (just-written) scores.jsonl + the corpus.
+    # No extra scoring — re-rendering an already-scored corpus is a no-op pass.
+    if sample_n is not None or report_path is not None:
+        from stylebot import report
+
+        if sample_n is not None:
+            click.echo(report.format_scores_sample(out, pairs_path, sample_n, fields=score_fields))
+        if report_path is not None:
+            written = report.render_scores_report(
+                out, pairs_path, report_path, fields=score_fields,
+                max_rows=(None if report_max_rows == 0 else report_max_rows),
+            )
+            click.echo(f"wrote report -> {written}")
 
 
 if __name__ == "__main__":

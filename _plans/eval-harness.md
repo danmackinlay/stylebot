@@ -122,8 +122,15 @@ the integration is *designed* before any spend; **do not wire it yet.**
       `schema_version: 2` summary) that Phase 3/4 can cite and join back to pairs.
 - [x] A documented entrypoint: `ai-style eval --pairs PATH.jsonl [--field
       slop|target] [--judge --judge-model …] [--vale-config …] [--max-workers N]
-      [--out scores.jsonl] [--summary summary.json] [--by slop_strategy] [--limit N]`.
-      Batched, concurrent, resumable.
+      [--out scores.jsonl] [--summary summary.json] [--by slop_strategy] [--limit N]
+      [--report scores.html] [--sample N]`. Batched, concurrent, resumable.
+- [x] A read-only **scores visualiser** (`stylebot.report.render_scores_report` /
+      `--report`): self-contained HTML joining `pairs.jsonl` + `scores.jsonl` by id —
+      slop↔Dan text + judge score + rationale per pair, sortable by the slop→Dan
+      delta, filterable by strategy, under a per-strategy headline. Generic over
+      score *fields* (a Phase-4 `output` field renders with no change). Reuses the
+      targets report's `_CSS` / `_histogram_svg` / escaping. No spend (re-renders
+      from `scores.jsonl`).
 
 ## Status detail (as built 2026-06-28)
 

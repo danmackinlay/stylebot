@@ -23,7 +23,8 @@ import statistics
 from collections.abc import Sequence
 from pathlib import Path
 
-from stylebot.pairs import build_pair_content
+from stylebot.eval import FIELD_EXTRACTORS, load_scores, record_id, summarize_scores
+from stylebot.pairs import build_pair_content, iter_pairs
 from stylebot.synth import Target
 
 
@@ -62,7 +63,7 @@ def _summary_stats(targets: Sequence[Target]) -> dict:
     }
 
 
-def _histogram_svg(lengths: Sequence[int], *, bins: int, width: int = 720, height: int = 160) -> str:
+def _histogram_svg(lengths: Sequence[int], *, bins: int, width: int = 720, height: int = 160, unit: str = "chars") -> str:
     if not lengths:
         return "<svg></svg>"
     hi = max(lengths)
@@ -85,7 +86,7 @@ def _histogram_svg(lengths: Sequence[int], *, bins: int, width: int = 720, heigh
         )
     axis = (
         f'<text x="0" y="{height - 4}" class="ax">0</text>'
-        f'<text x="{width}" y="{height - 4}" text-anchor="end" class="ax">{hi} chars</text>'
+        f'<text x="{width}" y="{height - 4}" text-anchor="end" class="ax">{hi} {unit}</text>'
     )
     return (
         f'<svg viewBox="0 0 {width} {height}" width="100%" preserveAspectRatio="none" '
@@ -234,3 +235,307 @@ def render_targets_report(
 def stats_json(targets: Sequence[Target]) -> str:
     """Return summary stats as a JSON string (for scripting / CI checks)."""
     return json.dumps(_summary_stats(targets), indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Scores report — join pairs.jsonl + scores.jsonl, compare slop ↔ Dan by eye
+# ---------------------------------------------------------------------------
+#
+# The eval sibling of the targets report: read-only, no spend, self-contained
+# HTML. Reuses the same _CSS / _histogram_svg / escaping discipline and the eval
+# plumbing (load_scores, record_id, FIELD_EXTRACTORS, summarize_scores) +
+# pairs.iter_pairs — so scores stay joined to the corpus by id, and the renderer
+# is generic over score *fields* (slop/target now; slop/output/target later).
+
+
+def _judge_score(field_scores: object) -> int | None:
+    j = field_scores.get("judge") if isinstance(field_scores, dict) else None
+    return j.get("score") if isinstance(j, dict) else None
+
+
+def _judge_rationale(field_scores: object) -> str:
+    j = field_scores.get("judge") if isinstance(field_scores, dict) else None
+    return (j.get("rationale") or "") if isinstance(j, dict) else ""
+
+
+def _field_text(pair: dict | None, field: str) -> str:
+    """The body text scored for `field`, pulled from the joined pair record."""
+    if pair is None:
+        return "(text unavailable)"
+    extractor = FIELD_EXTRACTORS.get(field)
+    if extractor is None:
+        return "(unknown field)"
+    try:
+        return extractor(pair)
+    except Exception:  # malformed pair — never break the report
+        return "(text unavailable)"
+
+
+def _mean(values: Sequence[float | None]) -> float | None:
+    vals = [v for v in values if v is not None]
+    return round(sum(vals) / len(vals), 2) if vals else None
+
+
+def _scores_rows_data(records: Sequence[dict], pairs_by_id: dict[str, dict], fields: Sequence[str]) -> list[dict]:
+    """Join score records to pairs and flatten to per-row render data."""
+    rows = []
+    for rec in records:
+        pair = pairs_by_id.get(rec.get("id"))
+        meta = rec.get("meta") or {}
+        scores = rec.get("scores") or {}
+        cells = {
+            f: {"text": _field_text(pair, f), "score": _judge_score(scores.get(f)), "rationale": _judge_rationale(scores.get(f))}
+            for f in fields
+        }
+        s0, s1 = cells[fields[0]]["score"], cells[fields[-1]]["score"]
+        delta = (s1 - s0) if (s0 is not None and s1 is not None) else None
+        rows.append({
+            "id": rec.get("id", ""),
+            "strategy": meta.get("slop_strategy") or "—",
+            "source": meta.get("source") or "—",
+            "cells": cells,
+            "delta": delta,
+        })
+    return rows
+
+
+def _load_scores_rows(scores, pairs_path, fields: Sequence[str]) -> tuple[list[dict], list[dict]]:
+    """`(records, rows)` — score records plus their joined, flattened render data."""
+    records = load_scores(scores)
+    pairs_by_id = {record_id(p): p for p in iter_pairs(pairs_path)}
+    return records, _scores_rows_data(records, pairs_by_id, fields)
+
+
+def _scores_summary_stats(rows: Sequence[dict], fields: Sequence[str]) -> dict:
+    return {
+        "count": len(rows),
+        "n_strategies": len({r["strategy"] for r in rows}),
+        "mean_slop": _mean([r["cells"][fields[0]]["score"] for r in rows]),
+        "mean_dan": _mean([r["cells"][fields[-1]]["score"] for r in rows]),
+        "mean_delta": _mean([r["delta"] for r in rows]),
+    }
+
+
+def _scores_headline_rows(records: Sequence[dict], fields: Sequence[str]) -> list[dict]:
+    """Per-strategy means via summarize_scores(by=…) — the compare-flavours headline."""
+    by = summarize_scores(records, by="slop_strategy").get("by", {})
+    out = []
+    for strat, byfields in sorted(by.items()):
+        sm = (byfields.get(fields[0]) or {}).get("mean_judge_score")
+        dm = (byfields.get(fields[-1]) or {}).get("mean_judge_score")
+        delta = round(dm - sm, 2) if (sm is not None and dm is not None) else None
+        out.append({"strategy": strat, "n": (byfields.get(fields[0]) or {}).get("n", 0), "slop": sm, "dan": dm, "delta": delta})
+    return out
+
+
+_SCORES_CSS = """
+.headline{border-collapse:collapse;margin:8px 0 16px;font-size:13px}
+.headline th,.headline td{padding:4px 12px;border-bottom:1px solid var(--line);text-align:left}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.histos{display:flex;gap:16px;margin:8px 0}
+.histos figure{flex:1;margin:0}.histos figcaption{font-size:12px;color:var(--muted);margin-top:2px}
+.srcsub{font-size:11px;color:var(--muted)}
+.cmp{display:flex;gap:16px}.cmp>div{flex:1;min-width:0}
+.fh{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.fl{font-weight:600;font-size:12px;color:var(--muted)}
+.badge{font-size:11px;font-weight:600;padding:1px 7px;border-radius:6px}
+.s-slop{background:#fcebeb;color:#791f1f}.s-dan{background:#eaf3de;color:#27500a}.s-mid{background:#e6f1fb;color:#0c447c}.s-na{background:#f1efe8;color:#5f5e5a}
+.ft{font-size:13px;line-height:1.45}
+.rat{color:var(--muted);font-size:12px;margin-top:4px}
+.d-pos{color:#27500a}.d-neg{color:#791f1f}.d-na{color:var(--muted)}
+"""
+
+_JS_SCORES = """
+const tbody=document.querySelector('tbody');
+const rows=()=>Array.from(tbody.querySelectorAll('tr'));
+function val(r,k){const v=r.dataset[k];return (v===''||v===undefined)?-Infinity:(isNaN(+v)?v:+v);}
+function applyFilter(){
+  const q=document.getElementById('q').value.toLowerCase();
+  const st=document.getElementById('strat').value;
+  for(const r of rows()){
+    const okText=(r.dataset.src+' '+r.querySelector('.txt').textContent).toLowerCase().includes(q);
+    const hit=okText&&(st===''||r.dataset.strategy===st);
+    r.dataset.hit=hit?'1':'0';
+    r.style.display=hit?'':'none';
+  }
+}
+function sortBy(k,numeric){
+  const rs=rows();
+  rs.sort((a,b)=>{const x=val(a,k),y=val(b,k);return numeric?(y-x):String(x).localeCompare(String(y));});
+  for(const r of rs) tbody.appendChild(r);
+}
+document.getElementById('q').addEventListener('input',applyFilter);
+document.getElementById('strat').addEventListener('change',applyFilter);
+sortBy('delta',true);
+"""
+
+
+def _badge(field: str, fields: Sequence[str], score: int | None) -> str:
+    cls = "s-na" if score is None else ("s-slop" if field == fields[0] else "s-dan" if field == fields[-1] else "s-mid")
+    txt = "—" if score is None else f"{score}/5"
+    return f'<span class="badge {cls}">{txt}</span>'
+
+
+def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows: int | None) -> str:
+    shown = rows if max_rows is None else rows[:max_rows]
+    out = []
+    for r in shown:
+        cols = []
+        for f in fields:
+            c = r["cells"][f]
+            text = c["text"]
+            preview = text if len(text) <= 400 else text[:400] + "…"
+            rat = c["rationale"]
+            rat = rat if len(rat) <= 200 else rat[:200] + "…"
+            rat_html = f"<div class=rat>{html.escape(rat)}</div>" if rat else ""
+            cols.append(
+                f'<div><div class=fh><span class=fl>{html.escape(f)}</span>{_badge(f, fields, c["score"])}</div>'
+                f"<div class=ft>{html.escape(preview)}</div>{rat_html}</div>"
+            )
+        delta = r["delta"]
+        d_txt = "—" if delta is None else (f"+{delta}" if delta > 0 else str(delta))
+        d_cls = "d-na" if delta is None else ("d-pos" if delta > 0 else "d-neg")
+        slop_s, dan_s = r["cells"][fields[0]]["score"], r["cells"][fields[-1]]["score"]
+        total_len = sum(len(r["cells"][f]["text"]) for f in fields)
+        out.append(
+            f'<tr data-strategy="{html.escape(r["strategy"], quote=True)}" '
+            f'data-slop="{"" if slop_s is None else slop_s}" data-dan="{"" if dan_s is None else dan_s}" '
+            f'data-delta="{"" if delta is None else delta}" '
+            f'data-src="{html.escape(r["source"], quote=True)}" data-len="{total_len}" data-hit="1">'
+            f"<td class=src>{html.escape(r['strategy'])}<div class=srcsub>{html.escape(r['source'])}</div></td>"
+            f'<td class="len {d_cls}">{html.escape(d_txt)}</td>'
+            f'<td class=txt><div class=cmp>{"".join(cols)}</div></td></tr>'
+        )
+    return "\n".join(out)
+
+
+def _score_histos(rows: Sequence[dict], fields: Sequence[str], *, bins: int) -> str:
+    slop = [r["cells"][fields[0]]["score"] for r in rows if r["cells"][fields[0]]["score"] is not None]
+    dan = [r["cells"][fields[-1]]["score"] for r in rows if r["cells"][fields[-1]]["score"] is not None]
+    sv = _histogram_svg(slop, bins=bins, unit="judge", width=320, height=120) if slop else "<svg></svg>"
+    dv = _histogram_svg(dan, bins=bins, unit="judge", width=320, height=120) if dan else "<svg></svg>"
+    return (
+        f"<div class=histos><figure>{sv}<figcaption>{html.escape(fields[0])} judge scores</figcaption></figure>"
+        f"<figure>{dv}<figcaption>{html.escape(fields[-1])} judge scores</figcaption></figure></div>"
+    )
+
+
+def _render_headline(headline_rows: Sequence[dict], fields: Sequence[str]) -> str:
+    if not headline_rows:
+        return ""
+    fmt = lambda x: "—" if x is None else f"{x}"  # noqa: E731
+    body = "".join(
+        f"<tr><td>{html.escape(h['strategy'])}</td><td class=num>{h['n']}</td>"
+        f"<td class=num>{fmt(h['slop'])}</td><td class=num>{fmt(h['dan'])}</td><td class=num>{fmt(h['delta'])}</td></tr>"
+        for h in headline_rows
+    )
+    return (
+        "<table class=headline><thead><tr><th>strategy</th><th class=num>n</th>"
+        f"<th class=num>{html.escape(fields[0])}</th><th class=num>{html.escape(fields[-1])}</th>"
+        f"<th class=num>Δ</th></tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
+def _scores_stat_cards(stats: dict, fields: Sequence[str]) -> str:
+    fmt = lambda x: "—" if x is None else x  # noqa: E731
+    card = lambda v, lab: f"<div class=stat><b>{v}</b><span>{html.escape(lab)}</span></div>"  # noqa: E731
+    return "".join([
+        card(stats["count"], "pairs"),
+        card(stats["n_strategies"], "strategies"),
+        card(fmt(stats["mean_slop"]), f"mean {fields[0]} judge"),
+        card(fmt(stats["mean_dan"]), f"mean {fields[-1]} judge"),
+        card(fmt(stats["mean_delta"]), "mean Δ"),
+    ])
+
+
+def _scores_page(*, title, stat_cards, headline, histos, controls, table, note) -> str:
+    return f"""<!doctype html>
+<html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>{html.escape(title)}</title><style>{_CSS}{_SCORES_CSS}</style></head>
+<body>
+<h1>{html.escape(title)}</h1>
+<div class=stats>{stat_cards}</div>
+{headline}
+{histos}
+<div class=controls>{controls}</div>
+<p class=note>{html.escape(note)}</p>
+{table}
+<script>{_JS_SCORES}</script>
+</body></html>"""
+
+
+def render_scores_report(
+    scores,
+    pairs_path: Path | str,
+    out_path: Path | str,
+    *,
+    title: str = "stylebot eval scores",
+    fields: Sequence[str] = ("slop", "target"),
+    max_rows: int | None = 2000,
+    histogram_bins: int = 5,
+) -> Path:
+    """Write a self-contained HTML scores report. Returns the path.
+
+    Joins `scores` (a `scores.jsonl` path or in-memory records) to `pairs_path`
+    by `record_id`, then renders, per pair, each `field`'s body text + judge score
+    + rationale side by side, sortable by the slop→Dan delta and filterable by
+    strategy, under a per-strategy headline. Generic over `fields` — a Phase-4
+    styler run (`slop`/`output`/`target`) renders with no change.
+    """
+    out_path = Path(out_path)
+    records, rows = _load_scores_rows(scores, pairs_path, fields)
+    stats = _scores_summary_stats(rows, fields)
+    strategies = sorted({r["strategy"] for r in rows})
+    strat_opts = '<option value="">all strategies</option>' + "".join(
+        f'<option value="{html.escape(s, quote=True)}">{html.escape(s)}</option>' for s in strategies
+    )
+    controls = (
+        '<input id=q placeholder="filter by source or text…" size=28>'
+        f"<select id=strat>{strat_opts}</select>"
+        "<button onclick=\"sortBy('delta',true)\">sort Δ</button>"
+        "<button onclick=\"sortBy('slop',true)\">sort slop</button>"
+        "<button onclick=\"sortBy('dan',true)\">sort Dan</button>"
+        "<button onclick=\"sortBy('strategy',false)\">sort strategy</button>"
+    )
+    table = (
+        "<table><thead><tr><th onclick=\"sortBy('strategy',false)\">strategy</th>"
+        "<th class=num onclick=\"sortBy('delta',true)\">Δ</th>"
+        f"<th>comparison ({html.escape(fields[0])} ↔ {html.escape(fields[-1])})</th></tr></thead>"
+        f"<tbody>{_render_scores_rows(rows, fields, max_rows=max_rows)}</tbody></table>"
+    )
+    n = len(rows)
+    note = (
+        f"showing {max_rows:,} of {n:,} rows (stats + summary cover all {n:,})"
+        if (max_rows is not None and n > max_rows)
+        else f"showing all {n:,} pairs"
+    )
+    page = _scores_page(
+        title=title,
+        stat_cards=_scores_stat_cards(stats, fields),
+        headline=_render_headline(_scores_headline_rows(records, fields), fields),
+        histos=_score_histos(rows, fields, bins=histogram_bins),
+        controls=controls,
+        table=table,
+        note=note,
+    )
+    out_path.write_text(page, encoding="utf-8")
+    return out_path
+
+
+def format_scores_sample(scores, pairs_path: Path | str, n: int, *, fields: Sequence[str] = ("slop", "target"), seed: int | None = None) -> str:
+    """Plain-text sample of joined scores for stdout (`eval --sample`)."""
+    _, rows = _load_scores_rows(scores, pairs_path, fields)
+    pick = random.Random(seed).sample(rows, min(n, len(rows)))
+    out: list[str] = []
+    for r in pick:
+        out.append("─" * 78)
+        out.append(f"{r['strategy']}  ·  {r['source']}  ·  Δ {r['delta']}")
+        for f in fields:
+            c = r["cells"][f]
+            sc = "—" if c["score"] is None else f"{c['score']}/5"
+            out.append("")
+            out.append(f"  [{f} {sc}] {c['text']}")
+            if c["rationale"]:
+                out.append(f"      ⌜ {c['rationale']} ⌟")
+    return "\n".join(out)
