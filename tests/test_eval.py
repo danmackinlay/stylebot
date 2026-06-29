@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import shutil
 
+import pytest
+
 from stylebot import eval as ev
 from stylebot import synth
 from stylebot.pairs import validate_pairs_file
@@ -55,6 +57,59 @@ def test_vale_score_degrades_gracefully_when_absent():
         assert "available" in result
         assert "by_severity" in result
         assert isinstance(result["alerts"], int)
+
+
+def _write_glob_scoped_vale_config(root):
+    """A minimal Vale setup whose styles apply ONLY under a `[*.{md,qmd}]` glob.
+
+    Mirrors the blog's `.vale.ini` shape: `BasedOnStyles` lives under a path
+    glob, not globally. Vale matches that glob against the *filename*, so the
+    rule fires only when the prose reaches Vale as a real `*.md` file — exactly
+    the regression this guards (stdin's synthetic filename matched no glob, so
+    zero rules ever ran). Returns the `.vale.ini` path.
+    """
+    style = root / "styles" / "teststyle"
+    style.mkdir(parents=True)
+    # An `existence` rule that fires on a couple of unmistakable slop tokens.
+    (style / "Slop.yml").write_text(
+        "extends: existence\n"
+        'message: "Avoid AI-slop token \'%s\'."\n'
+        "level: warning\n"
+        "ignorecase: true\n"
+        "tokens:\n"
+        "  - delve\n"
+        "  - leverage\n",
+        encoding="utf-8",
+    )
+    ini = root / ".vale.ini"
+    ini.write_text(
+        "StylesPath = styles\n"
+        "MinAlertLevel = suggestion\n"
+        "\n"
+        "[formats]\n"
+        "qmd = md\n"
+        "\n"
+        "[*.{md,qmd}]\n"
+        "BasedOnStyles = teststyle\n",
+        encoding="utf-8",
+    )
+    return ini
+
+
+def test_vale_score_applies_glob_scoped_styles(tmp_path):
+    if shutil.which("vale") is None:
+        pytest.skip("vale binary not on PATH")
+    ini = _write_glob_scoped_vale_config(tmp_path)
+    slop = "In today's world you can leverage this to delve into new opportunities."
+    result = ev.vale_score(slop, config_path=ini)
+    # The glob-scoped style fired: prose reached Vale as a real `*.md` file, not
+    # stdin (whose synthetic filename matches no glob → silently 0 alerts).
+    assert result["available"] is True, result
+    assert result["alerts"] > 0, result
+    # Clean prose with none of the banned tokens stays at zero under the same cfg.
+    clean = ev.vale_score("A short, plain sentence about nothing in particular.", config_path=ini)
+    assert clean["available"] is True
+    assert clean["alerts"] == 0
 
 
 def test_judge_reply_parser_extracts_score_from_surrounding_prose():

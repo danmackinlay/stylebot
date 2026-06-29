@@ -38,9 +38,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -60,11 +62,16 @@ SCHEMA_VERSION = 2
 def vale_score(text: str, *, config_path: str | Path | None = None) -> dict:
     """Score `text` with the `vale` binary; return a JSON-able alert summary.
 
-    Shells out to ``vale --output=JSON`` over the text on stdin. `config_path`
-    points at a Vale config (`.vale.ini`); it is an explicit *parameter* — never
-    a hardcoded blog ruleset. If `vale` is not on PATH, or no usable config is
-    available, this returns ``{"available": False, ...}`` and never raises, so a
-    run without Vale still completes.
+    Shells out to ``vale --output=JSON`` over the text written to a temporary
+    ``*.md`` file (NOT stdin). Vale applies glob-scoped styles by matching the
+    *filename* — a config like ``[*.{md,qmd}] BasedOnStyles = …`` only fires on
+    paths the glob matches. Vale's synthetic stdin filename matches no such glob,
+    so those styles silently never run (every alert count comes back 0). Passing
+    a real ``.md`` path makes glob sections apply. `config_path` points at a Vale
+    config (`.vale.ini`); it is an explicit *parameter* — never a hardcoded blog
+    ruleset. If `vale` is not on PATH, or no usable config is available, this
+    returns ``{"available": False, ...}`` and never raises, so a run without Vale
+    still completes.
 
     Returns::
 
@@ -87,19 +94,29 @@ def vale_score(text: str, *, config_path: str | Path | None = None) -> dict:
     cmd = ["vale", "--output=JSON"]
     if config_path is not None:
         cmd.append(f"--config={Path(config_path)}")
-    # `--ext` tells Vale how to parse stdin (markdown), matching our prose.
-    cmd += ["--ext=.md", "-"]
 
+    # Write the prose to a real `.md` file so glob-scoped styles (`[*.{md,qmd}]`)
+    # match by filename; close it before invoking Vale (cross-platform), and
+    # always remove it afterwards.
+    tmp_path: str | None = None
     try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as tmp:
+            tmp.write(text)
+            tmp_path = tmp.name
         proc = subprocess.run(
-            cmd,
-            input=text,
+            [*cmd, tmp_path],
             capture_output=True,
             text=True,
             check=False,
         )
     except OSError as exc:  # pragma: no cover - vale present but unexecutable
         return {**empty, "reason": f"vale failed to run: {exc}"}
+    finally:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:  # pragma: no cover - best-effort cleanup
+                pass
 
     out = (proc.stdout or "").strip()
     if not out:
