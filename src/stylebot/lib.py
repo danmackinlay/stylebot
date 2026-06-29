@@ -1,5 +1,6 @@
 from ruamel.yaml import YAML
 from pathlib import Path
+from datetime import date, datetime
 import re
 
 yaml = YAML(typ="rt")
@@ -218,3 +219,28 @@ def is_human_authored(
         return int(raw) <= max_level
     except (TypeError, ValueError):
         return False
+
+
+def is_modified_after(
+    meta: dict, *, field: str = "date-modified", after: str = "2021-01-01"
+) -> bool:
+    """True if ``meta[field]`` is a date on or after ``after`` (ISO ``YYYY-MM-DD``).
+
+    A generic frontmatter-date gate, parallel to `is_human_authored`: the caller
+    supplies the field name and threshold as policy. (Dan's blog uses
+    ``date-modified`` to restrict targets to recent, current-voice prose, since his
+    style has evolved.) Robust to the value being a YAML ``date``/``datetime`` object
+    or an ISO-8601 string — ISO dates sort lexicographically, so the ``YYYY-MM-DD``
+    prefix is compared. Conservative: a missing or malformed date is treated as NOT
+    recent (excluded), matching `is_human_authored`'s "unknown means exclude".
+    """
+    raw = meta.get(field)
+    if raw is None:
+        return False
+    iso = raw.isoformat() if isinstance(raw, (date, datetime)) else str(raw).strip()
+    prefix = iso[:10]
+    # Require a well-formed YYYY-MM-DD prefix before the lexicographic compare, so a
+    # garbage string can't sort its way past the threshold.
+    if len(prefix) != 10 or prefix[4] != "-" or prefix[7] != "-":
+        return False
+    return prefix >= after
