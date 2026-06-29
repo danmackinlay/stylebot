@@ -94,7 +94,7 @@ the integration is *designed* before any spend; **do not wire it yet.**
   returning the existing `Detector` callable (`prose -> {score, name}`), mapping
   `score = fraction_ai`, gated behind `PANGRAM_API_KEY`, **opt-in only** (never
   the default; default stays `null_detector`). It is for the one-shot labeling
-  passes above, not for `evaluate_groups`' default path.
+  passes above, not the default `score_candidate` / `score_pairs_file` path.
 
 ## Outputs
 

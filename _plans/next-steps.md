@@ -1,33 +1,17 @@
-# Post-QA continuation — handoff
+# Next steps — what to ship
 
-**Purpose.** Pick up the stylebot project *after* the QA review (see
-[`qa-handoff.md`](qa-handoff.md)). This is the forward-looking operational doc:
-what's built, what to do with the QA findings, and the next moves in priority
-order. The authoritative spec is [`OVERVIEW.md`](OVERVIEW.md) + the per-phase
-files + `../CLAUDE.md`; this is the "you are here, go there next" overlay.
+**Purpose.** The forward-looking operational overlay: what's built and the next
+moves in priority order, with concrete commands. The authoritative spec is
+[`OVERVIEW.md`](OVERVIEW.md) + the per-phase files + `../CLAUDE.md`; this is the
+"you are here, go there next" layer. The mechanism/policy codebase is clean (the
+QA declutter landed 2026-06-29) — focus here on functionality, not housekeeping.
 
-## Step 0 — triage the QA findings (the immediate input)
+## Current state (built + verified)
 
-The QA agent will have produced a clarity/quality assessment of both repos.
-Before any new feature work:
-1. **Triage each finding → fix / defer / reject.** Cross-check against the
-   intended-design list in `qa-handoff.md` ("Assessment focus & known
-   constraints") — several things that *look* like issues are deliberate (the
-   blog's pytest-free standalone test runner, keyless-by-default eval, the
-   editable path dep, the `qmd_core` → `stylebot.lib` port duplication).
-2. **One likely-real item to watch for:** the **divergence** between
-   `stylebot/src/stylebot/bin/ai_style_log.py` and the pre-existing
-   `livingthing/src/livingthing/bin/ai_style_log.py`. If QA flags it, decide
-   which is canonical (the stylebot copy is the maintained one) and whether the
-   blog copy should be retired or re-pointed. This is the one known structural
-   smell, out of scope for the last work-arc.
-3. **Land fixes as small, test-backed commits** (keep `uv run pytest -q` green;
-   `uv run ruff check .` clean). Plan edits commit straight to the branch.
-
-## Current state (built + verified, as of this handoff)
-
-All green: `uv run pytest -q` = **103 passing** (stylebot); the blog runner
-`uv run python tests/test_training_targets.py` = **13/13**; `ruff` clean.
+All green: `uv run pytest -q` = **101 passing** (stylebot); the blog runner
+`uv run python tests/test_training_targets.py` = **13/13**; `ruff` clean. The QA
+declutter (2026-06-29) removed dead blog-build code + the direct-Anthropic
+generator/dep (hosted models go via OpenRouter); ~430 lines gone, both repos.
 
 - **Phase 0/1** — scaffolding + `ai-style-log` (daily pair capture) shipped;
   heading context added.
@@ -40,10 +24,6 @@ All green: `uv run pytest -q` = **103 passing** (stylebot); the blog runner
   **HTML report** (`--report`). Live OpenRouter judge wiring is **verified**.
 - **Deferred (planned, not built):** the statistical-detector audition (eval's
   4th signal), `meta.weight`, Phase 3 (LoRA training), Phase 4 (inference CLI).
-
-> **Commit/push check before continuing:** run `git log`/`git status` in both
-> repos. As of writing, the scores-report work and the two `_plans/*handoff*.md`
-> docs may be uncommitted in stylebot; nothing is pushed. Commit/push as needed.
 
 ## Next move — the two unblocked tracks (run in parallel)
 
@@ -127,7 +107,7 @@ captured, NOT implemented"). Shape:
 - **Both repos checked out side by side** (`~/Source/stylebot`, `~/Source/livingthing`);
   the blog has an editable path dep on `../stylebot`.
 - **Keys** in each repo's gitignored `.env` (`OPENROUTER_API_KEY`; optionally
-  `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`LOCAL_LLM_*`; `PANGRAM_API_KEY` only if the
+  `OPENAI_API_KEY`/`LOCAL_LLM_*`; `PANGRAM_API_KEY` only if the
   audition picks it). **The key is only in env via `direnv exec uv run …`** — a
   bare `uv run` won't see it. Eval/synth run **keyless** by default (no judge / no
   paid generator), so tests and dry-runs need nothing.

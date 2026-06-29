@@ -90,7 +90,7 @@ whole pipeline from its own build.
 Most of what we imported is *generic*, not Dan-specific. The boundary:
 
 - **Generic core (keep, treat as reusable):** frontmatter + markdown loading
-  (`read_/write_w_frontmatter`), date parsing, content-file discovery. Quarto's
+  (`read_w_frontmatter_text`) and content-file discovery. Quarto's
   `.qmd` is just YAML-frontmatter markdown — the same code serves Hugo/Jekyll/
   any frontmatter blog. The only "blog-ness" in `is_valid_qmd_file` /
   `gather_qmd_files` is the hardcoded `.qmd` extension and build-dir skip-list;
@@ -146,11 +146,19 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 | 4 · Inference CLI | [`phase-4-inference-cli.md`](phase-4-inference-cli.md) | 📋 planned | a trained adapter |
 | E · Eval harness | [`eval-harness.md`](eval-harness.md) | 🔧 built (`stylebot.eval` / `ai-style eval`); **detector audition pending** | only sample prose |
 
+> **Codebase hygiene (2026-06-29).** A QA declutter pass removed the dead
+> blog-build code bulk-copied into stylebot (`migrate_ai_dates`,
+> `is_auxiliary_post`, the `SUMMARY_*`/`QUALITY_*` prompts, unused frontmatter
+> helpers) and the redundant direct-Anthropic generator + `anthropic` dep (hosted
+> models go through OpenRouter now). The mechanism is lean — don't redo it; ship
+> functionality.
+
 **Next move:** the two open tracks run in parallel — (a) **iterate the Phase-2
 slop experiments** (small batches per `--slop-strategy` into a scratch dir, eyeball,
 score with `ai-style eval`, promote a winner), and (b) the **detector audition**
 (the one remaining eval signal). Both need only sample prose + an OpenRouter key.
-The data-gated tail (Phase 3/4) waits on corpus volume + an adapter.
+The data-gated tail (Phase 3/4) waits on corpus volume + an adapter. Concrete
+commands + environment: [`next-steps.md`](next-steps.md).
 
 ## Sequencing — what's parallel vs serial
 

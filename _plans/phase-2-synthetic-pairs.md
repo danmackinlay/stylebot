@@ -26,8 +26,9 @@ a sample of Dan's paragraphs. Does not need a trained model.
   `is_human_authored` (the `automation: 0` example) is only the default — Phase
   2 must accept the selector as an argument, never hardcode the predicate.
 - `--data-dir` (write): where the resulting `pairs.jsonl` is appended.
-- LLM API keys (multi-source by design): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-  and a local/utility base model (`LOCAL_LLM_*`). See `.env.example`.
+- LLM API keys: `OPENROUTER_API_KEY` (one key, many hosted models — the default
+  path), optionally `OPENAI_API_KEY` and a local/utility base model
+  (`LOCAL_LLM_*`). See `.env.example`.
 - `STYLE_SYSTEM` from `stylebot.ai_core` (must match Phase 1 verbatim).
 
 Interface: a `stylebot.synth` function over explicit paths; `ai-style synth`
@@ -96,9 +97,9 @@ not guessed once:
 1. Sample paragraphs of Dan's own prose → these are the **targets**.
 2. For each, ask an LLM "rewrite this passage to be clearer and more polished"
    → the output is the **slop source**.
-3. **Multi-source**: rotate across ≥2 generators (Claude, GPT, the local base
-   model) so the styler learns to undo AI-writing broadly, not one model's
-   tics. Tag each pair with the generator in `meta`.
+3. **Multi-source**: rotate across ≥2 generators (several OpenRouter models, the
+   local base model) so the styler learns to undo AI-writing broadly, not one
+   model's tics. Tag each pair with the generator in `meta`.
 4. **Secondary set**: explicitly request worst-case patterns from the slop
    catalogue for long-tail mannerisms the paraphrase pipeline underrepresents.
 5. **Context-fullness sweep** (optional, post §"Whose slop?"): generate some

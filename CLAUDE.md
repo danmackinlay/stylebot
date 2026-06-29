@@ -93,13 +93,20 @@ The data-heavy phases need the prose corpus. Wired in against Dan's live blog:
 - [x] `is_human_authored` defaults (`field="automation"`, `max_level=0`) match
       the real frontmatter exactly — no retarget needed.
 
-## Current status (as of 2026-06-28)
+## Current status (as of 2026-06-29)
+
+> **Codebase decluttered (2026-06-29).** A QA pass removed dead blog-build code
+> (`migrate_ai_dates`, `is_auxiliary_post`, the `SUMMARY_*`/`QUALITY_*` prompts,
+> unused frontmatter/date helpers) and the redundant direct-Anthropic generator
+> + the `anthropic` dependency — hosted models reach stylebot via OpenRouter now.
+> The mechanism is lean and this housekeeping is done; next moves (shipping) live
+> in [`_plans/next-steps.md`](_plans/next-steps.md).
 
 Phase 0 (scaffolding) and Phase 1 (`ai-style-log`, daily-used) are done; Phase 1
 now also captures **heading context** (default ON; see below).
 
 Phase 2 (synthetic pairs) is **built and curated** — `ai-style synth` /
-`train-targets` over `stylebot.synth`, tested green (89 stylebot + 13 blog).
+`train-targets` over `stylebot.synth`, tested green (101 stylebot + 13 blog).
 The target-curation pipeline (all generic mechanism in `stylebot`, policy in the
 blog's `livingthing.training_targets`):
 - prose-only extraction (`segment_for_edit`), hygiene (min/max chars, tables,
