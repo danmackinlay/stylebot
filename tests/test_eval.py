@@ -2,7 +2,7 @@
 
 The judge is injected as a plain fake; the detector defaults to `null_detector`;
 Vale is exercised only for graceful degradation when the binary is absent. These
-gate the stable JSON schema `evaluate_groups` emits and the judge-reply parser.
+gate the batched score schema (`score_pairs_file`) and the judge-reply parser.
 """
 
 from __future__ import annotations
@@ -18,46 +18,6 @@ from stylebot.pairs import validate_pairs_file
 def fake_judge(prose: str) -> dict:
     # Deterministic verdict; no API. Carries `prose` length so we know it ran.
     return {"score": 4, "rationale": f"looks dan-shaped ({len(prose)} chars)"}
-
-
-# Tiny inline 3-group fixture mirroring the plan's styler-input / styler-output
-# / pure-Dan triad.
-GROUPS = {
-    "styler-input": [
-        "It is worth noting that this leverages a robust, scalable solution.",
-        "In today's fast-paced world, you really need to think outside the box.",
-    ],
-    "styler-output": [
-        "This uses a solution that scales.",
-        "You need a fresh idea.",
-    ],
-    "pure-Dan": [
-        "The abstraction is fine until it isn't, and then it is a liability.",
-        "I distrust any pipeline that lies to the model downstream of it.",
-    ],
-}
-
-
-def test_evaluate_groups_schema_and_aggregates():
-    report = ev.evaluate_groups(GROUPS, judge=fake_judge)
-
-    assert report["schema_version"] == 2
-    groups = report["groups"]
-
-    # Both contrast groups present (the movement comparison the plan wants).
-    assert "pure-Dan" in groups
-    assert "styler-input" in groups
-    assert "styler-output" in groups
-
-    for name, expected_n in (("styler-input", 2), ("styler-output", 2), ("pure-Dan", 2)):
-        agg = groups[name]["aggregate"]
-        assert agg["n"] == expected_n
-        # fake_judge always scores 4.
-        assert agg["mean_judge_score"] == 4.0
-        # null detector contributes no score.
-        assert agg["mean_detector_score"] is None
-        # Raw per-candidate records travel with the aggregate.
-        assert len(groups[name]["records"]) == expected_n
 
 
 def test_score_candidate_without_judge_runs_keyless():
@@ -113,14 +73,6 @@ def test_judge_reply_parser_clamps_and_falls_back():
     assert ev.parse_judge_reply('{"score": 9, "rationale": "x"}')["score"] == 5
     # No JSON object, but a bare digit is still recoverable.
     assert ev.parse_judge_reply("I would rate this a 3 overall.")["score"] == 3
-
-
-def test_read_prose_files(tmp_path):
-    p1 = tmp_path / "a.md"
-    p2 = tmp_path / "b.md"
-    p1.write_text("alpha", encoding="utf-8")
-    p2.write_text("beta", encoding="utf-8")
-    assert ev.read_prose_files([p1, p2]) == ["alpha", "beta"]
 
 
 # --- batched, JSONL-native scoring over a pairs.jsonl corpus ----------------

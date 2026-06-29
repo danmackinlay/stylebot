@@ -22,10 +22,10 @@ policy"): `iter_targets` takes a `selector` defaulting to
 own, or hand in a pre-selected file list and skip the walk entirely.
 
 The generators are injected, not hardcoded: tests pass plain callables; the
-`anthropic_generator` / `openai_generator` / `local_generator` /
-`openrouter_generator` factories build real provider-backed ones (multi-source by
-design — rotate ≥2 so the styler learns to undo AI writing broadly, not one
-model's tics; OpenRouter reaches many upstream models off a single key).
+`openai_generator` / `local_generator` / `openrouter_generator` factories build
+real provider-backed ones (multi-source by design — rotate ≥2 so the styler
+learns to undo AI writing broadly, not one model's tics; OpenRouter reaches many
+upstream models off a single key, so hosted models like Claude/GPT go through it).
 
 The slop *prompt* is itself a knob: `STRATEGIES` maps a label → a system prompt
 flavour, recorded as `meta.slop_strategy` and folded into `synth_key`, so you can
@@ -52,7 +52,7 @@ from stylebot.lib import (
     read_w_frontmatter_text,
     split_paragraphs,
 )
-from stylebot.pairs import build_pair_content
+from stylebot.pairs import build_pair_content, iter_pairs
 
 # Instruction we hand a generic LLM to manufacture "slop" from Dan's prose.
 # It mirrors STYLE_SYSTEM's structure-preservation clause so the synthetic
@@ -529,38 +529,6 @@ class Generator:
         return self.generate(target_text)
 
 
-def anthropic_generator(
-    *,
-    model: str = "claude-opus-4-8",
-    strategy: str = DEFAULT_STRATEGY,
-    system: str | None = None,
-    max_tokens: int = DEFAULT_SLOP_MAX_TOKENS,
-    api_key: str | None = None,
-) -> Generator:
-    """Claude-backed slop generator (`anthropic` SDK; key `ANTHROPIC_API_KEY`)."""
-    import anthropic
-
-    from stylebot import config
-
-    label, system = resolve_strategy(strategy, system)
-    client = anthropic.Anthropic(api_key=api_key or config.require_key("ANTHROPIC_API_KEY"))
-
-    def generate(text: str) -> str:
-        resp = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": text}],
-        )
-        # A truncated slop (hit max_tokens) doesn't cover the whole target — that
-        # is a broken pair, so fail loudly and let synthesize_pairs skip it.
-        if resp.stop_reason == "max_tokens":
-            raise RuntimeError(f"slop truncated at max_tokens={max_tokens} (raise it)")
-        return "".join(b.text for b in resp.content if b.type == "text").strip()
-
-    return Generator(name=model, generate=generate, strategy=label)
-
-
 def openai_generator(
     *,
     model: str = "gpt-4o",
@@ -722,24 +690,17 @@ def _capture_id(source: str, generator_name: str, strategy: str = DEFAULT_STRATE
 
 
 def existing_synth_keys(pairs_path: Path | str) -> set[str]:
-    """Read the `meta.synth_key`s already present in a `pairs.jsonl`."""
-    pairs_path = Path(pairs_path)
-    keys: set[str] = set()
-    if not pairs_path.exists():
-        return keys
-    with pairs_path.open(encoding="utf-8") as fp:
-        for line in fp:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            key = (rec.get("meta") or {}).get("synth_key") if isinstance(rec, dict) else None
-            if key:
-                keys.add(key)
-    return keys
+    """Read the `meta.synth_key`s already present in a `pairs.jsonl`.
+
+    Uses the shared tolerant reader `stylebot.pairs.iter_pairs` (UTF-8, blank /
+    undecodable lines skipped, missing file → empty), so resume and the schema
+    contract stay on one JSONL reader.
+    """
+    return {
+        key
+        for rec in iter_pairs(pairs_path)
+        if (key := (rec.get("meta") or {}).get("synth_key"))
+    }
 
 
 def _build_record(

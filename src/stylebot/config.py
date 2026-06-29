@@ -9,7 +9,7 @@ Usage:
 
     config.load()                       # idempotent; loads .env if present
     key = config.require_key("TOGETHER_API_KEY")   # raises a clear error if unset
-    corpus = config.data_dir()          # Path to $STYLEBOT_DATA_DIR or default
+    corpus = config.resolve_data_dir()  # Path to $STYLEBOT_DATA_DIR or default
 
 Secrets live in `.env` (gitignored) — see `.env.example` for the key names.
 Nothing here ever prints or logs a key value.
@@ -57,11 +57,6 @@ def resolve_data_dir(flag: str | os.PathLike | None = None) -> Path:
         return Path(flag)
     load()
     return Path(os.environ.get("STYLEBOT_DATA_DIR", "_training_pairs"))
-
-
-def data_dir() -> Path:
-    """Back-compat shorthand for ``resolve_data_dir()`` (env > default)."""
-    return resolve_data_dir()
 
 
 def get_key(name: str) -> str | None:

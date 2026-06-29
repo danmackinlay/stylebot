@@ -25,7 +25,7 @@ from stylebot.lib import is_human_authored
 # provider's own key). OpenRouter models are selected separately via
 # --openrouter-model (one key, many upstream models). Library callers inject
 # their own `synth.Generator`s.
-_PRESETS = ("claude", "gpt", "local")
+_PRESETS = ("gpt", "local")
 
 
 def _sort_key(name: str):
@@ -108,7 +108,6 @@ def main() -> None:
     help="Override the slop system prompt with this file's contents (e.g. an author's own slop "
     "catalogue), labelled by --slop-strategy. Keeps blog-specific prompts out of stylebot.",
 )
-@click.option("--claude-model", default="claude-opus-4-8", show_default=True)
 @click.option("--gpt-model", default="gpt-4o", show_default=True)
 @click.option("--local-model", default="", help="Local model id (else $LOCAL_LLM_MODEL).")
 @click.option("--per-generator", is_flag=True, help="Emit a pair from EVERY generator per target (n× cost), not round-robin.")
@@ -142,7 +141,6 @@ def synth_cmd(
     openrouter_models: tuple[str, ...],
     slop_strategy: str,
     slop_system_file: Path | None,
-    claude_model: str,
     gpt_model: str,
     local_model: str,
     per_generator: bool,
@@ -210,7 +208,7 @@ def synth_cmd(
     # and may hit a provider key the operator hasn't configured).
     if not generator_names and not openrouter_models:
         raise click.UsageError(
-            "no generators selected: pass --generator {claude,gpt,local} and/or "
+            "no generators selected: pass --generator {gpt,local} and/or "
             "--openrouter-model MODEL (synth needs at least one slop source)"
         )
     # Resolve the slop prompt once (fail fast on a bad strategy name).
@@ -233,16 +231,14 @@ def synth_cmd(
 
     if dry_run:
         # Name-only stubs — no API clients, no keys needed to vet selection.
-        preset_names = {"claude": claude_model, "gpt": gpt_model, "local": f"local-{local_model or 'local'}"}
+        preset_names = {"gpt": gpt_model, "local": f"local-{local_model or 'local'}"}
         generators = [synth.Generator(name=preset_names[g], strategy=strategy_label) for g in generator_names]
         generators += [synth.Generator(name=f"openrouter/{m}", strategy=strategy_label) for m in openrouter_models]
     else:
         try:
             generators = []
             for g in generator_names:
-                if g == "claude":
-                    generators.append(synth.anthropic_generator(model=claude_model, strategy=strategy_label, system=slop_system))
-                elif g == "gpt":
+                if g == "gpt":
                     generators.append(synth.openai_generator(model=gpt_model, strategy=strategy_label, system=slop_system))
                 elif g == "local":
                     generators.append(synth.local_generator(model=local_model or None, strategy=strategy_label, system=slop_system))

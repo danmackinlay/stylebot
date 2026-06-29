@@ -112,10 +112,11 @@ Most of what we imported is *generic*, not Dan-specific. The boundary:
   function is the default that ships, not a gate stylebot imposes. Phases must
   therefore never call it directly on a hardcoded path: they accept a selector
   argument and use this only as the default value.
-- **Blog-build cruft — NOT stylebot's job.** `migrate_ai_dates` (custom
-  `date-ai-*` keys) and `is_auxiliary_post` / `AUXILIARY_TYPES` (`digest`,
-  `about` post types) are blog-build concerns. No phase should depend on them;
-  they belong back in the blog, not here.
+- **Blog-build cruft — removed from stylebot (2026-06-29).** `migrate_ai_dates`
+  (custom `date-ai-*` keys) and `is_auxiliary_post` / `AUXILIARY_TYPES`
+  (`digest`/`about` post types) were copied in but never used here; they now live
+  only in the blog. Don't reintroduce them — auxiliary/AI-touched filtering is
+  the caller's `selector` policy, not stylebot's job.
 
 ## The shared data contract (the seams)
 

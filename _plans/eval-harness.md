@@ -139,8 +139,9 @@ the integration is *designed* before any spend; **do not wire it yet.**
   `Detector` protocol / `null_detector`, `score_candidate`; **batched layer**
   `score_pairs_file` (corpus → id-keyed `scores.jsonl`, concurrent + resumable) /
   `summarize_scores(by=…)` / `record_id` / `pair_body` / `FIELD_EXTRACTORS`. The
-  shared reader is `stylebot.pairs.iter_pairs`. (`evaluate_groups` /
-  `read_prose_files` remain as in-memory conveniences, no longer the CLI path.)
+  shared reader is `stylebot.pairs.iter_pairs`. (The legacy in-memory
+  conveniences `evaluate_groups` / `read_prose_files` were removed — the batched
+  JSONL path is the one way to score.)
 - **Keyless by default.** No judge ⇒ `judge: null`; Vale absent ⇒
   `{"available": false}`; detector unconfigured ⇒ `{"score": null}`. The harness
   always completes; signals it lacks are explicit nulls, never faked.

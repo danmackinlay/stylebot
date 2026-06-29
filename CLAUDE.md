@@ -18,6 +18,14 @@ uv run ai-style-log --help
 uv run ai-style --help  # synth (Phase 2); split/train/eval land with their phases
 ```
 
+**Always run Python through `uv`.** `uv run python …`, `uv run pytest`,
+`uv run <console-script>` — **never** bare `python`/`python3`, not even for a
+throwaway one-liner or a quick "just parse this file" check. Bare `python3` grabs
+whatever arbitrary interpreter is first on `PATH` instead of this project's
+pinned version and `uv`-installed env, so it's non-reproducible and can't import
+the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
+`uv run python -c …`. This applies to subagents too.
+
 ## Architecture rules (don't violate without updating the plan)
 
 - **Library-first, CLI second.** Each phase is a module with a typed function
@@ -39,9 +47,12 @@ uv run ai-style --help  # synth (Phase 2); split/train/eval land with their phas
   logged pair. Changing the string invalidates the corpus. Phase 2 must emit it
   verbatim as `messages[0]`.
 - **Blog/generic boundary.** Generic frontmatter+markdown tooling is reusable;
-  the only blog-specific code allowed is the bundled selector example. Do NOT
-  build new phases on `migrate_ai_dates` / `is_auxiliary_post` — those are
-  blog-build cruft slated to go home to the blog.
+  the only blog-specific code allowed is the bundled selector example
+  (`is_human_authored`). The old blog-build cruft (`migrate_ai_dates`,
+  `is_auxiliary_post`/`AUXILIARY_TYPES`, the `SUMMARY_*`/`QUALITY_*` prompts) was
+  removed from stylebot (2026-06-29) — it had been copied in but never used here,
+  and lives only in the blog now. Don't reintroduce it: auxiliary/AI-touched
+  filtering is the caller's `selector` policy.
 
 ## Never commit
 
@@ -73,7 +84,7 @@ The data-heavy phases need the prose corpus. Wired in against Dan's live blog:
 - [x] Frontmatter conventions: `automation:` is an int level of how much AI
       touched a post — `0` = pure human (1591 posts), `1` (58), `2` (61).
       `automation: 0` is the slop-free target prose. Auxiliary posts carry
-      `type: digest`/`about` (see `is_auxiliary_post`).
+      `type: digest`/`about` (see `livingthing.lib.is_auxiliary_post`).
 - [x] Where the **already-captured** `pairs.jsonl` lives:
       `~/Source/livingthing/_training_pairs/pairs.jsonl` (254 records as of
       2026-06-27, validates clean). Point downstream phases at it with

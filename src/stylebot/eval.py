@@ -342,62 +342,6 @@ def _aggregate(records: list[dict]) -> dict:
     }
 
 
-def evaluate_groups(
-    groups: dict[str, list[str]],
-    *,
-    judge: Judge | None = None,
-    detector: Detector = null_detector,
-    vale_config: str | Path | None = None,
-) -> dict:
-    """Score several named groups so a run is judged by MOVEMENT across them.
-
-    The plan's three groups are ``styler-input`` (pre-styling slop),
-    ``styler-output`` (the styler's rewrite), and ``pure-Dan`` (human
-    reference); a successful styler moves ``styler-output`` toward ``pure-Dan``
-    and away from ``styler-input``. Any named groups work — the function does
-    not hardcode the blog's three.
-
-    Returns a stable, JSON-able report::
-
-        {
-          "schema_version": 1,
-          "groups": {
-            "<name>": {
-              "aggregate": {n, mean_judge_score, mean_vale_alerts,
-                            mean_detector_score},
-              "records": [ {score_candidate record}, ... ],
-            },
-            ...
-          },
-        }
-    """
-    out: dict = {"schema_version": SCHEMA_VERSION, "groups": {}}
-    for name, texts in groups.items():
-        records = [
-            score_candidate(
-                t,
-                judge=judge,
-                detector=detector,
-                vale_config=vale_config,
-            )
-            for t in texts
-        ]
-        out["groups"][name] = {
-            "aggregate": _aggregate(records),
-            "records": records,
-        }
-    return out
-
-
-def read_prose_files(paths: Iterable[str | Path]) -> list[str]:
-    """Read a group of candidate prose files into a list of strings.
-
-    Generic helper — no blog assumptions, no frontmatter handling, no glob: the
-    caller hands in an explicit list of files (each is read whole as UTF-8).
-    """
-    return [Path(p).read_text(encoding="utf-8") for p in paths]
-
-
 # ---------------------------------------------------------------------------
 # Batched, JSONL-native scoring over a pairs.jsonl corpus
 # ---------------------------------------------------------------------------
