@@ -96,11 +96,29 @@ the integration is *designed* before any spend; **do not wire it yet.**
   the default; default stays `null_detector`). It is for the one-shot labeling
   passes above, not the default `score_candidate` / `score_pairs_file` path.
 
+## Planned — synthetic↔real distribution match (a fifth capability)
+
+The four signals score *individual passages* and aggregate scalar means. They cannot
+yet answer the question Phase-2 needs: **does synthetic slop match the distribution of
+real Claude output Dan actually cleans up?** (Eyeballing showed synthetic slop missing
+real mannerisms — e.g. incoherent mixed metaphors.) There is no feature/mannerism
+extraction and no distributional comparison (KL / Wasserstein / frequency tables).
+
+Planned (its own phase; deferred): a feature extractor (hedge rate, signposting
+density, sentence-length variance, the `_voices/slop_patterns.md` families, optionally
+an AI-detector score) run over **two strata** — synthetic pairs vs the **real-slop
+reference** (the 254 Phase-1 pairs, ≥48 from `automation:2`; plus `automation:1/2`
+prose) — and a side-by-side distribution view per strategy/covariate. **Seam:** the
+`meta.synthetic` facet (real = `synthetic` falsy/absent) over the existing aggregation;
+it consumes the `meta.gen` covariates Phase-2 now records. See
+[`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) → Experiment 3.
+
 ## Outputs
 
 - **`scores.jsonl`** — one **id-keyed** record per pair (`id` = `synth_key` or
   `capture_id:chunk_index`), carrying a `meta` subset (`source`, `synthetic`,
-  `generator`, `slop_strategy`, …) and `scores: {<field>: {vale, judge, detector,
+  `generator`, `slop_strategy`, the flattened `meta.gen` covariates, …) and
+  `scores: {<field>: {vale, judge, detector,
   …}}`. The id is the join key back to the corpus — so scores feed Phase-3
   filtering/weighting and Phase-4 best-of-N without re-deriving anything. The run
   is **idempotent/resumable** (scored ids skipped), like `synth`.

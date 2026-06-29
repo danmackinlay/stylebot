@@ -157,3 +157,41 @@ def test_format_scores_sample_seeded(tmp_path):
     a = report.format_scores_sample(scores, pairs, 2, seed=3)
     b = report.format_scores_sample(scores, pairs, 2, seed=3)
     assert a == b and "slop" in a and "target" in a
+
+
+def _make_scored_with_gen(tmp_path, *, judge=None):
+    """Build a 2-pair corpus whose generators record gen covariates (meta.gen)."""
+    d = tmp_path / "corpus"
+    specs = [
+        ("A terse idiosyncratic Dan target paragraph, long enough to score here.", "high"),
+        ("Another authored paragraph, comfortably long enough to be scored too.", "low"),
+    ]
+    for i, (text, effort) in enumerate(specs):
+        t = synth.Target(text=text, source=f"post/p{i}.qmd", chunk_index=0, chunk_total=1)
+        g = synth.Generator(
+            name="m",
+            reasoning_effort=effort,
+            generate=lambda s, e=effort: synth.GenOutput("slop: " + s, {"model": "anthropic/claude-opus-4.8", "reasoning_effort": e}),
+        )
+        synth.synthesize_pairs([t], d, [g])
+    pairs, scores = d / "pairs.jsonl", tmp_path / "scores.jsonl"
+    ev.score_pairs_file(pairs, scores, judge=judge)
+    return pairs, scores
+
+
+def test_scores_report_shows_gen_params(tmp_path):
+    pairs, scores = _make_scored_with_gen(tmp_path, judge=_judge)
+    p = tmp_path / "r.html"
+    report.render_scores_report(scores, pairs, p)
+    h = p.read_text()
+    assert "reasoning=high" in h  # per-pair generation-covariate sub-line
+    assert "anthropic/claude-opus-4.8" in h
+
+
+def test_scores_report_facet_by_covariate(tmp_path):
+    pairs, scores = _make_scored_with_gen(tmp_path, judge=_judge)
+    p = tmp_path / "r.html"
+    report.render_scores_report(scores, pairs, p, facet_by="reasoning_effort")
+    h = p.read_text()
+    assert "<th>reasoning_effort</th>" in h  # headline grouped by the covariate
+    assert "<th>slop_strategy</th>" not in h  # not the default facet

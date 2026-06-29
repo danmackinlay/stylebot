@@ -93,10 +93,18 @@ captured, NOT implemented"). Shape:
 
 ## Open decisions / things to watch (from OVERVIEW "Open questions")
 
+- **Generation covariate sweeps (the active Phase-2 step)** — reasoning effort
+  (default high), prompt, model and sampling are now recorded as `meta.gen` and
+  facetable (`ai-style eval --by <covariate>`). Run the reasoning sweep + prompt
+  ablation (incl. the blog's `_voices/slop_patterns.md` via `--slop-system-file`);
+  see `phase-2-synthetic-pairs.md` → Experiments.
+- **Synthetic↔real distribution match (deferred eval phase)** — no distributional
+  comparison exists yet; build a feature/mannerism extractor faceted by
+  `meta.synthetic` to see which real Claude mannerisms synthetic slop misses.
 - **`meta.weight`** — down-weight synthetic vs real pairs at train time? What
   weight? The scores join makes it derivable; decide in Phase 3.
-- **Single- vs multi-source slop ablation** — worth publishing? (`STRATEGIES` +
-  `meta.generator`/`meta.slop_strategy` make this measurable now.)
+- **Single- vs multi-source slop ablation** — worth publishing? (`SLOP_MODELS` +
+  `meta.generator`/`meta.gen` make this measurable now.)
 - **Base model** — Qwen3 8B first, 70B if headroom allows.
 - **Detector** — settled by the audition (track B).
 - **Heading-context depth** — only `immediate` shipped; `breadcrumb` is designed

@@ -115,9 +115,19 @@ def main() -> None:
     default=synth.DEFAULT_SLOP_MAX_TOKENS,
     show_default=True,
     type=int,
-    help="Max completion tokens per slop generation. Raise if a model truncates "
-    "(reasoning models are run with reasoning OFF, so this rarely needs raising).",
+    help="Max completion tokens per slop generation. Raise if a model truncates.",
 )
+@click.option(
+    "--reasoning-effort",
+    type=click.Choice(["high", "medium", "low", "off"]),
+    default=synth.DEFAULT_REASONING_EFFORT,
+    show_default=True,
+    help="Reasoning effort for the slop generator, recorded as a covariate in meta.gen "
+    "('off' disables reasoning). Mapping to each provider is best-effort; the requested "
+    "effort is recorded regardless of what the provider honors.",
+)
+@click.option("--temperature", type=float, default=None, help="Sampling temperature, sent to the API and recorded (provider default if unset).")
+@click.option("--top-p", "top_p", type=float, default=None, help="Nucleus top_p, sent to the API and recorded (provider default if unset).")
 @click.option("--per-generator", is_flag=True, help="Emit a pair from EVERY generator per target (n× cost), not round-robin.")
 @click.option("--limit", type=int, default=None, help="Cap the number of target chunks (cost control / smoke runs).")
 @click.option("--tag", "tags", multiple=True, help="Extra provenance tag(s) added to meta.tags.")
@@ -152,6 +162,9 @@ def synth_cmd(
     gpt_model: str,
     local_model: str,
     max_tokens: int,
+    reasoning_effort: str,
+    temperature: float | None,
+    top_p: float | None,
     per_generator: bool,
     limit: int | None,
     tags: tuple[str, ...],
@@ -220,11 +233,15 @@ def synth_cmd(
             "no generators selected: pass --generator {gpt,local} and/or "
             "--openrouter-model MODEL (synth needs at least one slop source)"
         )
-    # Resolve the slop prompt once (fail fast on a bad strategy name).
+    # Resolve the slop prompt once (fail fast on a bad strategy name). For a registry
+    # strategy we pass the *name* (system=None) down to the factory so it resolves the
+    # registry entry and keeps its version; only a custom --slop-system-file overrides
+    # the system text. prompt_id/version computed here drive the dry-run stubs so their
+    # synth_key matches a real run's.
+    custom_system = slop_system_file.read_text(encoding="utf-8") if slop_system_file else None
     try:
-        strategy_label, slop_system = synth.resolve_strategy(
-            slop_strategy,
-            slop_system_file.read_text(encoding="utf-8") if slop_system_file else None,
+        strategy_label, _slop_system, prompt_version, prompt_id = synth.resolve_strategy(
+            slop_strategy, custom_system
         )
     except ValueError as exc:
         raise click.BadParameter(str(exc), param_hint="--slop-strategy")
@@ -239,10 +256,21 @@ def synth_cmd(
     resolved_dir = config.resolve_data_dir(data_dir)
 
     if dry_run:
-        # Name-only stubs — no API clients, no keys needed to vet selection.
+        # Name-only stubs — no API clients, no keys needed to vet selection. Carry the
+        # covariates that feed synth_key so dry-run resume counts match a real run.
         preset_names = {"gpt": gpt_model, "local": f"local-{local_model or 'local'}"}
-        generators = [synth.Generator(name=preset_names[g], strategy=strategy_label) for g in generator_names]
-        generators += [synth.Generator(name=f"openrouter/{m}", strategy=strategy_label) for m in openrouter_models]
+
+        def _stub(name: str) -> synth.Generator:
+            return synth.Generator(
+                name=name,
+                strategy=strategy_label,
+                reasoning_effort=reasoning_effort,
+                prompt_id=prompt_id,
+                prompt_version=prompt_version,
+            )
+
+        generators = [_stub(preset_names[g]) for g in generator_names]
+        generators += [_stub(f"openrouter/{m}") for m in openrouter_models]
     else:
         try:
             generators = []
@@ -250,19 +278,25 @@ def synth_cmd(
                 if g == "gpt":
                     generators.append(
                         synth.openai_generator(
-                            model=gpt_model, strategy=strategy_label, system=slop_system, max_tokens=max_tokens
+                            model=gpt_model, strategy=strategy_label, system=custom_system,
+                            max_tokens=max_tokens, reasoning_effort=reasoning_effort,
+                            temperature=temperature, top_p=top_p,
                         )
                     )
                 elif g == "local":
                     generators.append(
                         synth.local_generator(
-                            model=local_model or None, strategy=strategy_label, system=slop_system, max_tokens=max_tokens
+                            model=local_model or None, strategy=strategy_label, system=custom_system,
+                            max_tokens=max_tokens, reasoning_effort=reasoning_effort,
+                            temperature=temperature, top_p=top_p,
                         )
                     )
             for m in openrouter_models:
                 generators.append(
                     synth.openrouter_generator(
-                        model=m, strategy=strategy_label, system=slop_system, max_tokens=max_tokens
+                        model=m, strategy=strategy_label, system=custom_system,
+                        max_tokens=max_tokens, reasoning_effort=reasoning_effort,
+                        temperature=temperature, top_p=top_p,
                     )
                 )
         except RuntimeError as exc:  # missing key, surfaced by config.require_key
@@ -319,6 +353,7 @@ def synth_cmd(
 @click.option("--limit", type=int, default=None, help="Cap pairs scored (smoke / cost control).")
 @click.option("--report", "report_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Write a self-contained HTML scores report (slop↔Dan + judge scores, sortable, faceted by strategy).")
 @click.option("--report-max-rows", default=2000, show_default=True, type=int, help="Cap rows in the HTML report (0 = all).")
+@click.option("--facet-by", "facet_by", default="slop_strategy", show_default=True, help="Group the HTML report headline by this meta covariate (e.g. reasoning_effort, prompt_id, generator).")
 @click.option("--sample", "sample_n", type=int, default=None, help="Print N random scored pairs (slop vs Dan + scores) to stdout.")
 def eval_cmd(
     pairs_path: Path,
@@ -333,6 +368,7 @@ def eval_cmd(
     limit: int | None,
     report_path: Path | None,
     report_max_rows: int,
+    facet_by: str,
     sample_n: int | None,
 ) -> None:
     """Score a pairs.jsonl corpus across the eval signals (offline, batched).
@@ -406,6 +442,7 @@ def eval_cmd(
             written = report.render_scores_report(
                 out, pairs_path, report_path, fields=score_fields,
                 max_rows=(None if report_max_rows == 0 else report_max_rows),
+                facet_by=facet_by,
             )
             click.echo(f"wrote report -> {written}")
 

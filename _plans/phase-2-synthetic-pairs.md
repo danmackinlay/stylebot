@@ -153,10 +153,59 @@ Append to the same `$STYLEBOT_DATA_DIR/pairs.jsonl`:
       `cd ~/Source/livingthing && uv run train-targets --limit N` (defaults to the
       OpenRouter rotation; `--dry-run`/`--report` first).
 
+## Generation covariates & experiments (built 2026-06-29)
+
+Slop generation is a **measured experiment**, not a fixed recipe: every synthetic
+pair records the generation parameters that may shape the slop distribution, so they
+can be faceted in eval and conditioned on at train time. (Prompted by Dan's review:
+the first smoke's slop missed real Claude mannerisms — e.g. incoherent mixed
+metaphors — and reasoning was wrongly hard-disabled.)
+
+- **`meta.gen` covariate bundle** (synthetic pairs only; `meta` is an open dict so
+  Phase-1 real pairs simply lack it — they're the falsy-`synthetic` stratum):
+  `model, reasoning_effort, temperature, top_p, max_tokens, finish_reason,
+  prompt_tokens, completion_tokens, prompt_id, prompt_version, prompt_label`. Carried
+  onto score records (`eval._CARRIED_GEN`), so `ai-style eval --by <covariate>` and
+  the report's `--facet-by` work for free.
+- **Reasoning is a covariate** (`--reasoning-effort high|medium|low|off`, default
+  **high** — real AI prose is often high-reasoning). `synth._reasoning_extra_body`
+  maps it to OpenRouter's `reasoning` field per model family (effort enum vs
+  `max_tokens` budget vs `enabled:false`); the *requested* effort is recorded
+  regardless of what the provider honors, and `finish_reason`/`completion_tokens`
+  expose a model that reasoned anyway. **Do not assume reasoning=off is "identical
+  quality"** — that is exactly what the sweep below measures.
+- **Sampling** (`--temperature`, `--top-p`) is now sent (previously the API default
+  ran, uncontrolled) and recorded. Recorded-only — NOT in `synth_key`.
+- **Versioned prompt library**: `STRATEGIES` values are `SlopStrategy(label, system,
+  version)`; `prompt_id = sha256(system)[:12]` identifies any prompt (registry *or*
+  custom `--slop-system-file`), folded into `synth_key`. The three generic flavours
+  are unvalidated starting points — treat prompts as the primary experimental axis.
+
+**Experiments to run** (each: small batch per arm into a scratch dir → `ai-style eval
+--by <covariate>` → compare the slop→Dan Δ + Vale Δ; promote nothing until it earns it):
+
+1. **Reasoning-effort sweep** — `high|medium|low|off` × the strategy set on a fixed
+   target set; `--by reasoning_effort`. Question: does reasoning change the slop
+   distribution, and *toward or away* from the real Claude output Dan cleans up?
+2. **Prompt ablation** — the generic flavours + Dan's `_voices/slop_patterns.md`
+   catalogue (injected via `--slop-system-file`) + new prompts that explicitly target
+   under-represented Claude mannerisms (mixed metaphors, false-definiteness); `--by
+   prompt_id`. The main axis.
+3. **Distribution-match diagnostic (DEFERRED — its own phase).** Compare synthetic
+   slop against the real-slop reference (the 254 Phase-1 pairs, ≥48 from
+   `automation:2`; plus `automation:1/2` prose) via a feature/mannerism extractor,
+   faceted by `meta.synthetic` (real = `synthetic` falsy). The eval scores passages
+   individually today; it has no distributional comparison — this is the next eval
+   capability (see [`eval-harness.md`](eval-harness.md)). Seam: `eval` aggregation
+   over `meta.synthetic`, consuming the covariates above.
+
+Also note (hygiene): some selected targets are low-signal; tighten selection/hygiene
+or record a target-quality covariate if it proves to matter.
+
 ## Risks / notes
 
 - Synthetic slop may not match the real Claude output distribution Dan hits in
   practice → keep mixing in real Phase 1 pairs; consider down-weighting
-  synthetic at train time (`meta.weight`?).
+  synthetic at train time (`meta.weight`?). Experiment 3 above measures the gap.
 - One known failure mode (post): learning the transform but *overcorrecting* —
   looks great on metrics, bad to humans. The eval harness must guard this.

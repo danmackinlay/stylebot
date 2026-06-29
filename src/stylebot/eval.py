@@ -404,6 +404,10 @@ FIELD_EXTRACTORS: dict[str, Callable[[dict], str]] = {
 # meta keys carried onto each score record, so scores group / filter / join
 # downstream without re-reading the corpus.
 _CARRIED_META = ("source", "synthetic", "generator", "slop_strategy", "chunk_index")
+# Generation covariates live nested under `meta.gen` (synthetic pairs only). Flatten
+# the experiment-relevant ones onto each score record so `summarize_scores(by=…)` can
+# facet by them directly; real pairs lack `meta.gen` and simply omit these (null bucket).
+_CARRIED_GEN = ("model", "reasoning_effort", "temperature", "top_p", "prompt_id", "prompt_version", "finish_reason")
 
 
 def record_id(record: dict) -> str:
@@ -467,9 +471,12 @@ def _score_record(
     for name in fields:
         text = FIELD_EXTRACTORS[name](record)
         scores[name] = score_candidate(text, judge=judge, detector=detector, vale_config=vale_config)
+    gen = meta.get("gen") or {}
+    carried = {k: meta.get(k) for k in _CARRIED_META if k in meta}
+    carried.update({k: gen[k] for k in _CARRIED_GEN if k in gen})
     return {
         "id": record_id(record),
-        "meta": {k: meta.get(k) for k in _CARRIED_META if k in meta},
+        "meta": carried,
         "scores": scores,
     }
 

@@ -174,6 +174,19 @@ def test_strategy_changes_synth_key():
     assert _synth_key("g", "body", "", "engaging") != _synth_key("g", "body", "", "catalogue")
 
 
+def test_reasoning_and_prompt_change_synth_key():
+    # Reasoning effort and prompt id are part of the key, so sweeping them
+    # regenerates rather than colliding on resume. Temperature is NOT a key axis.
+    import inspect
+
+    from stylebot.synth import _synth_key
+
+    base = _synth_key("g", "body")
+    assert base != _synth_key("g", "body", "", "polish", "low")  # reasoning effort
+    assert base != _synth_key("g", "body", "", "polish", "high", "pid123")  # prompt id
+    assert "temperature" not in inspect.signature(_synth_key).parameters
+
+
 def test_meta_records_slop_strategy(tmp_path):
     import json
 
@@ -208,16 +221,26 @@ def test_strategies_coexist_no_collision(tmp_path):
 
 
 def test_resolve_strategy():
-    label, system = synth.resolve_strategy("polish")
-    assert label == "polish" and system == synth.STRATEGIES["polish"]
-    # An explicit system overrides the registry under any label.
-    label, system = synth.resolve_strategy("dan-catalogue", "CUSTOM PROMPT")
+    label, system, version, prompt_id = synth.resolve_strategy("polish")
+    assert label == "polish" and system == synth.STRATEGIES["polish"].system
+    assert version == 1 and prompt_id == synth.prompt_id_of(system)
+    # An explicit system overrides the registry under any label (version 0, hashed id).
+    label, system, version, prompt_id = synth.resolve_strategy("dan-catalogue", "CUSTOM PROMPT")
     assert label == "dan-catalogue" and system == "CUSTOM PROMPT"
+    assert version == 0 and prompt_id == synth.prompt_id_of("CUSTOM PROMPT")
     # Unknown name with no custom prompt is an error.
     import pytest
 
     with pytest.raises(ValueError):
         synth.resolve_strategy("nonsense")
+
+
+def test_prompt_id_stable_and_distinct():
+    assert synth.prompt_id_of("abc") == synth.prompt_id_of("abc")  # stable
+    assert synth.prompt_id_of("abc") != synth.prompt_id_of("abd")  # content-sensitive
+    # Registry strategies have distinct prompt ids (distinct prompt texts).
+    ids = {synth.resolve_strategy(n)[3] for n in synth.STRATEGIES}
+    assert len(ids) == len(synth.STRATEGIES)
 
 
 def test_openrouter_generator_name_and_strategy():
@@ -374,9 +397,9 @@ def test_stop_at_headers_truncates_trailing_section(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Generator request-shaping + response guards. These mock the openai client to
-# assert the request we send (reasoning OFF by default, max_tokens) and how we
-# handle degenerate provider responses — no network, no keys.
+# Generator request-shaping + response guards + recorded covariates. These mock
+# the openai client to assert the request we send (reasoning-effort mapping,
+# sampling) and the GenOutput meta we record — no network, no keys.
 # ---------------------------------------------------------------------------
 
 
@@ -391,9 +414,16 @@ class _FakeChoice:
         self.finish_reason = finish_reason
 
 
+class _FakeUsage:
+    def __init__(self, prompt_tokens=None, completion_tokens=None):
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+
+
 class _FakeResponse:
-    def __init__(self, choices):
+    def __init__(self, choices, usage=None):
         self.choices = choices
+        self.usage = usage
 
 
 def _patch_openai(monkeypatch, response):
@@ -420,25 +450,56 @@ def _patch_openai(monkeypatch, response):
     return calls
 
 
-def test_openrouter_disables_reasoning_by_default(monkeypatch):
-    # Slop generation needs no chain-of-thought; reasoning models otherwise burn
-    # the token budget and truncate. The disable knob must be sent by default.
+def test_openrouter_reasoning_effort_enum(monkeypatch):
+    # Effort-enum families (claude/gpt/…) get {"effort": <level>}; default is high.
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice("slop out")]))
-    gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x")
-    assert gen.generate("rewrite me") == "slop out"
+    out = synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x").generate("rewrite me")
+    assert out.text == "slop out"  # GenOutput, not a bare string
+    assert calls["extra_body"] == {"reasoning": {"effort": "high"}}
+
+
+def test_openrouter_reasoning_budget_family(monkeypatch):
+    # Budget-style families (qwen/nvidia/google/…) get a token budget instead.
+    calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
+    synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="medium").generate("x")
+    assert calls["extra_body"] == {"reasoning": {"max_tokens": 4000}}
+
+
+def test_openrouter_reasoning_off(monkeypatch):
+    calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
+    synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="off").generate("x")
     assert calls["extra_body"] == {"reasoning": {"enabled": False}}
 
 
-def test_openrouter_reasoning_opt_in(monkeypatch):
-    calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
-    synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning=True).generate("x")
-    assert calls["extra_body"] is None  # re-enabled => we don't inject the disable knob
+def test_reasoning_effort_recorded_regardless_of_shape(monkeypatch):
+    # A budget-family model still RECORDS the requested effort string ("medium"),
+    # not the wire budget int — the covariate is the request, not what the API did.
+    _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
+    out = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="medium").generate("x")
+    assert out.meta["reasoning_effort"] == "medium"
 
 
 def test_max_tokens_threaded(monkeypatch):
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
     synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", max_tokens=1234).generate("x")
     assert calls["max_tokens"] == 1234
+
+
+def test_temperature_top_p_passed_and_recorded(monkeypatch):
+    calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()], usage=_FakeUsage(11, 22)))
+    out = synth.openrouter_generator(
+        model="anthropic/claude-opus-4.8", api_key="x", temperature=0.3, top_p=0.9
+    ).generate("x")
+    assert calls["temperature"] == 0.3 and calls["top_p"] == 0.9
+    assert out.meta["temperature"] == 0.3 and out.meta["top_p"] == 0.9
+    assert out.meta["prompt_tokens"] == 11 and out.meta["completion_tokens"] == 22
+
+
+def test_temperature_omitted_when_none(monkeypatch):
+    # Unset sampling params are NOT sent, so providers keep their defaults.
+    calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
+    synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x").generate("x")
+    assert "temperature" not in calls and "top_p" not in calls
 
 
 def test_empty_choices_raises_clear_error(monkeypatch):
@@ -457,3 +518,30 @@ def test_truncated_slop_raises(monkeypatch):
     gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x")
     with pytest.raises(RuntimeError, match="truncated"):
         gen.generate("rewrite me")
+
+
+def test_gen_output_meta_recorded(tmp_path):
+    # A generator returning GenOutput records its covariates under meta.gen.
+    import json
+
+    data_dir = tmp_path / "corpus"
+    target = synth.Target(text="A paragraph long enough to be a worthwhile target.", source="post/x.qmd", chunk_index=0, chunk_total=1)
+    gen = synth.Generator(
+        name="m",
+        generate=lambda t: synth.GenOutput("[slop] " + t, {"model": "m", "reasoning_effort": "low", "completion_tokens": 5}),
+    )
+    synth.synthesize_pairs([target], data_dir, [gen])
+    rec = json.loads((data_dir / "pairs.jsonl").read_text().splitlines()[0])
+    assert rec["meta"]["gen"] == {"model": "m", "reasoning_effort": "low", "completion_tokens": 5}
+    assert validate_pairs_file(data_dir / "pairs.jsonl") == []
+
+
+def test_bare_string_generator_has_no_gen_meta(tmp_path):
+    # Bare-string fakes still work (back-compat) and record no meta.gen.
+    import json
+
+    data_dir = tmp_path / "corpus"
+    target = synth.Target(text="A paragraph long enough to be a worthwhile target.", source="post/x.qmd", chunk_index=0, chunk_total=1)
+    synth.synthesize_pairs([target], data_dir, [synth.Generator(name="m", generate=lambda t: "[slop] " + t)])
+    rec = json.loads((data_dir / "pairs.jsonl").read_text().splitlines()[0])
+    assert "gen" not in rec["meta"]

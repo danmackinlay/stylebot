@@ -250,3 +250,33 @@ def test_summarize_scores_by_facet():
     assert summary["by"]["catalogue"]["slop"]["mean_judge_score"] == 3.0  # (2+4)/2
     assert summary["by"]["catalogue"]["target"]["mean_judge_score"] == 5.0
     assert summary["by"]["polish"]["slop"]["mean_judge_score"] == 3.0
+
+
+def test_carried_gen_meta_flattened_and_faceted(tmp_path):
+    # A synthetic pair's meta.gen covariates flatten onto the score record, so
+    # summarize_scores(by=…) facets by them for free.
+    data_dir = tmp_path / "c"
+    t1 = synth.Target(text="A paragraph long enough to be scored as a candidate here.", source="post/a.qmd", chunk_index=0, chunk_total=1)
+    t2 = synth.Target(text="Another paragraph, also comfortably long enough to score.", source="post/b.qmd", chunk_index=0, chunk_total=1)
+    g_hi = synth.Generator(name="m", reasoning_effort="high", generate=lambda s: synth.GenOutput("[slop] " + s, {"reasoning_effort": "high"}))
+    g_lo = synth.Generator(name="m", reasoning_effort="low", generate=lambda s: synth.GenOutput("[slop] " + s, {"reasoning_effort": "low"}))
+    synth.synthesize_pairs([t1], data_dir, [g_hi])
+    synth.synthesize_pairs([t2], data_dir, [g_lo])
+
+    out = tmp_path / "scores.jsonl"
+    ev.score_pairs_file(data_dir / "pairs.jsonl", out, judge=fake_judge)
+    recs = [json.loads(line) for line in out.read_text().splitlines() if line.strip()]
+    assert {r["meta"].get("reasoning_effort") for r in recs} == {"high", "low"}  # flattened from meta.gen
+    by = ev.summarize_scores(out, by="reasoning_effort")["by"]
+    assert set(by) == {"high", "low"}  # facets by the gen covariate for free
+
+
+def test_real_pair_without_gen_buckets_null():
+    # Real (Phase-1) pairs have no meta.gen; faceting by a gen covariate buckets
+    # them under "null" rather than erroring.
+    rec = {"id": "r1", "meta": {"slop_strategy": None}, "scores": {
+        "slop": {"judge": {"score": 3}, "vale": {"available": False}, "detector": {"score": None}},
+        "target": {"judge": {"score": 5}, "vale": {"available": False}, "detector": {"score": None}},
+    }}
+    by = ev.summarize_scores([rec], by="reasoning_effort")["by"]
+    assert set(by) == {"null"}

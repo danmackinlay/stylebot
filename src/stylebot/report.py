@@ -289,12 +289,15 @@ def _scores_rows_data(records: Sequence[dict], pairs_by_id: dict[str, dict], fie
         }
         s0, s1 = cells[fields[0]]["score"], cells[fields[-1]]["score"]
         delta = (s1 - s0) if (s0 is not None and s1 is not None) else None
+        # Generation covariates from the joined pair (synthetic only; empty for real).
+        gen = ((pair or {}).get("meta") or {}).get("gen") or {}
         rows.append({
             "id": rec.get("id", ""),
             "strategy": meta.get("slop_strategy") or "—",
             "source": meta.get("source") or "—",
             "cells": cells,
             "delta": delta,
+            "gen": gen,
         })
     return rows
 
@@ -316,15 +319,15 @@ def _scores_summary_stats(rows: Sequence[dict], fields: Sequence[str]) -> dict:
     }
 
 
-def _scores_headline_rows(records: Sequence[dict], fields: Sequence[str]) -> list[dict]:
-    """Per-strategy means via summarize_scores(by=…) — the compare-flavours headline."""
-    by = summarize_scores(records, by="slop_strategy").get("by", {})
+def _scores_headline_rows(records: Sequence[dict], fields: Sequence[str], *, by: str = "slop_strategy") -> list[dict]:
+    """Per-facet means via summarize_scores(by=…) — the compare-flavours headline."""
+    buckets = summarize_scores(records, by=by).get("by", {})
     out = []
-    for strat, byfields in sorted(by.items()):
+    for facet, byfields in sorted(buckets.items()):
         sm = (byfields.get(fields[0]) or {}).get("mean_judge_score")
         dm = (byfields.get(fields[-1]) or {}).get("mean_judge_score")
         delta = round(dm - sm, 2) if (sm is not None and dm is not None) else None
-        out.append({"strategy": strat, "n": (byfields.get(fields[0]) or {}).get("n", 0), "slop": sm, "dan": dm, "delta": delta})
+        out.append({"strategy": facet, "n": (byfields.get(fields[0]) or {}).get("n", 0), "slop": sm, "dan": dm, "delta": delta})
     return out
 
 
@@ -335,6 +338,7 @@ _SCORES_CSS = """
 .histos{display:flex;gap:16px;margin:8px 0}
 .histos figure{flex:1;margin:0}.histos figcaption{font-size:12px;color:var(--muted);margin-top:2px}
 .srcsub{font-size:11px;color:var(--muted)}
+.gensub{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;margin-top:2px}
 .cmp{display:flex;gap:16px}.cmp>div{flex:1;min-width:0}
 .fh{display:flex;align-items:center;gap:8px;margin-bottom:4px}
 .fl{font-weight:600;font-size:12px;color:var(--muted)}
@@ -376,6 +380,26 @@ def _badge(field: str, fields: Sequence[str], score: int | None) -> str:
     return f'<span class="badge {cls}">{txt}</span>'
 
 
+def _gen_subline(gen: dict) -> str:
+    """A muted one-line summary of generation covariates (empty for real pairs)."""
+    if not gen:
+        return ""
+    parts: list[str] = []
+    if gen.get("model"):
+        parts.append(str(gen["model"]))
+    if gen.get("reasoning_effort"):
+        parts.append(f"reasoning={gen['reasoning_effort']}")
+    if gen.get("temperature") is not None:
+        parts.append(f"t={gen['temperature']}")
+    if gen.get("top_p") is not None:
+        parts.append(f"top_p={gen['top_p']}")
+    if gen.get("prompt_id"):
+        parts.append(f"prompt {gen['prompt_id']}")
+    if gen.get("finish_reason"):
+        parts.append(str(gen["finish_reason"]))
+    return f"<div class=gensub>{html.escape(' · '.join(parts))}</div>" if parts else ""
+
+
 def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows: int | None) -> str:
     shown = rows if max_rows is None else rows[:max_rows]
     out = []
@@ -402,7 +426,8 @@ def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows
             f'data-slop="{"" if slop_s is None else slop_s}" data-dan="{"" if dan_s is None else dan_s}" '
             f'data-delta="{"" if delta is None else delta}" '
             f'data-src="{html.escape(r["source"], quote=True)}" data-len="{total_len}" data-hit="1">'
-            f"<td class=src>{html.escape(r['strategy'])}<div class=srcsub>{html.escape(r['source'])}</div></td>"
+            f"<td class=src>{html.escape(r['strategy'])}<div class=srcsub>{html.escape(r['source'])}</div>"
+            f"{_gen_subline(r['gen'])}</td>"
             f'<td class="len {d_cls}">{html.escape(d_txt)}</td>'
             f'<td class=txt><div class=cmp>{"".join(cols)}</div></td></tr>'
         )
@@ -420,17 +445,17 @@ def _score_histos(rows: Sequence[dict], fields: Sequence[str], *, bins: int) -> 
     )
 
 
-def _render_headline(headline_rows: Sequence[dict], fields: Sequence[str]) -> str:
+def _render_headline(headline_rows: Sequence[dict], fields: Sequence[str], *, by_label: str = "strategy") -> str:
     if not headline_rows:
         return ""
     fmt = lambda x: "—" if x is None else f"{x}"  # noqa: E731
     body = "".join(
-        f"<tr><td>{html.escape(h['strategy'])}</td><td class=num>{h['n']}</td>"
+        f"<tr><td>{html.escape(str(h['strategy']))}</td><td class=num>{h['n']}</td>"
         f"<td class=num>{fmt(h['slop'])}</td><td class=num>{fmt(h['dan'])}</td><td class=num>{fmt(h['delta'])}</td></tr>"
         for h in headline_rows
     )
     return (
-        "<table class=headline><thead><tr><th>strategy</th><th class=num>n</th>"
+        f"<table class=headline><thead><tr><th>{html.escape(by_label)}</th><th class=num>n</th>"
         f"<th class=num>{html.escape(fields[0])}</th><th class=num>{html.escape(fields[-1])}</th>"
         f"<th class=num>Δ</th></tr></thead><tbody>{body}</tbody></table>"
     )
@@ -474,14 +499,16 @@ def render_scores_report(
     fields: Sequence[str] = ("slop", "target"),
     max_rows: int | None = 2000,
     histogram_bins: int = 5,
+    facet_by: str = "slop_strategy",
 ) -> Path:
     """Write a self-contained HTML scores report. Returns the path.
 
     Joins `scores` (a `scores.jsonl` path or in-memory records) to `pairs_path`
     by `record_id`, then renders, per pair, each `field`'s body text + judge score
-    + rationale side by side, sortable by the slop→Dan delta and filterable by
-    strategy, under a per-strategy headline. Generic over `fields` — a Phase-4
-    styler run (`slop`/`output`/`target`) renders with no change.
+    + rationale side by side (plus a muted generation-covariate sub-line), sortable
+    by the slop→Dan delta and filterable by strategy, under a headline grouped by
+    `facet_by` (any carried meta covariate — slop_strategy, reasoning_effort,
+    prompt_id, …). Generic over `fields` — a Phase-4 styler run renders with no change.
     """
     out_path = Path(out_path)
     records, rows = _load_scores_rows(scores, pairs_path, fields)
@@ -513,7 +540,7 @@ def render_scores_report(
     page = _scores_page(
         title=title,
         stat_cards=_scores_stat_cards(stats, fields),
-        headline=_render_headline(_scores_headline_rows(records, fields), fields),
+        headline=_render_headline(_scores_headline_rows(records, fields, by=facet_by), fields, by_label=facet_by),
         histos=_score_histos(rows, fields, bins=histogram_bins),
         controls=controls,
         table=table,

@@ -140,7 +140,7 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 |-------|------|--------|-----------|
 | 0 · Scaffolding | this repo's pyproject/.env/_plans | ✅ done | — |
 | 1 · Pair capture | [`phase-1-pair-capture.md`](phase-1-pair-capture.md) | ✅ shipped (daily use) + heading context | — |
-| 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | 🔧 built + curated; slop-strategy knob + OpenRouter multi-source; **experimental generation loop is the active step** | corpus schema (have it) |
+| 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | 🔧 built + curated; slop-strategy/reasoning/sampling knobs recorded as `meta.gen` covariates; **experimental covariate sweeps are the active step** | corpus schema (have it) |
 | — · Heading context | [`heading-context.md`](heading-context.md) | 🔧 built (both producers; immediate depth) | — |
 | 3 · LoRA training | [`phase-3-training.md`](phase-3-training.md) | 📋 planned | enough pairs |
 | 4 · Inference CLI | [`phase-4-inference-cli.md`](phase-4-inference-cli.md) | 📋 planned | a trained adapter |
@@ -180,7 +180,14 @@ Before farming out a phase, confirm its file has:
 
 ## Open questions
 
-- Single-source vs multi-source slop ablation — worth publishing? (post §"Whose slop?")
+- **Which generation covariates matter** — reasoning effort, prompt, model, sampling
+  are now recorded per pair (`meta.gen`) and facetable; the Phase-2 experiment specs
+  (reasoning sweep, prompt ablation) decide which move the slop→Dan signal.
+- Synthetic↔real slop **distribution match** — does synthetic slop resemble the real
+  Claude output Dan cleans up? No distributional comparison exists yet (deferred eval
+  phase; see `eval-harness.md` + `phase-2-synthetic-pairs.md` Experiment 3).
+- Single-source vs multi-source slop ablation — worth publishing? (post §"Whose slop?";
+  measurable now via `meta.generator`/`meta.gen`.)
 - Down-weighting synthetic vs real pairs — what weight? (needs a `meta.weight` field?)
 - Which base model: Qwen3 8B first, 70B if headroom is short.
 - Pangram vs open-weights detector — settled by the audition in `eval-harness.md`.

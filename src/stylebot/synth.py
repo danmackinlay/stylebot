@@ -95,32 +95,64 @@ SLOP_SYSTEM_CATALOGUE = (  # "catalogue": the stereotypical LLM register, on pur
     "rhythm so sentences land at a similar measured length. " + _SLOP_PRESERVE
 )
 
-STRATEGIES: dict[str, str] = {
-    "polish": SLOP_SYSTEM,
-    "engaging": SLOP_SYSTEM_ENGAGING,
-    "catalogue": SLOP_SYSTEM_CATALOGUE,
+@dataclass(frozen=True)
+class SlopStrategy:
+    """A named slop-prompt flavour: a human label, the system prompt, a version.
+
+    `version` is bumped by hand when the prompt text changes meaningfully; the
+    stable `prompt_id` (a content hash, see `prompt_id_of`) is what actually
+    identifies the prompt for faceting/dedup, so editing a prompt changes its id
+    regardless of the version bump.
+    """
+
+    label: str
+    system: str
+    version: int = 1
+
+
+STRATEGIES: dict[str, SlopStrategy] = {
+    "polish": SlopStrategy("polish", SLOP_SYSTEM, version=1),
+    "engaging": SlopStrategy("engaging", SLOP_SYSTEM_ENGAGING, version=1),
+    "catalogue": SlopStrategy("catalogue", SLOP_SYSTEM_CATALOGUE, version=1),
 }
 DEFAULT_STRATEGY = "polish"
 
+# Reasoning is a recorded *covariate*, not a silent default. Slop generation is a
+# paraphrase, but real AI prose is often produced at high reasoning, so we default
+# HIGH and let experiments sweep down (see `_reasoning_extra_body`).
+DEFAULT_REASONING_EFFORT = "high"
 
-def resolve_strategy(name: str, system: str | None = None) -> tuple[str, str]:
-    """Resolve a strategy name to ``(label, system_prompt)``.
+
+def prompt_id_of(system_text: str) -> str:
+    """Stable content id for ANY slop system prompt (registry or custom file).
+
+    Hashing the actual prompt text means a custom `--slop-system-file` gets a
+    stable id and is faceted/deduped exactly like a registry strategy, and editing
+    a registry prompt changes its id (so old and new pairs stay distinguishable).
+    """
+    return hashlib.sha256(system_text.encode("utf-8")).hexdigest()[:12]
+
+
+def resolve_strategy(name: str, system: str | None = None) -> tuple[str, str, int, str]:
+    """Resolve a strategy name to ``(label, system_prompt, version, prompt_id)``.
 
     An explicit ``system`` overrides the registry, so a caller can inject a custom
     (e.g. blog-specific) slop prompt under any label without stylebot needing to
-    know that author's catalogue. A name absent from the registry is an error
-    *unless* an explicit ``system`` is supplied.
+    know that author's catalogue; such a prompt has version 0 and is identified by
+    its content hash. A name absent from the registry is an error *unless* an
+    explicit ``system`` is supplied.
     """
     if system is not None:
-        return name, system
+        return name, system, 0, prompt_id_of(system)
     try:
-        return name, STRATEGIES[name]
+        strat = STRATEGIES[name]
     except KeyError:
         known = ", ".join(sorted(STRATEGIES))
         raise ValueError(
             f"unknown slop strategy {name!r}; known: {known} "
             f"(or pass an explicit system prompt / --slop-system-file)"
         ) from None
+    return strat.label, strat.system, strat.version, prompt_id_of(strat.system)
 
 # Chunk hygiene. There is no voice transform to learn from a bare heading, a
 # fenced code block, a link list, or a stub paragraph — so trim them.
@@ -509,24 +541,75 @@ def iter_targets(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class GenOutput:
+    """A generator's output: the slop text plus per-call generation covariates.
+
+    A generator's `generate` may return a bare ``str`` (test fakes / simple
+    callables) or a ``GenOutput`` whose ``meta`` carries the recorded generation
+    covariates (model, reasoning_effort, temperature, top_p, max_tokens, token
+    usage, finish_reason, prompt id/version). `synthesize_pairs` coerces either via
+    `_normalize_gen_output`, so bare-string callables keep working unchanged.
+    """
+
+    text: str
+    meta: dict = field(default_factory=dict)
+
+
+def _normalize_gen_output(out: "str | GenOutput") -> tuple[str, dict]:
+    """Coerce a generator return (``str`` or ``GenOutput``) to ``(text, gen_meta)``."""
+    if isinstance(out, GenOutput):
+        return out.text, dict(out.meta)
+    return out, {}
+
+
 @dataclass
 class Generator:
     """A named slop producer.
 
     `name` becomes `meta.generator` (the model id); `strategy` becomes
-    `meta.slop_strategy` (which slop *prompt* produced the pair). Both feed the
-    `synth_key`, so the same model under two strategies yields distinct,
-    non-colliding pairs.
+    `meta.slop_strategy` (which slop *prompt* produced the pair). `reasoning_effort`
+    and `prompt_id` also feed the `synth_key`, so the same model under two
+    strategies / reasoning levels / prompts yields distinct, non-colliding pairs.
+    `generate` may return a bare `str` or a `GenOutput` (text + recorded covariates).
     """
 
     name: str
-    generate: Callable[[str], str] | None = None
+    generate: Callable[[str], "str | GenOutput"] | None = None
     strategy: str = DEFAULT_STRATEGY
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT
+    prompt_id: str = ""
+    prompt_version: int = 0
 
-    def __call__(self, target_text: str) -> str:
+    def __call__(self, target_text: str) -> "str | GenOutput":
         if self.generate is None:
             raise RuntimeError(f"generator {self.name!r} has no callable (dry-run/name-only stub)")
         return self.generate(target_text)
+
+
+# Approximate per-family reasoning budgets for upstreams that take a token budget
+# instead of an effort enum.
+_REASONING_MAX_TOKENS = {"high": 8000, "medium": 4000, "low": 1500}
+# OpenRouter model-id prefixes whose upstreams take a `max_tokens` reasoning budget
+# rather than the OpenAI/Anthropic `effort` enum (best-effort; OpenRouter normalizes
+# the rest, and the REQUESTED effort is recorded regardless of the wire shape).
+_REASONING_BUDGET_FAMILIES = ("google/", "qwen/", "nvidia/", "deepseek/")
+
+
+def _reasoning_extra_body(model: str, effort: str) -> dict | None:
+    """Map a requested reasoning effort to OpenRouter's `reasoning` request field.
+
+    `off` disables reasoning; budget-style families get a token budget; everyone
+    else gets the effort enum. Best-effort across heterogeneous upstreams — the
+    *requested* effort is recorded in `meta.gen` independent of what the provider
+    honors, and `finish_reason`/`completion_tokens` let you detect a model that
+    reasoned anyway.
+    """
+    if effort == "off":
+        return {"reasoning": {"enabled": False}}
+    if model.startswith(_REASONING_BUDGET_FAMILIES):
+        return {"reasoning": {"max_tokens": _REASONING_MAX_TOKENS[effort]}}
+    return {"reasoning": {"effort": effort}}
 
 
 def openai_generator(
@@ -535,6 +618,9 @@ def openai_generator(
     strategy: str = DEFAULT_STRATEGY,
     system: str | None = None,
     max_tokens: int = DEFAULT_SLOP_MAX_TOKENS,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    temperature: float | None = None,
+    top_p: float | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
     name: str | None = None,
@@ -543,30 +629,41 @@ def openai_generator(
     """OpenAI-compatible slop generator (`openai` SDK; key `OPENAI_API_KEY`).
 
     `base_url` repoints at any OpenAI-compatible endpoint — `local_generator` and
-    `openrouter_generator` use that to drive a base model / OpenRouter.
-    `extra_body` passes provider-specific knobs through to the request (e.g.
-    OpenRouter's ``{"reasoning": {"enabled": False}}`` to suppress reasoning).
+    `openrouter_generator` use that to drive a base model / OpenRouter. `extra_body`
+    passes provider-specific knobs through (e.g. OpenRouter's `reasoning` field, set
+    by `openrouter_generator`). `reasoning_effort` is recorded verbatim as the
+    *requested* covariate regardless of whether/how the provider honors it; sampling
+    params (`temperature`/`top_p`) are sent only when set, and recorded. `generate`
+    returns a `GenOutput` carrying these covariates plus token usage.
     """
     import openai
 
     from stylebot import config
 
-    label, system = resolve_strategy(strategy, system)
+    label, system, prompt_version, prompt_id = resolve_strategy(strategy, system)
     client = openai.OpenAI(
         api_key=api_key or config.require_key("OPENAI_API_KEY"),
         base_url=base_url,
     )
 
-    def generate(text: str) -> str:
-        resp = client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            messages=[
+    def generate(text: str) -> GenOutput:
+        kwargs: dict = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": text},
             ],
-            extra_body=extra_body or None,
-        )
+        }
+        # Send sampling/reasoning knobs only when set, so providers keep their
+        # defaults (and so the recorded request mirrors what was actually sent).
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if top_p is not None:
+            kwargs["top_p"] = top_p
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        resp = client.chat.completions.create(**kwargs)
         # Some providers return choices=None/[] on an upstream error rather than
         # raising — surface a clear, catchable message, not an opaque TypeError.
         if not resp.choices:
@@ -575,9 +672,30 @@ def openai_generator(
         # A truncated slop (finish_reason "length") is a broken pair — fail loudly.
         if choice.finish_reason == "length":
             raise RuntimeError(f"slop truncated at max_tokens={max_tokens} (raise --max-tokens)")
-        return (choice.message.content or "").strip()
+        usage = getattr(resp, "usage", None)
+        gen_meta = {
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "finish_reason": choice.finish_reason,
+            "prompt_tokens": getattr(usage, "prompt_tokens", None),
+            "completion_tokens": getattr(usage, "completion_tokens", None),
+            "prompt_id": prompt_id,
+            "prompt_version": prompt_version,
+            "prompt_label": label,
+        }
+        return GenOutput((choice.message.content or "").strip(), gen_meta)
 
-    return Generator(name=name or model, generate=generate, strategy=label)
+    return Generator(
+        name=name or model,
+        generate=generate,
+        strategy=label,
+        reasoning_effort=reasoning_effort,
+        prompt_id=prompt_id,
+        prompt_version=prompt_version,
+    )
 
 
 def local_generator(
@@ -588,12 +706,16 @@ def local_generator(
     api_key: str | None = None,
     system: str | None = None,
     max_tokens: int = DEFAULT_SLOP_MAX_TOKENS,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    temperature: float | None = None,
+    top_p: float | None = None,
 ) -> Generator:
     """Local/utility base-model generator via an OpenAI-compatible endpoint.
 
     Reads `LOCAL_LLM_BASE_URL` / `LOCAL_LLM_MODEL` / `LOCAL_LLM_API_KEY` from the
     environment when not passed explicitly. Tagged `local-<model>` so its pairs
-    are distinguishable in `meta.generator`.
+    are distinguishable in `meta.generator`. `reasoning_effort` is recorded but no
+    reasoning wire-param is sent (local OpenAI-compatible servers vary).
     """
     from stylebot import config
 
@@ -605,6 +727,9 @@ def local_generator(
         strategy=strategy,
         system=system,
         max_tokens=max_tokens,
+        reasoning_effort=reasoning_effort,
+        temperature=temperature,
+        top_p=top_p,
         api_key=api_key,
         base_url=base_url,
         name=f"local-{model}",
@@ -617,7 +742,9 @@ def openrouter_generator(
     strategy: str = DEFAULT_STRATEGY,
     system: str | None = None,
     max_tokens: int = DEFAULT_SLOP_MAX_TOKENS,
-    reasoning: bool = False,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    temperature: float | None = None,
+    top_p: float | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
 ) -> Generator:
@@ -625,17 +752,19 @@ def openrouter_generator(
 
     OpenRouter is OpenAI-compatible, so this is `openai_generator` pointed at the
     OpenRouter endpoint. `model` is an OpenRouter model id (e.g.
-    ``anthropic/claude-opus-4-8``, ``openai/gpt-4o``, ``google/gemini-2.0-flash``),
-    which makes multi-source slop rotation a single-credential affair. Tagged
-    ``openrouter/<model>`` in `meta.generator` so its pairs stay distinguishable.
+    ``anthropic/claude-opus-4.8``, ``qwen/qwen3-8b``), which makes multi-source slop
+    rotation a single-credential affair. Tagged ``openrouter/<model>`` in
+    `meta.generator` so its pairs stay distinguishable.
 
     Reads `OPENROUTER_API_KEY` (required) and optional `OPENROUTER_BASE_URL`
     (default ``https://openrouter.ai/api/v1``) from the environment / `.env`.
 
-    Slop generation is a paraphrase, not a reasoning task; many OpenRouter models
-    (Qwen3, Nemotron, …) reason by default, burning the token budget (≈14×
-    completion tokens) and truncating the paraphrase. Reasoning is disabled by
-    default — pass ``reasoning=True`` to re-enable it.
+    `reasoning_effort` (high|medium|low|off) is a recorded covariate. Many models
+    (Qwen3, Nemotron, …) reason by default, which on a paraphrase burns the token
+    budget (≈14× completion tokens) and truncates the output; `_reasoning_extra_body`
+    maps the requested effort to OpenRouter's `reasoning` field per model family.
+    Default is HIGH (real AI prose is often produced at high reasoning); sweep down
+    for experiments.
     """
     from stylebot import config
 
@@ -645,10 +774,13 @@ def openrouter_generator(
         strategy=strategy,
         system=system,
         max_tokens=max_tokens,
+        reasoning_effort=reasoning_effort,
+        temperature=temperature,
+        top_p=top_p,
         api_key=api_key or config.require_key("OPENROUTER_API_KEY"),
         base_url=base_url,
         name=f"openrouter/{model}",
-        extra_body=None if reasoning else {"reasoning": {"enabled": False}},
+        extra_body=_reasoning_extra_body(model, reasoning_effort),
     )
 
 
@@ -666,22 +798,22 @@ def _synth_key(
     target_text: str,
     context: str = "",
     strategy: str = DEFAULT_STRATEGY,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    prompt_id: str = "",
 ) -> str:
-    """Stable id for a (generator, strategy, context, target) pair — resume/dedup key.
+    """Stable id for one synthetic pair — the resume/dedup key.
 
-    Generator name, slop strategy, and context are all part of the key: a
-    context-less vs context-prefixed pair, and the same target under a different
-    slop *prompt*, are different training data, so each regenerates rather than
-    being skipped on resume.
+    The key spans every experimental axis whose variants we want to *coexist*
+    rather than shadow each other on resume: generator, slop strategy, reasoning
+    effort, prompt id (content hash of the system prompt), heading context, and the
+    target text. Sampling params (temperature/top_p) are deliberately NOT in the key
+    — they're recorded covariates, not dedup axes (continuous; would explode the key
+    space). Promote them here only if swept as a primary arm.
     """
     h = hashlib.sha256()
-    h.update(generator_name.encode("utf-8"))
-    h.update(b"\x00")
-    h.update(strategy.encode("utf-8"))
-    h.update(b"\x00")
-    h.update(context.encode("utf-8"))
-    h.update(b"\x00")
-    h.update(target_text.encode("utf-8"))
+    for part in (generator_name, strategy, reasoning_effort, prompt_id, context, target_text):
+        h.update(part.encode("utf-8"))
+        h.update(b"\x00")
     return h.hexdigest()[:16]
 
 
@@ -727,6 +859,7 @@ def _build_record(
     strategy: str = DEFAULT_STRATEGY,
     context: str = "",
     extra_tags: Sequence[str] = (),
+    gen_meta: dict | None = None,
 ) -> dict:
     meta = {
         "source": target.source,
@@ -748,6 +881,11 @@ def _build_record(
         # conditioned on, but never rewriting, the heading.
         meta["context"] = context
         meta["context_mode"] = "immediate"
+    if gen_meta:
+        # The per-call generation covariates (model, reasoning_effort, sampling,
+        # token usage, prompt id/version). Synthetic-only; Phase-1 real pairs have
+        # no `gen` (see _plans plan: real pairs are the falsy-`synthetic` stratum).
+        meta["gen"] = gen_meta
     return {
         "messages": [
             {"role": "system", "content": STYLE_SYSTEM},
@@ -791,7 +929,7 @@ def _assign(
 
     def assign_one(t: Target, gen: Generator) -> None:
         ctx = _effective_context(t, context_dropout)
-        key = _synth_key(gen.name, t.text, ctx, gen.strategy)
+        key = _synth_key(gen.name, t.text, ctx, gen.strategy, gen.reasoning_effort, gen.prompt_id)
         out.append((t, gen, key, ctx))
 
     if per_generator:
@@ -819,9 +957,10 @@ def synthesize_pairs(
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
     Idempotent and resumable: each pair carries a `meta.synth_key`
-    (`hash(generator, strategy, context, target)`); assignments whose key is already
-    in the file are skipped, so re-running never duplicates and a crashed run resumes
-    where it stopped (records are appended one-per-line, flushed as they go).
+    (`hash(generator, strategy, reasoning_effort, prompt_id, context, target)`);
+    assignments whose key is already in the file are skipped, so re-running never
+    duplicates and a crashed run resumes where it stopped (records are appended
+    one-per-line, flushed as they go).
 
     When targets carry heading `context` (`iter_targets(heading_context=...)`),
     the heading is prepended verbatim to both sides of the pair via
@@ -859,10 +998,11 @@ def synthesize_pairs(
             if key in written_keys:  # guard within-run dup (same target listed twice)
                 continue
             try:
-                slop = gen(target.text)
+                raw = gen(target.text)
             except Exception as exc:  # API error etc. — record and continue
                 result.errors.append((key, f"{type(exc).__name__}: {exc}"))
                 continue
+            slop, gen_meta = _normalize_gen_output(raw)
             if not slop.strip():
                 result.errors.append((key, "generator returned empty output"))
                 continue
@@ -874,6 +1014,7 @@ def synthesize_pairs(
                 strategy=gen.strategy,
                 context=context,
                 extra_tags=extra_tags,
+                gen_meta=gen_meta,
             )
             fp.write(json.dumps(record, ensure_ascii=False) + "\n")
             fp.flush()
