@@ -371,3 +371,89 @@ def test_stop_at_headers_truncates_trailing_section(tmp_path):
     assert len(synth.iter_targets(blog_root=root, stop_at_headers=["incoming"])) == 1
     # Without the option, the post-Incoming paragraphs survive.
     assert len(synth.iter_targets(blog_root=root)) == 3
+
+
+# ---------------------------------------------------------------------------
+# Generator request-shaping + response guards. These mock the openai client to
+# assert the request we send (reasoning OFF by default, max_tokens) and how we
+# handle degenerate provider responses — no network, no keys.
+# ---------------------------------------------------------------------------
+
+
+class _FakeMessage:
+    def __init__(self, content):
+        self.content = content
+
+
+class _FakeChoice:
+    def __init__(self, content="paraphrase", finish_reason="stop"):
+        self.message = _FakeMessage(content)
+        self.finish_reason = finish_reason
+
+
+class _FakeResponse:
+    def __init__(self, choices):
+        self.choices = choices
+
+
+def _patch_openai(monkeypatch, response):
+    """Patch ``openai.OpenAI`` with a client that records ``create()`` kwargs."""
+    calls: dict = {}
+
+    class _Completions:
+        def create(self, **kwargs):
+            calls.update(kwargs)
+            return response
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+        def __init__(self, **kwargs):
+            pass
+
+    import openai
+
+    monkeypatch.setattr(openai, "OpenAI", _Client)
+    return calls
+
+
+def test_openrouter_disables_reasoning_by_default(monkeypatch):
+    # Slop generation needs no chain-of-thought; reasoning models otherwise burn
+    # the token budget and truncate. The disable knob must be sent by default.
+    calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice("slop out")]))
+    gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x")
+    assert gen.generate("rewrite me") == "slop out"
+    assert calls["extra_body"] == {"reasoning": {"enabled": False}}
+
+
+def test_openrouter_reasoning_opt_in(monkeypatch):
+    calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
+    synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning=True).generate("x")
+    assert calls["extra_body"] is None  # re-enabled => we don't inject the disable knob
+
+
+def test_max_tokens_threaded(monkeypatch):
+    calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
+    synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", max_tokens=1234).generate("x")
+    assert calls["max_tokens"] == 1234
+
+
+def test_empty_choices_raises_clear_error(monkeypatch):
+    import pytest
+
+    _patch_openai(monkeypatch, _FakeResponse(None))  # provider returned choices=None
+    gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x")
+    with pytest.raises(RuntimeError, match="no choices"):  # not an opaque TypeError
+        gen.generate("rewrite me")
+
+
+def test_truncated_slop_raises(monkeypatch):
+    import pytest
+
+    _patch_openai(monkeypatch, _FakeResponse([_FakeChoice(finish_reason="length")]))
+    gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x")
+    with pytest.raises(RuntimeError, match="truncated"):
+        gen.generate("rewrite me")

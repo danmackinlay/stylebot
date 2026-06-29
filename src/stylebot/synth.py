@@ -538,11 +538,14 @@ def openai_generator(
     api_key: str | None = None,
     base_url: str | None = None,
     name: str | None = None,
+    extra_body: dict | None = None,
 ) -> Generator:
     """OpenAI-compatible slop generator (`openai` SDK; key `OPENAI_API_KEY`).
 
     `base_url` repoints at any OpenAI-compatible endpoint — `local_generator` and
     `openrouter_generator` use that to drive a base model / OpenRouter.
+    `extra_body` passes provider-specific knobs through to the request (e.g.
+    OpenRouter's ``{"reasoning": {"enabled": False}}`` to suppress reasoning).
     """
     import openai
 
@@ -562,11 +565,16 @@ def openai_generator(
                 {"role": "system", "content": system},
                 {"role": "user", "content": text},
             ],
+            extra_body=extra_body or None,
         )
+        # Some providers return choices=None/[] on an upstream error rather than
+        # raising — surface a clear, catchable message, not an opaque TypeError.
+        if not resp.choices:
+            raise RuntimeError(f"{model}: provider returned no choices (upstream error?)")
         choice = resp.choices[0]
         # A truncated slop (finish_reason "length") is a broken pair — fail loudly.
         if choice.finish_reason == "length":
-            raise RuntimeError(f"slop truncated at max_tokens={max_tokens} (raise it)")
+            raise RuntimeError(f"slop truncated at max_tokens={max_tokens} (raise --max-tokens)")
         return (choice.message.content or "").strip()
 
     return Generator(name=name or model, generate=generate, strategy=label)
@@ -609,6 +617,7 @@ def openrouter_generator(
     strategy: str = DEFAULT_STRATEGY,
     system: str | None = None,
     max_tokens: int = DEFAULT_SLOP_MAX_TOKENS,
+    reasoning: bool = False,
     api_key: str | None = None,
     base_url: str | None = None,
 ) -> Generator:
@@ -622,6 +631,11 @@ def openrouter_generator(
 
     Reads `OPENROUTER_API_KEY` (required) and optional `OPENROUTER_BASE_URL`
     (default ``https://openrouter.ai/api/v1``) from the environment / `.env`.
+
+    Slop generation is a paraphrase, not a reasoning task; many OpenRouter models
+    (Qwen3, Nemotron, …) reason by default, burning the token budget (≈14×
+    completion tokens) and truncating the paraphrase. Reasoning is disabled by
+    default — pass ``reasoning=True`` to re-enable it.
     """
     from stylebot import config
 
@@ -634,6 +648,7 @@ def openrouter_generator(
         api_key=api_key or config.require_key("OPENROUTER_API_KEY"),
         base_url=base_url,
         name=f"openrouter/{model}",
+        extra_body=None if reasoning else {"reasoning": {"enabled": False}},
     )
 
 

@@ -110,6 +110,14 @@ def main() -> None:
 )
 @click.option("--gpt-model", default="gpt-4o", show_default=True)
 @click.option("--local-model", default="", help="Local model id (else $LOCAL_LLM_MODEL).")
+@click.option(
+    "--max-tokens",
+    default=synth.DEFAULT_SLOP_MAX_TOKENS,
+    show_default=True,
+    type=int,
+    help="Max completion tokens per slop generation. Raise if a model truncates "
+    "(reasoning models are run with reasoning OFF, so this rarely needs raising).",
+)
 @click.option("--per-generator", is_flag=True, help="Emit a pair from EVERY generator per target (n× cost), not round-robin.")
 @click.option("--limit", type=int, default=None, help="Cap the number of target chunks (cost control / smoke runs).")
 @click.option("--tag", "tags", multiple=True, help="Extra provenance tag(s) added to meta.tags.")
@@ -143,6 +151,7 @@ def synth_cmd(
     slop_system_file: Path | None,
     gpt_model: str,
     local_model: str,
+    max_tokens: int,
     per_generator: bool,
     limit: int | None,
     tags: tuple[str, ...],
@@ -239,11 +248,23 @@ def synth_cmd(
             generators = []
             for g in generator_names:
                 if g == "gpt":
-                    generators.append(synth.openai_generator(model=gpt_model, strategy=strategy_label, system=slop_system))
+                    generators.append(
+                        synth.openai_generator(
+                            model=gpt_model, strategy=strategy_label, system=slop_system, max_tokens=max_tokens
+                        )
+                    )
                 elif g == "local":
-                    generators.append(synth.local_generator(model=local_model or None, strategy=strategy_label, system=slop_system))
+                    generators.append(
+                        synth.local_generator(
+                            model=local_model or None, strategy=strategy_label, system=slop_system, max_tokens=max_tokens
+                        )
+                    )
             for m in openrouter_models:
-                generators.append(synth.openrouter_generator(model=m, strategy=strategy_label, system=slop_system))
+                generators.append(
+                    synth.openrouter_generator(
+                        model=m, strategy=strategy_label, system=slop_system, max_tokens=max_tokens
+                    )
+                )
         except RuntimeError as exc:  # missing key, surfaced by config.require_key
             raise click.ClickException(str(exc))
 
