@@ -9,7 +9,8 @@ the prompt. Data-gated: needs enough pairs, not more engineering.
   (Phase 1 real + Phase 2 synthetic, mixed). Expensive + stateful, so the path
   is always explicit — it's the reproducibility record (see OVERVIEW
   "Interfaces"). No `--blog-root`: training reads the corpus, not raw prose.
-- `TOGETHER_API_KEY` (default trainer) / `FIREWORKS_API_KEY` / `TINKER_API_KEY`.
+- `TINKER_API_KEY` (trainer) / `FIREWORKS_API_KEY` (serving). (`TOGETHER_API_KEY`
+  only for the parked Together training fallback — see livingthing decisions #D1.)
 - Base model: start **Qwen3 8B**; escalate to 70B only if 8B lacks headroom.
 
 Interface: `stylebot.train.run_training(...)` over explicit params; `ai-style
@@ -17,20 +18,27 @@ train` is the thin CLI. The blog build can import the function directly.
 
 ## Method / decisions (from the post)
 
-- **Train on Together** (~$0.48/1M tokens for ≤16B LoRA SFT, ~$10/run — cheap
-  enough to iterate). Together makes the LoRA easy to *extract*.
-- **Switch on zero-data-retention** on Together (defaults to retaining).
-- **Serve on Fireworks**: it scales-to-zero, ideal for a personal CLI; Together
-  only offers a $6.49/hr always-on dedicated endpoint (a forgot-to-turn-it-off
-  hazard). Fireworks accepts uploaded LoRAs, so a Together-trained adapter can
-  be served there.
-- **Tinker** is a fancier option whose low-level primitives (`forward_backward`,
-  `sample`, `optim_step`) would enable a future DPO/RL loop instead of vanilla
-  SFT. Park unless preference-tuning becomes the plan.
+- **Train on Tinker** (Thinking Machines — GA, account in hand): managed
+  distributed training (no GPU to own/rent), per-token (~$0.40/1M, ~$6/8B run),
+  weight download → HF → MLX. SFT v1 uses the cookbook's supervised recipe; the
+  *same* platform graduates to DPO/preference (Phase 7) via its low-level
+  primitives (`forward_backward`/`optim_step`/`sample`/`save_state`) + RL/preference
+  cookbook — no migration. Full rationale: livingthing decisions #D1 + #D5.
+- **Serve on Fireworks**: scales-to-zero (`--min-replica-count 0`), ideal for a
+  personal CLI; accepts the Tinker-exported LoRA. **Fallback:** local MLX on the
+  Mac (download → merge → `mlx_lm.server`/Osaurus), then Modal. (Together train+serve
+  is parked — dedicated-endpoint-only, wrong idle cost shape.)
+- **`meta.weight` via the detector (if used):** the trained voice classifier's
+  `p_dan` on the Dan side can derive a per-pair weight, but only under the **shared
+  by-POST split** — train the detector on a `--holdout` partition that excludes the
+  posts this run trains on, or the weight is fit on its own training data (leakage).
+  Coordinate one partition across styler-train / detector-train / eval (see
+  `eval-harness.md` "the split contract"). Absolute-probability use wants
+  calibration; ranking does not.
 
 ## Outputs
 
-- A trained LoRA adapter (downloaded from Together and/or hosted on Fireworks).
+- A trained LoRA adapter (Tinker-trained → HF export; served on Fireworks or local MLX).
 - A pinned **training manifest** committed to git (NOT the weights, NOT the
   data): base model, hyperparameters, pairs.jsonl content hash + record count,
   train/val split, dataset filters (e.g. synthetic weight), timestamp, cost.

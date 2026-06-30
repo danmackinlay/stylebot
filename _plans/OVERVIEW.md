@@ -5,8 +5,8 @@ The durable source of truth for this project's phases. Code comments describe
 and how we'll know it's done*. Edit this when decisions change — it should
 always reflect current reality, not the original aspiration.
 
-Narrative rationale (the "why") lives in
-[`../docs/fine_tuning_danbot.qmd`](../docs/fine_tuning_danbot.qmd). This file is
+Narrative rationale (the "why") lives in the blog post
+[*Fine-tuning danbot*](https://danmackinlay.name/notebook/fine_tuning_danbot.html). This file is
 the operational counterpart: phase map, contracts, status.
 
 ## The goal
@@ -126,7 +126,7 @@ notify downstream.
 | Artifact | Producer | Consumer | Format |
 |----------|----------|----------|--------|
 | `pairs.jsonl` | Phase 1 (real), Phase 2 (synthetic) | Phase 3 | chat-completion JSONL, `{messages:[system,user,assistant], meta:{...}}` — schema in `phase-1-pair-capture.md` |
-| trained adapter | Phase 3 | Phase 4, eval | LoRA weights (Together download / Fireworks-hosted) |
+| trained adapter | Phase 3 | Phase 4, eval | LoRA weights (Tinker-trained → HF export; Fireworks-hosted or local MLX) |
 | candidate text | Phase 4 | eval harness | plain prose in, plain prose out |
 | `scores.jsonl` | eval harness | humans, Phase 3/4 | id-keyed (`synth_key`/`capture_id:idx`) per-pair `{meta, scores:{field:{vale,judge,detector}}}`; joins back to `pairs.jsonl` |
 
@@ -144,7 +144,7 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 | — · Heading context | [`heading-context.md`](heading-context.md) | 🔧 built (both producers; immediate depth) | — |
 | 3 · LoRA training | [`phase-3-training.md`](phase-3-training.md) | 📋 planned | enough pairs |
 | 4 · Inference CLI | [`phase-4-inference-cli.md`](phase-4-inference-cli.md) | 📋 planned | a trained adapter |
-| E · Eval harness | [`eval-harness.md`](eval-harness.md) | 🔧 built (`stylebot.eval` / `ai-style eval`); **detector audition pending** | only sample prose |
+| E · Eval harness | [`eval-harness.md`](eval-harness.md) | 🔧 built (`stylebot.eval` / `ai-style eval`); **all four signals live** — detector = trained voice classifier (StyleDistance) | only sample prose |
 
 > **Codebase hygiene (2026-06-29).** A QA declutter pass removed the dead
 > blog-build code bulk-copied into stylebot (`migrate_ai_dates`,
@@ -153,20 +153,20 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 > models go through OpenRouter now). The mechanism is lean — don't redo it; ship
 > functionality.
 
-**Next move:** the two open tracks run in parallel — (a) **iterate the Phase-2
-slop experiments** (small batches per `--slop-strategy` into a scratch dir, eyeball,
-score with `ai-style eval`, promote a winner), and (b) the **detector audition**
-(the one remaining eval signal). Both need only sample prose + an OpenRouter key.
-The data-gated tail (Phase 3/4) waits on corpus volume + an adapter. Concrete
-commands + environment: [`next-steps.md`](next-steps.md).
+**Next move:** the active track is **iterating the Phase-2 slop experiments**
+(small batches per `--slop-strategy` into a scratch dir, eyeball, score with
+`ai-style eval`, promote a winner) — needs only sample prose + an OpenRouter key.
+The eval harness is complete (the detector signal is the trained voice classifier,
+built 2026-06-30). The data-gated tail (Phase 3/4) waits on corpus volume + an
+adapter. Concrete commands + environment: [`next-steps.md`](next-steps.md).
 
 ## Sequencing — what's parallel vs serial
 
 - **Serial, done-first:** Phase 0 scaffolding (✅). Unblocks everything.
 - **Parallel now (each needs only the schema + sample paragraphs):**
-  Phase 2 synthesis, the Eval harness, and the detector audition inside it.
-  None of these need a trained model. **Build the eval harness early** — it's
-  the ground truth every later phase reports against.
+  Phase 2 synthesis and the Eval harness (now complete, incl. the trained
+  detector). None of these need a trained styler. **Build the eval harness early**
+  — it's the ground truth every later phase reports against.
 - **Data-gated tail:** Phase 3 (needs corpus volume) and Phase 4 (needs an
   adapter). These wait on *data*, not on engineering.
 
@@ -190,4 +190,6 @@ Before farming out a phase, confirm its file has:
   measurable now via `meta.generator`/`meta.gen`.)
 - Down-weighting synthetic vs real pairs — what weight? (needs a `meta.weight` field?)
 - Which base model: Qwen3 8B first, 70B if headroom is short.
-- Pangram vs open-weights detector — settled by the audition in `eval-harness.md`.
+- Detector — **settled (2026-06-30):** the trained Dan-voice classifier
+  (StyleDistance backbone) is the signal, not Pangram/general AI-detectors. Pangram
+  survives only as an optional independent cross-check. See `eval-harness.md`.

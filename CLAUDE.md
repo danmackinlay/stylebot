@@ -7,7 +7,8 @@ manual; the **plan is the source of truth** — read it first:
 → **[`_plans/OVERVIEW.md`](_plans/OVERVIEW.md)** (phase map, data contract,
 interfaces, sequencing) and the per-phase files it links.
 
-Narrative/rationale: [`docs/fine_tuning_danbot.qmd`](docs/fine_tuning_danbot.qmd).
+Narrative/rationale: the blog post [*Fine-tuning danbot*](https://danmackinlay.name/notebook/fine_tuning_danbot.html)
+(canonical source `notebook/fine_tuning_danbot.qmd` in the livingthing blog repo — not duplicated here).
 
 ## Setup & verify
 
@@ -136,10 +137,25 @@ pluggable detector, eyeball), keyless by default. **JSONL-native + batched:**
 `capture_id`); `summarize_scores(by="slop_strategy")` gives per-strategy means.
 A read-only **scores visualiser** (`--report scores.html` /
 `stylebot.report.render_scores_report`) joins pairs+scores into self-contained
-HTML — slop↔Dan + judge score/rationale, sortable by slop→Dan delta, faceted by
-strategy (reuses the targets-report infra; generic over score fields for Phase 4).
-The **statistical-detector audition** is the one remaining eval signal (deferred —
-GPU/$$, operator's call).
+HTML — slop↔Dan + judge score/rationale + detector P(slop) badge, sortable by
+slop→Dan delta, faceted by strategy (reuses the targets-report infra; generic over
+score fields for Phase 4).
+
+**Trained voice classifier — the detector signal (built 2026-06-30).** The 4th
+eval signal is a Dan-vs-AI-slop classifier, NOT a general AI-detector/Pangram:
+a frozen **style** embedding (**StyleDistance** — bake-off winner over the
+content-matched pairs: 0.78 pairwise / 0.72 AUC, beating the mxbai semantic
+baseline) + a logistic head, scored by a pure-Python dot product in
+`stylebot.classify` (mechanism, **no ML deps**). The Dan-specific trainer +
+`scikit-learn` live in livingthing (`voice_classifier.py` / `train-voice-clf`);
+the artifact (`head.json` + `meta.json`) is committed at `_models/voice-clf/`.
+Wire it via `ai-style eval --detector-model PATH` or `train-voice-clf eval`;
+`score = P(slop)` (composes with `mean_detector_score`), `p_dan` for reward use.
+**Eval vs reward:** a by-POST split makes it an honest eval; as a *reward* it needs
+the shared by-POST holdout (`train-voice-clf train --holdout-frac/--holdout-posts`)
++ the judge/eyeball as the orthogonal anti-Goodhart guard (a split fixes leakage,
+not over-optimisation). Pangram is now only an optional one-shot cross-check. See
+`_plans/eval-harness.md` "The detector decision".
 
 **The active step is the experimental Phase-2 generation loop**, not a one-shot
 paid run: per `--slop-strategy`, generate a small batch into a *scratch*

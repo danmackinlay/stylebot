@@ -85,8 +85,9 @@ not guessed once:
 - **Work the loop, not a one-shot run:** generate a small batch per strategy into
   a scratch `--data-dir`, eyeball via `--report`/`--sample`, then score it with
   `ai-style eval --pairs <scratch>/pairs.jsonl --judge --by slop_strategy --report
-  scores.html` (the judge works today; the detector signal lands with the audition)
-  to compare flavours by a number *and* eyeball the slop↔Dan pairs + rationales in
+  scores.html` (add `--detector-model _models/voice-clf` for the trained-detector
+  P(slop) signal alongside the judge) to compare flavours by a number *and* eyeball
+  the slop↔Dan pairs + rationales in
   the HTML report. Promote a chosen strategy into the real corpus only after it
   earns it. Because `synth_key`
   carries the strategy, "one run per strategy into the same dir" accumulates
@@ -137,7 +138,7 @@ Append to the same `$STYLEBOT_DATA_DIR/pairs.jsonl`:
 - [ ] **Experimental generation loop (the active step).** Don't batch a one-shot
       paid run; iterate. Per strategy, generate a small batch into a *scratch*
       `--data-dir`, eyeball (`--report`/`--sample`), then score the slop with
-      `ai-style eval` (once the detector audition lands). Promote a strategy into
+      `ai-style eval` (judge + the trained `--detector-model`). Promote a strategy into
       the real corpus only once it earns it. The blog offers ~10k clean
       quality>6 targets (merged), so volume is there. Example experiment:
 

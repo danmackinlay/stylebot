@@ -1,16 +1,18 @@
-# Eval harness — 🔧 BUILT (library + CLI; detector audition pending)
+# Eval harness — 🔧 BUILT (library + CLI; trained detector wired)
 
 How we know the styler works. Runs **offline** — it scores candidate output and
 is *not* wired into the trainer or baked into the served adapter. Built early and
 in parallel: it's the ground truth every later phase reports against, and it
 needs only sample prose, not a trained model.
 
-**Status (2026-06-28):** `stylebot.eval` ships the four-signal scorer as typed
+**Status (2026-06-30):** `stylebot.eval` ships the four-signal scorer as typed
 library functions + the thin `ai-style eval` CLI. Runs keyless by default (Vale
-+ null judge/detector); `--judge` scores voice via OpenRouter. Three of four
-signals are live; the **statistical-detector audition is the one remaining
-decision** (deliberately deferred — GPU/$$-heavy, needs the operator). See
-"Status detail" at the bottom.
++ null judge/detector); `--judge` scores voice via OpenRouter. **All four signals
+are now live:** the statistical detector is the **trained Dan-voice classifier**
+(`stylebot.classify` seam + the livingthing-trained head), wired via
+`ai-style eval --detector-model PATH` / `train-voice-clf eval`. It replaced the
+"audition a general AI-detector vs Pangram" plan — see "The detector decision"
+below. Keyless + free per pair.
 
 ## Inputs
 
@@ -20,7 +22,9 @@ decision** (deliberately deferred — GPU/$$-heavy, needs the operator). See
   judged. (One-prose-per-file is gone — we never have that.) A Phase-4 styler run
   scores the same way once it emits an `output`-bearing JSONL (add an `"output"`
   field extractor then).
-- `PANGRAM_API_KEY` (only if the paid detector wins the audition below).
+- A **trained detector artifact** (`_models/voice-clf/`, livingthing-side) for
+  the detector signal — keyless. `PANGRAM_API_KEY` only if you ever want Pangram
+  as an *optional* independent cross-check (see "The detector decision").
 - `OPENROUTER_API_KEY` for the LLM judge (one key, many models).
 - Vale + an optional Vale config (a parameter — never a hardcoded blog ruleset).
 
@@ -32,69 +36,80 @@ eval` is the thin CLI. Paths resolved via `stylebot.config`.
 
 1. **Vale** — mechanical slop (banned words, indefinite "you", -ize spelling).
 2. **LLM-as-judge** — "is this Dan-shaped" at the voice level.
-3. **Statistical detector** — "would an external classifier flag this".
+3. **Trained detector** — "is this Dan vs AI-slop", scored by the trained
+   voice classifier (`P(slop)`, higher = more AI-like). Keyless, free per pair.
 4. **Dan's eyeball** — the veto channel (not automatable; reported alongside).
 
-## The detector decision (the one real choice)
+## The detector decision (settled 2026-06-30 — trained voice classifier)
 
-Run an **audition before paying**: test open-weights detectors —
-[Binoculars](https://github.com/ahans30/Binoculars),
-[Ghostbuster](https://github.com/vivek3141/ghostbuster),
-[RADAR](https://huggingface.co/TrustSafeAI/RADAR-Vicuna-7B), OpenAI's
-deprecated RoBERTa — against [Pangram](https://www.pangram.com/) on the small
-test corpus, in the regime that matters: **single-paragraph, lightly-humanised
-text**. Prior: none of the free ones will be good enough at *this* regime, but
-the audition is one afternoon.
+**Decision: the detector is a trained Dan-vs-AI-slop classifier, not a
+general-purpose AI-detector.** We already hold content-matched labels — every
+pair is a `(slop, Dan)` couple over the *same* passage — so we can score the
+question we actually care about ("does this read like Dan?") directly, instead of
+borrowing someone else's human-vs-AI-in-general detector (Pangram) and paying per
+call. It is **keyless, free per pair, reproducible**, and drops straight into the
+existing `Detector` seam.
 
-- If an open-weights detector tracks Pangram well enough → use it, skip the spend.
-- If Pangram wins → make it cheap via **distillation**: ~$50 once to label
-  ~10,000 paragraphs, then train a small local classifier (DistilBERT-class,
-  <100ms) on those labels. That classifier becomes a free reward signal
-  callable anywhere on our side (eval, best-of-N at inference, a future DPO
-  loop) — and never touches the served adapter. One spend, no more API calls.
+**How it's built** (implementation in `stylebot/classify.py` + livingthing
+`voice_classifier.py` / `bin/train_voice_clf.py`): a frozen **style** embedding +
+a logistic head, scored by
+a pure-Python dot product in `stylebot.classify` (no ML deps in stylebot). The
+backbone was a **measured** choice — a bake-off over the content-matched pairs
+ranked candidates by content-matched pairwise accuracy + AUC (split by POST):
 
-### Pangram — captured, NOT implemented (cost discipline)
+| backbone | pairwise_acc | AUC |
+|---|---|---|
+| **StyleDistance** (`StyleDistance/styledistance`, 768-d) — **winner** | **0.78** | **0.72** |
+| LUAR-MUD | 0.76 | 0.71 |
+| mxbai (semantic baseline) | 0.75 | **0.62** |
+| Wegmann CISR | 0.73 | 0.67 |
 
-Pangram is the paid reference the audition benchmarks against. Captured here so
-the integration is *designed* before any spend; **do not wire it yet.**
+The AUC column is the tell: mxbai's topic-dominance collapses on the absolute "is
+this slop" question; a content-independent *style* embedding holds. Polarity is
+`score = P(slop)` so it composes with `mean_detector_score` unchanged; the factory
+also returns `p_dan` for reward callers.
 
-- **API surface** (`pip install pangram-sdk`, key `PANGRAM_API_KEY`):
-  - Realtime: `Pangram().predict(text)` → async task under the hood; returns
-    `stage`, `fraction_ai`, `fraction_ai_assisted`, `fraction_human`,
-    `num_ai_segments`, per-window `windows[{label, ai_assistance_score,
-    confidence}]`, `prediction_short`, optional `dashboard_link`. (REST:
-    `POST /task` → returns id → poll `GET /task/<id>` until `STAGE_SUCCESS`.)
-  - **Bulk API** for async throughput (`submit_bulk(items=[{id, text}])` →
-    `wait_for_bulk(id)` → `get_bulk_results[_page](id)`. Async, paged). Pick it
-    for *throughput/convenience on a big one-shot job, not for cost* — see below.
-  - (Also a plagiarism endpoint — irrelevant to us.)
-  - Docs: <https://docs.pangram.com/quickstart>.
-- **Price: realtime $0.05 / 1,000 words; bulk only ~20% cheaper (~$0.04/1k) —
-  not transformative.** So batching changes throughput, *not* the calculus: it's
-  still *metered per call* and **vastly pricier than slop generation** — a
-  ~120-word passage costs ~$0.006 to *detect* (bulk ~$0.005) versus ~$0.0002–0.001
-  to *generate* on the cheap bulk models, and ∞× a free local detector. The
-  asymmetry that bites: a generator is paid **once per pair**; a
-  detector-as-reward is paid **every time you score**.
-- **Therefore use it sparingly, in exactly two bounded one-shot ways — never in a
-  hot loop:**
-  1. **Audition reference** (do this — negligible): label only the ~30-paragraph
-     test corpus once to benchmark the free detectors → ~**$0.20**. This is the
-     gate decision; nothing downstream depends on it being cheap.
-  2. **Distillation labels** (only *if* Pangram wins the audition *and* a detector
-     signal is actually wanted): one **Bulk API** job over ~10k paragraphs
-     (~1.2–1.5M words) → ~**$50–60 once** (bulk's ~20% off the ~$60–75 realtime
-     cost — convenience, not a game-changer), then train the free local classifier
-     above. After that, **zero Pangram calls** — the local model is the reward
-     signal everywhere.
-- **Never:** Pangram as the live per-candidate `Detector` in `score_candidate`,
-  in best-of-N at inference, or per training step. Those are unbounded recurring
-  spend on a signal we can distil to a fixed one-time cost.
-- **Integration seam when/if the time comes:** a `pangram_detector(...)` factory
-  returning the existing `Detector` callable (`prose -> {score, name}`), mapping
-  `score = fraction_ai`, gated behind `PANGRAM_API_KEY`, **opt-in only** (never
-  the default; default stays `null_detector`). It is for the one-shot labeling
-  passes above, not the default `score_candidate` / `score_pairs_file` path.
+### Eval vs reward — and the leakage-safe split contract
+
+The detector plays two roles with different safety requirements:
+
+- **Eval signal (measure only).** A clean **by-POST** train/test split
+  (`GroupShuffleSplit`) gives an honest, in-distribution estimate. Since eval only
+  *measures*, that is sufficient — this is the keyless cross-check for the paid
+  judge. ✅ built.
+- **Reward signal (optimise against — Phase-3 weighting, Phase-4 best-of-N).**
+  Here a split is *necessary but not sufficient*. Splitting removes
+  **data-leakage** circularity (the detector hasn't memorised the styler's posts);
+  it does **not** remove **Goodhart / proxy over-optimisation** — optimising a
+  policy against a frozen proxy pushes its outputs into the proxy's blind spots
+  *regardless of how the proxy was trained* (Gao et al., reward-model
+  over-optimisation). The guard against *that* is a signal with **independent
+  failure modes** — the LLM judge and Dan's eyeball — not a fresh split of the
+  same model. Best-of-N with small N is gentle (KL ≈ log N), so it's fairly safe;
+  DPO/RL needs the orthogonal channel in the loop.
+
+**The split contract (load-bearing):** when the detector is used as a reward, one
+**shared by-POST partition** must govern all three stages — styler-train,
+detector-train, and the frozen eval — so the detector never trains on the posts
+the styler trains on or that eval scores. The trainer supports this:
+`train-voice-clf train --holdout-frac F` (or `--holdout-posts FILE` to pin the
+exact partition) ships a head fit on the train posts only and records the holdout
+post list in `meta.split`; downstream stages reuse it. Without that bookkeeping,
+the held-out guarantee is only as good as the split. (The default fit-all artifact
+is for *measurement* of an independent styler, and `meta.split` says so.)
+
+### Pangram — optional independent cross-check only (was: the planned signal)
+
+Pangram is no longer the path; it survives only as an **optional, one-shot,
+independent** sanity check — useful precisely because it's a *different model
+family* with different blind spots, so it's the one thing the voice-clf (and the
+judge) can't self-certify: run it once before trusting the detector as a *reward*
+to confirm the styler lowers AI-ness independently rather than gaming our
+embedding. It is a paid API (~$0.05/1k words, `PANGRAM_API_KEY`); if ever wired,
+do it as a bounded one-shot pass via an opt-in `pangram_detector(...)` factory
+(`score = fraction_ai`) — **never** the default, **never** in a hot loop. The
+judge + eyeball already supply the orthogonality more cheaply, so Pangram is a
+nice-to-have, not a dependency.
 
 ## Planned — synthetic↔real distribution match (a fifth capability)
 
@@ -133,9 +148,12 @@ it consumes the `meta.gen` covariates Phase-2 now records. See
       LLM-judge (live via OpenRouter), detector (seam + `null_detector`), eyeball
       (passthrough field). `stylebot.eval` + `tests/test_eval.py` (15 tests, no
       API/network/GPU). Runs keyless.
-- [ ] The detector audition completed and decision recorded here. **← the one
-      remaining track.** Seam is `Detector` (a `prose -> {score, name}` callable);
-      drop the winner in as the default for `score_candidate(detector=...)`.
+- [x] The detector decision made + the signal wired. The trained voice classifier
+      (StyleDistance backbone, bake-off-selected) is the detector; `Detector` seam
+      unchanged (`prose -> {score=P(slop), p_dan, name}`), served via
+      `stylebot.classify` and `ai-style eval --detector-model PATH` /
+      `train-voice-clf eval`. Held-out by-POST pairwise 0.78 / AUC 0.72; the
+      `--holdout-frac`/`--holdout-posts` split makes it reward-safe (see above).
 - [x] Scores emitted in a stable, **id-keyed** schema (`scores.jsonl` +
       `schema_version: 2` summary) that Phase 3/4 can cite and join back to pairs.
 - [x] A documented entrypoint: `ai-style eval --pairs PATH.jsonl [--field
@@ -166,14 +184,21 @@ it consumes the `meta.gen` covariates Phase-2 now records. See
 - **Judge via OpenRouter** (`OPENROUTER_API_KEY`, optional `OPENROUTER_BASE_URL`),
   default model `anthropic/claude-opus-4-8`, scores 1–5 + rationale; injectable so
   tests pass a fake. Mirrors `synth`'s OpenRouter wiring (one key, many models).
-- **Next:** run the detector audition (Binoculars / Ghostbuster / RADAR vs
-  Pangram on single-paragraph lightly-humanised text) and record the choice here.
+- **Detector (built 2026-06-30):** the trained voice classifier is the 4th signal,
+  wired keyless. See "The detector decision" above; the trainer + artifact live in
+  livingthing (`voice_classifier.py` / `_models/voice-clf/`).
 
 ## Guardrail (policy, not optional)
 
 This is **not** a slop-detection evader (see post Non-goals). The detector is
 useful only because its tripwires — uniform rhythm, hedging, signposting,
 generic vocab — are the same patterns the slop catalogue targets. A styler that
-lowers its detector score does so *as a consequence* of writing more like Dan.
-Watch for reward-hacking (passes-detector-but-still-bad output); the LLM-judge
-and eyeball signals exist to catch exactly that.
+lowers its detector score should do so *as a consequence* of writing more like Dan.
+
+The reward-hacking guard is structural, not aspirational: a held-out by-POST split
+stops the detector rewarding *memorised* posts, but the deeper risk when you
+optimise against the detector is **Goodhart** (the styler finds inputs that score
+"Dan" without being Dan) — which the split does not touch. The defence is signals
+with **independent failure modes**: the LLM-judge and Dan's eyeball must confirm
+the detector's movement is real. Detector movement alone is never the success
+criterion. (See "Eval vs reward" above.)

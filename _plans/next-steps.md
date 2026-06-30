@@ -8,10 +8,11 @@ QA declutter landed 2026-06-29) — focus here on functionality, not housekeepin
 
 ## Current state (built + verified)
 
-All green: `uv run pytest -q` = **101 passing** (stylebot); the blog runner
-`uv run python tests/test_training_targets.py` = **13/13**; `ruff` clean. The QA
-declutter (2026-06-29) removed dead blog-build code + the direct-Anthropic
-generator/dep (hosted models go via OpenRouter); ~430 lines gone, both repos.
+All green: `uv run pytest -q` = **129 passing** (stylebot, incl. the dep-free
+`classify` seam); the blog runners `uv run python tests/test_training_targets.py`
+(15/15) + `tests/test_voice_classifier.py` (5/5); `ruff` clean. The QA declutter
+(2026-06-29) removed dead blog-build code + the direct-Anthropic generator/dep
+(hosted models go via OpenRouter).
 
 - **Phase 0/1** — scaffolding + `ai-style-log` (daily pair capture) shipped;
   heading context added.
@@ -21,9 +22,11 @@ generator/dep (hosted models go via OpenRouter); ~430 lines gone, both repos.
   paid at-scale run is **not yet done** — it's the active step below.
 - **Eval** — `stylebot.eval` + `ai-style eval` (batched, JSONL-native): scores a
   `pairs.jsonl` → id-keyed `scores.jsonl`, `summarize_scores(by=…)`, and a scores
-  **HTML report** (`--report`). Live OpenRouter judge wiring is **verified**.
-- **Deferred (planned, not built):** the statistical-detector audition (eval's
-  4th signal), `meta.weight`, Phase 3 (LoRA training), Phase 4 (inference CLI).
+  **HTML report** (`--report`). Live OpenRouter judge wiring **verified**. The 4th
+  signal — the **trained voice classifier** — is now built (StyleDistance backbone;
+  `ai-style eval --detector-model` / `train-voice-clf`), so all four signals run.
+- **Deferred (planned, not built):** `meta.weight`, Phase 3 (LoRA training),
+  Phase 4 (inference CLI).
 
 ## Next move — the two unblocked tracks (run in parallel)
 
@@ -65,19 +68,23 @@ paraphrase of Dan's *own* prose, so slop and Dan scores sit closer than the easy
 ranking strategies. If the judge bunches everything near 3, sharpen `JUDGE_SYSTEM`
 (`stylebot.eval`) or move to a **pairwise** "which is more Dan-shaped" comparison.
 
-### B. The detector audition (eval's one remaining signal)
+### B. The detector — BUILT (trained voice classifier)
 
-The 4th eval signal. Plan + cost discipline are fully written in
-[`eval-harness.md`](eval-harness.md) ("The detector decision", "Pangram —
-captured, NOT implemented"). Shape:
-- Audition free open-weights detectors (Binoculars / Ghostbuster / RADAR) vs
-  **Pangram** on a ~30-paragraph test corpus, in the single-paragraph
-  lightly-humanised regime. Pangram for the audition reference is ~$0.20.
-- The seam is ready: drop the winner in as the default for
-  `score_candidate(detector=…)` (a `prose -> {score, name}` callable). Default
-  stays `null_detector` until decided. **Never** wire a paid detector as the live
-  per-candidate default (see the cost discipline).
-- GPU/$$ + operator's call — don't start without Dan's go-ahead.
+Was "audition a general AI-detector vs Pangram"; **settled 2026-06-30** by
+training a Dan-vs-slop classifier on the content-matched pairs instead (cheaper,
+keyless, on-target). Full write-up: [`eval-harness.md`](eval-harness.md) "The
+detector decision". State:
+- **Built + wired:** StyleDistance backbone (bake-off winner, 0.78/0.72 held-out),
+  `stylebot.classify` seam + livingthing `voice_classifier.py` / `_models/voice-clf/`.
+  Score it via `ai-style eval --pairs … --detector-model _models/voice-clf` or
+  `train-voice-clf eval`. Keyless, free per pair.
+- **Reward-safety follow-up (for Phase 3/4):** when the detector becomes a reward,
+  retrain with `train-voice-clf train --holdout-frac F` (or `--holdout-posts FILE`)
+  so it isn't fit on the styler's/eval's posts, and keep the judge + eyeball as the
+  orthogonal anti-Goodhart guard. The default fit-all artifact is for measuring an
+  *independent* styler only (`meta.split` says so).
+- **Optional:** a one-shot Pangram cross-check before trusting the reward (~$0.20),
+  never in a hot loop. Not a dependency.
 
 ## The data-gated tail (after enough corpus exists)
 
@@ -106,7 +113,8 @@ captured, NOT implemented"). Shape:
 - **Single- vs multi-source slop ablation** — worth publishing? (`SLOP_MODELS` +
   `meta.generator`/`meta.gen` make this measurable now.)
 - **Base model** — Qwen3 8B first, 70B if headroom allows.
-- **Detector** — settled by the audition (track B).
+- **Detector** — settled: trained voice classifier (track B). The open follow-up
+  is the reward-time held-out split + the Goodhart guard, not the choice of signal.
 - **Heading-context depth** — only `immediate` shipped; `breadcrumb` is designed
   but unbuilt (see `heading-context.md`).
 
@@ -115,8 +123,8 @@ captured, NOT implemented"). Shape:
 - **Both repos checked out side by side** (`~/Source/stylebot`, `~/Source/livingthing`);
   the blog has an editable path dep on `../stylebot`.
 - **Keys** in each repo's gitignored `.env` (`OPENROUTER_API_KEY`; optionally
-  `OPENAI_API_KEY`/`LOCAL_LLM_*`; `PANGRAM_API_KEY` only if the
-  audition picks it). **The key is only in env via `direnv exec uv run …`** — a
+  `OPENAI_API_KEY`/`LOCAL_LLM_*`; `PANGRAM_API_KEY` only for an optional one-shot
+  Pangram cross-check). **The key is only in env via `direnv exec uv run …`** — a
   bare `uv run` won't see it. Eval/synth run **keyless** by default (no judge / no
   paid generator), so tests and dry-runs need nothing.
 - **Verify:** `cd ~/Source/stylebot && uv run pytest -q && uv run ruff check .`;
