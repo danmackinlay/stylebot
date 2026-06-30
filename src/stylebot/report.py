@@ -258,6 +258,12 @@ def _judge_rationale(field_scores: object) -> str:
     return (j.get("rationale") or "") if isinstance(j, dict) else ""
 
 
+def _detector_score(field_scores: object) -> float | None:
+    """The trained detector's P(slop) for a field, or None if unconfigured/absent."""
+    d = field_scores.get("detector") if isinstance(field_scores, dict) else None
+    return d.get("score") if isinstance(d, dict) else None
+
+
 def _field_text(pair: dict | None, field: str) -> str:
     """The body text scored for `field`, pulled from the joined pair record."""
     if pair is None:
@@ -284,7 +290,12 @@ def _scores_rows_data(records: Sequence[dict], pairs_by_id: dict[str, dict], fie
         meta = rec.get("meta") or {}
         scores = rec.get("scores") or {}
         cells = {
-            f: {"text": _field_text(pair, f), "score": _judge_score(scores.get(f)), "rationale": _judge_rationale(scores.get(f))}
+            f: {
+                "text": _field_text(pair, f),
+                "score": _judge_score(scores.get(f)),
+                "rationale": _judge_rationale(scores.get(f)),
+                "detector": _detector_score(scores.get(f)),
+            }
             for f in fields
         }
         s0, s1 = cells[fields[0]]["score"], cells[fields[-1]]["score"]
@@ -316,6 +327,9 @@ def _scores_summary_stats(rows: Sequence[dict], fields: Sequence[str]) -> dict:
         "mean_slop": _mean([r["cells"][fields[0]]["score"] for r in rows]),
         "mean_dan": _mean([r["cells"][fields[-1]]["score"] for r in rows]),
         "mean_delta": _mean([r["delta"] for r in rows]),
+        # Trained-detector P(slop) means (None when no detector was wired).
+        "mean_det_slop": _mean([r["cells"][fields[0]]["detector"] for r in rows]),
+        "mean_det_dan": _mean([r["cells"][fields[-1]]["detector"] for r in rows]),
     }
 
 
@@ -344,6 +358,7 @@ _SCORES_CSS = """
 .fl{font-weight:600;font-size:12px;color:var(--muted)}
 .badge{font-size:11px;font-weight:600;padding:1px 7px;border-radius:6px}
 .s-slop{background:#fcebeb;color:#791f1f}.s-dan{background:#eaf3de;color:#27500a}.s-mid{background:#e6f1fb;color:#0c447c}.s-na{background:#f1efe8;color:#5f5e5a}
+.s-det{background:#eef0fb;color:#34406a;font-variant-numeric:tabular-nums}
 .ft{font-size:13px;line-height:1.45}
 .rat{color:var(--muted);font-size:12px;margin-top:4px}
 .d-pos{color:#27500a}.d-neg{color:#791f1f}.d-na{color:var(--muted)}
@@ -380,6 +395,13 @@ def _badge(field: str, fields: Sequence[str], score: int | None) -> str:
     return f'<span class="badge {cls}">{txt}</span>'
 
 
+def _det_chip(score: float | None) -> str:
+    """A muted chip showing the trained detector's P(slop); omitted if unconfigured."""
+    if score is None:
+        return ""
+    return f'<span class="badge s-det" title="trained detector P(slop)">P(slop) {score:.2f}</span>'
+
+
 def _gen_subline(gen: dict) -> str:
     """A muted one-line summary of generation covariates (empty for real pairs)."""
     if not gen:
@@ -413,7 +435,8 @@ def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows
             rat = rat if len(rat) <= 200 else rat[:200] + "…"
             rat_html = f"<div class=rat>{html.escape(rat)}</div>" if rat else ""
             cols.append(
-                f'<div><div class=fh><span class=fl>{html.escape(f)}</span>{_badge(f, fields, c["score"])}</div>'
+                f'<div><div class=fh><span class=fl>{html.escape(f)}</span>'
+                f'{_badge(f, fields, c["score"])}{_det_chip(c["detector"])}</div>'
                 f"<div class=ft>{html.escape(preview)}</div>{rat_html}</div>"
             )
         delta = r["delta"]
@@ -464,13 +487,20 @@ def _render_headline(headline_rows: Sequence[dict], fields: Sequence[str], *, by
 def _scores_stat_cards(stats: dict, fields: Sequence[str]) -> str:
     fmt = lambda x: "—" if x is None else x  # noqa: E731
     card = lambda v, lab: f"<div class=stat><b>{v}</b><span>{html.escape(lab)}</span></div>"  # noqa: E731
-    return "".join([
+    cards = [
         card(stats["count"], "pairs"),
         card(stats["n_strategies"], "strategies"),
         card(fmt(stats["mean_slop"]), f"mean {fields[0]} judge"),
         card(fmt(stats["mean_dan"]), f"mean {fields[-1]} judge"),
         card(fmt(stats["mean_delta"]), "mean Δ"),
-    ])
+    ]
+    # Detector cards only when a trained detector was wired (else both means None).
+    if stats.get("mean_det_slop") is not None or stats.get("mean_det_dan") is not None:
+        cards += [
+            card(fmt(stats["mean_det_slop"]), f"mean {fields[0]} P(slop)"),
+            card(fmt(stats["mean_det_dan"]), f"mean {fields[-1]} P(slop)"),
+        ]
+    return "".join(cards)
 
 
 def _scores_page(*, title, stat_cards, headline, histos, controls, table, note) -> str:

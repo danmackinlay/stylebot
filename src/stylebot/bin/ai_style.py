@@ -345,6 +345,7 @@ def synth_cmd(
 @click.option("--field", "fields", type=click.Choice(["slop", "target"]), multiple=True, default=(), help="Which side(s) to score (repeatable; default both). slop=messages[1], target=Dan/messages[2].")
 @click.option("--judge/--no-judge", default=False, show_default=True, help="Run the LLM judge (needs $OPENROUTER_API_KEY); off = Vale + null detector, no spend.")
 @click.option("--judge-model", default="anthropic/claude-opus-4-8", show_default=True, help="OpenRouter model id for the judge.")
+@click.option("--detector-model", "detector_model", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None, help="A trained voice-classifier artifact dir (head.json + meta.json) to score detector.score; needs the pinned embedder (sentence-transformers) installed.")
 @click.option("--vale-config", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Vale config (.vale.ini); omitted = Vale's own discovery (or Vale absent -> skipped).")
 @click.option("--max-workers", default=8, show_default=True, type=int, help="Concurrent scoring workers (judge/Vale are IO-bound).")
 @click.option("--out", "out_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="scores.jsonl to append (default: <pairs-dir>/scores.jsonl). Resumable — scored ids are skipped.")
@@ -360,6 +361,7 @@ def eval_cmd(
     fields: tuple[str, ...],
     judge: bool,
     judge_model: str,
+    detector_model: Path | None,
     vale_config: Path | None,
     max_workers: int,
     out_path: Path | None,
@@ -393,6 +395,20 @@ def eval_cmd(
     except RuntimeError as exc:  # missing key, surfaced by config.require_key
         raise click.ClickException(str(exc))
 
+    # A trained voice-classifier artifact, if given, supplies a real detector
+    # (P(slop)); else the null detector. The embedder is rebuilt lazily from the
+    # artifact's pinned meta.embed_model — heavy imports stay inside classify.
+    detector_fn = ev.null_detector
+    if detector_model is not None:
+        from stylebot import classify
+
+        try:
+            detector_fn = classify.sklearn_detector(detector_model)
+        except ImportError as exc:
+            raise click.ClickException(
+                f"--detector-model needs the embedder installed (sentence-transformers): {exc}"
+            )
+
     def _progress(i: int, total: int) -> None:
         if i == 1 or i % 25 == 0 or i == total:
             click.echo(f"  ... {i}/{total} scored", err=True)
@@ -402,6 +418,7 @@ def eval_cmd(
         out,
         fields=score_fields,
         judge=judge_fn,
+        detector=detector_fn,
         vale_config=vale_config,
         max_workers=max_workers,
         limit=limit,
