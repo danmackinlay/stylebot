@@ -4,8 +4,8 @@ Tooling to fine-tune a small open-weights LLM that rewrites AI-flavoured draft
 prose into [Dan Mackinlay's](https://danmackinlay.name) voice — a specialist
 *prose styler*, not a chatbot.
 
-The motivation, design, and economics are written up in
-[`docs/fine_tuning_danbot.qmd`](docs/fine_tuning_danbot.qmd). The development
+The motivation, design, and economics are written up in the blog post
+[*Fine-tuning danbot*](https://danmackinlay.name/notebook/fine_tuning_danbot.html). The development
 plan and phase contracts live in [`_plans/`](_plans/OVERVIEW.md).
 
 ## What's here
