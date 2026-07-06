@@ -427,11 +427,11 @@ class _FakeResponse:
 
 
 def _patch_openai(monkeypatch, response):
-    """Patch ``openai.OpenAI`` with a client that records ``create()`` kwargs."""
+    """Patch ``openai.AsyncOpenAI`` with a client that records ``create()`` kwargs."""
     calls: dict = {}
 
     class _Completions:
-        def create(self, **kwargs):
+        async def create(self, **kwargs):
             calls.update(kwargs)
             return response
 
@@ -446,8 +446,15 @@ def _patch_openai(monkeypatch, response):
 
     import openai
 
-    monkeypatch.setattr(openai, "OpenAI", _Client)
+    monkeypatch.setattr(openai, "AsyncOpenAI", _Client)
     return calls
+
+
+def _run_gen(gen, text, history=None):
+    """Drive a factory generator's async `generate` from a sync test."""
+    import asyncio
+
+    return asyncio.run(gen.generate(text, history=history))
 
 
 def test_openrouter_reasoning_effort_enum(monkeypatch):
@@ -455,7 +462,7 @@ def test_openrouter_reasoning_effort_enum(monkeypatch):
     # Provider routing defaults to throughput sort (price-balanced routing can
     # land on ~10 tok/s upstreams).
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice("slop out")]))
-    out = synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x").generate("rewrite me")
+    out = _run_gen(synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x"), "rewrite me")
     assert out.text == "slop out"  # GenOutput, not a bare string
     assert calls["extra_body"] == {"reasoning": {"effort": "high"}, "provider": {"sort": "throughput"}}
     assert out.meta["provider_sort"] == "throughput"  # the routing request, recorded
@@ -464,13 +471,13 @@ def test_openrouter_reasoning_effort_enum(monkeypatch):
 def test_openrouter_reasoning_budget_family(monkeypatch):
     # Budget-style families (qwen/nvidia/google/…) get a token budget instead.
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
-    synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="medium").generate("x")
+    _run_gen(synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="medium"), "x")
     assert calls["extra_body"] == {"reasoning": {"max_tokens": 4000}, "provider": {"sort": "throughput"}}
 
 
 def test_openrouter_reasoning_off(monkeypatch):
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
-    synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="off").generate("x")
+    _run_gen(synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="off"), "x")
     assert calls["extra_body"] == {"reasoning": {"enabled": False}, "provider": {"sort": "throughput"}}
 
 
@@ -478,7 +485,7 @@ def test_openrouter_provider_sort_none_omits_field(monkeypatch):
     # provider_sort=None restores OpenRouter's own load-balancing: no provider
     # field on the wire, no provider_sort covariate recorded.
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
-    out = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", provider_sort=None).generate("x")
+    out = _run_gen(synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", provider_sort=None), "x")
     assert "provider" not in calls["extra_body"]
     assert "provider_sort" not in out.meta
 
@@ -487,21 +494,21 @@ def test_reasoning_effort_recorded_regardless_of_shape(monkeypatch):
     # A budget-family model still RECORDS the requested effort string ("medium"),
     # not the wire budget int — the covariate is the request, not what the API did.
     _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
-    out = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="medium").generate("x")
+    out = _run_gen(synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="medium"), "x")
     assert out.meta["reasoning_effort"] == "medium"
 
 
 def test_max_tokens_threaded(monkeypatch):
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
-    synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", max_tokens=1234).generate("x")
+    _run_gen(synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", max_tokens=1234), "x")
     assert calls["max_tokens"] == 1234
 
 
 def test_temperature_top_p_passed_and_recorded(monkeypatch):
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()], usage=_FakeUsage(11, 22)))
-    out = synth.openrouter_generator(
-        model="anthropic/claude-opus-4.8", api_key="x", temperature=0.3, top_p=0.9
-    ).generate("x")
+    out = _run_gen(
+        synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x", temperature=0.3, top_p=0.9), "x"
+    )
     assert calls["temperature"] == 0.3 and calls["top_p"] == 0.9
     assert out.meta["temperature"] == 0.3 and out.meta["top_p"] == 0.9
     assert out.meta["prompt_tokens"] == 11 and out.meta["completion_tokens"] == 22
@@ -510,7 +517,7 @@ def test_temperature_top_p_passed_and_recorded(monkeypatch):
 def test_temperature_omitted_when_none(monkeypatch):
     # Unset sampling params are NOT sent, so providers keep their defaults.
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
-    synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x").generate("x")
+    _run_gen(synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x"), "x")
     assert "temperature" not in calls and "top_p" not in calls
 
 
@@ -520,7 +527,7 @@ def test_empty_choices_raises_clear_error(monkeypatch):
     _patch_openai(monkeypatch, _FakeResponse(None))  # provider returned choices=None
     gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x")
     with pytest.raises(RuntimeError, match="no choices"):  # not an opaque TypeError
-        gen.generate("rewrite me")
+        _run_gen(gen, "rewrite me")
 
 
 def test_truncated_slop_raises(monkeypatch):
@@ -529,7 +536,7 @@ def test_truncated_slop_raises(monkeypatch):
     _patch_openai(monkeypatch, _FakeResponse([_FakeChoice(finish_reason="length")]))
     gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x")
     with pytest.raises(RuntimeError, match="truncated"):
-        gen.generate("rewrite me")
+        _run_gen(gen, "rewrite me")
 
 
 def test_gen_output_meta_recorded(tmp_path):
@@ -557,3 +564,211 @@ def test_bare_string_generator_has_no_gen_meta(tmp_path):
     synth.synthesize_pairs([target], data_dir, [synth.Generator(name="m", generate=lambda t: "[slop] " + t)])
     rec = json.loads((data_dir / "pairs.jsonl").read_text().splitlines()[0])
     assert "gen" not in rec["meta"]
+
+
+# ---------------------------------------------------------------------------
+# Parallelism + live sessions (async engine, window-position covariates)
+# ---------------------------------------------------------------------------
+
+
+def _targets(n: int) -> list[synth.Target]:
+    return [
+        synth.Target(
+            text=f"Paragraph {i}: " + "sufficiently long prose about abstraction. " * 3,
+            source=f"post/{i % 3}.qmd",
+            chunk_index=i,
+            chunk_total=n,
+        )
+        for i in range(n)
+    ]
+
+
+def test_parallel_stateless_run_writes_each_pair_once(tmp_path):
+    import json
+
+    targets = _targets(10)
+    gens = [_fake("a"), _fake("b")]
+    first = synth.synthesize_pairs(targets, tmp_path / "c", gens, max_workers=4)
+    assert first.written == 10
+    assert first.per_generator == {"a": 5, "b": 5}
+
+    second = synth.synthesize_pairs(targets, tmp_path / "c", gens, max_workers=4)
+    assert second.written == 0 and second.skipped_existing == 10
+
+    keys = [
+        json.loads(ln)["meta"]["synth_key"]
+        for ln in (tmp_path / "c" / "pairs.jsonl").read_text().splitlines()
+    ]
+    assert len(keys) == 10 == len(set(keys))
+
+
+def test_async_injected_generator_works(tmp_path):
+    async def gen(text, history=None):
+        return "[async-slop] " + text
+
+    result = synth.synthesize_pairs(_targets(2), tmp_path / "c", [synth.Generator("ag", generate=gen)])
+    assert result.written == 2
+
+
+def test_stateless_keys_have_no_session_component():
+    # session_turns=1 must key exactly like bare _synth_key, independent of the
+    # rest of the target list — corpus resume must survive the blog growing.
+    t = _targets(1)[0]
+    g = synth.Generator(name="g")
+    [sess] = synth._plan_sessions([(t, g, "")], session_turns=1)
+    assert sess.session_id == ""
+    assert sess.turns[0].key == synth._synth_key("g", t.text)
+
+
+def test_session_keys_distinct_per_turn_and_stable():
+    t1, t2 = _targets(2)
+    g = synth.Generator(name="g")
+    plan = lambda: synth._plan_sessions([(t1, g, ""), (t2, g, "")], session_turns=2)  # noqa: E731
+    [sess] = plan()
+    keys = [t.key for t in sess.turns]
+    assert len(set(keys)) == 2
+    assert keys[0] != synth._synth_key("g", t1.text)  # session component folded in
+    assert [t.key for t in plan()[0].turns] == keys  # deterministic replan
+    # Even a duplicated target text gets distinct per-turn keys inside a session.
+    [dup] = synth._plan_sessions([(t1, g, ""), (t1, g, "")], session_turns=2)
+    assert len({t.key for t in dup.turns}) == 2
+
+
+def test_session_history_accumulates_and_covariates_recorded(tmp_path):
+    import json
+
+    targets = _targets(3)
+    seen_hist: list[list[dict]] = []
+
+    def gen(text, history=None):
+        seen_hist.append(list(history or []))
+        return synth.GenOutput("[slop] " + text, {"prompt_tokens": 100 * (len(seen_hist))})
+
+    result = synth.synthesize_pairs(
+        targets, tmp_path / "c", [synth.Generator("g", generate=gen)],
+        session_turns=3, context_windows={"g": 10_000},
+    )
+    assert result.written == 3
+    assert [len(h) for h in seen_hist] == [0, 2, 4]  # turn N sees N-1 exchanges
+    assert seen_hist[1][0] == {"role": "user", "content": targets[0].text}
+    assert seen_hist[1][1]["content"] == "[slop] " + targets[0].text
+
+    recs = [json.loads(ln) for ln in (tmp_path / "c" / "pairs.jsonl").read_text().splitlines()]
+    assert [r["meta"]["gen"]["session_turn"] for r in recs] == [1, 2, 3]
+    assert len({r["meta"]["gen"]["session_id"] for r in recs}) == 1
+    assert recs[1]["meta"]["gen"]["context_window"] == 10_000
+    assert recs[1]["meta"]["gen"]["window_fill"] == round(200 / 10_000, 4)
+
+
+def test_session_resume_replays_recorded_history(tmp_path):
+    targets = _targets(3)
+    calls = {"n": 0}
+
+    def flaky(text, history=None):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise RuntimeError("boom")
+        return "[slop] " + text
+
+    first = synth.synthesize_pairs(
+        targets, tmp_path / "c", [synth.Generator("g", generate=flaky)], session_turns=3
+    )
+    assert first.written == 2 and len(first.errors) == 1
+
+    hists: list[list[dict]] = []
+
+    def good(text, history=None):
+        hists.append(list(history or []))
+        return "[slop] " + text
+
+    second = synth.synthesize_pairs(
+        targets, tmp_path / "c", [synth.Generator("g", generate=good)], session_turns=3
+    )
+    assert second.written == 1 and second.skipped_existing == 2
+    # The retried turn saw the two recorded exchanges replayed from the file.
+    assert len(hists) == 1 and len(hists[0]) == 4
+    assert hists[0][1]["content"] == "[slop] " + targets[0].text
+
+
+def test_turn_error_ends_only_its_session(tmp_path):
+    targets = _targets(4)  # round-robin: bad gets 0,2; good gets 1,3
+
+    def bad(text, history=None):
+        raise RuntimeError("api down")
+
+    result = synth.synthesize_pairs(
+        targets, tmp_path / "c",
+        [synth.Generator("bad", generate=bad), synth.Generator("good", generate=lambda t, history=None: "[slop] " + t)],
+        session_turns=2,
+    )
+    assert result.per_generator.get("good") == 2
+    assert "bad" not in result.per_generator
+    assert len(result.errors) == 1  # session ended at its first failure
+
+
+def test_session_budget_stops_session(tmp_path):
+    targets = _targets(3)
+
+    def gen(text, history=None):
+        return synth.GenOutput("[slop] " + text, {"prompt_tokens": 10_000, "completion_tokens": 50})
+
+    result = synth.synthesize_pairs(
+        targets, tmp_path / "c", [synth.Generator("g", generate=gen)],
+        session_turns=3, session_max_tokens=100,
+    )
+    assert result.written == 1  # turn 2 estimate blows the budget
+    assert not result.errors  # a budget stop is not an error
+
+
+def test_generator_session_budget_beats_global(tmp_path):
+    targets = _targets(3)
+
+    def gen(text, history=None):
+        return synth.GenOutput("[slop] " + text, {"prompt_tokens": 60})
+
+    g = synth.Generator("g", generate=gen, session_budget=50)
+    result = synth.synthesize_pairs(
+        targets, tmp_path / "c", [g], session_turns=3, session_max_tokens=1_000_000
+    )
+    assert result.written == 1
+
+
+def test_window_cap_stops_session(tmp_path):
+    targets = _targets(3)
+
+    def gen(text, history=None):
+        return synth.GenOutput("[slop] " + text, {"prompt_tokens": 790, "completion_tokens": 50})
+
+    result = synth.synthesize_pairs(
+        targets, tmp_path / "c", [synth.Generator("g", generate=gen)],
+        session_turns=3, session_max_tokens=None, context_windows={"g": 1000},
+    )
+    # cap = 0.8 * 1000 = 800; next-turn estimate from prompt_tokens=790 exceeds it.
+    assert result.written == 1
+
+
+def test_openrouter_context_windows_registry(monkeypatch):
+    import io
+    import json as _json
+    import urllib.request
+
+    payload = {"data": [
+        {"id": "a/b", "context_length": 32768},
+        {"id": "c/d", "context_length": 200000},
+        {"id": "e/no-window"},
+    ]}
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(url, timeout=None):
+        assert url.endswith("/models")
+        return _Resp(_json.dumps(payload).encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    windows = synth.openrouter_context_windows(base_url="https://registry.test/api/v1")
+    assert windows == {"a/b": 32768, "c/d": 200000}

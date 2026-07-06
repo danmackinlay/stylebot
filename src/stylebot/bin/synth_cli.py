@@ -24,7 +24,7 @@ inspection modes), and provenance tags.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 
 import click
@@ -108,6 +108,10 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "temperature": (("--temperature",), dict(type=float, default=None, help="Sampling temperature, sent to the API and recorded (provider default if unset).")),
     "top_p": (("--top-p", "top_p"), dict(type=float, default=None, help="Nucleus top_p, sent to the API and recorded (provider default if unset).")),
     "per_generator": (("--per-generator",), dict(is_flag=True, help="Emit a pair from EVERY generator per target (n× cost), not round-robin.")),
+    "max_workers": (("--max-workers",), dict(default=0, show_default="auto", type=int, help="Concurrent sessions (asyncio). 0 = auto: 16 when all generators are OpenRouter-backed, 1 when a gpt/local preset is in the mix (a local server wants sequential).")),
+    "session_turns": (("--session-turns",), dict(default=1, show_default=True, type=int, help="Turns per live session: each turn sees the real prior (passage -> slop) exchanges, sweeping window position (meta.gen session_turn / window_fill). 1 = stateless.")),
+    "session_max_tokens": (("--session-max-tokens",), dict(default=synth.DEFAULT_SESSION_MAX_TOKENS, show_default=True, type=int, help="Per-session prompt-token budget (absolute; input cost grows ~quadratically with it). Also capped at 80% of each model's context window.")),
+    "context_window": (("--context-window",), dict(type=int, default=None, help="Context window (tokens) for gpt/local preset generators when sweeping sessions — OpenRouter models resolve theirs from the models registry automatically.")),
     "limit": (("--limit",), dict(type=int, default=None, help="Cap the number of target chunks (cost control / smoke runs).")),
     "dry_run": (("--dry-run",), dict(is_flag=True, help="Report planned targets/pairs without calling any API or writing.")),
 }
@@ -159,6 +163,11 @@ def run_synth(
     top_p: float | None = None,
     per_generator: bool = False,
     context_dropout: float = 0.0,
+    max_workers: int = 0,
+    session_turns: int = 1,
+    session_max_tokens: int = synth.DEFAULT_SESSION_MAX_TOKENS,
+    context_window: int | None = None,
+    session_budgets: Mapping[str, int] | None = None,
     limit: int | None = None,
     dry_run: bool = False,
     sample_n: int | None = None,
@@ -272,6 +281,42 @@ def run_synth(
             except RuntimeError as exc:  # missing key, surfaced by config.require_key
                 raise click.ClickException(str(exc))
 
+    # Per-model session budgets (policy hook, e.g. a blog's model->budget map).
+    if session_budgets:
+        for gen in generators:
+            budget = session_budgets.get(gen.name) or session_budgets.get(
+                gen.name.removeprefix("openrouter/")
+            )
+            if budget:
+                gen.session_budget = budget
+
+    # auto concurrency: OpenRouter multiplexes fine; a local/preset endpoint
+    # (or injected generators we know nothing about) gets sequential.
+    if max_workers <= 0:
+        openrouter_only = bool(openrouter_models) and not generator_names
+        max_workers = 16 if (openrouter_only and not dry_run) else 1
+
+    # Window sizes: needed only for live sessions (overflow guard + the
+    # window_fill covariate). OpenRouter models resolve from the registry
+    # (ground truth); presets/injected generators use --context-window.
+    windows: dict[str, int] = {}
+    if session_turns > 1 and not dry_run:
+        or_names = [g.name for g in generators if g.name.startswith("openrouter/")]
+        if or_names:
+            try:
+                registry = synth.openrouter_context_windows()
+            except Exception as exc:
+                raise click.ClickException(
+                    f"could not fetch OpenRouter context windows for the session sweep: {exc}"
+                )
+            for n in or_names:
+                w = registry.get(n.removeprefix("openrouter/"))
+                if w:
+                    windows[n] = w
+        if context_window:
+            for g in generators:
+                windows.setdefault(g.name, context_window)
+
     resolved_dir = data_dir() if callable(data_dir) else data_dir
 
     # Heartbeat on wall-clock, not pair count: at high reasoning effort a pair
@@ -300,6 +345,10 @@ def run_synth(
         context_dropout=context_dropout,
         on_progress=None if dry_run else _progress,
         on_error=None if dry_run else _on_error,
+        max_workers=max_workers,
+        session_turns=session_turns,
+        session_max_tokens=session_max_tokens,
+        context_windows=windows or None,
     )
 
     pairs_path = resolved_dir / "pairs.jsonl"
@@ -308,6 +357,9 @@ def run_synth(
             f"[dry-run] would write {result.planned - result.skipped_existing} new pair(s) "
             f"({result.skipped_existing} already present) to {pairs_path}"
         )
+        if session_turns > 1:
+            n_sessions = sum(-(-c // session_turns) for c in result.per_generator.values())
+            click.echo(f"  ~{n_sessions} live session(s) of <= {session_turns} turn(s)")
         for name, count in sorted(result.per_generator.items()):
             click.echo(f"  {name}: {count}")
         return result

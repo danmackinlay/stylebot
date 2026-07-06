@@ -35,10 +35,12 @@ on resume or blurring together in the corpus.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import inspect
 import json
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -182,6 +184,14 @@ DEFAULT_SLOP_MAX_TOKENS = 8192
 # high-reasoning generations (~60-120s observed) with headroom; a timed-out
 # pair is recorded in SynthResult.errors and the run continues.
 DEFAULT_GEN_TIMEOUT = 300.0
+# Multi-turn sessions never push the prompt past this fraction of the model's
+# context window — end-of-window behaviour (truncation, degraded attention) is
+# a failure mode, not a covariate we want to sample.
+SESSION_WINDOW_FILL_CAP = 0.8
+# Global default per-session prompt-token budget (absolute, same for every
+# model — cost grows ~quadratically with it). Per-model overrides go on
+# Generator.session_budget.
+DEFAULT_SESSION_MAX_TOKENS = 32_000
 
 
 # ---------------------------------------------------------------------------
@@ -578,19 +588,32 @@ class Generator:
     `meta.slop_strategy` (which slop *prompt* produced the pair). `reasoning_effort`
     and `prompt_id` also feed the `synth_key`, so the same model under two
     strategies / reasoning levels / prompts yields distinct, non-colliding pairs.
-    `generate` may return a bare `str` or a `GenOutput` (text + recorded covariates).
+
+    `generate` may be sync or async (the session loop awaits the result only if
+    it is awaitable) and may return a bare `str` or a `GenOutput` (text +
+    recorded covariates). A plain 1-arg callable is fine for stateless
+    (`session_turns=1`) runs; multi-turn sessions call it with a `history`
+    kwarg (list of ``{"role","content"}`` messages), so a session-capable
+    callable must accept `(text, history=None)`.
+
+    `session_budget` optionally overrides the global per-session prompt-token
+    budget for this generator (policy hook — normally unset; the registry
+    window × `SESSION_WINDOW_FILL_CAP` still caps it).
     """
 
     name: str
-    generate: Callable[[str], "str | GenOutput"] | None = None
+    generate: Callable[..., "str | GenOutput"] | None = None
     strategy: str = DEFAULT_STRATEGY
     reasoning_effort: str = DEFAULT_REASONING_EFFORT
     prompt_id: str = ""
     prompt_version: int = 0
+    session_budget: int | None = None
 
-    def __call__(self, target_text: str) -> "str | GenOutput":
+    def __call__(self, target_text: str, history: list[dict] | None = None):
         if self.generate is None:
             raise RuntimeError(f"generator {self.name!r} has no callable (dry-run/name-only stub)")
+        if history:
+            return self.generate(target_text, history=history)
         return self.generate(target_text)
 
 
@@ -617,6 +640,31 @@ def _reasoning_extra_body(model: str, effort: str) -> dict | None:
     if model.startswith(_REASONING_BUDGET_FAMILIES):
         return {"reasoning": {"max_tokens": _REASONING_MAX_TOKENS[effort]}}
     return {"reasoning": {"effort": effort}}
+
+
+_CONTEXT_WINDOWS_CACHE: dict[str, dict[str, int]] = {}
+
+
+def openrouter_context_windows(base_url: str | None = None) -> dict[str, int]:
+    """Fetch ``{model_id: context_length}`` from the OpenRouter models registry.
+
+    Ground truth for per-model window sizes (hand-annotating them would go
+    stale). The endpoint is keyless; one GET per base_url per process
+    (module-level cache). Raises URLError/HTTPError on network failure — the
+    caller decides whether windows are required.
+    """
+    from urllib.request import urlopen
+
+    base = (base_url or "https://openrouter.ai/api/v1").rstrip("/")
+    if base not in _CONTEXT_WINDOWS_CACHE:
+        with urlopen(f"{base}/models", timeout=30) as resp:
+            data = json.load(resp)
+        _CONTEXT_WINDOWS_CACHE[base] = {
+            m["id"]: int(m["context_length"])
+            for m in data.get("data", [])
+            if m.get("id") and m.get("context_length")
+        }
+    return _CONTEXT_WINDOWS_CACHE[base]
 
 
 def openai_generator(
@@ -650,18 +698,22 @@ def openai_generator(
     from stylebot import config
 
     label, system, prompt_version, prompt_id = resolve_strategy(strategy, system)
-    client = openai.OpenAI(
+    # Async client: synthesize_pairs runs sessions concurrently on an event
+    # loop (no threads, no locks); the sync CLI surface is preserved by an
+    # asyncio.run inside synthesize_pairs.
+    client = openai.AsyncOpenAI(
         api_key=api_key or config.require_key("OPENAI_API_KEY"),
         base_url=base_url,
         timeout=timeout,
     )
 
-    def generate(text: str) -> GenOutput:
+    async def generate(text: str, history: list[dict] | None = None) -> GenOutput:
         kwargs: dict = {
             "model": model,
             "max_tokens": max_tokens,
             "messages": [
                 {"role": "system", "content": system},
+                *(history or []),
                 {"role": "user", "content": text},
             ],
         }
@@ -674,7 +726,7 @@ def openai_generator(
         if extra_body:
             kwargs["extra_body"] = extra_body
         t0 = time.monotonic()
-        resp = client.chat.completions.create(**kwargs)
+        resp = await client.chat.completions.create(**kwargs)
         gen_seconds = time.monotonic() - t0
         # Some providers return choices=None/[] on an upstream error rather than
         # raising — surface a clear, catchable message, not an opaque TypeError.
@@ -838,6 +890,7 @@ def _synth_key(
     strategy: str = DEFAULT_STRATEGY,
     reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     prompt_id: str = "",
+    session: str = "",
 ) -> str:
     """Stable id for one synthetic pair — the resume/dedup key.
 
@@ -847,10 +900,18 @@ def _synth_key(
     target text. Sampling params (temperature/top_p) are deliberately NOT in the key
     — they're recorded covariates, not dedup axes (continuous; would explode the key
     space). Promote them here only if swept as a primary arm.
+
+    `session` ("<session_id>:<turn>") is folded in ONLY for multi-turn session
+    runs — session chunking depends on the whole target list, so folding it into
+    stateless (session_turns=1) keys would churn every key whenever the blog
+    gains a post; the corpus-building path must regenerate nothing on resume.
     """
     h = hashlib.sha256()
     for part in (generator_name, strategy, reasoning_effort, prompt_id, context, target_text):
         h.update(part.encode("utf-8"))
+        h.update(b"\x00")
+    if session:
+        h.update(session.encode("utf-8"))
         h.update(b"\x00")
     return h.hexdigest()[:16]
 
@@ -945,40 +1006,104 @@ class SynthResult:
     per_generator: dict[str, int] = field(default_factory=dict)
 
 
+@dataclass
+class _Turn:
+    target: Target
+    key: str
+    context: str
+    index: int  # 1-based position within the session
+
+
+@dataclass
+class _Session:
+    generator: Generator
+    session_id: str
+    turns: list[_Turn]
+
+
 def _assign(
     targets: Sequence[Target],
     generators: Sequence[Generator],
     *,
     per_generator: bool,
     context_dropout: float = 0.0,
-) -> list[tuple[Target, Generator, str, str]]:
-    """Pair targets with generators → ``(target, generator, synth_key, context)``.
+) -> list[tuple[Target, Generator, str]]:
+    """Pair targets with generators → ``(target, generator, effective_context)``.
 
     Default (rotate, `per_generator=False`): round-robin — target *i* goes to
     generator *i % n*. Cheap, and across the corpus yields ≥2 generators.
     `per_generator=True`: every target × every generator (n× the pairs/cost).
-    `context` is the effective heading context after dropout; the `synth_key`
-    incorporates the generator name, its slop strategy, and the context, so
-    toggling any of them regenerates rather than colliding on resume.
+    `context` is the effective heading context after dropout. Keys are computed
+    in `_plan_sessions` (they may fold in session membership).
     """
     if not generators:
         return []
-    out: list[tuple[Target, Generator, str, str]] = []
-
-    def assign_one(t: Target, gen: Generator) -> None:
-        ctx = _effective_context(t, context_dropout)
-        key = _synth_key(gen.name, t.text, ctx, gen.strategy, gen.reasoning_effort, gen.prompt_id)
-        out.append((t, gen, key, ctx))
-
+    out: list[tuple[Target, Generator, str]] = []
     if per_generator:
         for t in targets:
             for gen in generators:
-                assign_one(t, gen)
+                out.append((t, gen, _effective_context(t, context_dropout)))
     else:
         n = len(generators)
         for i, t in enumerate(targets):
-            assign_one(t, generators[i % n])
+            out.append((t, generators[i % n], _effective_context(t, context_dropout)))
     return out
+
+
+def _plan_sessions(
+    assignments: Sequence[tuple[Target, Generator, str]],
+    *,
+    session_turns: int = 1,
+) -> list[_Session]:
+    """Chunk each generator's assigned targets (in order) into sessions.
+
+    Assignment order is preserved — with the default walk order a session works
+    through one post, then the next, like a real editing pass. `session_turns=1`
+    yields one single-turn session per pair with NO session component in the
+    key (stateless keys stay stable as the target set grows); multi-turn
+    sessions fold `session_id:turn` into each key so every turn is a distinct,
+    resumable pair. `session_id` is derived from the generator name and the
+    ordered turn inputs — never from prior generations.
+    """
+    per_gen: dict[str, tuple[Generator, list[tuple[Target, str]]]] = {}
+    for target, gen, ctx in assignments:
+        per_gen.setdefault(gen.name, (gen, []))[1].append((target, ctx))
+
+    sessions: list[_Session] = []
+    for gen, items in per_gen.values():
+        for start in range(0, len(items), max(1, session_turns)):
+            chunk = items[start : start + max(1, session_turns)]
+            if session_turns > 1:
+                sid_h = hashlib.sha256(gen.name.encode("utf-8"))
+                for target, ctx in chunk:
+                    sid_h.update(b"\x00")
+                    sid_h.update(ctx.encode("utf-8"))
+                    sid_h.update(target.text.encode("utf-8"))
+                sid = sid_h.hexdigest()[:8]
+            else:
+                sid = ""
+            turns = [
+                _Turn(
+                    target=target,
+                    key=_synth_key(
+                        gen.name, target.text, ctx, gen.strategy, gen.reasoning_effort,
+                        gen.prompt_id, session=f"{sid}:{idx}" if sid else "",
+                    ),
+                    context=ctx,
+                    index=idx,
+                )
+                for idx, (target, ctx) in enumerate(chunk, start=1)
+            ]
+            sessions.append(_Session(generator=gen, session_id=sid, turns=turns))
+    return sessions
+
+
+def _exchange(user_text: str, assistant_text: str) -> list[dict]:
+    """One (user → assistant) session exchange, as chat messages."""
+    return [
+        {"role": "user", "content": user_text},
+        {"role": "assistant", "content": assistant_text},
+    ]
 
 
 def synthesize_pairs(
@@ -992,14 +1117,34 @@ def synthesize_pairs(
     context_dropout: float = 0.0,
     on_progress: Callable[[int, int], None] | None = None,
     on_error: Callable[[str, str], None] | None = None,
+    max_workers: int = 1,
+    session_turns: int = 1,
+    session_max_tokens: int | None = DEFAULT_SESSION_MAX_TOKENS,
+    context_windows: Mapping[str, int] | None = None,
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
     Idempotent and resumable: each pair carries a `meta.synth_key`
-    (`hash(generator, strategy, reasoning_effort, prompt_id, context, target)`);
-    assignments whose key is already in the file are skipped, so re-running never
-    duplicates and a crashed run resumes where it stopped (records are appended
-    one-per-line, flushed as they go).
+    (`hash(generator, strategy, reasoning_effort, prompt_id, context, target
+    [, session])`); assignments whose key is already in the file are skipped, so
+    re-running never duplicates and a crashed run resumes where it stopped
+    (records are appended one-per-line, flushed as they go).
+
+    **Concurrency**: sessions run concurrently on an asyncio event loop,
+    `max_workers` at a time (single-threaded — writes and callbacks interleave
+    only between awaits, so no locks). Generator callables may be sync or async.
+
+    **Sessions** (`session_turns > 1`): each generator's targets are chunked
+    into live multi-turn sessions — every turn sees the real prior
+    (passage → slop) exchanges, so the window-position covariate is honest
+    self-conditioned context. Fill is *measured*, not engineered: the recorded
+    `prompt_tokens` (each model's own tokenizer) plus `context_window` /
+    `window_fill` in `meta.gen` are the analysis covariates. A session ends
+    early at `min(session_budget or session_max_tokens,
+    SESSION_WINDOW_FILL_CAP × window)` estimated prompt tokens, or on a turn
+    error (later turns would see a hole in history; the failed turn retries
+    next run under the same key, and already-recorded turns are replayed into
+    history from the file).
 
     When targets carry heading `context` (`iter_targets(heading_context=...)`),
     the heading is prepended verbatim to both sides of the pair via
@@ -1016,54 +1161,126 @@ def synthesize_pairs(
     pairs_path = data_dir / "pairs.jsonl"
 
     assignments = _assign(targets, generators, per_generator=per_generator, context_dropout=context_dropout)
-    result = SynthResult(planned=len(assignments))
+    sessions = _plan_sessions(assignments, session_turns=session_turns)
+    all_turns = [(s, t) for s in sessions for t in s.turns]
+    result = SynthResult(planned=len(all_turns))
 
     seen = existing_synth_keys(pairs_path)
-    todo = [a for a in assignments if a[2] not in seen]
-    result.skipped_existing = len(assignments) - len(todo)
+    total = sum(1 for _, t in all_turns if t.key not in seen)
+    result.skipped_existing = len(all_turns) - total
 
     if dry_run:
-        for _, gen, _, _ in todo:
-            result.per_generator[gen.name] = result.per_generator.get(gen.name, 0) + 1
+        for s, t in all_turns:
+            if t.key not in seen:
+                result.per_generator[s.generator.name] = result.per_generator.get(s.generator.name, 0) + 1
         return result
 
+    # Session resume needs the recorded slop of already-done turns to replay
+    # into history. One extra pass over the file, only when it can matter.
+    recorded_slop: dict[str, str] = {}
+    if session_turns > 1 and result.skipped_existing:
+        from stylebot.eval import extract_slop  # lazy: eval pulls in scorer deps
+
+        needed = {t.key for s in sessions if len(s.turns) > 1 for t in s.turns} & seen
+        if needed:
+            for rec in iter_pairs(pairs_path):
+                k = (rec.get("meta") or {}).get("synth_key")
+                if k in needed:
+                    recorded_slop[k] = extract_slop(rec)
+
     data_dir.mkdir(parents=True, exist_ok=True)
-    written_keys: set[str] = set()
-    total = len(todo)
-    with pairs_path.open("a", encoding="utf-8") as fp:
-        for idx, (target, gen, key, context) in enumerate(todo, start=1):
-            if on_progress is not None:
-                on_progress(idx, total)
-            if key in written_keys:  # guard within-run dup (same target listed twice)
+    windows = dict(context_windows or {})
+    claimed: set[str] = set()  # in-run dup guard, claimed BEFORE the await
+    state = {"done": 0}
+
+    async def _run_session(sess: _Session, fp) -> None:
+        gen = sess.generator
+        window = windows.get(gen.name)
+        caps = [gen.session_budget or session_max_tokens]
+        if window:
+            caps.append(int(window * SESSION_WINDOW_FILL_CAP))
+        cap = min((c for c in caps if c), default=None)
+        history: list[dict] = []
+        last_prompt = 0  # prompt_tokens reported for the last live turn
+        last_visible = 0  # ~tokens the last reply added to history
+
+        for turn in sess.turns:
+            if history and cap is not None:
+                # Estimate the next prompt: last measured prompt + what the
+                # last reply added + the next passage (~4 chars/token), or a
+                # pure char estimate before any live turn has reported usage.
+                if last_prompt:
+                    est = last_prompt + last_visible + len(turn.target.text) // 4
+                else:
+                    est = (sum(len(m["content"]) for m in history) + len(turn.target.text)) // 4
+                if est > cap:
+                    break
+            if turn.key in seen or turn.key in claimed:
+                if (slop := recorded_slop.get(turn.key)) is not None:
+                    history += _exchange(turn.target.text, slop)
                 continue
+            claimed.add(turn.key)
             try:
-                raw = gen(target.text)
-            except Exception as exc:  # API error etc. — record and continue
+                out = gen(turn.target.text, history=history or None)
+                if inspect.isawaitable(out):
+                    out = await out
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # API error etc. — record, end this session
                 msg = f"{type(exc).__name__}: {exc}"
-                result.errors.append((key, msg))
+                result.errors.append((turn.key, msg))
                 if on_error is not None:
-                    on_error(key, msg)
-                continue
-            slop, gen_meta = _normalize_gen_output(raw)
+                    on_error(turn.key, msg)
+                break
+            slop, gen_meta = _normalize_gen_output(out)
             if not slop.strip():
-                result.errors.append((key, "generator returned empty output"))
+                result.errors.append((turn.key, "generator returned empty output"))
                 if on_error is not None:
-                    on_error(key, "generator returned empty output")
-                continue
+                    on_error(turn.key, "generator returned empty output")
+                break
+            prompt_tokens = gen_meta.get("prompt_tokens")
+            if sess.session_id:
+                gen_meta.update(
+                    session_id=sess.session_id,
+                    session_turn=turn.index,
+                    context_window=window,
+                    window_fill=(
+                        round(prompt_tokens / window, 4) if prompt_tokens and window else None
+                    ),
+                )
             record = _build_record(
                 slop=slop,
-                target=target,
+                target=turn.target,
                 generator_name=gen.name,
-                synth_key=key,
+                synth_key=turn.key,
                 strategy=gen.strategy,
-                context=context,
+                context=turn.context,
                 extra_tags=extra_tags,
                 gen_meta=gen_meta,
             )
             fp.write(json.dumps(record, ensure_ascii=False) + "\n")
             fp.flush()
-            written_keys.add(key)
             result.written += 1
             result.per_generator[gen.name] = result.per_generator.get(gen.name, 0) + 1
+            state["done"] += 1
+            if on_progress is not None:
+                on_progress(state["done"], total)
+            history += _exchange(turn.target.text, slop)
+            if prompt_tokens:
+                last_prompt = prompt_tokens
+            completion = gen_meta.get("completion_tokens") or 0
+            reasoning = gen_meta.get("reasoning_tokens") or 0
+            last_visible = max(completion - reasoning, len(slop) // 4)
 
+    async def _run_all() -> None:
+        sem = asyncio.Semaphore(max(1, max_workers))
+
+        async def _gated(sess: _Session, fp) -> None:
+            async with sem:
+                await _run_session(sess, fp)
+
+        with pairs_path.open("a", encoding="utf-8") as fp:
+            await asyncio.gather(*(_gated(s, fp) for s in sessions))
+
+    asyncio.run(_run_all())
     return result

@@ -197,3 +197,63 @@ def test_run_synth_defers_data_dir_for_inspection(tmp_path):
 
     result = synth_cli.run_synth(targets, data_dir=_explode, sample_n=1)
     assert result is None
+
+
+# -- parallelism + sessions through the shared surface --
+
+
+def test_max_workers_auto_rule(tmp_path, monkeypatch):
+    root = _make_blog(tmp_path)
+    captured = {}
+
+    def spy(targets, data_dir, generators, **kw):
+        captured.update(kw)
+        return synth.SynthResult(planned=0)
+
+    monkeypatch.setattr(synth, "synthesize_pairs", spy)
+    monkeypatch.setattr(
+        synth, "openrouter_generator",
+        lambda *, model, **kw: synth.Generator(name=f"openrouter/{model}", generate=lambda t, history=None: "s"),
+    )
+    monkeypatch.setattr(
+        synth, "local_generator",
+        lambda **kw: synth.Generator(name="local-x", generate=lambda t, history=None: "s"),
+    )
+    runner = CliRunner()
+    base = ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "c")]
+
+    # OpenRouter-only -> auto 16.
+    assert runner.invoke(ai_style_main, [*base, "--openrouter-model", "x/y"]).exit_code == 0
+    assert captured["max_workers"] == 16
+    # A local preset in the mix -> auto 1 (local endpoints want sequential).
+    assert runner.invoke(ai_style_main, [*base, "--generator", "local"]).exit_code == 0
+    assert captured["max_workers"] == 1
+    # Explicit always wins.
+    assert runner.invoke(ai_style_main, [*base, "--openrouter-model", "x/y", "--max-workers", "3"]).exit_code == 0
+    assert captured["max_workers"] == 3
+
+
+def test_run_synth_sessions_end_to_end(tmp_path):
+    import json
+
+    targets = synth.iter_targets(blog_root=_make_blog(tmp_path))
+    hist_lens = []
+
+    def gen(text, history=None):
+        hist_lens.append(len(history or []))
+        return synth.GenOutput("[slop] " + text, {"prompt_tokens": 200 * (len(hist_lens))})
+
+    result = synth_cli.run_synth(
+        targets,
+        data_dir=tmp_path / "corpus",
+        generators=[synth.Generator("fake", generate=gen)],
+        session_turns=2,
+        context_window=8000,  # injected generator: window comes from the flag
+    )
+    assert result is not None and result.written == 2
+    assert hist_lens == [0, 2]
+    recs = [json.loads(ln) for ln in (tmp_path / "corpus" / "pairs.jsonl").read_text().splitlines()]
+    gens_meta = [r["meta"]["gen"] for r in recs]
+    assert [g["session_turn"] for g in gens_meta] == [1, 2]
+    assert all(g["context_window"] == 8000 for g in gens_meta)
+    assert gens_meta[1]["window_fill"] == round(400 / 8000, 4)

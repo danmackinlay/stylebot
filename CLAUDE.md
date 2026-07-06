@@ -134,6 +134,15 @@ Real-blog dry-run: ~3.6k passages from 492 quality>6 posts, 85% heading-framed.
 **`OPENROUTER_API_KEY`** (the blog's `dan-style synth` now defaults to an OpenRouter
 rotation). Add `OPENROUTER_API_KEY` to `.env` / `.envrc` (gitignored).
 
+**Parallel synth + window-position sessions (built 2026-07-06).** `synthesize_pairs`
+runs on asyncio — `--max-workers` (auto: 16 OpenRouter-only, 1 with a local preset)
+parallelises stateless generation (days→hours), and `--session-turns K` runs live
+multi-turn sessions for the context-fullness sweep: fill is *measured*
+(`prompt_tokens` + registry `context_window` → `window_fill` in `meta.gen`,
+facet with `--facet-by session_turn`), budget-capped at
+`min(--session-max-tokens, 0.8×window)`. Details:
+[`_plans/phase-2-synthetic-pairs.md`](_plans/phase-2-synthetic-pairs.md) step 5.
+
 **Eval harness (built 2026-06-28; batched 2026-06-28).** `stylebot.eval` +
 `ai-style eval` — the offline four-signal scorer (Vale, OpenRouter LLM-judge,
 pluggable detector, eyeball), keyless by default. **JSONL-native + batched:**

@@ -103,9 +103,33 @@ not guessed once:
    model's tics. Tag each pair with the generator in `meta`.
 4. **Secondary set**: explicitly request worst-case patterns from the slop
    catalogue for long-tail mannerisms the paraphrase pipeline underrepresents.
-5. **Context-fullness sweep** (optional, post §"Whose slop?"): generate some
-   slop across one growing session (fresh paragraph each turn) and tag with how
-   full the context was, to study/​weight late-stage slop.
+5. **Context-fullness sweep** (✅ built 2026-07-06, post §"Whose slop?") — live
+   multi-turn sessions with parallelism, `--session-turns K` on `ai-style` /
+   `dan-style synth`. Design:
+   - **Sessions are the unit of parallelism**: a session = one generator + an
+     ordered slice of targets; each turn sees the real prior (passage → slop)
+     exchanges — true self-conditioning. `synthesize_pairs` runs sessions
+     concurrently on an asyncio event loop (`--max-workers`, default auto: 16
+     when OpenRouter-only, 1 with a local preset in the mix). At the default
+     `--session-turns 1` this degenerates to plain per-pair parallelism — the
+     days→hours corpus-augmentation speedup with sessions off.
+   - **Fill is measured, not engineered** (models grow context unevenly —
+     different tokenizers, reply lengths, window sizes): the covariates are the
+     response's own `prompt_tokens` plus `context_window` (fetched per model
+     from the keyless OpenRouter models registry) and derived `window_fill`,
+     all in `meta.gen` next to `session_id`/`session_turn`. Facet eval with
+     `--facet-by session_turn`.
+   - **Cost/overflow control**: a session ends at
+     `min(--session-max-tokens (default 32k), 0.8 × window)` estimated prompt
+     tokens or at `--session-turns`, whichever first. Input cost grows
+     ~quadratically with the budget (a 32k session costs ~25× the input tokens
+     of the same pairs stateless) — size experiments accordingly. Per-model
+     budget overrides exist as a library hook (`Generator.session_budget` /
+     `run_synth(session_budgets=…)`), unused by default.
+   - **Keys/resume**: multi-turn keys fold `session_id:turn` into `synth_key`
+     (turns coexist; a crashed session resumes by replaying recorded slop into
+     history). Stateless keys carry NO session component, so corpus resume is
+     stable as the blog grows.
 
 ## Outputs (must match Phase 1 schema)
 
