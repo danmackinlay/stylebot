@@ -50,10 +50,15 @@ borrowing someone else's human-vs-AI-in-general detector (Pangram) and paying pe
 call. It is **keyless, free per pair, reproducible**, and drops straight into the
 existing `Detector` seam.
 
-**How it's built** (implementation in `stylebot/classify.py` + livingthing
-`voice_classifier.py` / `bin/train_voice_clf.py`): a frozen **style** embedding +
-a logistic head, scored by
-a pure-Python dot product in `stylebot.classify` (no ML deps in stylebot). The
+**How it's built** (both halves are stylebot mechanism, split by dependency
+weight): the **runtime** is `stylebot/classify.py` — a frozen **style** embedding +
+a logistic head, scored by a pure-Python dot product (dep-free at import,
+enforced by a test); the **trainer** is `stylebot/classify_train.py` (dataset
+assembly, the POST-split methodology, artifact I/O) behind the
+`stylebot[classifier]` extra, with the generic CLI `ai-style train-clf`.
+Author-specific *policy* — backbone pin, free-positives selector, path
+defaults — lives in livingthing (`voice_classifier.py` / `train-voice-clf`,
+a thin delegate). The
 backbone was a **measured** choice — a bake-off over the content-matched pairs
 ranked candidates by content-matched pairwise accuracy + AUC (split by POST):
 
@@ -92,9 +97,10 @@ The detector plays two roles with different safety requirements:
 **shared by-POST partition** must govern all three stages — styler-train,
 detector-train, and the frozen eval — so the detector never trains on the posts
 the styler trains on or that eval scores. The trainer supports this:
-`train-voice-clf train --holdout-frac F` (or `--holdout-posts FILE` to pin the
-exact partition) ships a head fit on the train posts only and records the holdout
-post list in `meta.split`; downstream stages reuse it. Without that bookkeeping,
+`ai-style train-clf --holdout-frac F` (or `--holdout-posts FILE` to pin the
+exact partition; same flags on the blog's `train-voice-clf`) ships a head fit on
+the train posts only and records the holdout post list in `meta.split`;
+downstream stages reuse it. Without that bookkeeping,
 the held-out guarantee is only as good as the split. (The default fit-all artifact
 is for *measurement* of an independent styler, and `meta.split` says so.)
 
@@ -184,9 +190,11 @@ it consumes the `meta.gen` covariates Phase-2 now records. See
 - **Judge via OpenRouter** (`OPENROUTER_API_KEY`, optional `OPENROUTER_BASE_URL`),
   default model `anthropic/claude-opus-4-8`, scores 1–5 + rationale; injectable so
   tests pass a fake. Mirrors `synth`'s OpenRouter wiring (one key, many models).
-- **Detector (built 2026-06-30):** the trained voice classifier is the 4th signal,
-  wired keyless. See "The detector decision" above; the trainer + artifact live in
-  livingthing (`voice_classifier.py` / `_models/voice-clf/`).
+- **Detector (built 2026-06-30; trainer generalised 2026-07-06):** the trained
+  voice classifier is the 4th signal, wired keyless. See "The detector decision"
+  above; the generic trainer is `stylebot.classify_train` (`ai-style train-clf`,
+  `stylebot[classifier]` extra); blog policy + the artifact live in livingthing
+  (`voice_classifier.py` / `_models/voice-clf/`).
 
 ## Guardrail (policy, not optional)
 

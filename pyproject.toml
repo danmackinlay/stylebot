@@ -14,6 +14,16 @@ dependencies = [
     "openai>=1.60.0",
 ]
 
+[project.optional-dependencies]
+# Classifier *training* (stylebot.classify_train / `ai-style train-clf`). The
+# runtime (stylebot.classify) deliberately needs none of these — it scores the
+# plain-JSON head with the stdlib. Install: `uv add 'stylebot[classifier]'`.
+classifier = [
+    "scikit-learn>=1.4",
+    "numpy>=1.26",
+    "sentence-transformers>=3.0",
+]
+
 [project.scripts]
 ai-style-log = "stylebot.bin.ai_style_log:main"
 ai-style = "stylebot.bin.ai_style:main"
@@ -22,6 +32,10 @@ ai-style = "stylebot.bin.ai_style:main"
 dev = [
     "pytest>=8.3.0",
     "ruff>=0.6.0",
+    # For the trainer tests (stub embedding matrices — sentence-transformers is
+    # deliberately NOT here; no model downloads in the test suite).
+    "scikit-learn>=1.4",
+    "numpy>=1.26",
 ]
 
 [build-system]

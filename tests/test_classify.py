@@ -93,3 +93,22 @@ def test_detector_composes_into_score_candidate():
     rec = ev.score_candidate("some prose", judge=None, detector=det)
     assert rec["detector"]["score"] == pytest.approx(classify._sigmoid(2.0))
     assert rec["detector"]["name"] == "voice-clf"
+
+
+def test_runtime_import_pulls_no_ml_deps():
+    """The dep-free guarantee, enforced: importing the runtime (classify) — and
+    even the trainer module (classify_train, whose heavy imports are lazy) —
+    must not load sklearn/numpy/sentence_transformers/torch. Run in a subprocess
+    so this process's own imports can't contaminate the check."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "import stylebot.classify, stylebot.classify_train\n"
+        "bad = [m for m in ('sklearn', 'numpy', 'sentence_transformers', 'torch')\n"
+        "       if any(k == m or k.startswith(m + '.') for k in sys.modules)]\n"
+        "assert not bad, f'ML deps loaded at import time: {bad}'\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr

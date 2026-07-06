@@ -1,0 +1,518 @@
+"""Generic voice-classifier *training* — the other half of `stylebot.classify`.
+
+`classify.py` is the runtime seam (dep-free import, pure-Python scoring of a
+plain-JSON linear head). This module is the trainer that *produces* that
+artifact: assemble a dataset from a `pairs.jsonl` corpus, embed it with a style
+backbone, fit a logistic regression slop-vs-author, evaluate it leakage-safely
+(split by POST), and write `head.json` + `meta.json`.
+
+It is generic over authors by construction — every input and output is a
+stylebot contract (`pairs.jsonl` in, `head.json`/`meta.json` out), and the
+caller-specific choices are injected:
+
+- **Which pairs**: the `pairs_path` argument.
+- **Extra free-standing positives**: `extra_positives` — an iterable of
+  `(text, source)` pairs (or `synth.Target`s) the *caller* selected under its own
+  policy (cf. `iter_targets(selector=…)`). Off by default: free positives
+  reintroduce a topic signal, so they are flagged and excluded from the metric.
+- **The backbone**: `embed_model`, defaulting to `DEFAULT_EMBED_MODEL` below.
+
+**Dependencies.** This module needs the ``classifier`` extra —
+``uv add 'stylebot[classifier]'`` (scikit-learn, numpy, sentence-transformers).
+All heavy imports are lazy (inside functions), so importing the module is free
+and `import stylebot.classify` stays ML-dep-free; calling a trainer function
+without the extra raises an actionable ImportError.
+
+**The methodology crux — train STYLE not TOPIC (leakage safety).** Use
+content-matched pairs (slop vs author of the *same* passage), split by POST
+(`GroupShuffleSplit` — never by paragraph), `class_weight='balanced'`. The
+headline metric is content-matched pairwise accuracy ("pick the author's version
+of the same passage") plus AUC. Two training modes:
+
+- **fit-all (default)**: cross-validated metric over POST splits, head shipped
+  fit on all posts. Honest for *measuring* an independent styler; NOT for
+  grading a styler trained on the same posts.
+- **holdout** (`holdout_frac`/`holdout_posts`): hold out whole POSTs, report the
+  single-split unseen-posts metric, ship the head fit on the train posts only —
+  the leakage-safe configuration when the detector is used as a *reward*. The
+  resolved partition is recorded in `meta.split` so styler-train + eval reuse it.
+
+Polarity: slop is the positive class (`LABEL_SLOP=1`), so
+`predict_proba[:, slop] = P(slop)` and the served detector's ``score = P(slop)``
+composes with `stylebot.eval.mean_detector_score`; `p_dan = 1 - score`.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import subprocess
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+from stylebot import classify
+from stylebot.eval import extract_slop, extract_target
+from stylebot.pairs import iter_pairs
+
+logger = logging.getLogger(__name__)
+
+# The default style backbone. Chosen by a measured bake-off on Dan's
+# content-matched corpus (2026-06-30): StyleDistance 0.78 pairwise / 0.72 AUC,
+# beating LUAR (0.76/0.71), Wegmann CISR (0.73/0.67) and the mxbai *semantic*
+# baseline (0.75/0.62) — content-independent style embeddings hold where topic-
+# dominated semantic geometry collapses. A different author should re-run that
+# bake-off on their own pairs rather than trust this default blindly; whatever
+# wins is pinned into the artifact's meta.json and enforced at serve time.
+DEFAULT_EMBED_MODEL = "StyleDistance/styledistance"
+NORMALIZE = True
+SCHEMA_VERSION = 1
+
+# Label encoding: slop = positive class (1) so predict_proba[:, 1] = P(slop).
+LABEL_SLOP = 1
+LABEL_DAN = 0  # the author class ("Dan" for historical reasons; generic in use)
+
+# Leakage-safe evaluation defaults.
+DEFAULT_TEST_SIZE = 0.25
+DEFAULT_N_SPLITS = 8
+DEFAULT_C = 1.0
+DEFAULT_RANDOM_STATE = 0
+
+_EXTRA_HINT = (
+    "stylebot.classify_train needs the 'classifier' extra: "
+    "run `uv add 'stylebot[classifier]'` (or `pip install 'stylebot[classifier]'`) "
+    "to get scikit-learn/numpy/sentence-transformers. The stylebot runtime "
+    "(stylebot.classify) stays dependency-free without it."
+)
+
+
+def _np():
+    try:
+        import numpy as np
+    except ImportError as exc:  # pragma: no cover - exercised only without the extra
+        raise ImportError(_EXTRA_HINT) from exc
+    return np
+
+
+# ---------------------------------------------------------------------------
+# Data assembly — learn STYLE not TOPIC (content-matched pairs, grouped by post)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Dataset:
+    """The assembled training matrix inputs, before embedding.
+
+    `texts[i]` has label `labels[i]` and belongs to POST `groups[i]`. `pair_rows`
+    lists `(slop_row, author_row)` index twins (the content-matched pairs) — the
+    only rows the headline metric scores. `is_free[i]` marks free-standing
+    positives (off by default); these augment the *fit* but never the metric, so
+    their topic signal can't inflate the reported numbers.
+    """
+
+    texts: list[str] = field(default_factory=list)
+    labels: list[int] = field(default_factory=list)
+    groups: list[str] = field(default_factory=list)
+    pair_rows: list[tuple[int, int]] = field(default_factory=list)
+    is_free: list[bool] = field(default_factory=list)
+
+    @property
+    def n_pairs(self) -> int:
+        return len(self.pair_rows)
+
+    @property
+    def n_posts(self) -> int:
+        return len({g for g in self.groups})
+
+    def _add(self, text: str, label: int, group: str, *, free: bool = False) -> int:
+        self.texts.append(text)
+        self.labels.append(label)
+        self.groups.append(group)
+        self.is_free.append(free)
+        return len(self.texts) - 1
+
+
+def assemble_dataset(
+    pairs_path: str | Path,
+    *,
+    extra_positives: Iterable[object] | None = None,
+) -> Dataset:
+    """Build the slop-vs-author dataset from a content-matched pairs corpus.
+
+    Each pair contributes its slop side (`messages[1]`, label slop) and its
+    author side (`messages[2]`, label author), heading-context stripped (via
+    `eval.extract_slop`/`extract_target`), grouped by `meta.source` (the POST).
+
+    `extra_positives` enriches the author class with free-standing prose the
+    *caller* selected under its own policy — each item is a `synth.Target` (or
+    any object with `.text` and `.source`) or a plain `(text, source)` tuple.
+    They are flagged `is_free` and excluded from the headline metric, because
+    free positives reintroduce a topic signal that would inflate it.
+    """
+    ds = Dataset()
+    for rec in iter_pairs(pairs_path):
+        slop = extract_slop(rec).strip()
+        author = extract_target(rec).strip()
+        if not slop or not author:
+            continue
+        source = (rec.get("meta") or {}).get("source") or "?"
+        s_row = ds._add(slop, LABEL_SLOP, source)
+        a_row = ds._add(author, LABEL_DAN, source)
+        ds.pair_rows.append((s_row, a_row))
+
+    if extra_positives is not None:
+        n_extra = 0
+        for item in extra_positives:
+            if isinstance(item, tuple):
+                text, source = item
+            else:  # a synth.Target or anything shaped like one
+                text, source = item.text, item.source
+            text = (text or "").strip()
+            if not text:
+                continue
+            ds._add(text, LABEL_DAN, source, free=True)
+            n_extra += 1
+        logger.info("added %d free positives (excluded from the metric)", n_extra)
+
+    return ds
+
+
+# ---------------------------------------------------------------------------
+# Embedding (the heavy bit)
+# ---------------------------------------------------------------------------
+
+
+def embed_texts(
+    texts: Sequence[str],
+    *,
+    model_id: str = DEFAULT_EMBED_MODEL,
+    normalize: bool = NORMALIZE,
+    batch_size: int = 32,
+):
+    """Batch-encode `texts` with the style backbone; returns an [N, D] float32 array.
+
+    Wraps `stylebot.classify.sentence_transformers_batch_embed_fn` — the ONE
+    encode call-site shared with serving, so normalize/encode semantics can't
+    drift between training and inference. Heavy imports stay inside the call so
+    importing this module is cheap.
+    """
+    np = _np()
+    try:
+        encode = classify.sentence_transformers_batch_embed_fn(model_id, normalize=normalize)
+    except ImportError as exc:
+        raise ImportError(_EXTRA_HINT) from exc
+    return encode(texts, batch_size=batch_size).astype(np.float32, copy=False)
+
+
+# ---------------------------------------------------------------------------
+# Fit + leakage-safe evaluation
+# ---------------------------------------------------------------------------
+
+
+def _make_logreg(C: float = DEFAULT_C):
+    try:
+        from sklearn.linear_model import LogisticRegression
+    except ImportError as exc:
+        raise ImportError(_EXTRA_HINT) from exc
+
+    # class_weight='balanced' guards the small/imbalanced negative set.
+    return LogisticRegression(max_iter=2000, class_weight="balanced", C=C)
+
+
+def evaluate(
+    X,
+    ds: Dataset,
+    *,
+    test_size: float = DEFAULT_TEST_SIZE,
+    n_splits: int = DEFAULT_N_SPLITS,
+    C: float = DEFAULT_C,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> dict:
+    """POST-split content-matched pairwise accuracy + per-text AUC.
+
+    For each `GroupShuffleSplit` fold (grouped by POST, so no post appears in both
+    train and test), fit logreg on the train rows and, on the held-out side,
+    measure: (1) **pairwise accuracy** — for each content-matched twin whose POST
+    is in test, did `P(slop | slop_side) > P(slop | author_side)`; (2) **AUC**
+    over the matched test rows. Free positives never enter the metric.
+    """
+    np = _np()
+    from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import GroupShuffleSplit
+
+    y = np.asarray(ds.labels)
+    groups = np.asarray(ds.groups)
+    matched_rows = {r for pair in ds.pair_rows for r in pair}
+
+    gss = GroupShuffleSplit(n_splits=n_splits, test_size=test_size, random_state=random_state)
+    pair_accs: list[float] = []
+    aucs: list[float] = []
+    for train_idx, test_idx in gss.split(X, y, groups):
+        clf = _make_logreg(C)
+        clf.fit(X[train_idx], y[train_idx])
+        p_slop = clf.predict_proba(X)[:, list(clf.classes_).index(LABEL_SLOP)]
+
+        test_set = set(test_idx.tolist())
+        # AUC over matched test rows only (free positives excluded).
+        matched_test = [r for r in test_idx.tolist() if r in matched_rows]
+        ytest = y[matched_test]
+        if len(set(ytest.tolist())) == 2:
+            aucs.append(float(roc_auc_score(ytest, p_slop[matched_test])))
+
+        correct = total = 0.0
+        for s_row, a_row in ds.pair_rows:
+            if s_row in test_set and a_row in test_set:
+                ps, pa = p_slop[s_row], p_slop[a_row]
+                total += 1
+                correct += 1.0 if ps > pa else (0.5 if ps == pa else 0.0)
+        if total:
+            pair_accs.append(correct / total)
+
+    def _stat(xs: list[float]) -> dict:
+        if not xs:
+            return {"mean": None, "std": None, "n": 0}
+        return {"mean": round(float(np.mean(xs)), 4), "std": round(float(np.std(xs)), 4), "n": len(xs)}
+
+    return {
+        "pairwise_accuracy": _stat(pair_accs),
+        "auc": _stat(aucs),
+        "n_splits": n_splits,
+        "test_size": test_size,
+        "mode": "cross_val",
+    }
+
+
+def partition_posts(
+    sources,
+    *,
+    holdout_frac: float = 0.0,
+    holdout_seed: int = 0,
+    holdout_posts=None,
+) -> tuple[set, set]:
+    """Split the distinct POSTs into `(train, holdout)` for the shared by-POST split.
+
+    The leakage-safe contract: the detector must NOT be trained on the posts the
+    styler trains on or that the final eval scores (see `_plans/eval-harness.md`
+    "the split contract"). An explicit `holdout_posts` list pins the exact
+    partition so all three stages (styler-train / detector-train / eval) can reuse
+    it; otherwise the holdout is derived deterministically from `holdout_frac` +
+    `holdout_seed`. `holdout_frac=0` and no list ⇒ no holdout (empty set).
+    """
+    posts = sorted(set(sources))
+    if holdout_posts:
+        hold = set(holdout_posts) & set(posts)
+    elif holdout_frac and holdout_frac > 0:
+        import random
+
+        shuffled = list(posts)
+        random.Random(holdout_seed).shuffle(shuffled)
+        n_hold = max(1, round(len(posts) * holdout_frac))
+        hold = set(shuffled[:n_hold])
+    else:
+        hold = set()
+    return set(posts) - hold, hold
+
+
+def evaluate_holdout(X, ds: Dataset, holdout: set, *, C: float = DEFAULT_C) -> dict:
+    """Single by-POST holdout eval: fit on the train posts, score the holdout twins.
+
+    The honest "unseen posts" number for a head that ships fit on the train posts
+    only — content-matched pairwise accuracy + AUC over the held-out posts.
+    """
+    np = _np()
+    from sklearn.metrics import roc_auc_score
+
+    y = np.asarray(ds.labels)
+    train_rows = [i for i, g in enumerate(ds.groups) if g not in holdout]
+    test_rows = [i for i, g in enumerate(ds.groups) if g in holdout]
+    clf = _make_logreg(C)
+    clf.fit(X[train_rows], y[train_rows])
+    p_slop = clf.predict_proba(X)[:, list(clf.classes_).index(LABEL_SLOP)]
+
+    matched = {r for pair in ds.pair_rows for r in pair}
+    matched_test = [r for r in test_rows if r in matched]
+    auc = None
+    if len(set(y[matched_test].tolist())) == 2:
+        auc = round(float(roc_auc_score(y[matched_test], p_slop[matched_test])), 4)
+
+    test_set = set(test_rows)
+    correct = total = 0.0
+    for s_row, a_row in ds.pair_rows:
+        if s_row in test_set and a_row in test_set:
+            total += 1
+            ps, pa = p_slop[s_row], p_slop[a_row]
+            correct += 1.0 if ps > pa else (0.5 if ps == pa else 0.0)
+    pa_mean = round(correct / total, 4) if total else None
+    return {
+        "pairwise_accuracy": {"mean": pa_mean, "std": None, "n": int(total)},
+        "auc": {"mean": auc, "std": None, "n": len(matched_test)},
+        "mode": "holdout",
+    }
+
+
+def fit_head(X, ds: Dataset, *, C: float = DEFAULT_C, rows: list[int] | None = None):
+    """Fit the final logreg (optionally on a row subset) and return `(clf, coef, intercept)`.
+
+    `coef`/`intercept` are extracted for the P(slop) class so the pure-Python
+    `stylebot.classify._logreg_p_slop` reproduces `clf.predict_proba[:, slop]`
+    exactly. (Binary logreg keeps one weight row; we index it by the slop class.)
+
+    `rows` restricts the fit to a subset of row indices — used by the held-out
+    split mode to ship a head that has NOT seen the holdout posts.
+    """
+    np = _np()
+
+    if rows is None:
+        X_fit, y_fit = X, ds.labels
+    else:
+        X_fit, y_fit = X[rows], np.asarray(ds.labels)[rows]
+    clf = _make_logreg(C)
+    clf.fit(X_fit, y_fit)
+    slop_col = list(clf.classes_).index(LABEL_SLOP)
+    # Binary logistic regression stores a single weight row for the positive
+    # class (classes_[1]); index defensively in case the row count ever differs.
+    coef_row = clf.coef_[slop_col] if clf.coef_.shape[0] > 1 else clf.coef_[0]
+    intercept = clf.intercept_[slop_col] if clf.intercept_.shape[0] > 1 else clf.intercept_[0]
+    return clf, [float(c) for c in coef_row], float(intercept)
+
+
+# ---------------------------------------------------------------------------
+# Artifact I/O
+# ---------------------------------------------------------------------------
+
+
+def _git_sha(repo: str | Path | None) -> str | None:
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo or "."), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, check=True,
+        )
+        return out.stdout.strip() or None
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def write_artifact(
+    out_dir: str | Path,
+    *,
+    clf,
+    coef: list[float],
+    intercept: float,
+    ds: Dataset,
+    metrics: dict,
+    embed_model: str = DEFAULT_EMBED_MODEL,
+    normalize: bool = NORMALIZE,
+    threshold: float = 0.5,
+    git_repo: str | Path | None = None,
+    save_joblib: bool = False,
+    split: dict | None = None,
+) -> Path:
+    """Write `head.json` (the runtime contract) + `meta.json` [+ optional `model.joblib`].
+
+    `head.json` is the plain-JSON linear head `stylebot.classify` serves with no
+    ML deps; `meta.json` pins the embedder + records the held-out metrics. These
+    two are the committable artifact: tiny, diff-able, version-independent, and
+    the only way to use the detector without re-deriving it from the (private)
+    corpus.
+
+    `model.joblib` (the full sklearn estimator) is OFF by default: it is a
+    redundant, sklearn-version-fragile binary pickle of the same weights that no
+    code path loads (both `classify.sklearn_detector` and `--detector-model`
+    read `head.json`).
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    head = {"coef": coef, "intercept": intercept, "calibration": None}
+    (out_dir / "head.json").write_text(json.dumps(head), encoding="utf-8")
+
+    meta = {
+        "schema_version": SCHEMA_VERSION,
+        "name": "voice-clf",
+        "embed_model": embed_model,
+        "embed_dim": len(coef),
+        "normalize": normalize,
+        "label_polarity": "p_slop",
+        "threshold": threshold,
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "git_sha": _git_sha(git_repo),
+        "n_pairs": ds.n_pairs,
+        "n_posts": ds.n_posts,
+        "n_free_positives": sum(ds.is_free),
+        "split": split or {"mode": "fit_all", "note": (
+            "head fit on ALL posts; honest for measuring an INDEPENDENT styler, but "
+            "NOT for grading a styler trained on these posts — use holdout_frac/"
+            "holdout_posts for the shared by-POST split when the detector is a reward."
+        )},
+        "metrics": metrics,
+    }
+    (out_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    if save_joblib:
+        import joblib
+
+        joblib.dump(clf, out_dir / "model.joblib")
+    return out_dir
+
+
+def train(
+    pairs_path: str | Path,
+    out_dir: str | Path,
+    *,
+    extra_positives: Iterable[object] | None = None,
+    test_size: float = DEFAULT_TEST_SIZE,
+    n_splits: int = DEFAULT_N_SPLITS,
+    C: float = DEFAULT_C,
+    embed_model: str = DEFAULT_EMBED_MODEL,
+    normalize: bool = NORMALIZE,
+    batch_size: int = 32,
+    git_repo: str | Path | None = None,
+    save_joblib: bool = False,
+    holdout_frac: float = 0.0,
+    holdout_seed: int = 0,
+    holdout_posts=None,
+) -> tuple[Path, dict]:
+    """End-to-end: assemble → embed → evaluate → fit → write artifact.
+
+    Returns `(artifact_dir, metrics)`. Two modes:
+
+    - **default (no holdout):** cross-validated held-out metric over POST splits,
+      then ship the head fit on ALL posts. Honest for *measuring* an independent
+      styler; not for grading one trained on these posts.
+    - **holdout** (`holdout_frac`>0 or `holdout_posts`): hold out a set of POSTs,
+      report the single-split unseen-posts metric, and ship the head fit on the
+      train posts ONLY — the leakage-safe configuration when the detector is used
+      as a reward / to grade a styler that shares the corpus. The resolved holdout
+      post list is recorded in `meta.split` so styler-train + eval reuse it.
+    """
+    ds = assemble_dataset(pairs_path, extra_positives=extra_positives)
+    if ds.n_pairs == 0:
+        raise ValueError(f"no content-matched pairs found in {pairs_path}")
+    logger.info("embedding %d passages with %s", len(ds.texts), embed_model)
+    X = embed_texts(ds.texts, model_id=embed_model, normalize=normalize, batch_size=batch_size)
+
+    train_posts, holdout = partition_posts(
+        ds.groups, holdout_frac=holdout_frac, holdout_seed=holdout_seed, holdout_posts=holdout_posts
+    )
+    if holdout:
+        metrics = evaluate_holdout(X, ds, holdout, C=C)
+        train_rows = [i for i, g in enumerate(ds.groups) if g in train_posts]
+        clf, coef, intercept = fit_head(X, ds, C=C, rows=train_rows)
+        split = {
+            "mode": "holdout",
+            "holdout_frac": holdout_frac,
+            "holdout_seed": holdout_seed,
+            "n_train_posts": len(train_posts),
+            "n_holdout_posts": len(holdout),
+            "holdout_posts": sorted(holdout),
+        }
+    else:
+        metrics = evaluate(X, ds, test_size=test_size, n_splits=n_splits, C=C)
+        clf, coef, intercept = fit_head(X, ds, C=C)
+        split = None
+    out = write_artifact(
+        out_dir, clf=clf, coef=coef, intercept=intercept, ds=ds, metrics=metrics,
+        embed_model=embed_model, normalize=normalize, git_repo=git_repo, save_joblib=save_joblib, split=split,
+    )
+    return out, metrics

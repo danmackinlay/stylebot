@@ -144,18 +144,27 @@ HTML — slop↔Dan + judge score/rationale + detector P(slop) badge, sortable b
 slop→Dan delta, faceted by strategy (reuses the targets-report infra; generic over
 score fields for Phase 4).
 
-**Trained voice classifier — the detector signal (built 2026-06-30).** The 4th
-eval signal is a Dan-vs-AI-slop classifier, NOT a general AI-detector/Pangram:
-a frozen **style** embedding (**StyleDistance** — bake-off winner over the
-content-matched pairs: 0.78 pairwise / 0.72 AUC, beating the mxbai semantic
-baseline) + a logistic head, scored by a pure-Python dot product in
-`stylebot.classify` (mechanism, **no ML deps**). The Dan-specific trainer +
-`scikit-learn` live in livingthing (`voice_classifier.py` / `train-voice-clf`);
-the artifact (`head.json` + `meta.json`) is committed at `_models/voice-clf/`.
-Wire it via `ai-style eval --detector-model PATH` or `train-voice-clf eval`;
+**Trained voice classifier — the detector signal (built 2026-06-30; trainer
+generalised into stylebot 2026-07-06).** The 4th eval signal is a Dan-vs-AI-slop
+classifier, NOT a general AI-detector/Pangram: a frozen **style** embedding
+(**StyleDistance** — bake-off winner over the content-matched pairs: 0.78
+pairwise / 0.72 AUC, beating the mxbai semantic baseline) + a logistic head.
+Both halves are stylebot mechanism now, split by dependency weight:
+- `stylebot.classify` — the **runtime**: pure-Python dot product over the
+  plain-JSON `head.json`. **Dep-free at import, always** (enforced by a test).
+- `stylebot.classify_train` — the **trainer**: dataset assembly from
+  `pairs.jsonl`, the leakage-safe by-POST split methodology, artifact I/O.
+  Needs the **`stylebot[classifier]` extra** (scikit-learn/numpy/
+  sentence-transformers); lazy imports keep the module importable without it.
+  Generic CLI: `ai-style train-clf`.
+livingthing keeps only *policy* (~100 lines): the backbone pin, the
+free-positives selector (`blog_free_positives`), and blog path defaults
+(`train-voice-clf`, which delegates). The artifact (`head.json` + `meta.json`)
+is committed at livingthing `_models/voice-clf/`. Wire it via
+`ai-style eval --detector-model PATH` or `train-voice-clf eval`;
 `score = P(slop)` (composes with `mean_detector_score`), `p_dan` for reward use.
 **Eval vs reward:** a by-POST split makes it an honest eval; as a *reward* it needs
-the shared by-POST holdout (`train-voice-clf train --holdout-frac/--holdout-posts`)
+the shared by-POST holdout (`train-clf --holdout-frac/--holdout-posts`)
 + the judge/eyeball as the orthogonal anti-Goodhart guard (a split fixes leakage,
 not over-optimisation). Pangram is now only an optional one-shot cross-check. See
 `_plans/eval-harness.md` "The detector decision".

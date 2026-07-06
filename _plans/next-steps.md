@@ -8,9 +8,10 @@ QA declutter landed 2026-06-29) — focus here on functionality, not housekeepin
 
 ## Current state (built + verified)
 
-All green: `uv run pytest -q` = **129 passing** (stylebot, incl. the dep-free
-`classify` seam); the blog runners `uv run python tests/test_training_targets.py`
-(15/15) + `tests/test_voice_classifier.py` (5/5); `ruff` clean. The QA declutter
+All green: `uv run pytest -q` = **143 passing** (stylebot, incl. the dep-free
+`classify` seam + the `classify_train` trainer tests); the blog runners
+`uv run python tests/test_training_targets.py` (15/15) +
+`tests/test_voice_classifier.py` (4/4 policy tests); `ruff` clean. The QA declutter
 (2026-06-29) removed dead blog-build code + the direct-Anthropic generator/dep
 (hosted models go via OpenRouter).
 
@@ -74,8 +75,10 @@ Was "audition a general AI-detector vs Pangram"; **settled 2026-06-30** by
 training a Dan-vs-slop classifier on the content-matched pairs instead (cheaper,
 keyless, on-target). Full write-up: [`eval-harness.md`](eval-harness.md) "The
 detector decision". State:
-- **Built + wired:** StyleDistance backbone (bake-off winner, 0.78/0.72 held-out),
-  `stylebot.classify` seam + livingthing `voice_classifier.py` / `_models/voice-clf/`.
+- **Built + wired:** StyleDistance backbone (bake-off winner, 0.78/0.72 held-out).
+  Runtime `stylebot.classify` (dep-free); generic trainer `stylebot.classify_train`
+  / `ai-style train-clf` (`stylebot[classifier]` extra); blog policy wrapper
+  livingthing `voice_classifier.py` / `train-voice-clf`; artifact `_models/voice-clf/`.
   Score it via `ai-style eval --pairs … --detector-model _models/voice-clf` or
   `train-voice-clf eval`. Keyless, free per pair.
 - **Reward-safety follow-up (for Phase 3/4):** when the detector becomes a reward,

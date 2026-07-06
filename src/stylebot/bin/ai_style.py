@@ -497,5 +497,76 @@ def serve_cmd(detector_model: Path) -> None:
     serve.serve_loop(detector, sys.stdin, sys.stdout, meta=meta)
 
 
+@main.command("train-clf")
+@click.option("--pairs", "pairs_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path), help="The content-matched pairs.jsonl corpus to train on.")
+@click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path), help="Artifact directory to write (head.json + meta.json).")
+@click.option("--test-size", default=0.25, show_default=True, type=float, help="Held-out POST fraction per CV split.")
+@click.option("--n-splits", default=8, show_default=True, type=int, help="GroupShuffleSplit folds for the CV metric.")
+@click.option("--C", "C", default=1.0, show_default=True, type=float, help="Inverse logreg regularisation strength.")
+@click.option("--embed-model", default=None, help="Style backbone (sentence-transformers id); pinned into meta.json. [default: StyleDistance/styledistance]")
+@click.option("--holdout-frac", default=0.0, show_default=True, type=float, help="Hold out this fraction of POSTs from training and ship the head fit on the rest — the leakage-safe config when the detector is a reward. 0 = CV metric + fit-on-all.")
+@click.option("--holdout-seed", default=0, show_default=True, type=int, help="Seed for the deterministic by-POST holdout split.")
+@click.option("--holdout-posts", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="File of POST source ids (one per line) to hold out — pins the EXACT shared partition across styler-train/detector-train/eval.")
+@click.option("--save-joblib/--no-save-joblib", default=False, show_default=True, help="Also dump the fitted sklearn estimator (redundant binary pickle; no code path reads it).")
+@click.option("--dry-run", is_flag=True, help="Report data assembly (n_pairs, n_posts, class balance) without embedding or writing.")
+def train_clf_cmd(
+    pairs_path: Path,
+    out_dir: Path,
+    test_size: float,
+    n_splits: int,
+    C: float,
+    embed_model: str | None,
+    holdout_frac: float,
+    holdout_seed: int,
+    holdout_posts: Path | None,
+    save_joblib: bool,
+    dry_run: bool,
+) -> None:
+    """Train a voice classifier (linear head over a style embedding).
+
+    Generic slop-vs-author trainer over a pairs.jsonl corpus: embeds both sides
+    of every content-matched pair, fits a logistic regression, evaluates
+    leakage-safely (split by POST), and writes the head.json + meta.json artifact
+    that `--detector-model` / `serve` consume. Needs the `classifier` extra
+    (`uv add 'stylebot[classifier]'`). Free-standing extra positives are a
+    library-level policy argument (`classify_train.train(extra_positives=…)`) —
+    callers with a corpus policy wrap this, as livingthing's train-voice-clf does.
+    """
+    from stylebot import classify_train as ct
+
+    ds = ct.assemble_dataset(pairs_path)
+    n_slop = sum(1 for label in ds.labels if label == ct.LABEL_SLOP)
+    n_author = sum(1 for label in ds.labels if label == ct.LABEL_DAN)
+    click.echo(
+        f"{ds.n_pairs} content-matched pair(s) from {ds.n_posts} post(s)  "
+        f"[{n_slop} slop / {n_author} author]"
+    )
+    if ds.n_pairs == 0:
+        raise click.ClickException(f"no content-matched pairs in {pairs_path}")
+    if dry_run:
+        click.echo("[dry-run] no embedding, no artifact written")
+        return
+
+    holdout_list = None
+    if holdout_posts is not None:
+        holdout_list = [ln.strip() for ln in holdout_posts.read_text().splitlines() if ln.strip()]
+
+    model_id = embed_model or ct.DEFAULT_EMBED_MODEL
+    click.echo(f"embedding {len(ds.texts)} passages with {model_id} (downloads on first use) ...")
+    try:
+        out, metrics = ct.train(
+            pairs_path, out_dir, test_size=test_size, n_splits=n_splits, C=C,
+            embed_model=model_id, save_joblib=save_joblib,
+            holdout_frac=holdout_frac, holdout_seed=holdout_seed, holdout_posts=holdout_list,
+        )
+    except ImportError as exc:
+        raise click.ClickException(str(exc))
+    pa, auc = metrics["pairwise_accuracy"], metrics["auc"]
+    label = "holdout (unseen posts)" if metrics.get("mode") == "holdout" else f"cross-val ({metrics.get('n_splits')} POST folds)"
+    click.echo(f"{label}: pairwise_acc={pa['mean']}±{pa['std']}  auc={auc['mean']}±{auc['std']}")
+    files = "head.json, meta.json" + (", model.joblib" if save_joblib else "")
+    click.echo(f"wrote artifact -> {out}/ ({files})")
+
+
 if __name__ == "__main__":
     main()
