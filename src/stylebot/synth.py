@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -671,7 +672,9 @@ def openai_generator(
             kwargs["top_p"] = top_p
         if extra_body:
             kwargs["extra_body"] = extra_body
+        t0 = time.monotonic()
         resp = client.chat.completions.create(**kwargs)
+        gen_seconds = time.monotonic() - t0
         # Some providers return choices=None/[] on an upstream error rather than
         # raising — surface a clear, catchable message, not an opaque TypeError.
         if not resp.choices:
@@ -681,6 +684,12 @@ def openai_generator(
         if choice.finish_reason == "length":
             raise RuntimeError(f"slop truncated at max_tokens={max_tokens} (raise --max-tokens)")
         usage = getattr(resp, "usage", None)
+        # OpenRouter/OpenAI split reasoning tokens out of completion_tokens here
+        # (None when the provider doesn't report it). Latency + this split let a
+        # slow run be diagnosed from the corpus alone: reasoning blowout shows as
+        # reasoning_tokens ~ its budget; a slow upstream shows as low
+        # completion_tokens / gen_seconds.
+        details = getattr(usage, "completion_tokens_details", None)
         gen_meta = {
             "model": model,
             "reasoning_effort": reasoning_effort,
@@ -690,6 +699,8 @@ def openai_generator(
             "finish_reason": choice.finish_reason,
             "prompt_tokens": getattr(usage, "prompt_tokens", None),
             "completion_tokens": getattr(usage, "completion_tokens", None),
+            "reasoning_tokens": getattr(details, "reasoning_tokens", None),
+            "gen_seconds": round(gen_seconds, 2),
             "prompt_id": prompt_id,
             "prompt_version": prompt_version,
             "prompt_label": label,
