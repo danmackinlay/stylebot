@@ -1,0 +1,6 @@
+# Ship only the esbuild bundle + manifest/readme; sources and tests live in git.
+**
+!dist/extension.js
+!package.json
+!README.md
+!LICENSE*

@@ -84,7 +84,7 @@
     "pretest": "tsc -p ./",
     "test": "node --test \"out/test/*.test.js\"",
     "vscode:prepublish": "npm run compile",
-    "package": "vsce package"
+    "package": "vsce package --skip-license"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
