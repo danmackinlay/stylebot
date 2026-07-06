@@ -537,9 +537,13 @@ def train_clf_cmd(
     ds = ct.assemble_dataset(pairs_path)
     n_slop = sum(1 for label in ds.labels if label == ct.LABEL_SLOP)
     n_author = sum(1 for label in ds.labels if label == ct.LABEL_DAN)
+    provenance = (
+        f"; {ds.n_pairs_real} real / {ds.n_pairs_synthetic} synthetic"
+        if ds.n_pairs_synthetic else ""
+    )
     click.echo(
         f"{ds.n_pairs} content-matched pair(s) from {ds.n_posts} post(s)  "
-        f"[{n_slop} slop / {n_author} author]"
+        f"[{n_slop} slop / {n_author} author{provenance}]"
     )
     if ds.n_pairs == 0:
         raise click.ClickException(f"no content-matched pairs in {pairs_path}")
@@ -564,6 +568,12 @@ def train_clf_cmd(
     pa, auc = metrics["pairwise_accuracy"], metrics["auc"]
     label = "holdout (unseen posts)" if metrics.get("mode") == "holdout" else f"cross-val ({metrics.get('n_splits')} POST folds)"
     click.echo(f"{label}: pairwise_acc={pa['mean']}±{pa['std']}  auc={auc['mean']}±{auc['std']}")
+    for name, facet in (metrics.get("by_provenance") or {}).items():
+        fpa, fauc = facet["pairwise_accuracy"], facet["auc"]
+        click.echo(
+            f"  {name} ({facet['n_pairs']} pairs): pairwise_acc={fpa['mean']}±{fpa['std']}  "
+            f"auc={fauc['mean']}±{fauc['std']}"
+        )
     files = "head.json, meta.json" + (", model.joblib" if save_joblib else "")
     click.echo(f"wrote artifact -> {out}/ ({files})")
 

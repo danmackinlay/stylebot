@@ -104,6 +104,14 @@ downstream stages reuse it. Without that bookkeeping,
 the held-out guarantee is only as good as the split. (The default fit-all artifact
 is for *measurement* of an independent styler, and `meta.split` says so.)
 
+**Synth-augmented training (the provenance facet):** synthetic pairs
+(`meta.synthetic`) can enlarge the training corpus, but "how well do we detect
+our own paraphrase generator" must never masquerade as the honest number. On a
+mixed corpus both eval modes automatically facet the metric by provenance —
+`metrics.by_provenance.real` / `.synthetic` in `meta.json`, echoed by the CLIs;
+`meta.n_pairs_real`/`n_pairs_synthetic` record the composition. The **real**
+facet is the headline when synth pairs are in the fit.
+
 ### Pangram — optional independent cross-check only (was: the planned signal)
 
 Pangram is no longer the path; it survives only as an **optional, one-shot,

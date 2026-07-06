@@ -37,6 +37,12 @@ of the same passage") plus AUC. Two training modes:
   the leakage-safe configuration when the detector is used as a *reward*. The
   resolved partition is recorded in `meta.split` so styler-train + eval reuse it.
 
+On a mixed corpus (real edit-pairs + `meta.synthetic` machine paraphrases) both
+modes additionally facet the metric by provenance (`by_provenance.real` /
+`.synthetic`): synthetic pairs may augment the *fit*, but "how well do we detect
+our own paraphrase generator" must never masquerade as the honest number — that
+is `by_provenance.real`.
+
 Polarity: slop is the positive class (`LABEL_SLOP=1`), so
 `predict_proba[:, slop] = P(slop)` and the served detector's ``score = P(slop)``
 composes with `stylebot.eval.mean_detector_score`; `p_dan = 1 - score`.
@@ -106,15 +112,18 @@ class Dataset:
 
     `texts[i]` has label `labels[i]` and belongs to POST `groups[i]`. `pair_rows`
     lists `(slop_row, author_row)` index twins (the content-matched pairs) — the
-    only rows the headline metric scores. `is_free[i]` marks free-standing
-    positives (off by default); these augment the *fit* but never the metric, so
-    their topic signal can't inflate the reported numbers.
+    only rows the headline metric scores. `pair_synth[k]` marks pair `k` as
+    synthetic (`meta.synthetic` — a machine paraphrase rather than a real edit
+    capture), so metrics can facet real vs synthetic. `is_free[i]` marks
+    free-standing positives (off by default); these augment the *fit* but never
+    the metric, so their topic signal can't inflate the reported numbers.
     """
 
     texts: list[str] = field(default_factory=list)
     labels: list[int] = field(default_factory=list)
     groups: list[str] = field(default_factory=list)
     pair_rows: list[tuple[int, int]] = field(default_factory=list)
+    pair_synth: list[bool] = field(default_factory=list)
     is_free: list[bool] = field(default_factory=list)
 
     @property
@@ -125,12 +134,31 @@ class Dataset:
     def n_posts(self) -> int:
         return len({g for g in self.groups})
 
+    def pair_is_synthetic(self, k: int) -> bool:
+        # Tolerate hand-built Datasets that never filled pair_synth: all-real.
+        return self.pair_synth[k] if k < len(self.pair_synth) else False
+
+    @property
+    def n_pairs_synthetic(self) -> int:
+        return sum(1 for k in range(self.n_pairs) if self.pair_is_synthetic(k))
+
+    @property
+    def n_pairs_real(self) -> int:
+        return self.n_pairs - self.n_pairs_synthetic
+
     def _add(self, text: str, label: int, group: str, *, free: bool = False) -> int:
         self.texts.append(text)
         self.labels.append(label)
         self.groups.append(group)
         self.is_free.append(free)
         return len(self.texts) - 1
+
+    def _add_pair(self, slop: str, author: str, group: str, *, synthetic: bool = False) -> tuple[int, int]:
+        s_row = self._add(slop, LABEL_SLOP, group)
+        a_row = self._add(author, LABEL_DAN, group)
+        self.pair_rows.append((s_row, a_row))
+        self.pair_synth.append(synthetic)
+        return s_row, a_row
 
 
 def assemble_dataset(
@@ -143,6 +171,8 @@ def assemble_dataset(
     Each pair contributes its slop side (`messages[1]`, label slop) and its
     author side (`messages[2]`, label author), heading-context stripped (via
     `eval.extract_slop`/`extract_target`), grouped by `meta.source` (the POST).
+    `meta.synthetic` (truthy on `ai-style synth` output, absent on real edit
+    captures) is carried into `pair_synth` so metrics can facet by provenance.
 
     `extra_positives` enriches the author class with free-standing prose the
     *caller* selected under its own policy — each item is a `synth.Target` (or
@@ -156,10 +186,9 @@ def assemble_dataset(
         author = extract_target(rec).strip()
         if not slop or not author:
             continue
-        source = (rec.get("meta") or {}).get("source") or "?"
-        s_row = ds._add(slop, LABEL_SLOP, source)
-        a_row = ds._add(author, LABEL_DAN, source)
-        ds.pair_rows.append((s_row, a_row))
+        meta = rec.get("meta") or {}
+        source = meta.get("source") or "?"
+        ds._add_pair(slop, author, source, synthetic=bool(meta.get("synthetic")))
 
     if extra_positives is not None:
         n_extra = 0
@@ -220,6 +249,34 @@ def _make_logreg(C: float = DEFAULT_C):
     return LogisticRegression(max_iter=2000, class_weight="balanced", C=C)
 
 
+STRATA = ("real", "synthetic")
+
+
+def _provenance_strata(ds: Dataset) -> tuple[dict[str, list[int]], dict[int, str]]:
+    """`(stratum -> pair indices, matched row -> stratum)` for real/synthetic faceting.
+
+    The stratum dict is empty unless the corpus is genuinely mixed — on an
+    all-real (or all-synthetic) corpus the facet would just repeat the headline
+    metric, so callers skip `by_provenance` entirely.
+    """
+    pair_idx = {name: [] for name in STRATA}
+    row_stratum: dict[int, str] = {}
+    for k, (s_row, a_row) in enumerate(ds.pair_rows):
+        name = "synthetic" if ds.pair_is_synthetic(k) else "real"
+        pair_idx[name].append(k)
+        row_stratum[s_row] = row_stratum[a_row] = name
+    if not all(pair_idx.values()):  # single-stratum corpus -> no facet
+        return {}, row_stratum
+    return pair_idx, row_stratum
+
+
+def _stat(xs: list[float]) -> dict:
+    if not xs:
+        return {"mean": None, "std": None, "n": 0}
+    np = _np()
+    return {"mean": round(float(np.mean(xs)), 4), "std": round(float(np.std(xs)), 4), "n": len(xs)}
+
+
 def evaluate(
     X,
     ds: Dataset,
@@ -236,6 +293,11 @@ def evaluate(
     measure: (1) **pairwise accuracy** — for each content-matched twin whose POST
     is in test, did `P(slop | slop_side) > P(slop | author_side)`; (2) **AUC**
     over the matched test rows. Free positives never enter the metric.
+
+    On a mixed real/synthetic corpus the result gains `by_provenance` — the same
+    two metrics per stratum. The `real` facet is the honest number when synthetic
+    pairs augment the fit: it can't be inflated by "detecting our own paraphrase
+    generator".
     """
     np = _np()
     from sklearn.metrics import roc_auc_score
@@ -244,10 +306,13 @@ def evaluate(
     y = np.asarray(ds.labels)
     groups = np.asarray(ds.groups)
     matched_rows = {r for pair in ds.pair_rows for r in pair}
+    pair_idx, row_stratum = _provenance_strata(ds)
 
     gss = GroupShuffleSplit(n_splits=n_splits, test_size=test_size, random_state=random_state)
     pair_accs: list[float] = []
     aucs: list[float] = []
+    facet_pair_accs: dict[str, list[float]] = {name: [] for name in pair_idx}
+    facet_aucs: dict[str, list[float]] = {name: [] for name in pair_idx}
     for train_idx, test_idx in gss.split(X, y, groups):
         clf = _make_logreg(C)
         clf.fit(X[train_idx], y[train_idx])
@@ -259,28 +324,46 @@ def evaluate(
         ytest = y[matched_test]
         if len(set(ytest.tolist())) == 2:
             aucs.append(float(roc_auc_score(ytest, p_slop[matched_test])))
+        for name in pair_idx:
+            rows = [r for r in matched_test if row_stratum[r] == name]
+            if len(set(y[rows].tolist())) == 2:
+                facet_aucs[name].append(float(roc_auc_score(y[rows], p_slop[rows])))
 
         correct = total = 0.0
-        for s_row, a_row in ds.pair_rows:
+        facet_ct = {name: [0.0, 0.0] for name in pair_idx}  # correct, total
+        for k, (s_row, a_row) in enumerate(ds.pair_rows):
             if s_row in test_set and a_row in test_set:
                 ps, pa = p_slop[s_row], p_slop[a_row]
+                score = 1.0 if ps > pa else (0.5 if ps == pa else 0.0)
                 total += 1
-                correct += 1.0 if ps > pa else (0.5 if ps == pa else 0.0)
+                correct += score
+                if pair_idx:
+                    ct = facet_ct[row_stratum[s_row]]
+                    ct[0] += score
+                    ct[1] += 1
         if total:
             pair_accs.append(correct / total)
+        for name, (c, t) in facet_ct.items():
+            if t:
+                facet_pair_accs[name].append(c / t)
 
-    def _stat(xs: list[float]) -> dict:
-        if not xs:
-            return {"mean": None, "std": None, "n": 0}
-        return {"mean": round(float(np.mean(xs)), 4), "std": round(float(np.std(xs)), 4), "n": len(xs)}
-
-    return {
+    result = {
         "pairwise_accuracy": _stat(pair_accs),
         "auc": _stat(aucs),
         "n_splits": n_splits,
         "test_size": test_size,
         "mode": "cross_val",
     }
+    if pair_idx:
+        result["by_provenance"] = {
+            name: {
+                "pairwise_accuracy": _stat(facet_pair_accs[name]),
+                "auc": _stat(facet_aucs[name]),
+                "n_pairs": len(pair_idx[name]),
+            }
+            for name in STRATA
+        }
+    return result
 
 
 def partition_posts(
@@ -318,7 +401,8 @@ def evaluate_holdout(X, ds: Dataset, holdout: set, *, C: float = DEFAULT_C) -> d
     """Single by-POST holdout eval: fit on the train posts, score the holdout twins.
 
     The honest "unseen posts" number for a head that ships fit on the train posts
-    only — content-matched pairwise accuracy + AUC over the held-out posts.
+    only — content-matched pairwise accuracy + AUC over the held-out posts. Like
+    `evaluate`, gains a `by_provenance` real/synthetic facet on a mixed corpus.
     """
     np = _np()
     from sklearn.metrics import roc_auc_score
@@ -329,26 +413,46 @@ def evaluate_holdout(X, ds: Dataset, holdout: set, *, C: float = DEFAULT_C) -> d
     clf = _make_logreg(C)
     clf.fit(X[train_rows], y[train_rows])
     p_slop = clf.predict_proba(X)[:, list(clf.classes_).index(LABEL_SLOP)]
+    pair_idx, row_stratum = _provenance_strata(ds)
+
+    def _auc(rows: list[int]) -> tuple[float | None, int]:
+        if len(set(y[rows].tolist())) == 2:
+            return round(float(roc_auc_score(y[rows], p_slop[rows])), 4), len(rows)
+        return None, len(rows)
 
     matched = {r for pair in ds.pair_rows for r in pair}
     matched_test = [r for r in test_rows if r in matched]
-    auc = None
-    if len(set(y[matched_test].tolist())) == 2:
-        auc = round(float(roc_auc_score(y[matched_test], p_slop[matched_test])), 4)
+    auc, n_auc = _auc(matched_test)
 
     test_set = set(test_rows)
-    correct = total = 0.0
-    for s_row, a_row in ds.pair_rows:
-        if s_row in test_set and a_row in test_set:
-            total += 1
-            ps, pa = p_slop[s_row], p_slop[a_row]
-            correct += 1.0 if ps > pa else (0.5 if ps == pa else 0.0)
-    pa_mean = round(correct / total, 4) if total else None
-    return {
-        "pairwise_accuracy": {"mean": pa_mean, "std": None, "n": int(total)},
-        "auc": {"mean": auc, "std": None, "n": len(matched_test)},
+
+    def _pairwise(pairs: Iterable[tuple[int, int]]) -> tuple[float | None, int]:
+        correct = total = 0.0
+        for s_row, a_row in pairs:
+            if s_row in test_set and a_row in test_set:
+                total += 1
+                ps, pa = p_slop[s_row], p_slop[a_row]
+                correct += 1.0 if ps > pa else (0.5 if ps == pa else 0.0)
+        return (round(correct / total, 4) if total else None), int(total)
+
+    pa_mean, n_pairs = _pairwise(ds.pair_rows)
+    result = {
+        "pairwise_accuracy": {"mean": pa_mean, "std": None, "n": n_pairs},
+        "auc": {"mean": auc, "std": None, "n": n_auc},
         "mode": "holdout",
     }
+    if pair_idx:
+        by = {}
+        for name in STRATA:
+            f_pa, f_n = _pairwise(ds.pair_rows[k] for k in pair_idx[name])
+            f_auc, f_n_auc = _auc([r for r in matched_test if row_stratum[r] == name])
+            by[name] = {
+                "pairwise_accuracy": {"mean": f_pa, "std": None, "n": f_n},
+                "auc": {"mean": f_auc, "std": None, "n": f_n_auc},
+                "n_pairs": len(pair_idx[name]),
+            }
+        result["by_provenance"] = by
+    return result
 
 
 def fit_head(X, ds: Dataset, *, C: float = DEFAULT_C, rows: list[int] | None = None):
@@ -438,6 +542,8 @@ def write_artifact(
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "git_sha": _git_sha(git_repo),
         "n_pairs": ds.n_pairs,
+        "n_pairs_real": ds.n_pairs_real,
+        "n_pairs_synthetic": ds.n_pairs_synthetic,
         "n_posts": ds.n_posts,
         "n_free_positives": sum(ds.is_free),
         "split": split or {"mode": "fit_all", "note": (

@@ -86,6 +86,12 @@ detector decision". State:
   so it isn't fit on the styler's/eval's posts, and keep the judge + eyeball as the
   orthogonal anti-Goodhart guard. The default fit-all artifact is for measuring an
   *independent* styler only (`meta.split` says so).
+- **Synth-augmented retraining:** more `ai-style synth` pairs are valid training
+  data (content-matched, by-POST split covers them via `meta.source`). On a mixed
+  corpus the metrics auto-facet by provenance (`metrics.by_provenance.real`/
+  `.synthetic`); the **real** facet is the honest number — a synth-heavy corpus
+  must not grade itself on detecting its own paraphrase generator. Diversify the
+  slop side (model rotation + strategies) against generator-tic shortcuts.
 - **Optional:** a one-shot Pangram cross-check before trusting the reward (~$0.20),
   never in a hot loop. Not a dependency.
 
