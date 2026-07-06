@@ -8,10 +8,11 @@ QA declutter landed 2026-06-29) — focus here on functionality, not housekeepin
 
 ## Current state (built + verified)
 
-All green: `uv run pytest -q` = **143 passing** (stylebot, incl. the dep-free
-`classify` seam + the `classify_train` trainer tests); the blog runners
-`uv run python tests/test_training_targets.py` (15/15) +
-`tests/test_voice_classifier.py` (4/4 policy tests); `ruff` clean. The QA declutter
+All green: `uv run pytest -q` = **168 passing** (stylebot, incl. the dep-free
+`classify` seam, the `classify_train` trainer tests + the shared `synth_cli`
+kit); the blog runners `uv run python tests/test_training_targets.py` (15/15) +
+`tests/test_voice_classifier.py` (4/4) + `tests/test_dan_style_cli.py` (3/3
+mirror-parity) + `tests/test_train_targets_cli.py` (2/2); `ruff` clean. The QA declutter
 (2026-06-29) removed dead blog-build code + the direct-Anthropic generator/dep
 (hosted models go via OpenRouter).
 
@@ -31,37 +32,60 @@ All green: `uv run pytest -q` = **143 passing** (stylebot, incl. the dep-free
 
 ## Next move — the two unblocked tracks (run in parallel)
 
-### A. The Phase-2 experimental generation loop (the active step)
+### A. The Phase-2 loop: audition → generate → split (THE RUNBOOK)
 
-Not a one-shot paid run — an iterate-and-promote loop. Per slop strategy:
-generate a small batch into a **scratch** dir, eyeball, score, and promote a
-winner into the real corpus. Generating with real models and judging both need
-the key, so run via `direnv exec` (see Environment).
+Not a one-shot paid run — an iterate-and-promote loop. Everything runs from the
+blog repo through `dan-style synth` (NOT bare `ai-style synth`, whose defaults
+are unmerged ~100-char fragments with no quality gate). Keys reach the process
+only via `direnv exec` (see Environment).
 
-```sh
-cd ~/Source/stylebot
-# 1. generate a small batch for one strategy into a throwaway dir:
-direnv exec . uv run ai-style synth --blog-root ~/Source/livingthing \
-  --data-dir /tmp/slop-experiments --slop-strategy catalogue \
-  --openrouter-model anthropic/claude-opus-4-8 --openrouter-model openai/gpt-4o \
-  --limit 40 --report /tmp/exp-targets.html
-# 2. score it + compare flavours + eyeball the pairs:
-direnv exec . uv run ai-style eval --pairs /tmp/slop-experiments/pairs.jsonl \
-  --judge --by slop_strategy --report /tmp/exp-scores.html
-# 3. repeat for other strategies into the SAME scratch dir (synth_key carries the
-#    strategy, so they accumulate without colliding), compare the per-strategy Δ.
-```
-
-**Promote the winner** into the real corpus (the blog path is the production run):
+**Where the preferred config is recorded:** the winner of each audition is
+promoted into the constants of
+`livingthing/src/livingthing/training_targets.py` — `SLOP_MODELS` (the
+generator rotation), `SLOP_STRATEGY`, `REASONING_EFFORT` — and committed.
+Audition flags override those defaults; the corpus run uses them bare, so the
+committed constants ARE the record of what we decided.
 
 ```sh
-cd ~/Source/livingthing
-direnv exec . uv run dan-style synth --dry-run --report /tmp/corpus.html   # vet first
-direnv exec . uv run dan-style synth --limit 3000 --slop-strategy <winner>  # spends $$
+cd ~/Source/livingthing            # every step runs here
+
+# 0. AUDITION TARGETS (free, read-only): what prose is selected, how chunked
+uv run dan-style synth --dry-run --report /tmp/targets.html   # or --sample 10
+
+# 1. AUDITION GENERATION: small paid batch per candidate config, scratch dir
+direnv exec . uv run dan-style synth --data-dir /tmp/slop-experiments \
+  --slop-strategy catalogue \
+  --openrouter-model anthropic/claude-opus-4.8 --openrouter-model qwen/qwen3-32b \
+  --limit 40
+#    repeat with other strategies/models/--reasoning-effort into the SAME
+#    scratch dir — synth_key carries the config, so batches accumulate
+#    without colliding and re-runs resume instead of duplicating.
+
+# 2. SCORE + EYEBALL the scratch corpus (detector keyless; --judge needs key)
+direnv exec . uv run dan-style eval --pairs /tmp/slop-experiments/pairs.jsonl \
+  --judge --by slop_strategy --facet-by generator --report /tmp/exp-pairs.html
+#    the report shows slop<->Dan side by side; rank configs by the slop->Dan
+#    delta (see the judge-calibration caveat below).
+
+# 3. RECORD THE WINNER: edit SLOP_STRATEGY / SLOP_MODELS / REASONING_EFFORT in
+#    src/livingthing/training_targets.py and commit. That is the config record.
+
+# 4. CORPUS RUN — the same command, now flagless (policy carries the winner):
+uv run dan-style synth --dry-run                      # vet count + resume math
+direnv exec . uv run dan-style synth --limit 3000     # spends $$; resumable append
+
+# 5. GATE + SPLIT + RETRAIN
+uv run python -c "from stylebot.pairs import validate_pairs_file as v; \
+  print(v('_training_pairs/pairs.jsonl') or 'valid')"
+#    splits.json is already committed and SELF-EXTENDS: new posts are routed by
+#    the hash rule, so do NOT re-run make-splits after a corpus run. Re-cut only
+#    knowingly (it un-freezes eval): ai-style make-splits --pairs … --out … --force
+uv run dan-style train-clf     # retrain the detector on the enlarged corpus
+                               # (picks up splits.json automatically)
 ```
 
 Corpus lives at `~/Source/livingthing/_training_pairs/pairs.jsonl` (private,
-gitignored). Gate it: `stylebot.pairs.validate_pairs_file(path)` must return `[]`.
+gitignored there — committed in the blog repo only).
 
 **Watch for (the judge-calibration caveat):** in this real regime the "slop" is a
 paraphrase of Dan's *own* prose, so slop and Dan scores sit closer than the easy

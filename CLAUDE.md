@@ -189,4 +189,8 @@ a winner into the real corpus. **Experiments run through `dan-style synth` too**
 the blog chunking/selection policy (merge into ~1.5k-char passages, quality>6,
 heading context); the generic CLI's defaults are unmerged ~100-char fragments,
 too short to judge style on. Then the corpus run is the same command minus
-`--data-dir`, with `--limit N`. Phase 3/4 are data-/adapter-gated. See OVERVIEW.
+`--data-dir`, with `--limit N`. **The full audition→generate→split runbook —
+including where the preferred generators/strategy get recorded
+(`livingthing.training_targets` constants) — is
+[`_plans/next-steps.md`](_plans/next-steps.md) §A.** Phase 3/4 are
+data-/adapter-gated. See OVERVIEW.
