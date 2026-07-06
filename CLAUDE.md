@@ -172,5 +172,10 @@ not over-optimisation). Pangram is now only an optional one-shot cross-check. Se
 **The active step is the experimental Phase-2 generation loop**, not a one-shot
 paid run: per `--slop-strategy`, generate a small batch into a *scratch*
 `--data-dir`, eyeball (`--report`/`--sample`), score with `ai-style eval`, promote
-a winner into the real corpus. Then the corpus run is `cd ~/Source/livingthing &&
-uv run train-targets --limit N`. Phase 3/4 are data-/adapter-gated. See OVERVIEW.
+a winner into the real corpus. **Experiments run through `train-targets` too**
+(`cd ~/Source/livingthing && uv run train-targets --data-dir /tmp/scratch
+--slop-strategy X --limit 40`), not bare `ai-style synth` — the wrapper carries
+the blog chunking/selection policy (merge into ~1.5k-char passages, quality>6,
+heading context); the generic CLI's defaults are unmerged ~100-char fragments,
+too short to judge style on. Then the corpus run is the same command minus
+`--data-dir`, with `--limit N`. Phase 3/4 are data-/adapter-gated. See OVERVIEW.
