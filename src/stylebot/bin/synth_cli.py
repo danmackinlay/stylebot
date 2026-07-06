@@ -23,12 +23,16 @@ inspection modes), and provenance tags.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 import click
 
 from stylebot import synth
+
+# Progress heartbeat cadence for generation (seconds of wall-clock silence).
+_HEARTBEAT_SECS = 20.0
 
 # Direct-API slop-generator presets selectable on the CLI (each needs that
 # provider's own key). OpenRouter models are selected separately via
@@ -98,6 +102,7 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "gpt_model": (("--gpt-model",), dict(default="gpt-4o", show_default=True)),
     "local_model": (("--local-model",), dict(default="", help="Local model id (else $LOCAL_LLM_MODEL).")),
     "max_tokens": (("--max-tokens",), dict(default=synth.DEFAULT_SLOP_MAX_TOKENS, show_default=True, type=int, help="Max completion tokens per slop generation. Raise if a model truncates.")),
+    "timeout": (("--timeout",), dict(default=synth.DEFAULT_GEN_TIMEOUT, show_default=True, type=float, help="Per-request HTTP timeout (seconds) for slop generation. A timed-out pair is reported immediately, recorded as an error, and the run continues.")),
     "reasoning_effort": (("--reasoning-effort",), dict(type=click.Choice(["high", "medium", "low", "off"]), default=synth.DEFAULT_REASONING_EFFORT, show_default=True, help="Reasoning effort for the slop generator, recorded as a covariate in meta.gen ('off' disables reasoning). Mapping to each provider is best-effort; the requested effort is recorded regardless of what the provider honors.")),
     "temperature": (("--temperature",), dict(type=float, default=None, help="Sampling temperature, sent to the API and recorded (provider default if unset).")),
     "top_p": (("--top-p", "top_p"), dict(type=float, default=None, help="Nucleus top_p, sent to the API and recorded (provider default if unset).")),
@@ -146,6 +151,7 @@ def run_synth(
     gpt_model: str = "gpt-4o",
     local_model: str = "",
     max_tokens: int = synth.DEFAULT_SLOP_MAX_TOKENS,
+    timeout: float | None = synth.DEFAULT_GEN_TIMEOUT,
     reasoning_effort: str = synth.DEFAULT_REASONING_EFFORT,
     temperature: float | None = None,
     top_p: float | None = None,
@@ -248,6 +254,7 @@ def run_synth(
             gen_kw = dict(
                 strategy=strategy_label, system=custom_system, max_tokens=max_tokens,
                 reasoning_effort=reasoning_effort, temperature=temperature, top_p=top_p,
+                timeout=timeout,
             )
             try:
                 generators = []
@@ -263,9 +270,21 @@ def run_synth(
 
     resolved_dir = data_dir() if callable(data_dir) else data_dir
 
+    # Heartbeat on wall-clock, not pair count: at high reasoning effort a pair
+    # takes ~1-2 min, so count-gated echoes (every 25th) sit silent for half an
+    # hour and look like a hang. on_progress fires before each pair, so after
+    # any slow pair the very next tick prints.
+    last_echo = [0.0]
+
     def _progress(i: int, total: int) -> None:
-        if i == 1 or i % 25 == 0 or i == total:
+        now = time.monotonic()
+        if i == 1 or i == total or now - last_echo[0] >= _HEARTBEAT_SECS:
+            last_echo[0] = now
             click.echo(f"  ... {i}/{total} pairs", err=True)
+
+    def _on_error(key: str, msg: str) -> None:
+        # Surface failures the moment they happen, not just in the exit summary.
+        click.echo(f"  !! {key[:12]}: {msg}", err=True)
 
     result = synth.synthesize_pairs(
         targets,
@@ -276,6 +295,7 @@ def run_synth(
         extra_tags=list(extra_tags),
         context_dropout=context_dropout,
         on_progress=None if dry_run else _progress,
+        on_error=None if dry_run else _on_error,
     )
 
     pairs_path = resolved_dir / "pairs.jsonl"

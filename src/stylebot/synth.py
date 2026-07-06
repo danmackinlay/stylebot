@@ -175,6 +175,12 @@ _LINK_RE = re.compile(r"\[[^\]]*\]\([^)]*\)")
 # targets capped at MAX_CHUNK_CHARS (~2k tokens), ~8k output tokens leaves room
 # for 3-4x expansion. Well under every provider's non-streaming ceiling.
 DEFAULT_SLOP_MAX_TOKENS = 8192
+# Per-request HTTP timeout for slop generation. Without one, the openai SDK
+# waits 600s per attempt (x its automatic retries) — a bad upstream stalls a
+# sequential run for half an hour in silence. 300s clears even slow
+# high-reasoning generations (~60-120s observed) with headroom; a timed-out
+# pair is recorded in SynthResult.errors and the run continues.
+DEFAULT_GEN_TIMEOUT = 300.0
 
 
 # ---------------------------------------------------------------------------
@@ -625,6 +631,7 @@ def openai_generator(
     base_url: str | None = None,
     name: str | None = None,
     extra_body: dict | None = None,
+    timeout: float | None = DEFAULT_GEN_TIMEOUT,
 ) -> Generator:
     """OpenAI-compatible slop generator (`openai` SDK; key `OPENAI_API_KEY`).
 
@@ -644,6 +651,7 @@ def openai_generator(
     client = openai.OpenAI(
         api_key=api_key or config.require_key("OPENAI_API_KEY"),
         base_url=base_url,
+        timeout=timeout,
     )
 
     def generate(text: str) -> GenOutput:
@@ -709,6 +717,7 @@ def local_generator(
     reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     temperature: float | None = None,
     top_p: float | None = None,
+    timeout: float | None = DEFAULT_GEN_TIMEOUT,
 ) -> Generator:
     """Local/utility base-model generator via an OpenAI-compatible endpoint.
 
@@ -733,6 +742,7 @@ def local_generator(
         api_key=api_key,
         base_url=base_url,
         name=f"local-{model}",
+        timeout=timeout,
     )
 
 
@@ -747,6 +757,7 @@ def openrouter_generator(
     top_p: float | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
+    timeout: float | None = DEFAULT_GEN_TIMEOUT,
 ) -> Generator:
     """OpenRouter slop generator — one key, many upstream models.
 
@@ -781,6 +792,7 @@ def openrouter_generator(
         base_url=base_url,
         name=f"openrouter/{model}",
         extra_body=_reasoning_extra_body(model, reasoning_effort),
+        timeout=timeout,
     )
 
 
@@ -953,6 +965,7 @@ def synthesize_pairs(
     extra_tags: Sequence[str] = (),
     context_dropout: float = 0.0,
     on_progress: Callable[[int, int], None] | None = None,
+    on_error: Callable[[str, str], None] | None = None,
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
@@ -1000,11 +1013,16 @@ def synthesize_pairs(
             try:
                 raw = gen(target.text)
             except Exception as exc:  # API error etc. — record and continue
-                result.errors.append((key, f"{type(exc).__name__}: {exc}"))
+                msg = f"{type(exc).__name__}: {exc}"
+                result.errors.append((key, msg))
+                if on_error is not None:
+                    on_error(key, msg)
                 continue
             slop, gen_meta = _normalize_gen_output(raw)
             if not slop.strip():
                 result.errors.append((key, "generator returned empty output"))
+                if on_error is not None:
+                    on_error(key, "generator returned empty output")
                 continue
             record = _build_record(
                 slop=slop,

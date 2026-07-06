@@ -150,7 +150,31 @@ def test_run_synth_exits_nonzero_on_generation_errors(tmp_path, capsys):
     with pytest.raises(SystemExit) as excinfo:
         synth_cli.run_synth(targets, data_dir=tmp_path / "corpus", generators=[bad])
     assert excinfo.value.code == 1
-    assert "generation error(s)" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "generation error(s)" in err  # exit summary
+    assert "!!" in err and "api down" in err  # surfaced immediately, not just at exit
+
+
+def test_timeout_reaches_generator_factories(tmp_path, monkeypatch):
+    # --timeout must be plumbed into the HTTP client construction; without it
+    # the openai SDK waits 600s x retries and a bad upstream stalls in silence.
+    root = _make_blog(tmp_path)
+    captured = {}
+
+    def fake_factory(*, model, timeout=None, **kw):
+        captured["timeout"] = timeout
+        return synth.Generator(name=f"openrouter/{model}", generate=lambda t: f"slop {t}")
+
+    monkeypatch.setattr(synth, "openrouter_generator", fake_factory)
+    result = CliRunner().invoke(
+        ai_style_main,
+        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
+         "--openrouter-model", "x/y", "--timeout", "7"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["timeout"] == 7.0
+    # The heartbeat brackets the run: first and last pair always echo.
+    assert "1/2 pairs" in result.output and "2/2 pairs" in result.output
 
 
 def test_run_synth_defers_data_dir_for_inspection(tmp_path):
