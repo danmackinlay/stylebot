@@ -632,6 +632,7 @@ def openai_generator(
     base_url: str | None = None,
     name: str | None = None,
     extra_body: dict | None = None,
+    extra_meta: dict | None = None,
     timeout: float | None = DEFAULT_GEN_TIMEOUT,
 ) -> Generator:
     """OpenAI-compatible slop generator (`openai` SDK; key `OPENAI_API_KEY`).
@@ -701,10 +702,16 @@ def openai_generator(
             "completion_tokens": getattr(usage, "completion_tokens", None),
             "reasoning_tokens": getattr(details, "reasoning_tokens", None),
             "gen_seconds": round(gen_seconds, 2),
+            # OpenRouter reports which upstream provider actually served the
+            # request (None elsewhere) — the routing outcome, next to the
+            # routing *request* in extra_meta (e.g. provider_sort).
+            "provider": getattr(resp, "provider", None),
             "prompt_id": prompt_id,
             "prompt_version": prompt_version,
             "prompt_label": label,
         }
+        if extra_meta:
+            gen_meta.update(extra_meta)
         return GenOutput((choice.message.content or "").strip(), gen_meta)
 
     return Generator(
@@ -769,6 +776,7 @@ def openrouter_generator(
     api_key: str | None = None,
     base_url: str | None = None,
     timeout: float | None = DEFAULT_GEN_TIMEOUT,
+    provider_sort: str | None = "throughput",
 ) -> Generator:
     """OpenRouter slop generator — one key, many upstream models.
 
@@ -791,6 +799,12 @@ def openrouter_generator(
     from stylebot import config
 
     base_url = base_url or config.get_key("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+    # Provider routing: OpenRouter's default load-balancing favours price and
+    # can land on ~10 tok/s upstreams; sort=throughput picks the fastest. The
+    # requested sort is recorded (extra_meta) next to the served `provider`.
+    extra_body = dict(_reasoning_extra_body(model, reasoning_effort) or {})
+    if provider_sort:
+        extra_body["provider"] = {"sort": provider_sort}
     return openai_generator(
         model=model,
         strategy=strategy,
@@ -802,7 +816,8 @@ def openrouter_generator(
         api_key=api_key or config.require_key("OPENROUTER_API_KEY"),
         base_url=base_url,
         name=f"openrouter/{model}",
-        extra_body=_reasoning_extra_body(model, reasoning_effort),
+        extra_body=extra_body,
+        extra_meta={"provider_sort": provider_sort} if provider_sort else None,
         timeout=timeout,
     )
 

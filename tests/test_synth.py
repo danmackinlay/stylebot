@@ -452,23 +452,35 @@ def _patch_openai(monkeypatch, response):
 
 def test_openrouter_reasoning_effort_enum(monkeypatch):
     # Effort-enum families (claude/gpt/…) get {"effort": <level>}; default is high.
+    # Provider routing defaults to throughput sort (price-balanced routing can
+    # land on ~10 tok/s upstreams).
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice("slop out")]))
     out = synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x").generate("rewrite me")
     assert out.text == "slop out"  # GenOutput, not a bare string
-    assert calls["extra_body"] == {"reasoning": {"effort": "high"}}
+    assert calls["extra_body"] == {"reasoning": {"effort": "high"}, "provider": {"sort": "throughput"}}
+    assert out.meta["provider_sort"] == "throughput"  # the routing request, recorded
 
 
 def test_openrouter_reasoning_budget_family(monkeypatch):
     # Budget-style families (qwen/nvidia/google/…) get a token budget instead.
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
     synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="medium").generate("x")
-    assert calls["extra_body"] == {"reasoning": {"max_tokens": 4000}}
+    assert calls["extra_body"] == {"reasoning": {"max_tokens": 4000}, "provider": {"sort": "throughput"}}
 
 
 def test_openrouter_reasoning_off(monkeypatch):
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
     synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="off").generate("x")
-    assert calls["extra_body"] == {"reasoning": {"enabled": False}}
+    assert calls["extra_body"] == {"reasoning": {"enabled": False}, "provider": {"sort": "throughput"}}
+
+
+def test_openrouter_provider_sort_none_omits_field(monkeypatch):
+    # provider_sort=None restores OpenRouter's own load-balancing: no provider
+    # field on the wire, no provider_sort covariate recorded.
+    calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
+    out = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", provider_sort=None).generate("x")
+    assert "provider" not in calls["extra_body"]
+    assert "provider_sort" not in out.meta
 
 
 def test_reasoning_effort_recorded_regardless_of_shape(monkeypatch):

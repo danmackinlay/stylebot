@@ -161,8 +161,9 @@ def test_timeout_reaches_generator_factories(tmp_path, monkeypatch):
     root = _make_blog(tmp_path)
     captured = {}
 
-    def fake_factory(*, model, timeout=None, **kw):
+    def fake_factory(*, model, timeout=None, provider_sort=None, **kw):
         captured["timeout"] = timeout
+        captured["provider_sort"] = provider_sort
         return synth.Generator(name=f"openrouter/{model}", generate=lambda t: f"slop {t}")
 
     monkeypatch.setattr(synth, "openrouter_generator", fake_factory)
@@ -173,8 +174,18 @@ def test_timeout_reaches_generator_factories(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, result.output
     assert captured["timeout"] == 7.0
+    assert captured["provider_sort"] == "throughput"  # the default routing preference
     # The heartbeat brackets the run: first and last pair always echo.
     assert "1/2 pairs" in result.output and "2/2 pairs" in result.output
+
+    # --provider-sort none restores OpenRouter's own load-balancing (field omitted).
+    result = CliRunner().invoke(
+        ai_style_main,
+        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus2"),
+         "--openrouter-model", "x/y", "--provider-sort", "none"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["provider_sort"] is None
 
 
 def test_run_synth_defers_data_dir_for_inspection(tmp_path):
