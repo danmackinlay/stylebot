@@ -98,6 +98,8 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "generator_names": (("--generator", "generator_names"), dict(type=click.Choice(PRESETS), multiple=True, default=(), show_default=True, help="Direct-API slop generators to rotate across (repeatable; each needs that provider's key). Combine with or replace by --openrouter-model.")),
     "openrouter_models": (("--openrouter-model", "openrouter_models"), dict(multiple=True, help="OpenRouter model id to generate slop with (repeatable), e.g. anthropic/claude-opus-4-8. One key ($OPENROUTER_API_KEY) reaches many upstream models — ideal for multi-source rotation.")),
     "provider_sort": (("--provider-sort",), dict(type=click.Choice(["throughput", "price", "latency", "none"]), default="throughput", show_default=True, help="OpenRouter provider-routing preference (default load-balancing favours price and can land on ~10 tok/s upstreams; 'none' restores it). OpenRouter models only; recorded in meta.gen next to the served provider.")),
+    "sticky_provider": (("--sticky-provider/--no-sticky-provider",), dict(default=True, show_default=True, help="Pin each live session to the provider that served its first turn — keeps its prefix cache hot AND the serving stack constant, so window-position covariates aren't confounded by provider hops. OpenRouter models only; no effect on stateless runs.")),
+    "prompt_cache": (("--prompt-cache/--no-prompt-cache",), dict(default=True, show_default=True, help="Anthropic models: mark session history with a moving cache_control breakpoint (cache reads at 0.1x after a 1.25x write; inert under ~1024-token prefixes and for other model families). Verify via meta.gen cached_tokens/cost.")),
     "slop_strategy": (("--slop-strategy",), dict(default=synth.DEFAULT_STRATEGY, show_default=True, help=f"Named slop-prompt flavour ({', '.join(synth.STRATEGIES)}); recorded as meta.slop_strategy and folded into synth_key. With --slop-system-file the name is just a label.")),
     "slop_system_file": (("--slop-system-file",), dict(type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="Override the slop system prompt with this file's contents (e.g. an author's own slop catalogue), labelled by --slop-strategy. Keeps blog-specific prompts out of stylebot.")),
     "gpt_model": (("--gpt-model",), dict(default="gpt-4o", show_default=True)),
@@ -152,6 +154,8 @@ def run_synth(
     generator_names: Sequence[str] = (),
     openrouter_models: Sequence[str] = (),
     provider_sort: str = "throughput",
+    sticky_provider: bool = True,
+    prompt_cache: bool = True,
     slop_strategy: str = synth.DEFAULT_STRATEGY,
     slop_system_file: Path | None = None,
     gpt_model: str = "gpt-4o",
@@ -276,7 +280,8 @@ def run_synth(
                         generators.append(synth.local_generator(model=local_model or None, **gen_kw))
                 for m in openrouter_models:
                     generators.append(synth.openrouter_generator(
-                        model=m, provider_sort=None if provider_sort == "none" else provider_sort, **gen_kw
+                        model=m, provider_sort=None if provider_sort == "none" else provider_sort,
+                        sticky_provider=sticky_provider, prompt_cache=prompt_cache, **gen_kw
                     ))
             except RuntimeError as exc:  # missing key, surfaced by config.require_key
                 raise click.ClickException(str(exc))

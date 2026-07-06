@@ -599,6 +599,12 @@ class Generator:
     `session_budget` optionally overrides the global per-session prompt-token
     budget for this generator (policy hook — normally unset; the registry
     window × `SESSION_WINDOW_FILL_CAP` still caps it).
+
+    `begin_session`, when set, returns a fresh generate-callable holding
+    per-session state; the session loop calls it once per multi-turn session
+    (openrouter uses it for sticky provider routing — stay on whichever
+    provider served turn 1, so its prefix cache stays hot and the serving
+    stack is constant within a session).
     """
 
     name: str
@@ -608,6 +614,7 @@ class Generator:
     prompt_id: str = ""
     prompt_version: int = 0
     session_budget: int | None = None
+    begin_session: Callable[[], Callable[..., "str | GenOutput"]] | None = None
 
     def __call__(self, target_text: str, history: list[dict] | None = None):
         if self.generate is None:
@@ -682,6 +689,8 @@ def openai_generator(
     extra_body: dict | None = None,
     extra_meta: dict | None = None,
     timeout: float | None = DEFAULT_GEN_TIMEOUT,
+    sticky_provider: bool = False,
+    cache_breakpoints: bool = False,
 ) -> Generator:
     """OpenAI-compatible slop generator (`openai` SDK; key `OPENAI_API_KEY`).
 
@@ -707,80 +716,106 @@ def openai_generator(
         timeout=timeout,
     )
 
-    async def generate(text: str, history: list[dict] | None = None) -> GenOutput:
-        kwargs: dict = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "messages": [
+    def _make_generate(pin_state: dict | None):
+        async def generate(text: str, history: list[dict] | None = None) -> GenOutput:
+            messages = [
                 {"role": "system", "content": system},
                 *(history or []),
                 {"role": "user", "content": text},
-            ],
-        }
-        # Send sampling/reasoning knobs only when set, so providers keep their
-        # defaults (and so the recorded request mirrors what was actually sent).
-        if temperature is not None:
-            kwargs["temperature"] = temperature
-        if top_p is not None:
-            kwargs["top_p"] = top_p
-        if extra_body:
-            kwargs["extra_body"] = extra_body
-        t0 = time.monotonic()
-        resp = await client.chat.completions.create(**kwargs)
-        gen_seconds = time.monotonic() - t0
-        # Some providers return choices=None/[] on an upstream error rather than
-        # raising — surface a clear, catchable message, not an opaque TypeError.
-        if not resp.choices:
-            raise RuntimeError(f"{model}: provider returned no choices (upstream error?)")
-        choice = resp.choices[0]
-        # A truncated slop (finish_reason "length") is a broken pair — fail loudly.
-        if choice.finish_reason == "length":
-            raise RuntimeError(f"slop truncated at max_tokens={max_tokens} (raise --max-tokens)")
-        usage = getattr(resp, "usage", None)
-        # OpenRouter/OpenAI split reasoning tokens out of completion_tokens here
-        # (None when the provider doesn't report it). Latency + this split let a
-        # slow run be diagnosed from the corpus alone: reasoning blowout shows as
-        # reasoning_tokens ~ its budget; a slow upstream shows as low
-        # completion_tokens / gen_seconds.
-        details = getattr(usage, "completion_tokens_details", None)
-        prompt_details = getattr(usage, "prompt_tokens_details", None)
-        gen_meta = {
-            "model": model,
-            "reasoning_effort": reasoning_effort,
-            "temperature": temperature,
-            "top_p": top_p,
-            "max_tokens": max_tokens,
-            "finish_reason": choice.finish_reason,
-            "prompt_tokens": getattr(usage, "prompt_tokens", None),
-            "completion_tokens": getattr(usage, "completion_tokens", None),
-            "reasoning_tokens": getattr(details, "reasoning_tokens", None),
-            # Billing ground truth (OpenRouter, when usage.include is on):
-            # cached_tokens = prompt prefix billed at the provider's cache-read
-            # discount (0/None on providers with no cache pricing), cost = the
-            # actual credits charged for THIS request. Session cost analysis
-            # sums these instead of trusting token arithmetic.
-            "cached_tokens": getattr(prompt_details, "cached_tokens", None),
-            "cost": getattr(usage, "cost", None),
-            "gen_seconds": round(gen_seconds, 2),
-            # OpenRouter reports which upstream provider actually served the
-            # request (None elsewhere) — the routing outcome, next to the
-            # routing *request* in extra_meta (e.g. provider_sort).
-            "provider": getattr(resp, "provider", None),
-            "prompt_id": prompt_id,
-            "prompt_version": prompt_version,
-            "prompt_label": label,
-        }
-        if extra_meta:
-            gen_meta.update(extra_meta)
-        return GenOutput((choice.message.content or "").strip(), gen_meta)
+            ]
+            if cache_breakpoints and history:
+                # Anthropic prompt caching: one moving breakpoint on the last
+                # history message marks system+history as the reusable prefix
+                # (cache reads at 0.1x after a 1.25x write; the API ignores
+                # breakpoints under its ~1024-token minimum, so this is inert
+                # early in a session and on stateless calls).
+                last = dict(messages[-2])
+                last["content"] = [
+                    {"type": "text", "text": last["content"], "cache_control": {"type": "ephemeral"}}
+                ]
+                messages[-2] = last
+            kwargs: dict = {"model": model, "max_tokens": max_tokens, "messages": messages}
+            # Send sampling/reasoning knobs only when set, so providers keep their
+            # defaults (and so the recorded request mirrors what was actually sent).
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            if top_p is not None:
+                kwargs["top_p"] = top_p
+            body = dict(extra_body) if extra_body else {}
+            if pin_state is not None and pin_state.get("provider"):
+                # Session-sticky routing: after turn 1 stay on the provider that
+                # served it, so its prefix cache stays hot and the serving stack
+                # (quantization etc.) is constant within the session. If it goes
+                # down the turn errors, the session ends, and the retry next run
+                # re-pins fresh.
+                body["provider"] = {"order": [pin_state["provider"]], "allow_fallbacks": False}
+            if body:
+                kwargs["extra_body"] = body
+            t0 = time.monotonic()
+            resp = await client.chat.completions.create(**kwargs)
+            gen_seconds = time.monotonic() - t0
+            # Some providers return choices=None/[] on an upstream error rather than
+            # raising — surface a clear, catchable message, not an opaque TypeError.
+            if not resp.choices:
+                raise RuntimeError(f"{model}: provider returned no choices (upstream error?)")
+            choice = resp.choices[0]
+            # A truncated slop (finish_reason "length") is a broken pair — fail loudly.
+            if choice.finish_reason == "length":
+                raise RuntimeError(f"slop truncated at max_tokens={max_tokens} (raise --max-tokens)")
+            served_provider = getattr(resp, "provider", None)
+            if pin_state is not None and served_provider:
+                pin_state.setdefault("provider", served_provider)  # pin to turn 1's provider
+            usage = getattr(resp, "usage", None)
+            # OpenRouter/OpenAI split reasoning tokens out of completion_tokens here
+            # (None when the provider doesn't report it). Latency + this split let a
+            # slow run be diagnosed from the corpus alone: reasoning blowout shows as
+            # reasoning_tokens ~ its budget; a slow upstream shows as low
+            # completion_tokens / gen_seconds.
+            details = getattr(usage, "completion_tokens_details", None)
+            prompt_details = getattr(usage, "prompt_tokens_details", None)
+            gen_meta = {
+                "model": model,
+                "reasoning_effort": reasoning_effort,
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_tokens": max_tokens,
+                "finish_reason": choice.finish_reason,
+                "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                "completion_tokens": getattr(usage, "completion_tokens", None),
+                "reasoning_tokens": getattr(details, "reasoning_tokens", None),
+                # Billing ground truth (OpenRouter, when usage.include is on):
+                # cached_tokens = prompt prefix billed at the provider's cache-read
+                # discount (0/None on providers with no cache pricing), cost = the
+                # actual credits charged for THIS request. Session cost analysis
+                # sums these instead of trusting token arithmetic.
+                "cached_tokens": getattr(prompt_details, "cached_tokens", None),
+                "cost": getattr(usage, "cost", None),
+                "gen_seconds": round(gen_seconds, 2),
+                # OpenRouter reports which upstream provider actually served the
+                # request (None elsewhere) — the routing outcome, next to the
+                # routing *request* in extra_meta (e.g. provider_sort).
+                "provider": served_provider,
+                "prompt_id": prompt_id,
+                "prompt_version": prompt_version,
+                "prompt_label": label,
+            }
+            if extra_meta:
+                gen_meta.update(extra_meta)
+            return GenOutput((choice.message.content or "").strip(), gen_meta)
+
+        return generate
 
     return Generator(
         name=name or model,
-        generate=generate,
+        generate=_make_generate(None),
         strategy=label,
         reasoning_effort=reasoning_effort,
         prompt_id=prompt_id,
         prompt_version=prompt_version,
+        # Multi-turn sessions get a per-session closure whose pin_state makes
+        # routing sticky after turn 1 (only when requested — presets/local have
+        # no provider routing to pin).
+        begin_session=(lambda: _make_generate({})) if sticky_provider else None,
     )
 
 
@@ -837,6 +872,8 @@ def openrouter_generator(
     base_url: str | None = None,
     timeout: float | None = DEFAULT_GEN_TIMEOUT,
     provider_sort: str | None = "throughput",
+    sticky_provider: bool = True,
+    prompt_cache: bool = True,
 ) -> Generator:
     """OpenRouter slop generator — one key, many upstream models.
 
@@ -883,6 +920,13 @@ def openrouter_generator(
         extra_body=extra_body,
         extra_meta={"provider_sort": provider_sort} if provider_sort else None,
         timeout=timeout,
+        # Session cost/covariate hygiene: pin each live session to the provider
+        # that served its first turn (prefix cache stays hot; serving stack
+        # constant within a session), and let Anthropic models cache the
+        # session history via a moving cache_control breakpoint (0.1x reads;
+        # other families cache automatically or not at all).
+        sticky_provider=sticky_provider,
+        cache_breakpoints=prompt_cache and model.startswith("anthropic/"),
     )
 
 
@@ -1207,6 +1251,10 @@ def synthesize_pairs(
 
     async def _run_session(sess: _Session, fp) -> None:
         gen = sess.generator
+        # Multi-turn sessions get a per-session callable when the generator
+        # offers one (sticky provider routing state); stateless stays on the
+        # plain path.
+        call = gen.begin_session() if (len(sess.turns) > 1 and gen.begin_session is not None) else gen
         window = windows.get(gen.name)
         caps = [gen.session_budget or session_max_tokens]
         if window:
@@ -1233,7 +1281,7 @@ def synthesize_pairs(
                 continue
             claimed.add(turn.key)
             try:
-                out = gen(turn.target.text, history=history or None)
+                out = call(turn.target.text, history=history or None)
                 if inspect.isawaitable(out):
                     out = await out
             except asyncio.CancelledError:

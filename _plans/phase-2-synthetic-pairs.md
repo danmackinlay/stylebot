@@ -136,6 +136,15 @@ not guessed once:
      (turns coexist; a crashed session resumes by replaying recorded slop into
      history). Stateless keys carry NO session component, so corpus resume is
      stable as the blog grows.
+   - **Cache exploitation (2026-07-07)**: live sessions pin to the provider
+     that served turn 1 (`--sticky-provider`, default on) — keeps that
+     provider's prefix cache hot AND holds the serving stack constant so the
+     fill covariate isn't confounded by provider hops; Anthropic models get a
+     moving `cache_control` breakpoint on session history (`--prompt-cache`,
+     default on; 0.1× cache reads after a 1.25× write). Note prompt caching is
+     **unexploitable on stateless corpus runs** — the shared prefix (the slop
+     system prompt) is under every provider's ~1024-token minimum. Savings are
+     verified, not assumed: sum the recorded `meta.gen` `cost`/`cached_tokens`.
 
 ## Outputs (must match Phase 1 schema)
 

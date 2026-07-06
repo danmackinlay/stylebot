@@ -772,3 +772,114 @@ def test_openrouter_context_windows_registry(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     windows = synth.openrouter_context_windows(base_url="https://registry.test/api/v1")
     assert windows == {"a/b": 32768, "c/d": 200000}
+
+
+# ---------------------------------------------------------------------------
+# Session cost hygiene: sticky provider routing + Anthropic cache breakpoints
+# ---------------------------------------------------------------------------
+
+
+def _patch_openai_multi(monkeypatch, response):
+    """Like _patch_openai but captures kwargs per call (list, not last-wins)."""
+    seen: list[dict] = []
+
+    class _Completions:
+        async def create(self, **kwargs):
+            seen.append(kwargs)
+            return response
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+        def __init__(self, **kwargs):
+            pass
+
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", _Client)
+    return seen
+
+
+def test_sticky_provider_pins_session_after_first_turn(monkeypatch):
+    import asyncio
+
+    resp = _FakeResponse([_FakeChoice()])
+    resp.provider = "Groq"
+    seen = _patch_openai_multi(monkeypatch, resp)
+    gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x")
+
+    session_call = gen.begin_session()
+    hist = [{"role": "user", "content": "one"}, {"role": "assistant", "content": "s"}]
+    asyncio.run(session_call("one"))
+    asyncio.run(session_call("two", history=hist))
+    assert seen[0]["extra_body"]["provider"] == {"sort": "throughput"}  # turn 1 routes free
+    assert seen[1]["extra_body"]["provider"] == {"order": ["Groq"], "allow_fallbacks": False}
+
+    # The stateless path never pins; a NEW session re-pins from scratch.
+    asyncio.run(gen.generate("three"))
+    assert seen[2]["extra_body"]["provider"] == {"sort": "throughput"}
+    asyncio.run(gen.begin_session()("four"))
+    assert seen[3]["extra_body"]["provider"] == {"sort": "throughput"}
+
+
+def test_no_sticky_provider_disables_begin_session(monkeypatch):
+    _patch_openai_multi(monkeypatch, _FakeResponse([_FakeChoice()]))
+    gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", sticky_provider=False)
+    assert gen.begin_session is None
+
+
+def test_anthropic_cache_breakpoint_marks_last_history_message(monkeypatch):
+    import asyncio
+
+    seen = _patch_openai_multi(monkeypatch, _FakeResponse([_FakeChoice()]))
+    hist = [{"role": "user", "content": "p1"}, {"role": "assistant", "content": "s1"}]
+
+    gen = synth.openrouter_generator(model="anthropic/claude-sonnet-4.6", api_key="x")
+    asyncio.run(gen.generate("p2", history=hist))
+    last_hist_msg = seen[0]["messages"][-2]
+    assert last_hist_msg["content"] == [
+        {"type": "text", "text": "s1", "cache_control": {"type": "ephemeral"}}
+    ]
+    assert seen[0]["messages"][-1] == {"role": "user", "content": "p2"}
+
+    # No history -> nothing to cache, plain string content everywhere.
+    asyncio.run(gen.generate("p2"))
+    assert all(isinstance(m["content"], str) for m in seen[1]["messages"])
+
+    # Non-Anthropic models are never marked (their providers cache
+    # automatically or not at all; structured content buys nothing).
+    gen_qwen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x")
+    asyncio.run(gen_qwen.generate("p2", history=hist))
+    assert seen[2]["messages"][-2]["content"] == "s1"
+
+    # And --no-prompt-cache turns it off for Anthropic too.
+    gen_off = synth.openrouter_generator(
+        model="anthropic/claude-sonnet-4.6", api_key="x", prompt_cache=False
+    )
+    asyncio.run(gen_off.generate("p2", history=hist))
+    assert seen[3]["messages"][-2]["content"] == "s1"
+
+
+def test_session_loop_uses_begin_session_per_session(tmp_path):
+    made = []
+
+    def begin():
+        def g(text, history=None):
+            return "[slop] " + text
+
+        made.append(g)
+        return g
+
+    gen = synth.Generator(
+        "g", generate=lambda t, history=None: "[slop] " + t, begin_session=begin
+    )
+    result = synth.synthesize_pairs(_targets(4), tmp_path / "c", [gen], session_turns=2)
+    assert result.written == 4
+    assert len(made) == 2  # one fresh closure per session
+
+    made.clear()
+    stateless = synth.synthesize_pairs(_targets(2), tmp_path / "c2", [gen])
+    assert stateless.written == 2 and made == []  # stateless never begins a session
