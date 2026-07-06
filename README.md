@@ -34,6 +34,47 @@ uv run ai-style --help
 The pair-logger is run from inside the prose working tree (e.g. the blog repo),
 where it writes captured pairs to `$STYLEBOT_DATA_DIR/pairs.jsonl`.
 
+## Specializing stylebot for your own blog
+
+stylebot is split into **mechanism** (this repo: prose extraction, chunk
+hygiene, pair synthesis, eval scoring, classifier training — everything that
+operates on stylebot's own contracts) and **policy** (your repo: which posts
+count as your voice, which chunks are worth keeping, which models generate the
+slop). The `ai-style` commands run the mechanism with bare defaults; the
+intended way to adopt stylebot is a thin policy layer in *your* blog repo —
+[Dan's blog](https://github.com/danmackinlay/danmackinlay.github.io) is the
+worked example, and its whole synthesis layer is two small files:
+
+1. **A policy module** (~100 lines; example `livingthing/training_targets.py`):
+   your constants (quality thresholds, stop-headers, stub markers, chunking
+   defaults, slop-model rotation) and a composite `selector(meta: dict) -> bool`
+   over your frontmatter conventions. Every stylebot phase accepts `selector=`;
+   the predicate is never hardcoded in the mechanism.
+2. **A CLI mirror** (~90 lines; example `livingthing/bin/train_targets.py`),
+   composed from `stylebot.bin.synth_cli`:
+   `@synth_options(exclude=…, **your_defaults)` re-declares nothing — it applies
+   the shared option surface with your defaults swapped in and your pinned
+   options removed — and the command body is just
+   `iter_targets(selector=…)` → `run_synth(…)`. Inspection modes, generator
+   wiring, progress, resume and error handling all come from stylebot, so the
+   wrapper can't drift.
+
+**Naming convention:** mirror the `ai-style` subcommands under your own prefix.
+On Dan's blog, `dan-style synth|train-clf|eval` are the policy versions of
+`ai-style synth|train-clf|eval` — same subcommand, swap the prefix. That one
+rule is the entire translation table, and it tells you where behaviour comes
+from: if `dan-style synth` produces ~1.5k-char merged passages where
+`ai-style synth` produces raw fragments, the difference is (visible, greppable)
+policy, not mechanism.
+
+The **voice classifier** usually needs no wrapper code at all:
+`ai-style train-clf --pairs … --out …` (requires the `stylebot[classifier]`
+extra) trains the linear head from your captured pairs; policy enters as an
+optional injected `extra_positives=` iterable (library-level) and the choice of
+embedding backbone (`--embed-model`). The default backbone, StyleDistance, won
+a bake-off *on Dan's corpus* — re-run that comparison for your own author
+before trusting it.
+
 ## VS Code voice marker
 
 [`vscode-voice-marker/`](vscode-voice-marker/) is a small editor extension
@@ -49,8 +90,9 @@ arbiter. Design and caveats: [`_plans/vscode-marker.md`](_plans/vscode-marker.md
 
 The extension spawns **`ai-style serve --detector-model DIR`** as a child
 process — a long-lived sidecar (`stylebot.serve`) that loads a trained
-voice-classifier artifact (`head.json` + `meta.json`, produced by the blog's
-`train-voice-clf`) once (~5 s for the embedding model) and then scores batches
+voice-classifier artifact (`head.json` + `meta.json`, produced by
+`ai-style train-clf` or a blog policy mirror like `dan-style train-clf`)
+once (~5 s for the embedding model) and then scores batches
 of texts over stdin/stdout NDJSON in tens of milliseconds per document. The
 extension owns the process lifecycle: spawn on activation, status-bar spinner
 until the `info` handshake, capped-backoff restart on crash, kill on window
@@ -105,8 +147,9 @@ first mark), slop-p50, slop-p75, slop-p95. Worked recipe + current numbers:
 The artifact is data, not code — an improved classifier almost never touches
 the extension:
 
-1. **Retrain the head** (in the repo that owns the trainer, e.g. the blog:
-   `uv run train-voice-clf train --pairs … --out _models/voice-clf`) and
+1. **Retrain the head** (in the repo that owns the corpus and artifact, e.g.
+   the blog: `uv run dan-style train-clf`, or generically
+   `uv run ai-style train-clf --pairs … --out _models/voice-clf`) and
    commit the refreshed `head.json` + `meta.json`.
 2. **Restart the sidecar** — the *Voice Marker: Restart Sidecar* command (or
    reload the window). The sidecar rebuilds the detector from `meta.json` at
