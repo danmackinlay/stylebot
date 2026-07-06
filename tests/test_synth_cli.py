@@ -107,6 +107,26 @@ def test_ai_style_synth_sample_needs_no_data_dir(tmp_path):
     assert result.exit_code == 0, result.output
 
 
+def test_inspection_mode_banner_and_generation_flag_pointer(tmp_path):
+    # Generation flags alongside --sample/--report are silently inert; the
+    # inspection banner must say so and point at the eval pair browser.
+    root = _make_blog(tmp_path)
+    runner = CliRunner()
+    with_flags = runner.invoke(
+        ai_style_main,
+        ["synth", "--blog-root", str(root), "--sample", "1", "--openrouter-model", "x/y"],
+    )
+    assert with_flags.exit_code == 0, with_flags.output
+    assert "nothing generated" in with_flags.output
+    assert "ai-style eval --pairs" in with_flags.output
+
+    without_flags = runner.invoke(
+        ai_style_main, ["synth", "--blog-root", str(root), "--sample", "1"]
+    )
+    assert "nothing generated" in without_flags.output  # banner always
+    assert "ai-style eval --pairs" not in without_flags.output  # pointer only on the trap
+
+
 def test_ai_style_synth_requires_a_generator(tmp_path):
     root = _make_blog(tmp_path)
     result = CliRunner().invoke(

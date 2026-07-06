@@ -264,6 +264,14 @@ def _detector_score(field_scores: object) -> float | None:
     return d.get("score") if isinstance(d, dict) else None
 
 
+def _vale_alerts(field_scores: object) -> int | None:
+    """Vale's alert count for a field, or None when Vale wasn't available."""
+    v = field_scores.get("vale") if isinstance(field_scores, dict) else None
+    if isinstance(v, dict) and v.get("available"):
+        return int(v.get("alerts", 0))
+    return None
+
+
 def _field_text(pair: dict | None, field: str) -> str:
     """The body text scored for `field`, pulled from the joined pair record."""
     if pair is None:
@@ -295,17 +303,25 @@ def _scores_rows_data(records: Sequence[dict], pairs_by_id: dict[str, dict], fie
                 "score": _judge_score(scores.get(f)),
                 "rationale": _judge_rationale(scores.get(f)),
                 "detector": _detector_score(scores.get(f)),
+                "vale": _vale_alerts(scores.get(f)),
             }
             for f in fields
         }
         s0, s1 = cells[fields[0]]["score"], cells[fields[-1]]["score"]
         delta = (s1 - s0) if (s0 is not None and s1 is not None) else None
         # Generation covariates from the joined pair (synthetic only; empty for real).
-        gen = ((pair or {}).get("meta") or {}).get("gen") or {}
+        pair_meta = (pair or {}).get("meta") or {}
+        gen = pair_meta.get("gen") or {}
         rows.append({
             "id": rec.get("id", ""),
             "strategy": meta.get("slop_strategy") or "—",
             "source": meta.get("source") or "—",
+            # Row-level facet covariates. Score records carry these since the
+            # _CARRIED_GEN flattening; fall back to the joined pair for score
+            # files written before that.
+            "generator": str(meta.get("generator") or pair_meta.get("generator") or "—"),
+            "reasoning": str(meta.get("reasoning_effort") or gen.get("reasoning_effort") or "—"),
+            "prompt": str(meta.get("prompt_id") or gen.get("prompt_id") or "—"),
             "cells": cells,
             "delta": delta,
             "gen": gen,
@@ -359,6 +375,7 @@ _SCORES_CSS = """
 .badge{font-size:11px;font-weight:600;padding:1px 7px;border-radius:6px}
 .s-slop{background:#fcebeb;color:#791f1f}.s-dan{background:#eaf3de;color:#27500a}.s-mid{background:#e6f1fb;color:#0c447c}.s-na{background:#f1efe8;color:#5f5e5a}
 .s-det{background:#eef0fb;color:#34406a;font-variant-numeric:tabular-nums}
+.s-vale{background:#f6efe0;color:#6b5416;font-variant-numeric:tabular-nums}
 .ft{font-size:13px;line-height:1.45}
 .rat{color:var(--muted);font-size:12px;margin-top:4px}
 .d-pos{color:#27500a}.d-neg{color:#791f1f}.d-na{color:var(--muted)}
@@ -367,13 +384,14 @@ _SCORES_CSS = """
 _JS_SCORES = """
 const tbody=document.querySelector('tbody');
 const rows=()=>Array.from(tbody.querySelectorAll('tr'));
+const facetSels=Array.from(document.querySelectorAll('select.facet'));
 function val(r,k){const v=r.dataset[k];return (v===''||v===undefined)?-Infinity:(isNaN(+v)?v:+v);}
 function applyFilter(){
   const q=document.getElementById('q').value.toLowerCase();
-  const st=document.getElementById('strat').value;
   for(const r of rows()){
     const okText=(r.dataset.src+' '+r.querySelector('.txt').textContent).toLowerCase().includes(q);
-    const hit=okText&&(st===''||r.dataset.strategy===st);
+    const okFacets=facetSels.every(s=>s.value===''||r.dataset[s.dataset.key]===s.value);
+    const hit=okText&&okFacets;
     r.dataset.hit=hit?'1':'0';
     r.style.display=hit?'':'none';
   }
@@ -384,7 +402,7 @@ function sortBy(k,numeric){
   for(const r of rs) tbody.appendChild(r);
 }
 document.getElementById('q').addEventListener('input',applyFilter);
-document.getElementById('strat').addEventListener('change',applyFilter);
+for(const s of facetSels) s.addEventListener('change',applyFilter);
 sortBy('delta',true);
 """
 
@@ -400,6 +418,13 @@ def _det_chip(score: float | None) -> str:
     if score is None:
         return ""
     return f'<span class="badge s-det" title="trained detector P(slop)">P(slop) {score:.2f}</span>'
+
+
+def _vale_chip(alerts: int | None) -> str:
+    """A muted chip with Vale's alert count; omitted when Vale wasn't available."""
+    if alerts is None:
+        return ""
+    return f'<span class="badge s-vale" title="Vale style alerts">vale {alerts}</span>'
 
 
 def _gen_subline(gen: dict) -> str:
@@ -436,7 +461,7 @@ def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows
             rat_html = f"<div class=rat>{html.escape(rat)}</div>" if rat else ""
             cols.append(
                 f'<div><div class=fh><span class=fl>{html.escape(f)}</span>'
-                f'{_badge(f, fields, c["score"])}{_det_chip(c["detector"])}</div>'
+                f'{_badge(f, fields, c["score"])}{_det_chip(c["detector"])}{_vale_chip(c["vale"])}</div>'
                 f"<div class=ft>{html.escape(preview)}</div>{rat_html}</div>"
             )
         delta = r["delta"]
@@ -446,6 +471,9 @@ def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows
         total_len = sum(len(r["cells"][f]["text"]) for f in fields)
         out.append(
             f'<tr data-strategy="{html.escape(r["strategy"], quote=True)}" '
+            f'data-generator="{html.escape(r["generator"], quote=True)}" '
+            f'data-reasoning="{html.escape(r["reasoning"], quote=True)}" '
+            f'data-prompt="{html.escape(r["prompt"], quote=True)}" '
             f'data-slop="{"" if slop_s is None else slop_s}" data-dan="{"" if dan_s is None else dan_s}" '
             f'data-delta="{"" if delta is None else delta}" '
             f'data-src="{html.escape(r["source"], quote=True)}" data-len="{total_len}" data-hit="1">'
@@ -543,14 +571,24 @@ def render_scores_report(
     out_path = Path(out_path)
     records, rows = _load_scores_rows(scores, pairs_path, fields)
     stats = _scores_summary_stats(rows, fields)
-    strategies = sorted({r["strategy"] for r in rows})
-    strat_opts = '<option value="">all strategies</option>' + "".join(
-        f'<option value="{html.escape(s, quote=True)}">{html.escape(s)}</option>' for s in strategies
-    )
+
+    def _facet_select(key: str, label: str) -> str:
+        # One dropdown per row-level covariate, omitted when it can't discriminate.
+        values = sorted({r[key] for r in rows})
+        if len(values) < 2:
+            return ""
+        opts = f'<option value="">all {html.escape(label)}</option>' + "".join(
+            f'<option value="{html.escape(v, quote=True)}">{html.escape(v)}</option>' for v in values
+        )
+        return f'<select class=facet data-key="{key}">{opts}</select>'
+
     controls = (
         '<input id=q placeholder="filter by source or text…" size=28>'
-        f"<select id=strat>{strat_opts}</select>"
-        "<button onclick=\"sortBy('delta',true)\">sort Δ</button>"
+        + _facet_select("strategy", "strategies")
+        + _facet_select("generator", "generators")
+        + _facet_select("reasoning", "reasoning")
+        + _facet_select("prompt", "prompts")
+        + "<button onclick=\"sortBy('delta',true)\">sort Δ</button>"
         "<button onclick=\"sortBy('slop',true)\">sort slop</button>"
         "<button onclick=\"sortBy('dan',true)\">sort Dan</button>"
         "<button onclick=\"sortBy('strategy',false)\">sort strategy</button>"

@@ -195,3 +195,42 @@ def test_scores_report_facet_by_covariate(tmp_path):
     h = p.read_text()
     assert "<th>reasoning_effort</th>" in h  # headline grouped by the covariate
     assert "<th>slop_strategy</th>" not in h  # not the default facet
+
+
+def test_scores_report_row_facet_attrs_and_dropdowns(tmp_path):
+    pairs, scores = _make_scored_with_gen(tmp_path, judge=_judge)
+    p = tmp_path / "r.html"
+    report.render_scores_report(scores, pairs, p)
+    h = p.read_text()
+    # Row-level covariate attributes feed the facet filters.
+    assert 'data-reasoning="high"' in h and 'data-reasoning="low"' in h
+    assert 'data-generator="m"' in h
+    # A dropdown appears only for covariates that discriminate: two reasoning
+    # levels -> dropdown; a single generator/strategy -> no dropdown.
+    assert 'data-key="reasoning"' in h
+    assert 'data-key="generator"' not in h
+    assert 'data-key="strategy"' not in h
+
+
+def test_scores_report_vale_chip_keyless(tmp_path):
+    # Hand-built records so the Vale signal is present regardless of whether a
+    # local vale binary exists; judge=None = the keyless pair-browser path.
+    pairs, _ = _make_scored_with_gen(tmp_path, judge=None)
+    from stylebot.pairs import iter_pairs
+
+    recs = [
+        {
+            "id": ev.record_id(pr),
+            "meta": {"slop_strategy": "polish", "source": pr["meta"]["source"], "generator": "m"},
+            "scores": {
+                f: {"vale": {"available": True, "alerts": 3}, "judge": None, "detector": {"score": None}}
+                for f in ("slop", "target")
+            },
+        }
+        for pr in iter_pairs(pairs)
+    ]
+    p = tmp_path / "r.html"
+    report.render_scores_report(recs, pairs, p)
+    h = p.read_text()
+    assert "vale 3" in h  # the third signal is now visible per cell
+    assert "—" in h  # judge badges render the keyless placeholder

@@ -87,7 +87,7 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "context_dropout": (("--context-dropout",), dict(default=0.0, show_default=True, type=float, help="Fraction of pairs to keep heading-less (deterministic) so the styler doesn't require a heading.")),
     "sort_name": (("--sort", "sort_name"), dict(type=click.Choice(["none", "length", "source"]), default="none", show_default=True)),
     # -- read-only inspection (handled inside run_synth, exit before generation) --
-    "report_path": (("--report", "report_path"), dict(type=click.Path(dir_okay=False, path_type=Path), default=None, help="Write a self-contained HTML report of the selected targets and exit (no generation).")),
+    "report_path": (("--report", "report_path"), dict(type=click.Path(dir_okay=False, path_type=Path), default=None, help="Write a self-contained HTML report of the selected targets and exit (pre-generation — vets selection, generates nothing; browse generated pairs via ai-style eval --report).")),
     "report_max_rows": (("--report-max-rows",), dict(default=2000, show_default=True, type=int, help="Cap table rows in the HTML report (0 = all).")),
     "sample_n": (("--sample", "sample_n"), dict(type=int, default=None, help="Print N random targets to stdout and exit (no generation).")),
     # -- generation --
@@ -185,6 +185,18 @@ def run_synth(
     if sample_n is not None or report_path is not None:
         from stylebot import report
 
+        click.echo("[inspection] targets only — nothing generated.", err=True)
+        # Generation flags alongside --report/--sample are a classic trap: the
+        # run exits before any generator fires. Say so, and point at the pair
+        # browser (the eval scores report) that DOES show generated slop.
+        if generator_names or openrouter_models or slop_strategy != synth.DEFAULT_STRATEGY:
+            pairs_hint = f"{data_dir}/pairs.jsonl" if isinstance(data_dir, Path) else "<data-dir>/pairs.jsonl"
+            click.echo(
+                "[inspection] generation flags ignored; to generate then browse pairs: "
+                "re-run without --report/--sample, then: "
+                f"ai-style eval --pairs {pairs_hint} --report FILE.html --facet-by generator",
+                err=True,
+            )
         if sample_n is not None:
             click.echo(report.format_sample(report.sample_targets(targets, sample_n)))
         if report_path is not None:

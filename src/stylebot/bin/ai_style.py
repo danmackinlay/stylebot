@@ -96,7 +96,10 @@ def synth_cmd(
             )
         return config.resolve_data_dir(data_dir)
 
-    synth_cli.run_synth(targets, data_dir=_data_dir, extra_tags=tags, **kw)
+    # Resolve eagerly when the flag was given (inspection hints then name the real
+    # pairs path); defer only to keep flag-less inspection runs guard-free.
+    resolved = config.resolve_data_dir(data_dir) if data_dir is not None else _data_dir
+    synth_cli.run_synth(targets, data_dir=resolved, extra_tags=tags, **kw)
 
 
 @main.command("eval")
@@ -111,7 +114,7 @@ def synth_cmd(
 @click.option("--summary", "summary_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Also write the aggregate summary JSON here.")
 @click.option("--by", "by", default=None, help="Facet the summary by a meta key, e.g. slop_strategy or generator.")
 @click.option("--limit", type=int, default=None, help="Cap pairs scored (smoke / cost control).")
-@click.option("--report", "report_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Write a self-contained HTML scores report (slop↔Dan + judge scores, sortable, faceted by strategy).")
+@click.option("--report", "report_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Write a self-contained HTML scores report — the pair browser: slop↔Dan side by side, judge/detector/Vale chips, generation covariates, facet dropdowns. Works keyless (judge badges show — without --judge).")
 @click.option("--report-max-rows", default=2000, show_default=True, type=int, help="Cap rows in the HTML report (0 = all).")
 @click.option("--facet-by", "facet_by", default="slop_strategy", show_default=True, help="Group the HTML report headline by this meta covariate (e.g. reasoning_effort, prompt_id, generator).")
 @click.option("--sample", "sample_n", type=int, default=None, help="Print N random scored pairs (slop vs Dan + scores) to stdout.")
@@ -139,7 +142,10 @@ def eval_cmd(
     resumable — re-running skips already-scored ids). Runs keyless by default
     (Vale + null detector); add --judge to score voice via OpenRouter. The
     summary aggregates per field, and per --by facet (e.g. slop_strategy) so you
-    can compare strategies with a number. A Phase-4 styler run scores the same way
+    can compare strategies with a number. --report is also the *pair browser* —
+    a keyless run (no --judge) is the cheap way to eyeball a fresh synth batch:
+    slop↔Dan side by side with generation covariates (model, strategy, prompt,
+    reasoning), faceted and sortable. A Phase-4 styler run scores the same way
     once it emits an output-bearing JSONL (add an "output" field then).
     """
     import json
