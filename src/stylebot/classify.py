@@ -136,22 +136,44 @@ def load_artifact_meta(artifact_dir: str | Path) -> dict:
     return meta
 
 
-def sentence_transformers_embed_fn(model_id: str, *, normalize: bool = True) -> EmbedFn:
-    """Build an `embed_fn` backed by a sentence-transformers model (LAZY import).
+def sentence_transformers_batch_embed_fn(model_id: str, *, normalize: bool = True):
+    """Build a batch encoder backed by a sentence-transformers model (LAZY import).
 
     The heavy import lives inside this function (the lazy-`openai` convention in
     `eval.py`) so importing `stylebot.classify` never pulls in torch /
-    sentence-transformers. The model is loaded once and reused per call. Used by
-    `sklearn_detector` for the self-contained `--detector-model` path; livingthing
-    supplies its own (shared with `index_blog`) for the default path.
+    sentence-transformers. Returns ``encode(texts, batch_size=32) -> [N, D] array``
+    (numpy, as sentence-transformers produces). This is the **one** encode
+    call-site for the classifier: the per-passage `embed_fn` below and
+    livingthing's training-time `embed_texts` both wrap it, so normalize/encode
+    semantics can't drift between training and serving.
     """
     from sentence_transformers import SentenceTransformer
 
     model = SentenceTransformer(model_id)
 
+    def encode(texts: Sequence[str], *, batch_size: int = 32):
+        return model.encode(
+            list(texts),
+            batch_size=batch_size,
+            convert_to_numpy=True,
+            normalize_embeddings=normalize,
+            show_progress_bar=False,
+        )
+
+    return encode
+
+
+def sentence_transformers_embed_fn(model_id: str, *, normalize: bool = True) -> EmbedFn:
+    """A per-passage `embed_fn` over the shared batch encoder (LAZY import).
+
+    The model is loaded once and reused per call. Used by `sklearn_detector` for
+    the self-contained `--detector-model` path; livingthing composes the same
+    batch encoder for training.
+    """
+    encode = sentence_transformers_batch_embed_fn(model_id, normalize=normalize)
+
     def embed(prose: str) -> list[float]:
-        vec = model.encode(prose, normalize_embeddings=normalize, show_progress_bar=False)
-        return vec.tolist()
+        return encode([prose])[0].tolist()
 
     return embed
 

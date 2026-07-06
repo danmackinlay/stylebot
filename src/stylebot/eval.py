@@ -385,20 +385,30 @@ def pair_body(content: str, context: str | None) -> str:
     return content[len(prefix):] if content.startswith(prefix) else content
 
 
-def _extract_slop(record: dict) -> str:
+def extract_slop(record: dict) -> str:
+    """The slop-side body of a pair (messages[1], heading-context stripped).
+
+    Public API: the voice-classifier trainer (livingthing) assembles its training
+    texts through these extractors so eval and training read a pair identically.
+    """
     return pair_body(record["messages"][1]["content"], (record.get("meta") or {}).get("context"))
 
 
-def _extract_target(record: dict) -> str:
+def extract_target(record: dict) -> str:
+    """The Dan-side body of a pair (messages[2], heading-context stripped)."""
     return pair_body(record["messages"][2]["content"], (record.get("meta") or {}).get("context"))
 
+
+# Backwards-compatible aliases (pre-2026-07 private names).
+_extract_slop = extract_slop
+_extract_target = extract_target
 
 # Field name -> (record -> body text). Defaults cover the pairs schema
 # (messages[1]=slop/user, messages[2]=Dan/assistant). A Phase-4 styler-output
 # JSONL adds an "output" extractor here; nothing else changes.
 FIELD_EXTRACTORS: dict[str, Callable[[dict], str]] = {
-    "slop": _extract_slop,
-    "target": _extract_target,
+    "slop": extract_slop,
+    "target": extract_target,
 }
 
 # meta keys carried onto each score record, so scores group / filter / join
