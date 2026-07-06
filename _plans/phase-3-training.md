@@ -28,13 +28,15 @@ train` is the thin CLI. The blog build can import the function directly.
   personal CLI; accepts the Tinker-exported LoRA. **Fallback:** local MLX on the
   Mac (download → merge → `mlx_lm.server`/Osaurus), then Modal. (Together train+serve
   is parked — dedicated-endpoint-only, wrong idle cost shape.)
-- **`meta.weight` via the detector (if used):** the trained voice classifier's
-  `p_dan` on the Dan side can derive a per-pair weight, but only under the **shared
-  by-POST split** — train the detector on a `--holdout` partition that excludes the
-  posts this run trains on, or the weight is fit on its own training data (leakage).
-  Coordinate one partition across styler-train / detector-train / eval (see
-  `eval-harness.md` "the split contract"). Absolute-probability use wants
-  calibration; ranking does not.
+- **The shared partition is materialised** (built 2026-07-06): consume
+  `stylebot.splits` / the blog's `_training_pairs/splits.json` — Phase 3 trains
+  the styler on the **styler**-role posts only (`splits.role_of(meta.source)`),
+  the detector is already fit on the **detector** pool, and the frozen **eval**
+  posts are for final eval alone (see `eval-harness.md` "the split contract").
+- **`meta.weight` via the detector (if used):** the voice classifier's `p_dan`
+  on the Dan side can derive a per-pair weight — legitimate under the splits
+  contract above (the detector never saw the styler posts). Absolute-probability
+  use wants calibration; ranking does not.
 
 ## Outputs
 

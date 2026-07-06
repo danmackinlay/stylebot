@@ -142,6 +142,46 @@ def test_evaluate_separates_classes():
     assert metrics["mode"] == "cross_val"
     # Single-stratum corpus -> no provenance facet (it would repeat the headline).
     assert "by_provenance" not in metrics
+    # Default C=None -> nested CV: a per-fold C chosen from the grid, recorded.
+    assert metrics["C"]["mode"] == "nested_cv"
+    assert len(metrics["C"]["selected"]) == 4
+    assert all(c in ct.C_GRID for c in metrics["C"]["selected"])
+    # An explicit C is an override, recorded as fixed.
+    fixed = ct.evaluate(X, ds, n_splits=2, test_size=0.34, C=1.0)
+    assert fixed["C"] == {"mode": "fixed", "value": 1.0}
+
+
+def test_select_C_nested_and_fallback():
+    ds, X = _separable_dataset()  # 6 posts, separable at any sane C
+    C, info = ct.select_C(X, ds, list(range(len(ds.texts))))
+    assert C in ct.C_GRID
+    assert info["mode"] == "nested_cv"
+    assert max(v for v in info["scores"].values() if v is not None) > 0.9
+
+    # Too few posts for an inner split -> DEFAULT_C fallback, flagged as such.
+    tiny = ct.Dataset()
+    Xt = []
+    for p in range(2):
+        for c in range(2):
+            tiny._add_pair(f"slop {p}.{c}", f"author {p}.{c}", f"post/p{p}.qmd")
+            Xt += [[1.0, 0.0], [-1.0, 0.0]]
+    C2, info2 = ct.select_C(np.asarray(Xt, dtype=np.float32), tiny, list(range(len(tiny.texts))))
+    assert C2 == ct.DEFAULT_C
+    assert info2["mode"] == "fallback"
+
+
+def test_subset_dataset_remaps_pairs_and_aligns_rows():
+    ds, X = _mixed_dataset()
+    keep = {"post/p0.qmd", "post/p10.qmd"}  # one real + one synthetic post
+    sub, rows = ct.subset_dataset(ds, keep)
+    assert set(sub.groups) == keep
+    assert sub.n_pairs == 6 and sub.n_pairs_synthetic == 3 and sub.n_pairs_real == 3
+    # rows are the kept original indices in order -> X[rows] aligns with sub.
+    assert [ds.texts[i] for i in rows] == sub.texts
+    for k, (s_row, a_row) in enumerate(sub.pair_rows):
+        assert sub.labels[s_row] == ct.LABEL_SLOP and sub.labels[a_row] == ct.LABEL_DAN
+        assert sub.groups[s_row] == sub.groups[a_row]
+        assert sub.texts[s_row].startswith("slop") and sub.texts[a_row].startswith("author")
 
 
 def test_evaluate_facets_by_provenance():
@@ -225,6 +265,77 @@ def test_holdout_eval_and_subset_fit_are_leakage_safe():
     from stylebot.classify import _logreg_p_slop
 
     assert _logreg_p_slop([1.0, 0.0], coef, intercept) > 0.5 > _logreg_p_slop([-1.0, 0.0], coef, intercept)
+
+
+def test_train_with_splits_contract(tmp_path, monkeypatch):
+    """End-to-end splits mode: eval posts never embedded, styler holdout reported,
+    the contract + danger report recorded in meta, artifact serves via the runtime."""
+    import hashlib
+
+    from stylebot import splits as sp
+
+    corpus = tmp_path / "pairs.jsonl"
+    _write_fake_corpus(corpus, n_posts=12, chunks=2, n_synth_posts=4)
+    ds_all = ct.assemble_dataset(corpus)
+    posts = sorted(set(ds_all.groups))
+    real_posts = sorted({
+        ds_all.groups[s] for k, (s, _) in enumerate(ds_all.pair_rows) if not ds_all.pair_is_synthetic(k)
+    })
+    splits_doc = sp.make_splits(posts, eval_frac=0.25, detector_frac=0.5, seed=0, eval_candidates=real_posts)
+    splits_path = sp.save_splits(splits_doc, tmp_path / "splits.json")
+    roles = {p: sp.role_of(p, splits_doc) for p in posts}
+    assert set(roles.values()) == {"eval", "detector", "styler"}  # precondition
+
+    embedded: list[str] = []
+
+    def stub_embed(texts, **kw):
+        embedded.extend(texts)
+        out = []
+        for t in texts:
+            jitter = (int(hashlib.sha256(t.encode()).hexdigest()[:4], 16) / 65535 - 0.5) * 0.1
+            base = 1.0 if t.startswith("It is worth noting") else -1.0  # the slop side
+            out.append([base + jitter, jitter])
+        return np.asarray(out, dtype=np.float32)
+
+    monkeypatch.setattr(ct, "embed_texts", stub_embed)
+    out, metrics = ct.train(corpus, tmp_path / "clf", splits_path=splits_path)
+
+    # The frozen eval stratum was never even encoded.
+    post_of_text = {t: ds_all.groups[i] for i, t in enumerate(ds_all.texts)}
+    eval_posts = {p for p, r in roles.items() if r == "eval"}
+    assert embedded and all(post_of_text[t] not in eval_posts for t in embedded)
+
+    # Styler posts give the bonus unseen-posts metric.
+    assert metrics["styler_holdout"]["mode"] == "holdout"
+    assert metrics["styler_holdout"]["pairwise_accuracy"]["mean"] is not None
+
+    meta = json.loads((out / "meta.json").read_text())
+    assert meta["split"]["mode"] == "splits"
+    assert meta["split"]["rest_rule"] == splits_doc["rest_rule"]
+    assert meta["split"]["roles"]["eval"]["pairs"] > 0  # counted, just untrained-on
+    assert meta["head_C"]["value"] in set(ct.C_GRID) | {ct.DEFAULT_C}
+    # Tiny fixture strata -> the danger report fires and travels with the artifact.
+    assert any("DANGEROUSLY SMALL" in w for w in meta["split"]["warnings"])
+    # n_pairs describes the fit data (detector pool only).
+    assert meta["n_pairs"] == meta["split"]["roles"]["detector"]["pairs"]
+
+    # Round-trip: the artifact serves through the dep-free runtime.
+    from stylebot import classify
+
+    def one_embed(prose: str):
+        jitter = (int(hashlib.sha256(prose.encode()).hexdigest()[:4], 16) / 65535 - 0.5) * 0.1
+        base = 1.0 if prose.startswith("It is worth noting") else -1.0
+        return [base + jitter, jitter]
+
+    det = classify.sklearn_detector(out, embed_fn=one_embed)
+    assert det("It is worth noting that this delves.")["score"] > 0.5 > det("The tight version.")["score"]
+
+
+def test_train_splits_mutually_exclusive_with_holdout(tmp_path):
+    corpus = tmp_path / "pairs.jsonl"
+    _write_fake_corpus(corpus, n_posts=3, chunks=1)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        ct.train(corpus, tmp_path / "clf", splits_path=tmp_path / "splits.json", holdout_frac=0.25)
 
 
 def test_holdout_eval_facets_by_provenance():

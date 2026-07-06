@@ -81,11 +81,18 @@ detector decision". State:
   livingthing `voice_classifier.py` / `train-voice-clf`; artifact `_models/voice-clf/`.
   Score it via `ai-style eval --pairs … --detector-model _models/voice-clf` or
   `train-voice-clf eval`. Keyless, free per pair.
-- **Reward-safety follow-up (for Phase 3/4):** when the detector becomes a reward,
-  retrain with `train-voice-clf train --holdout-frac F` (or `--holdout-posts FILE`)
-  so it isn't fit on the styler's/eval's posts, and keep the judge + eyeball as the
-  orthogonal anti-Goodhart guard. The default fit-all artifact is for measuring an
-  *independent* styler only (`meta.split` says so).
+- **Reward-safety — the shared splits contract (built 2026-07-06):** the canonical
+  three-role partition (frozen **eval** / **styler** / **detector**) lives at
+  livingthing `_training_pairs/splits.json` (made once via `ai-style make-splits`;
+  eval pinned from real-capture posts, the rest hash-assigned so new posts flow in
+  stably). `train-voice-clf train` uses it automatically: head fit on the detector
+  pool only, eval posts never embedded, a styler-posts holdout metric reported,
+  role counts + **danger report** (dangerously-small strata warnings) recorded in
+  `meta.split`. C is selected by **nested group-CV** (`--C` = explicit override —
+  don't sweep it against the printed metric). First run: detector-pool CV
+  0.787/0.742, styler-holdout 0.830/0.726 (88 unseen pairs), head C=10.0. Phase 3
+  must train the styler on the **styler**-role posts and final-eval on **eval**.
+  Keep the judge + eyeball as the orthogonal anti-Goodhart guard regardless.
 - **Synth-augmented retraining:** more `ai-style synth` pairs are valid training
   data (content-matched, by-POST split covers them via `meta.source`). On a mixed
   corpus the metrics auto-facet by provenance (`metrics.by_provenance.real`/

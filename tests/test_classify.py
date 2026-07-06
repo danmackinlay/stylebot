@@ -105,7 +105,7 @@ def test_runtime_import_pulls_no_ml_deps():
 
     code = (
         "import sys\n"
-        "import stylebot.classify, stylebot.classify_train\n"
+        "import stylebot.classify, stylebot.classify_train, stylebot.splits\n"
         "bad = [m for m in ('sklearn', 'numpy', 'sentence_transformers', 'torch')\n"
         "       if any(k == m or k.startswith(m + '.') for k in sys.modules)]\n"
         "assert not bad, f'ML deps loaded at import time: {bad}'\n"

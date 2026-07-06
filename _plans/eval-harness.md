@@ -93,16 +93,33 @@ The detector plays two roles with different safety requirements:
   same model. Best-of-N with small N is gentle (KL ≈ log N), so it's fairly safe;
   DPO/RL needs the orthogonal channel in the loop.
 
-**The split contract (load-bearing):** when the detector is used as a reward, one
-**shared by-POST partition** must govern all three stages — styler-train,
-detector-train, and the frozen eval — so the detector never trains on the posts
-the styler trains on or that eval scores. The trainer supports this:
-`ai-style train-clf --holdout-frac F` (or `--holdout-posts FILE` to pin the
-exact partition; same flags on the blog's `train-voice-clf`) ships a head fit on
-the train posts only and records the holdout post list in `meta.split`;
-downstream stages reuse it. Without that bookkeeping,
-the held-out guarantee is only as good as the split. (The default fit-all artifact
-is for *measurement* of an independent styler, and `meta.split` says so.)
+**The split contract (load-bearing, materialised):** one **shared by-POST
+partition** governs all three stages — styler-train, detector-train, and the
+frozen eval — so the detector never trains on the posts the styler trains on or
+that eval scores. It lives in one canonical file, `splits.json`
+(`ai-style make-splits`; the blog's is committed at
+`_training_pairs/splits.json`), with three roles: **eval** (a frozen pinned
+list, sampled from posts with ≥1 *real* pair), **styler**, and **detector** —
+the latter two assigned by a deterministic hash rule so new posts flow in with
+no file churn and eval can never drift. `ai-style train-clf --splits FILE`
+(auto-used by `train-voice-clf` when the file exists) fits on the detector pool
+only, never even embeds the eval posts, reports a bonus styler-posts holdout
+metric, and records role counts + the danger report in `meta.split`. The
+ad-hoc `--holdout-frac/--holdout-posts` flags remain for experiments; the
+splits file is the contract. (The default fit-all artifact is for *measurement*
+of an independent styler, and `meta.split` says so.)
+
+**Regularization is nested, not hand-tuned:** C defaults to selection by inner
+`GroupKFold` *within each training side* (`select_C`, grid `C_GRID`), so the
+reported CV metric covers the tuning step; `--C` is an explicit override, and
+sweeping it against the printed number is exactly the tuning-on-the-test-set
+this design removes. Residual caveat: the *backbone* bake-off already selected
+StyleDistance on this corpus's CV metric, so the headline carries mild
+winner's-curse inflation — the frozen eval posts are where that gets settled
+honestly, once, at final-eval time. **There is deliberately no fourth
+materialised split for hyperparameters** — nested CV inside the detector pool
+serves that role; a dedicated validation stratum at 28-post scale would starve
+every other role for nothing.
 
 **Synth-augmented training (the provenance facet):** synthetic pairs
 (`meta.synthetic`) can enlarge the training corpus, but "how well do we detect

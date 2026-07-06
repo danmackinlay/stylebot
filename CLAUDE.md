@@ -163,10 +163,18 @@ free-positives selector (`blog_free_positives`), and blog path defaults
 is committed at livingthing `_models/voice-clf/`. Wire it via
 `ai-style eval --detector-model PATH` or `train-voice-clf eval`;
 `score = P(slop)` (composes with `mean_detector_score`), `p_dan` for reward use.
-**Eval vs reward:** a by-POST split makes it an honest eval; as a *reward* it needs
-the shared by-POST holdout (`train-clf --holdout-frac/--holdout-posts`)
-+ the judge/eyeball as the orthogonal anti-Goodhart guard (a split fixes leakage,
-not over-optimisation). Pangram is now only an optional one-shot cross-check. See
+**Eval vs reward — the shared splits contract (2026-07-06):** one canonical
+three-role partition (`stylebot.splits`, stdlib-only; `ai-style make-splits` →
+the blog's committed `_training_pairs/splits.json`): frozen **eval** posts
+(pinned, real-capture only, never embedded by the trainer), **styler** posts
+(Phase 3), **detector** pool (the rest, hash-assigned so new posts flow in
+stably). `train-clf --splits` / `train-voice-clf` (automatic when the file
+exists) fit on the detector pool, report a styler-posts holdout metric, and
+record role counts + a **danger report** (dangerously-small-strata warnings) in
+`meta.split`. **C is selected by nested group-CV** (`select_C`/`C_GRID`;
+`--C` = explicit override — never sweep it against the printed metric). Judge +
+eyeball stay the orthogonal anti-Goodhart guard (a split fixes leakage, not
+over-optimisation). Pangram is only an optional one-shot cross-check. See
 `_plans/eval-harness.md` "The detector decision".
 
 **The active step is the experimental Phase-2 generation loop**, not a one-shot
