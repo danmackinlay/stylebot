@@ -110,7 +110,10 @@ Phase 0 (scaffolding) and Phase 1 (`ai-style-log`, daily-used) are done; Phase 1
 now also captures **heading context** (default ON; see below).
 
 Phase 2 (synthetic pairs) is **built and curated** — `ai-style synth` /
-`train-targets` over `stylebot.synth`, tested green (101 stylebot + 13 blog).
+`dan-style synth` over `stylebot.synth`, tested green (101 stylebot + 13 blog).
+(**Naming rule:** `dan-style X` is the blog-policy mirror of `ai-style X` —
+same subcommand, swap the prefix. `train-targets` / `train-voice-clf` are
+legacy aliases of `dan-style synth` / `dan-style train-clf|eval`.)
 The target-curation pipeline (all generic mechanism in `stylebot`, policy in the
 blog's `livingthing.training_targets`):
 - prose-only extraction (`segment_for_edit`), hygiene (min/max chars, tables,
@@ -128,7 +131,7 @@ Real-blog dry-run: ~3.6k passages from 492 quality>6 posts, 85% heading-framed.
 `STRATEGIES` / `--slop-strategy` (`polish`|`engaging`|`catalogue`) /
 `--slop-system-file`, recorded as `meta.slop_strategy` and folded into `synth_key`.
 `openrouter_generator` / `--openrouter-model` reach many models off one
-**`OPENROUTER_API_KEY`** (the blog's `train-targets` now defaults to an OpenRouter
+**`OPENROUTER_API_KEY`** (the blog's `dan-style synth` now defaults to an OpenRouter
 rotation). Add `OPENROUTER_API_KEY` to `.env` / `.envrc` (gitignored).
 
 **Eval harness (built 2026-06-28; batched 2026-06-28).** `stylebot.eval` +
@@ -159,16 +162,16 @@ Both halves are stylebot mechanism now, split by dependency weight:
   Generic CLI: `ai-style train-clf`.
 livingthing keeps only *policy* (~100 lines): the backbone pin, the
 free-positives selector (`blog_free_positives`), and blog path defaults
-(`train-voice-clf`, which delegates). The artifact (`head.json` + `meta.json`)
+(`dan-style train-clf`, which delegates). The artifact (`head.json` + `meta.json`)
 is committed at livingthing `_models/voice-clf/`. Wire it via
-`ai-style eval --detector-model PATH` or `train-voice-clf eval`;
+`ai-style eval --detector-model PATH` or `dan-style eval`;
 `score = P(slop)` (composes with `mean_detector_score`), `p_dan` for reward use.
 **Eval vs reward — the shared splits contract (2026-07-06):** one canonical
 three-role partition (`stylebot.splits`, stdlib-only; `ai-style make-splits` →
 the blog's committed `_training_pairs/splits.json`): frozen **eval** posts
 (pinned, real-capture only, never embedded by the trainer), **styler** posts
 (Phase 3), **detector** pool (the rest, hash-assigned so new posts flow in
-stably). `train-clf --splits` / `train-voice-clf` (automatic when the file
+stably). `train-clf --splits` / `dan-style train-clf` (automatic when the file
 exists) fit on the detector pool, report a styler-posts holdout metric, and
 record role counts + a **danger report** (dangerously-small-strata warnings) in
 `meta.split`. **C is selected by nested group-CV** (`select_C`/`C_GRID`;
@@ -180,8 +183,8 @@ over-optimisation). Pangram is only an optional one-shot cross-check. See
 **The active step is the experimental Phase-2 generation loop**, not a one-shot
 paid run: per `--slop-strategy`, generate a small batch into a *scratch*
 `--data-dir`, eyeball (`--report`/`--sample`), score with `ai-style eval`, promote
-a winner into the real corpus. **Experiments run through `train-targets` too**
-(`cd ~/Source/livingthing && uv run train-targets --data-dir /tmp/scratch
+a winner into the real corpus. **Experiments run through `dan-style synth` too**
+(`cd ~/Source/livingthing && uv run dan-style synth --data-dir /tmp/scratch
 --slop-strategy X --limit 40`), not bare `ai-style synth` — the wrapper carries
 the blog chunking/selection policy (merge into ~1.5k-char passages, quality>6,
 heading context); the generic CLI's defaults are unmerged ~100-char fragments,

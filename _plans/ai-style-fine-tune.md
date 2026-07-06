@@ -49,7 +49,7 @@ Sample paragraph-or-section chunks from `automation: 0`; for each, call a genera
 
 **Method M5 — bias toward styler use cases**: sample chunks from notebook drafts and post-introductions (short, dense prose where voice matters most), not just long reference-style notebook sections that read more like docs.
 
-**Method M6 — detector-in-the-loop slop calibration** (optional): score paraphrases with the **trained voice classifier** (Phase 4a; `train-voice-clf`); if `P(slop)` is below threshold, re-prompt for harder sloppification. Produces synthetic pairs with calibrated AI-ness on the input side. Cost: ~$0 (keyless local detector).
+**Method M6 — detector-in-the-loop slop calibration** (optional): score paraphrases with the **trained voice classifier** (Phase 4a; `dan-style train-clf`); if `P(slop)` is below threshold, re-prompt for harder sloppification. Produces synthetic pairs with calibrated AI-ness on the input side. Cost: ~$0 (keyless local detector).
 
 **Output**: `_training_pairs/synthetic.jsonl` in Together chat format with `STYLE_SYSTEM` as the system message. Pre-train sanity: eyeball 30 random pairs (slop side obviously sloppy, target side obviously Dan, markdown preserved); distribution stats (length / edit-distance / Vale-warning delta); confirm Phase-1 real pairs fit the same format. Phase-1 real pairs mix in unweighted at first; upweight via duplication if they look much cleaner than synthetic.
 
@@ -67,7 +67,7 @@ Build `uv run ai-style-eval` so future fine-tunes compare apples-to-apples:
 - **Four eval channels**:
   - **Vale**: slop warnings per 1k words. Deterministic, automatable, runs every iteration.
   - **LLM-as-judge**: side-by-side blind comparison ("which output is more like a human writer with this style sheet?"). ~$2/batch.
-  - **Trained voice classifier** (Phase 4a; `train-voice-clf eval` / `ai-style eval --detector-model`): per-passage `P(slop)`, keyless and free. (Optional: a one-shot **Pangram** cross-check as an *independent* family — see decisions.md#D7.)
+  - **Trained voice classifier** (Phase 4a; `dan-style eval` / `ai-style eval --detector-model`): per-passage `P(slop)`, keyless and free. (Optional: a one-shot **Pangram** cross-check as an *independent* family — see decisions.md#D7.)
   - **Eyeball**: Dan reads 20 random samples and votes. The veto channel.
 - Save eval results to `_training_pairs/runs/<timestamp>/eval.json`.
 
@@ -75,7 +75,7 @@ Also: an optional one-off Pangram pass over `automation: 0` (~$5) could surface 
 
 ### Phase 4a: the voice classifier (BUILT 2026-06-30) — the local reward signal
 
-**Enables M6, the `--best-of N` flag in Phase 5, and Phase 7 — with no gating spend.** Earlier this slot was a ~$50–60 Pangram-distillation job; superseded. We already hold content-matched `(slop, Dan)` labels, so we trained a Dan-vs-slop classifier *directly* on the pairs: a frozen **StyleDistance** style embedding + a logistic head (bake-off winner, 0.78 pairwise / 0.72 AUC, beating the mxbai baseline), scored by a pure-Python dot product in `stylebot.classify`. Keyless, free per call, callable anywhere (eval, best-of-N, a future DPO loop). Trainer: `stylebot.classify_train` / `ai-style train-clf` (generic mechanism, behind the `stylebot[classifier]` extra); `train-voice-clf` is the blog wrapper adding path defaults + the free-positives policy; artifact at `_models/voice-clf/`. **Reward-safety:** train with `--holdout-frac/--holdout-posts` (shared by-POST split) so it isn't fit on the styler's posts, and keep R_judge + eyeball as the orthogonal anti-Goodhart guard. Full rationale: decisions.md#D7.
+**Enables M6, the `--best-of N` flag in Phase 5, and Phase 7 — with no gating spend.** Earlier this slot was a ~$50–60 Pangram-distillation job; superseded. We already hold content-matched `(slop, Dan)` labels, so we trained a Dan-vs-slop classifier *directly* on the pairs: a frozen **StyleDistance** style embedding + a logistic head (bake-off winner, 0.78 pairwise / 0.72 AUC, beating the mxbai baseline), scored by a pure-Python dot product in `stylebot.classify`. Keyless, free per call, callable anywhere (eval, best-of-N, a future DPO loop). Trainer: `stylebot.classify_train` / `ai-style train-clf` (generic mechanism, behind the `stylebot[classifier]` extra); `dan-style train-clf` is the blog wrapper adding path defaults + the free-positives policy; artifact at `_models/voice-clf/`. **Reward-safety:** train with `--holdout-frac/--holdout-posts` (shared by-POST split) so it isn't fit on the styler's posts, and keep R_judge + eyeball as the orthogonal anti-Goodhart guard. Full rationale: decisions.md#D7.
 
 ### Phase 5: `uv run ai-style` CLI (~1 day)
 

@@ -91,7 +91,7 @@ restyle the body." `validate_pairs_file` stays valid unchanged.
 6. CLI `ai-style synth --heading-context [none|immediate|breadcrumb]`; `report.py`
    shows the context (prefix/column) so heading+passage units are eyeball-able.
 7. Blog policy (`livingthing.training_targets`): add `HEADING_CONTEXT =
-   "breadcrumb"` (or `"immediate"`), wired by `train-targets`.
+   "breadcrumb"` (or `"immediate"`), wired by `dan-style synth`.
 
 ## Phase 1 — real capture (`stylebot.bin.ai_style_log`)
 

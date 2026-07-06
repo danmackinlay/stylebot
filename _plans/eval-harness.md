@@ -10,7 +10,7 @@ library functions + the thin `ai-style eval` CLI. Runs keyless by default (Vale
 + null judge/detector); `--judge` scores voice via OpenRouter. **All four signals
 are now live:** the statistical detector is the **trained Dan-voice classifier**
 (`stylebot.classify` seam + the livingthing-trained head), wired via
-`ai-style eval --detector-model PATH` / `train-voice-clf eval`. It replaced the
+`ai-style eval --detector-model PATH` / `dan-style eval`. It replaced the
 "audition a general AI-detector vs Pangram" plan — see "The detector decision"
 below. Keyless + free per pair.
 
@@ -57,7 +57,7 @@ enforced by a test); the **trainer** is `stylebot/classify_train.py` (dataset
 assembly, the POST-split methodology, artifact I/O) behind the
 `stylebot[classifier]` extra, with the generic CLI `ai-style train-clf`.
 Author-specific *policy* — backbone pin, free-positives selector, path
-defaults — lives in livingthing (`voice_classifier.py` / `train-voice-clf`,
+defaults — lives in livingthing (`voice_classifier.py` / `dan-style train-clf`,
 a thin delegate). The
 backbone was a **measured** choice — a bake-off over the content-matched pairs
 ranked candidates by content-matched pairwise accuracy + AUC (split by POST):
@@ -102,7 +102,7 @@ that eval scores. It lives in one canonical file, `splits.json`
 list, sampled from posts with ≥1 *real* pair), **styler**, and **detector** —
 the latter two assigned by a deterministic hash rule so new posts flow in with
 no file churn and eval can never drift. `ai-style train-clf --splits FILE`
-(auto-used by `train-voice-clf` when the file exists) fits on the detector pool
+(auto-used by `dan-style train-clf` when the file exists) fits on the detector pool
 only, never even embeds the eval posts, reports a bonus styler-posts holdout
 metric, and records role counts + the danger report in `meta.split`. The
 ad-hoc `--holdout-frac/--holdout-posts` flags remain for experiments; the
@@ -183,7 +183,7 @@ it consumes the `meta.gen` covariates Phase-2 now records. See
       (StyleDistance backbone, bake-off-selected) is the detector; `Detector` seam
       unchanged (`prose -> {score=P(slop), p_dan, name}`), served via
       `stylebot.classify` and `ai-style eval --detector-model PATH` /
-      `train-voice-clf eval`. Held-out by-POST pairwise 0.78 / AUC 0.72; the
+      `dan-style eval`. Held-out by-POST pairwise 0.78 / AUC 0.72; the
       `--holdout-frac`/`--holdout-posts` split makes it reward-safe (see above).
 - [x] Scores emitted in a stable, **id-keyed** schema (`scores.jsonl` +
       `schema_version: 2` summary) that Phase 3/4 can cite and join back to pairs.

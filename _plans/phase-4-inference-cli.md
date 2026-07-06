@@ -31,7 +31,7 @@ a thin CLI over a `stylebot.infer` library function the blog build can import.
   stdout, `--write` to edit in place).
 - Optional: best-of-N candidate selection using the trained voice classifier
   (`p_dan = 1 - score`) as a cheap reward signal — a later enhancement. **Reward
-  safety:** train the detector with a held-out by-POST split (`train-voice-clf
+  safety:** train the detector with a held-out by-POST split (`dan-style train-clf
   train --holdout-frac/--holdout-posts`) so it isn't fit on this styler's posts,
   and keep the LLM-judge + eyeball as the orthogonal anti-Goodhart guard (a split
   fixes leakage, not over-optimisation). See `eval-harness.md` "Eval vs reward".

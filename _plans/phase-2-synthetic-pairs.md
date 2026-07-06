@@ -80,7 +80,7 @@ not guessed once:
   `OPENROUTER_API_KEY` (OpenAI-compatible; tagged `openrouter/<model>` in
   `meta.generator`), making multi-source rotation a single-credential affair.
   CLI: `--openrouter-model <id>` (repeatable) on both `ai-style synth` and the
-  blog's `train-targets` (whose default is now an OpenRouter rotation — see
+  blog's `dan-style synth` (whose default is now an OpenRouter rotation — see
   `livingthing.training_targets.OPENROUTER_MODELS` / `SLOP_STRATEGY`).
 - **Work the loop, not a one-shot run:** generate a small batch per strategy into
   a scratch `--data-dir`, eyeball via `--report`/`--sample`, then score it with
@@ -151,7 +151,7 @@ Append to the same `$STYLEBOT_DATA_DIR/pairs.jsonl`:
       ```
 
       Once a strategy (or mix) is chosen, the corpus run is
-      `cd ~/Source/livingthing && uv run train-targets --limit N` (defaults to the
+      `cd ~/Source/livingthing && uv run dan-style synth --limit N` (defaults to the
       OpenRouter rotation; `--dry-run`/`--report` first).
 
 ## Generation covariates & experiments (built 2026-06-29)

@@ -17,7 +17,7 @@ All green: `uv run pytest -q` = **143 passing** (stylebot, incl. the dep-free
 
 - **Phase 0/1** — scaffolding + `ai-style-log` (daily pair capture) shipped;
   heading context added.
-- **Phase 2** — `ai-style synth` / blog `train-targets` built + curated. Slop is
+- **Phase 2** — `ai-style synth` / blog `dan-style synth` built + curated. Slop is
   a **knob** (`STRATEGIES` / `--slop-strategy` / `--slop-system-file`) and
   **multi-source** via `openrouter_generator` (one `OPENROUTER_API_KEY`). The
   paid at-scale run is **not yet done** — it's the active step below.
@@ -25,7 +25,7 @@ All green: `uv run pytest -q` = **143 passing** (stylebot, incl. the dep-free
   `pairs.jsonl` → id-keyed `scores.jsonl`, `summarize_scores(by=…)`, and a scores
   **HTML report** (`--report`). Live OpenRouter judge wiring **verified**. The 4th
   signal — the **trained voice classifier** — is now built (StyleDistance backbone;
-  `ai-style eval --detector-model` / `train-voice-clf`), so all four signals run.
+  `ai-style eval --detector-model` / `dan-style train-clf`), so all four signals run.
 - **Deferred (planned, not built):** `meta.weight`, Phase 3 (LoRA training),
   Phase 4 (inference CLI).
 
@@ -56,8 +56,8 @@ direnv exec . uv run ai-style eval --pairs /tmp/slop-experiments/pairs.jsonl \
 
 ```sh
 cd ~/Source/livingthing
-direnv exec . uv run train-targets --dry-run --report /tmp/corpus.html   # vet first
-direnv exec . uv run train-targets --limit 3000 --slop-strategy <winner>  # spends $$
+direnv exec . uv run dan-style synth --dry-run --report /tmp/corpus.html   # vet first
+direnv exec . uv run dan-style synth --limit 3000 --slop-strategy <winner>  # spends $$
 ```
 
 Corpus lives at `~/Source/livingthing/_training_pairs/pairs.jsonl` (private,
@@ -78,14 +78,14 @@ detector decision". State:
 - **Built + wired:** StyleDistance backbone (bake-off winner, 0.78/0.72 held-out).
   Runtime `stylebot.classify` (dep-free); generic trainer `stylebot.classify_train`
   / `ai-style train-clf` (`stylebot[classifier]` extra); blog policy wrapper
-  livingthing `voice_classifier.py` / `train-voice-clf`; artifact `_models/voice-clf/`.
+  livingthing `voice_classifier.py` / `dan-style train-clf`; artifact `_models/voice-clf/`.
   Score it via `ai-style eval --pairs … --detector-model _models/voice-clf` or
-  `train-voice-clf eval`. Keyless, free per pair.
+  `dan-style eval`. Keyless, free per pair.
 - **Reward-safety — the shared splits contract (built 2026-07-06):** the canonical
   three-role partition (frozen **eval** / **styler** / **detector**) lives at
   livingthing `_training_pairs/splits.json` (made once via `ai-style make-splits`;
   eval pinned from real-capture posts, the rest hash-assigned so new posts flow in
-  stably). `train-voice-clf train` uses it automatically: head fit on the detector
+  stably). `dan-style train-clf` uses it automatically: head fit on the detector
   pool only, eval posts never embedded, a styler-posts holdout metric reported,
   role counts + **danger report** (dangerously-small strata warnings) recorded in
   `meta.split`. C is selected by **nested group-CV** (`--C` = explicit override —
