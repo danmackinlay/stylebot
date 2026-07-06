@@ -32,8 +32,10 @@ and the contracts *between* stages matter more than internal abstraction. So:
    a documented on-disk format (below). That's what lets phases be built in
    parallel against a few fixture rows, and farmed out to subagents.
 4. **The corpus and secrets never enter this public repo.** The corpus is
-   gitignored and manually backed up (see `_training_pairs/README.md`); keys
-   live in `.env` (gitignored — see `.env.example`).
+   gitignored here; its canonical home is the livingthing repo, where it is
+   committed (`_training_pairs/pairs.jsonl`, since 2026-07, for portability —
+   see `_training_pairs/README.md`). Keys live in `.env` (gitignored — see
+   `.env.example`).
 5. **Verify with a number, never with vibes.** "Does the styler work" is
    exactly where an ML project rots. The eval harness is therefore an *early*
    parallel track, not a final step.
@@ -145,6 +147,7 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 | 3 · LoRA training | [`phase-3-training.md`](phase-3-training.md) | 📋 planned | enough pairs |
 | 4 · Inference CLI | [`phase-4-inference-cli.md`](phase-4-inference-cli.md) | 📋 planned | a trained adapter |
 | E · Eval harness | [`eval-harness.md`](eval-harness.md) | 🔧 built (`stylebot.eval` / `ai-style eval`); **all four signals live** — detector = trained voice classifier (StyleDistance) | only sample prose |
+| — · VS Code marker | [`vscode-marker.md`](vscode-marker.md) | 🔧 in progress — `ai-style serve` sidecar + editor extension marking paragraphs with detector `P(slop)` | the trained detector (have it) |
 
 > **Codebase hygiene (2026-06-29).** A QA declutter pass removed the dead
 > blog-build code bulk-copied into stylebot (`migrate_ai_dates`,

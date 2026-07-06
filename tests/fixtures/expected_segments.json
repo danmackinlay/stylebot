@@ -1,0 +1,10 @@
+{
+  "paragraphs": [
+    "This is an ordinary prose paragraph, long enough to be scored, sitting under a\nheading. It has two lines and no protected content at all.",
+    "A second paragraph follows after a blank line. It mentions `inline code` and\n$e^{i\\pi}$ inline math, both of which stay inside the paragraph.",
+    "Prose immediately after the fence, with a blank line before it.\nThis paragraph runs right up to a code fence with no blank line between them:",
+    "Short.",
+    "- a list item paragraph survives segmentation (list handling is a scoring-policy\n  question, not a segmentation one)\n- with two items",
+    "The final paragraph closes the file, checking the end-of-document flush path."
+  ]
+}

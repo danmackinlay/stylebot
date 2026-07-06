@@ -57,12 +57,15 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
 
 ## Never commit
 
-- The **corpus** (`$STYLEBOT_DATA_DIR`, default `_training_pairs/` — gitignored
-  except its README). It is private and manually backed up; this repo is public.
+- The **corpus** never enters **this repo** (`$STYLEBOT_DATA_DIR`, default
+  `_training_pairs/` — gitignored except its README): stylebot is public
+  tooling. The real corpus lives in the livingthing repo, where it *is*
+  committed (`_training_pairs/pairs.jsonl`, since 2026-07, for portability) —
+  that's the backup story. The rule here is about *this* repo, not the data.
 - **Secrets** (`.env`). Copy `.env.example` → `.env` and fill in per-phase keys.
 
-Sanity-check before any commit: `git status` must never show `.env` or
-`pairs.jsonl`.
+Sanity-check before any commit in stylebot: `git status` must never show
+`.env` or `pairs.jsonl`.
 
 ## Validating corpus data
 

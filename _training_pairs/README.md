@@ -5,7 +5,10 @@ This directory holds the **training corpus**: the captured and synthesised
 valuable, private asset.
 
 **Everything in here except this README is gitignored.** The stylebot code
-repo is public; the corpus is not. Do not `git add -f` the data.
+repo is public tooling and never carries the data. Do not `git add -f` it.
+The *canonical* corpus lives in the livingthing repo, where it **is**
+committed (`livingthing/_training_pairs/pairs.jsonl`, since 2026-07, for
+portability) — the never-commit rule is about this repo, not the data.
 
 ## Layout
 
@@ -39,10 +42,10 @@ relative to the current working directory. So:
 Keeping one canonical corpus path (rather than copies scattered per repo)
 avoids the classic "which pairs.jsonl is the real one" failure.
 
-## Backup policy (manual)
+## Backup policy
 
-The corpus is **not** versioned in any git repo. Its only recovery backstop is
-your own backup. Practical minimums:
+The canonical corpus is versioned in the (livingthing) blog repo as of
+2026-07, so git history is the primary backstop. Remaining practical care:
 
 - Treat `pairs.jsonl` as precious: a careless `ai-style-log save --replace`
   (or `--append` then `tidy`) can drop pairs irrecoverably.
@@ -57,6 +60,6 @@ your own backup. Practical minimums:
 - Make sure the corpus directory is inside whatever your machine backup
   already covers (Time Machine, Backblaze, rsync target, …).
 
-If you later outgrow manual backup, the natural upgrades are a private git
-repo for the corpus or an object-storage bucket — `STYLEBOT_DATA_DIR` makes
-either a one-line change with no code edits.
+If your corpus can't live in a git repo (too big, too private), the natural
+alternative is an object-storage bucket — `STYLEBOT_DATA_DIR` makes that a
+one-line change with no code edits.

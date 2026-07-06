@@ -1,0 +1,49 @@
+---
+title: Segmentation parity fixture
+date: 2026-07-06
+automation: 0
+---
+
+## A heading that must not be scored
+
+This is an ordinary prose paragraph, long enough to be scored, sitting under a
+heading. It has two lines and no protected content at all.
+
+A second paragraph follows after a blank line. It mentions `inline code` and
+$e^{i\pi}$ inline math, both of which stay inside the paragraph.
+
+```python
+def protected():
+    return "code fences are dropped, not scored"
+```
+
+Prose immediately after the fence, with a blank line before it.
+This paragraph runs right up to a code fence with no blank line between them:
+```sh
+echo "adjacent fence"
+```
+
+$$
+\int_0^1 x^2 \, dx = \frac{1}{3}
+$$ {#eq-protected}
+
+> A blockquote is somebody else's voice, so it is protected and never scored.
+> It continues over two lines.
+
+:::{.callout-note}
+Callouts are protected as a block.
+
+:::{.callout-tip}
+Even when they nest.
+:::
+
+Still inside the outer callout.
+:::
+
+Short.
+
+- a list item paragraph survives segmentation (list handling is a scoring-policy
+  question, not a segmentation one)
+- with two items
+
+The final paragraph closes the file, checking the end-of-document flush path.

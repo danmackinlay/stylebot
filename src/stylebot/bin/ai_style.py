@@ -1,10 +1,11 @@
 """ai-style: the one-entry-point CLI (subcommands), thin over the libraries.
 
 Per OVERVIEW "Interfaces": one command, subcommands `synth | split | train |
-eval` — not a scatter of loose scripts. Each subcommand is a thin `click`
-wrapper that parses flags and calls a typed library function. `synth` (Phase 2)
-and `eval` (the offline scorer, `stylebot.eval`) are built; `split` / `train`
-land with their phases.
+eval | serve` — not a scatter of loose scripts. Each subcommand is a thin
+`click` wrapper that parses flags and calls a typed library function. `synth`
+(Phase 2), `eval` (the offline scorer, `stylebot.eval`) and `serve` (the NDJSON
+scoring sidecar, `stylebot.serve`) are built; `split` / `train` land with their
+phases.
 
 The shipped `ai-style-log` (Phase 1) stays its own console script — it is
 daily-used and its CLI predates this group.
@@ -462,6 +463,38 @@ def eval_cmd(
                 facet_by=facet_by,
             )
             click.echo(f"wrote report -> {written}")
+
+
+@main.command("serve")
+@click.option(
+    "--detector-model",
+    "detector_model",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="A trained voice-classifier artifact dir (head.json + meta.json); needs the "
+    "pinned embedder (sentence-transformers) installed.",
+)
+def serve_cmd(detector_model: Path) -> None:
+    """Score texts over stdin/stdout NDJSON (long-lived editor sidecar).
+
+    Loads the detector once (the embedding model is the slow part), then serves
+    {"id", "op": "score", "texts": [...]} -> {"id", "scores": [P(slop), ...]}
+    one JSON object per line until EOF. {"op": "info"} returns the artifact's
+    meta.json and doubles as the client's ready handshake. Protocol details:
+    stylebot.serve.
+    """
+    from stylebot import classify, serve
+
+    try:
+        meta = classify.load_artifact_meta(detector_model)
+        detector = classify.sklearn_detector(detector_model)
+    except ImportError as exc:
+        raise click.ClickException(
+            f"--detector-model needs the embedder installed (sentence-transformers): {exc}"
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+    serve.serve_loop(detector, sys.stdin, sys.stdout, meta=meta)
 
 
 if __name__ == "__main__":
