@@ -121,10 +121,16 @@ not guessed once:
      `--facet-by session_turn`.
    - **Cost/overflow control**: a session ends at
      `min(--session-max-tokens (default 32k), 0.8 × window)` estimated prompt
-     tokens or at `--session-turns`, whichever first. Input cost grows
-     ~quadratically with the budget (a 32k session costs ~25× the input tokens
-     of the same pairs stateless) — size experiments accordingly. Per-model
-     budget overrides exist as a library hook (`Generator.session_budget` /
+     tokens or at `--session-turns`, whichever first. Input *tokens* grow
+     ~quadratically with session depth (each stateless call re-sends the
+     history; a 32k session bills ~25× the input tokens of the same pairs
+     stateless). Whether *dollars* follow depends on the serving provider's
+     cache-read discount — measured live 2026-07-06: qwen-via-Groq and
+     sub-1024-token OpenAI prompts get `cached_tokens=0`, i.e. genuinely
+     quadratic dollars; providers with prompt caching flatten it. Don't infer:
+     `meta.gen` records the billing ground truth per pair (`cost` in credits +
+     `cached_tokens`, via OpenRouter `usage.include`). Per-model budget
+     overrides exist as a library hook (`Generator.session_budget` /
      `run_synth(session_budgets=…)`), unused by default.
    - **Keys/resume**: multi-turn keys fold `session_id:turn` into `synth_key`
      (turns coexist; a crashed session resumes by replaying recorded slop into

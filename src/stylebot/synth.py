@@ -743,6 +743,7 @@ def openai_generator(
         # reasoning_tokens ~ its budget; a slow upstream shows as low
         # completion_tokens / gen_seconds.
         details = getattr(usage, "completion_tokens_details", None)
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
         gen_meta = {
             "model": model,
             "reasoning_effort": reasoning_effort,
@@ -753,6 +754,13 @@ def openai_generator(
             "prompt_tokens": getattr(usage, "prompt_tokens", None),
             "completion_tokens": getattr(usage, "completion_tokens", None),
             "reasoning_tokens": getattr(details, "reasoning_tokens", None),
+            # Billing ground truth (OpenRouter, when usage.include is on):
+            # cached_tokens = prompt prefix billed at the provider's cache-read
+            # discount (0/None on providers with no cache pricing), cost = the
+            # actual credits charged for THIS request. Session cost analysis
+            # sums these instead of trusting token arithmetic.
+            "cached_tokens": getattr(prompt_details, "cached_tokens", None),
+            "cost": getattr(usage, "cost", None),
             "gen_seconds": round(gen_seconds, 2),
             # OpenRouter reports which upstream provider actually served the
             # request (None elsewhere) — the routing outcome, next to the
@@ -857,6 +865,10 @@ def openrouter_generator(
     extra_body = dict(_reasoning_extra_body(model, reasoning_effort) or {})
     if provider_sort:
         extra_body["provider"] = {"sort": provider_sort}
+    # Ask OpenRouter to return billing ground truth in usage: per-request cost
+    # (credits) and cached_tokens (cache-read-discounted prefix) — recorded in
+    # meta.gen so session cost curves are measured, not inferred from tokens.
+    extra_body["usage"] = {"include": True}
     return openai_generator(
         model=model,
         strategy=strategy,

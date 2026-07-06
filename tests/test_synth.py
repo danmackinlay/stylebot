@@ -464,7 +464,7 @@ def test_openrouter_reasoning_effort_enum(monkeypatch):
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice("slop out")]))
     out = _run_gen(synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x"), "rewrite me")
     assert out.text == "slop out"  # GenOutput, not a bare string
-    assert calls["extra_body"] == {"reasoning": {"effort": "high"}, "provider": {"sort": "throughput"}}
+    assert calls["extra_body"] == {"reasoning": {"effort": "high"}, "provider": {"sort": "throughput"}, "usage": {"include": True}}
     assert out.meta["provider_sort"] == "throughput"  # the routing request, recorded
 
 
@@ -472,13 +472,13 @@ def test_openrouter_reasoning_budget_family(monkeypatch):
     # Budget-style families (qwen/nvidia/google/…) get a token budget instead.
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
     _run_gen(synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="medium"), "x")
-    assert calls["extra_body"] == {"reasoning": {"max_tokens": 4000}, "provider": {"sort": "throughput"}}
+    assert calls["extra_body"] == {"reasoning": {"max_tokens": 4000}, "provider": {"sort": "throughput"}, "usage": {"include": True}}
 
 
 def test_openrouter_reasoning_off(monkeypatch):
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
     _run_gen(synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="off"), "x")
-    assert calls["extra_body"] == {"reasoning": {"enabled": False}, "provider": {"sort": "throughput"}}
+    assert calls["extra_body"] == {"reasoning": {"enabled": False}, "provider": {"sort": "throughput"}, "usage": {"include": True}}
 
 
 def test_openrouter_provider_sort_none_omits_field(monkeypatch):
