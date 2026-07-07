@@ -613,6 +613,10 @@ class Generator:
     reasoning_effort: str = DEFAULT_REASONING_EFFORT
     prompt_id: str = ""
     prompt_version: int = 0
+    # Full system-prompt text (factories set it); synthesize_pairs archives it
+    # to <data-dir>/prompts.jsonl so a prompt_id is always resolvable to the
+    # exact prompt that produced the pairs sitting next to it.
+    prompt_system: str = ""
     session_budget: int | None = None
     begin_session: Callable[[], Callable[..., "str | GenOutput"]] | None = None
 
@@ -812,6 +816,7 @@ def openai_generator(
         reasoning_effort=reasoning_effort,
         prompt_id=prompt_id,
         prompt_version=prompt_version,
+        prompt_system=system,
         # Multi-turn sessions get a per-session closure whose pin_state makes
         # routing sticky after turn 1 (only when requested — presets/local have
         # no provider routing to pin).
@@ -1154,6 +1159,33 @@ def _plan_sessions(
     return sessions
 
 
+def _record_prompts(data_dir: Path, generators: Sequence[Generator]) -> None:
+    """Archive each run's system prompts to `<data-dir>/prompts.jsonl` (id-deduped).
+
+    `meta.gen.prompt_id` is a content hash — opaque on its own. This sidecar
+    keeps the exact prompt text next to the corpus it produced, so
+    "what did prompt dc0f6c5c5de6 actually say?" is a grep, including for
+    custom `--slop-system-file` prompts and superseded registry versions.
+    """
+    path = data_dir / "prompts.jsonl"
+    seen: set[str] = set()
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                seen.add(json.loads(line).get("prompt_id", ""))
+    with path.open("a", encoding="utf-8") as fp:
+        for g in generators:
+            if g.prompt_id and g.prompt_system and g.prompt_id not in seen:
+                entry = {
+                    "prompt_id": g.prompt_id,
+                    "label": g.strategy,
+                    "version": g.prompt_version,
+                    "system": g.prompt_system,
+                }
+                fp.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                seen.add(g.prompt_id)
+
+
 def _exchange(user_text: str, assistant_text: str) -> list[dict]:
     """One (user → assistant) session exchange, as chat messages."""
     return [
@@ -1245,6 +1277,7 @@ def synthesize_pairs(
                     recorded_slop[k] = extract_slop(rec)
 
     data_dir.mkdir(parents=True, exist_ok=True)
+    _record_prompts(data_dir, generators)
     windows = dict(context_windows or {})
     claimed: set[str] = set()  # in-run dup guard, claimed BEFORE the await
     state = {"done": 0}

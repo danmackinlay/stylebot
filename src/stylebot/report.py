@@ -322,11 +322,26 @@ def _scores_rows_data(records: Sequence[dict], pairs_by_id: dict[str, dict], fie
             "generator": str(meta.get("generator") or pair_meta.get("generator") or "—"),
             "reasoning": str(meta.get("reasoning_effort") or gen.get("reasoning_effort") or "—"),
             "prompt": str(meta.get("prompt_id") or gen.get("prompt_id") or "—"),
+            # Human-readable prompt: "catalogue v1" (the content-hash id stays
+            # as the dedup/facet key and the tooltip).
+            "prompt_label": _prompt_display(
+                meta.get("prompt_label") or gen.get("prompt_label"),
+                meta.get("prompt_version") or gen.get("prompt_version"),
+                meta.get("prompt_id") or gen.get("prompt_id"),
+            ),
+            "turn": gen.get("session_turn"),
             "cells": cells,
             "delta": delta,
             "gen": gen,
         })
     return rows
+
+
+def _prompt_display(label, version, prompt_id) -> str:
+    """"catalogue v1" when the pair recorded a label; else the bare hash id."""
+    if label:
+        return f"{label} v{version}" if version else str(label)
+    return str(prompt_id) if prompt_id else "—"
 
 
 def _load_scores_rows(scores, pairs_path, fields: Sequence[str]) -> tuple[list[dict], list[dict]]:
@@ -368,6 +383,7 @@ _SCORES_CSS = """
 .histos{display:flex;gap:16px;margin:8px 0}
 .histos figure{flex:1;margin:0}.histos figcaption{font-size:12px;color:var(--muted);margin-top:2px}
 .srcsub{font-size:11px;color:var(--muted)}
+.facet{font-size:12px;white-space:nowrap;vertical-align:top}
 .gensub{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;margin-top:2px}
 .cmp{display:flex;gap:16px}.cmp>div{flex:1;min-width:0}
 .fh{display:flex;align-items:center;gap:8px;margin-bottom:4px}
@@ -428,21 +444,20 @@ def _vale_chip(alerts: int | None) -> str:
 
 
 def _gen_subline(gen: dict) -> str:
-    """A muted one-line summary of generation covariates (empty for real pairs)."""
+    """A muted one-line summary of the NON-column covariates (empty for real
+    pairs). Model/reasoning/prompt/turn have their own plain-text columns."""
     if not gen:
         return ""
     parts: list[str] = []
-    if gen.get("model"):
-        parts.append(str(gen["model"]))
-    if gen.get("reasoning_effort"):
-        parts.append(f"reasoning={gen['reasoning_effort']}")
     if gen.get("temperature") is not None:
         parts.append(f"t={gen['temperature']}")
     if gen.get("top_p") is not None:
         parts.append(f"top_p={gen['top_p']}")
-    if gen.get("prompt_id"):
-        parts.append(f"prompt {gen['prompt_id']}")
-    if gen.get("finish_reason"):
+    if gen.get("window_fill") is not None:
+        parts.append(f"fill={gen['window_fill']}")
+    if gen.get("provider"):
+        parts.append(str(gen["provider"]))
+    if gen.get("finish_reason") and gen["finish_reason"] != "stop":
         parts.append(str(gen["finish_reason"]))
     return f"<div class=gensub>{html.escape(' · '.join(parts))}</div>" if parts else ""
 
@@ -469,16 +484,21 @@ def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows
         d_cls = "d-na" if delta is None else ("d-pos" if delta > 0 else "d-neg")
         slop_s, dan_s = r["cells"][fields[0]]["score"], r["cells"][fields[-1]]["score"]
         total_len = sum(len(r["cells"][f]["text"]) for f in fields)
+        turn = r.get("turn")
         out.append(
             f'<tr data-strategy="{html.escape(r["strategy"], quote=True)}" '
             f'data-generator="{html.escape(r["generator"], quote=True)}" '
             f'data-reasoning="{html.escape(r["reasoning"], quote=True)}" '
             f'data-prompt="{html.escape(r["prompt"], quote=True)}" '
+            f'data-turn="{"" if turn is None else turn}" '
             f'data-slop="{"" if slop_s is None else slop_s}" data-dan="{"" if dan_s is None else dan_s}" '
             f'data-delta="{"" if delta is None else delta}" '
             f'data-src="{html.escape(r["source"], quote=True)}" data-len="{total_len}" data-hit="1">'
-            f"<td class=src>{html.escape(r['strategy'])}<div class=srcsub>{html.escape(r['source'])}</div>"
-            f"{_gen_subline(r['gen'])}</td>"
+            f"<td class=facet>{html.escape(r['strategy'])}<div class=srcsub>{html.escape(r['source'])}</div></td>"
+            f"<td class=facet>{html.escape(r['generator'])}{_gen_subline(r['gen'])}</td>"
+            f"<td class=facet>{html.escape(r['reasoning'])}</td>"
+            f'<td class=facet title="{html.escape(r["prompt"], quote=True)}">{html.escape(r["prompt_label"])}</td>'
+            f"<td class=\"facet num\">{'—' if turn is None else turn}</td>"
             f'<td class="len {d_cls}">{html.escape(d_txt)}</td>'
             f'<td class=txt><div class=cmp>{"".join(cols)}</div></td></tr>'
         )
@@ -595,6 +615,10 @@ def render_scores_report(
     )
     table = (
         "<table><thead><tr><th onclick=\"sortBy('strategy',false)\">strategy</th>"
+        "<th onclick=\"sortBy('generator',false)\">generator</th>"
+        "<th onclick=\"sortBy('reasoning',false)\">reasoning</th>"
+        "<th onclick=\"sortBy('prompt',false)\">prompt</th>"
+        "<th class=num onclick=\"sortBy('turn',true)\">turn</th>"
         "<th class=num onclick=\"sortBy('delta',true)\">Δ</th>"
         f"<th>comparison ({html.escape(fields[0])} ↔ {html.escape(fields[-1])})</th></tr></thead>"
         f"<tbody>{_render_scores_rows(rows, fields, max_rows=max_rows)}</tbody></table>"

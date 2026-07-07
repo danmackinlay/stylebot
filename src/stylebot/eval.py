@@ -417,7 +417,11 @@ _CARRIED_META = ("source", "synthetic", "generator", "slop_strategy", "chunk_ind
 # Generation covariates live nested under `meta.gen` (synthetic pairs only). Flatten
 # the experiment-relevant ones onto each score record so `summarize_scores(by=…)` can
 # facet by them directly; real pairs lack `meta.gen` and simply omit these (null bucket).
-_CARRIED_GEN = ("model", "reasoning_effort", "temperature", "top_p", "prompt_id", "prompt_version", "finish_reason")
+_CARRIED_GEN = (
+    "model", "reasoning_effort", "temperature", "top_p",
+    "prompt_id", "prompt_version", "prompt_label",
+    "session_turn", "window_fill", "provider", "finish_reason",
+)
 
 
 def record_id(record: dict) -> str:

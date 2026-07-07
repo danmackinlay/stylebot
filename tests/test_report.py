@@ -184,8 +184,31 @@ def test_scores_report_shows_gen_params(tmp_path):
     p = tmp_path / "r.html"
     report.render_scores_report(scores, pairs, p)
     h = p.read_text()
-    assert "reasoning=high" in h  # per-pair generation-covariate sub-line
-    assert "anthropic/claude-opus-4.8" in h
+    # Facets are plain-text COLUMNS, not a muted subline.
+    assert "<td class=facet>high</td>" in h and "<td class=facet>low</td>" in h
+    for col in ("generator", "reasoning", "prompt", "turn"):
+        assert f">{col}</th>" in h
+
+
+def test_scores_report_prompt_column_is_human_readable(tmp_path):
+    # A pair recording prompt_label/version renders "catalogue v1" (hash id in
+    # the tooltip) — never a bare content hash in the visible cell.
+    d = tmp_path / "corpus"
+    t = synth.Target(text="A long-enough authored paragraph for scoring purposes.", source="p.qmd", chunk_index=0, chunk_total=1)
+    g = synth.Generator(
+        name="m",
+        generate=lambda s: synth.GenOutput(
+            "slop: " + s,
+            {"prompt_id": "dc0f6c5c5de6", "prompt_label": "catalogue", "prompt_version": 1},
+        ),
+    )
+    synth.synthesize_pairs([t], d, [g])
+    pairs, scores = d / "pairs.jsonl", tmp_path / "scores.jsonl"
+    ev.score_pairs_file(pairs, scores)
+    p = tmp_path / "r.html"
+    report.render_scores_report(scores, pairs, p)
+    h = p.read_text()
+    assert '<td class=facet title="dc0f6c5c5de6">catalogue v1</td>' in h
 
 
 def test_scores_report_facet_by_covariate(tmp_path):

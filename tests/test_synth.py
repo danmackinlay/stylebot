@@ -883,3 +883,28 @@ def test_session_loop_uses_begin_session_per_session(tmp_path):
     made.clear()
     stateless = synth.synthesize_pairs(_targets(2), tmp_path / "c2", [gen])
     assert stateless.written == 2 and made == []  # stateless never begins a session
+
+
+def test_prompts_sidecar_written_and_deduped(tmp_path):
+    import json
+
+    gen = synth.Generator(
+        name="m",
+        generate=lambda t: "[slop] " + t,
+        strategy="catalogue",
+        prompt_id="abc123",
+        prompt_version=2,
+        prompt_system="You are a typical AI writing assistant...",
+    )
+    synth.synthesize_pairs(_targets(2), tmp_path / "c", [gen])
+    synth.synthesize_pairs(_targets(2), tmp_path / "c", [gen])  # resume: no dup entry
+
+    lines = (tmp_path / "c" / "prompts.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry == {
+        "prompt_id": "abc123",
+        "label": "catalogue",
+        "version": 2,
+        "system": "You are a typical AI writing assistant...",
+    }
