@@ -913,3 +913,33 @@ def test_prompts_sidecar_written_and_deduped(tmp_path):
         "version": 2,
         "system": "You are a typical AI writing assistant...",
     }
+
+
+def test_transform_similarity_bounds():
+    assert synth.transform_similarity("same text here", "same text  here") == 1.0  # whitespace-insensitive
+    assert synth.transform_similarity("", "") == 1.0
+    long_a = "completely original prose about macroeconomic weather patterns " * 5
+    long_b = "utterly different words concerning tidal marmalade physics today " * 5
+    assert synth.transform_similarity(long_a, long_b) < 0.4
+    assert synth.transform_similarity(long_a, long_a) == 1.0
+
+
+def test_transform_sim_recorded_on_pairs(tmp_path):
+    import json
+
+    target = synth.Target(text="A paragraph long enough to be a worthwhile target here.", source="p.qmd", chunk_index=0, chunk_total=1)
+    echo = synth.Generator("echo", generate=lambda t: t + " ")  # near-verbatim no-op
+    rewrite = synth.Generator("rw", generate=lambda t: "Entirely different slop with none of the original words at all, padded out somewhat.")
+    synth.synthesize_pairs([target], tmp_path / "a", [echo])
+    synth.synthesize_pairs([target], tmp_path / "b", [rewrite])
+    sim_a = json.loads((tmp_path / "a" / "pairs.jsonl").read_text())["meta"]["transform_sim"]
+    sim_b = json.loads((tmp_path / "b" / "pairs.jsonl").read_text())["meta"]["transform_sim"]
+    assert sim_a == 1.0
+    assert sim_b < 0.5
+
+
+def test_measured_strategy_registered():
+    label, system, version, prompt_id = synth.resolve_strategy("measured")
+    assert label == "measured" and version == 1
+    # The whole point: describe texture, never quote a stock phrase.
+    assert "In today's world" not in system

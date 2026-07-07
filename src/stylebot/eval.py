@@ -413,7 +413,7 @@ FIELD_EXTRACTORS: dict[str, Callable[[dict], str]] = {
 
 # meta keys carried onto each score record, so scores group / filter / join
 # downstream without re-reading the corpus.
-_CARRIED_META = ("source", "synthetic", "generator", "slop_strategy", "chunk_index")
+_CARRIED_META = ("source", "synthetic", "generator", "slop_strategy", "chunk_index", "transform_sim")
 # Generation covariates live nested under `meta.gen` (synthetic pairs only). Flatten
 # the experiment-relevant ones onto each score record so `summarize_scores(by=…)` can
 # facet by them directly; real pairs lack `meta.gen` and simply omit these (null bucket).

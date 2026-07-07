@@ -173,6 +173,7 @@ def assemble_dataset(
     pairs_path: str | Path,
     *,
     extra_positives: Iterable[object] | None = None,
+    max_transform_sim: float | None = 0.85,
 ) -> Dataset:
     """Build the slop-vs-author dataset from a content-matched pairs corpus.
 
@@ -182,6 +183,11 @@ def assemble_dataset(
     `meta.synthetic` (truthy on `ai-style synth` output, absent on real edit
     captures) is carried into `pair_synth` so metrics can facet by provenance.
 
+    Pairs whose `meta.transform_sim` (the copying ratio synth records) exceeds
+    `max_transform_sim` are dropped: two near-identical texts with opposite
+    labels are label noise for the classifier. Pairs without the covariate
+    (real captures, pre-covariate synth) are kept — `None` disables the gate.
+
     `extra_positives` enriches the author class with free-standing prose the
     *caller* selected under its own policy — each item is a `synth.Target` (or
     any object with `.text` and `.source`) or a plain `(text, source)` tuple.
@@ -189,14 +195,24 @@ def assemble_dataset(
     free positives reintroduce a topic signal that would inflate it.
     """
     ds = Dataset()
+    n_near_identity = 0
     for rec in iter_pairs(pairs_path):
         slop = extract_slop(rec).strip()
         author = extract_target(rec).strip()
         if not slop or not author:
             continue
         meta = rec.get("meta") or {}
+        sim = meta.get("transform_sim")
+        if max_transform_sim is not None and sim is not None and sim > max_transform_sim:
+            n_near_identity += 1
+            continue
         source = meta.get("source") or "?"
         ds._add_pair(slop, author, source, synthetic=bool(meta.get("synthetic")))
+    if n_near_identity:
+        logger.info(
+            "dropped %d near-identity pair(s) (transform_sim > %s) — label noise",
+            n_near_identity, max_transform_sim,
+        )
 
     if extra_positives is not None:
         n_extra = 0

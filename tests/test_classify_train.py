@@ -350,3 +350,42 @@ def test_holdout_eval_facets_by_provenance():
     # Head fit on the (real-dominated) train posts -> facets diverge on the holdout.
     assert by["real"]["pairwise_accuracy"]["mean"] > 0.9
     assert by["synthetic"]["pairwise_accuracy"]["mean"] < 0.1
+
+
+def test_assemble_drops_near_identity_pairs(tmp_path):
+    # Near-identical slop/author sides with opposite labels are label noise;
+    # the transform_sim gate drops them (None-covariate pairs are kept).
+    import json
+
+    from stylebot.classify_train import assemble_dataset
+
+    def rec(slop, author, sim=None):
+        meta = {"source": "p.qmd"}
+        if sim is not None:
+            meta["transform_sim"] = sim
+        return {
+            "messages": [
+                {"role": "system", "content": "s"},
+                {"role": "user", "content": slop},
+                {"role": "assistant", "content": author},
+            ],
+            "meta": meta,
+        }
+
+    path = tmp_path / "pairs.jsonl"
+    path.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                rec("proper slop text", "proper author text", sim=0.3),
+                rec("nearly identical text", "nearly identical text!", sim=0.97),  # dropped
+                rec("legacy pair no covariate", "legacy author no covariate"),  # kept
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ds = assemble_dataset(path)
+    assert ds.n_pairs == 2
+    ds_all = assemble_dataset(path, max_transform_sim=None)  # gate off
+    assert ds_all.n_pairs == 3

@@ -36,6 +36,7 @@ on resume or blurring together in the corpus.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import inspect
 import json
@@ -96,10 +97,22 @@ SLOP_SYSTEM_CASUAL = (  # "casual": the friendly-technical-blog register
     "nice thing is'), and round each idea off so nothing lands abruptly. "
     + _SLOP_PRESERVE
 )
-# A "catalogue" strategy (exaggerated stereotypical-LLM tics, requested
-# outright) was removed 2026-07-07: it produced cartoonish slop unlike
-# anything in the real drafting distribution. Old catalogue pairs remain
-# resolvable via their data-dir's prompts.jsonl; the text is in git history.
+SLOP_SYSTEM_MEASURED = (  # "measured": the mild stereotypical-LLM register — texture, not tokens
+    "You are a careful AI writing assistant. Rewrite the user's passage in a "
+    "measured, well-organized explanatory register: smooth transitions, gentle "
+    "hedging of strong claims, tidy structure, slightly more formal vocabulary, "
+    "and an even sentence rhythm. Let the register show in the overall texture, "
+    "not in any stock phrase — do not open with generic scene-setting, and vary "
+    "your sentence openings and structure naturally from passage to passage. "
+    + _SLOP_PRESERVE
+)
+# "measured" replaces a removed "catalogue" strategy (2026-07-07) that QUOTED
+# the stereotypical tics ("In today's world", ...) — samplers converge hard on
+# quoted tokens, so every output opened identically and the slop was cartoonish.
+# Describing the texture and banning stock phrases keeps the register while
+# preserving output diversity. Old catalogue pairs remain resolvable via their
+# data-dir's prompts.jsonl; the prompt text is in git history.
+
 
 @dataclass(frozen=True)
 class SlopStrategy:
@@ -120,6 +133,7 @@ STRATEGIES: dict[str, SlopStrategy] = {
     "polish": SlopStrategy("polish", SLOP_SYSTEM, version=1),
     "engaging": SlopStrategy("engaging", SLOP_SYSTEM_ENGAGING, version=1),
     "casual": SlopStrategy("casual", SLOP_SYSTEM_CASUAL, version=1),
+    "measured": SlopStrategy("measured", SLOP_SYSTEM_MEASURED, version=1),
 }
 DEFAULT_STRATEGY = "polish"
 
@@ -127,6 +141,26 @@ DEFAULT_STRATEGY = "polish"
 # paraphrase, but real AI prose is often produced at high reasoning, so we default
 # HIGH and let experiments sweep down (see `_reasoning_extra_body`).
 DEFAULT_REASONING_EFFORT = "high"
+
+
+def transform_similarity(a: str, b: str) -> float:
+    """Character-level copying ratio between two prose bodies, in [0, 1].
+
+    `difflib.SequenceMatcher` over whitespace-normalized text: 1.0 = verbatim
+    copy, ~0 = no shared runs. Deliberately a *copying* measure, not a style
+    measure — sentence reordering counts as a transform. Cheap, deterministic,
+    stdlib-only, so it is baked into every synthetic pair as the frozen
+    `meta.transform_sim` covariate; the *living* style-shift measure is the
+    detector-score gap at eval time. Consumers filter by policy (e.g. the
+    voice-classifier trainer drops near-identity pairs, which would be label
+    noise). `autojunk=False`: on prose the default popularity heuristic junks
+    the space character, which makes ratios erratic.
+    """
+    na = " ".join(a.split())
+    nb = " ".join(b.split())
+    if not na and not nb:
+        return 1.0
+    return round(difflib.SequenceMatcher(None, na, nb, autojunk=False).ratio(), 3)
 
 
 def prompt_id_of(system_text: str) -> str:
@@ -1041,6 +1075,10 @@ def _build_record(
         "chunk_total": target.chunk_total,
         "before_chars": len(slop),  # body lengths (the transform), excluding the heading prefix
         "after_chars": len(target.text),
+        # Copying ratio slop<->target (1.0 = verbatim no-op). Frozen hygiene
+        # covariate: near-identity pairs are label noise for the detector and
+        # teach the styler to copy; consumers filter by threshold.
+        "transform_sim": transform_similarity(slop, target.text),
         "synthetic": True,
         "generator": generator_name,
         "slop_strategy": strategy,

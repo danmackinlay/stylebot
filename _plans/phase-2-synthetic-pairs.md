@@ -69,7 +69,8 @@ not guessed once:
 
 - `STRATEGIES` (`stylebot.synth`) maps a label → a system-prompt flavour:
   `polish` (neutral baseline), `engaging` (hooks/signposting), `casual` (the
-  friendly-technical-blog register). A `catalogue` strategy (exaggerated
+  friendly-technical-blog register), `measured` (the mild stereotypical-LLM
+  register — texture described, stock phrases banned, variety instructed). A `catalogue` strategy (exaggerated
   stereotypical-LLM tics, requested outright) was removed 2026-07-07 — it
   produced cartoonish slop unlike the real drafting distribution; old pairs
   stay resolvable via their data-dir's prompts.jsonl. The label is recorded as

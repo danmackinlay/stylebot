@@ -330,6 +330,10 @@ def _scores_rows_data(records: Sequence[dict], pairs_by_id: dict[str, dict], fie
                 meta.get("prompt_id") or gen.get("prompt_id"),
             ),
             "turn": gen.get("session_turn"),
+            # Copying ratio slop<->target (1.0 = verbatim no-op) — the frozen
+            # hygiene covariate synth records; sortable to surface near-identity
+            # pairs instantly.
+            "sim": meta.get("transform_sim", pair_meta.get("transform_sim")),
             "cells": cells,
             "delta": delta,
             "gen": gen,
@@ -485,12 +489,14 @@ def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows
         slop_s, dan_s = r["cells"][fields[0]]["score"], r["cells"][fields[-1]]["score"]
         total_len = sum(len(r["cells"][f]["text"]) for f in fields)
         turn = r.get("turn")
+        sim_txt = "—" if r.get("sim") is None else f"{r['sim']:.2f}"
         out.append(
             f'<tr data-strategy="{html.escape(r["strategy"], quote=True)}" '
             f'data-generator="{html.escape(r["generator"], quote=True)}" '
             f'data-reasoning="{html.escape(r["reasoning"], quote=True)}" '
             f'data-prompt="{html.escape(r["prompt"], quote=True)}" '
             f'data-turn="{"" if turn is None else turn}" '
+            f'data-sim="{"" if r.get("sim") is None else r["sim"]}" '
             f'data-slop="{"" if slop_s is None else slop_s}" data-dan="{"" if dan_s is None else dan_s}" '
             f'data-delta="{"" if delta is None else delta}" '
             f'data-src="{html.escape(r["source"], quote=True)}" data-len="{total_len}" data-hit="1">'
@@ -499,6 +505,7 @@ def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows
             f"<td class=facet>{html.escape(r['reasoning'])}</td>"
             f'<td class=facet title="{html.escape(r["prompt"], quote=True)}">{html.escape(r["prompt_label"])}</td>'
             f"<td class=\"facet num\">{'—' if turn is None else turn}</td>"
+            f'<td class="facet num">{sim_txt}</td>'
             f'<td class="len {d_cls}">{html.escape(d_txt)}</td>'
             f'<td class=txt><div class=cmp>{"".join(cols)}</div></td></tr>'
         )
@@ -619,6 +626,7 @@ def render_scores_report(
         "<th onclick=\"sortBy('reasoning',false)\">reasoning</th>"
         "<th onclick=\"sortBy('prompt',false)\">prompt</th>"
         "<th class=num onclick=\"sortBy('turn',true)\">turn</th>"
+        "<th class=num onclick=\"sortBy('sim',true)\" title=\"copying ratio slop↔target; 1.0 = verbatim no-op\">sim</th>"
         "<th class=num onclick=\"sortBy('delta',true)\">Δ</th>"
         f"<th>comparison ({html.escape(fields[0])} ↔ {html.escape(fields[-1])})</th></tr></thead>"
         f"<tbody>{_render_scores_rows(rows, fields, max_rows=max_rows)}</tbody></table>"

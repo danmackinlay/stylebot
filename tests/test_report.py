@@ -186,7 +186,7 @@ def test_scores_report_shows_gen_params(tmp_path):
     h = p.read_text()
     # Facets are plain-text COLUMNS, not a muted subline.
     assert "<td class=facet>high</td>" in h and "<td class=facet>low</td>" in h
-    for col in ("generator", "reasoning", "prompt", "turn"):
+    for col in ("generator", "reasoning", "prompt", "turn", "sim"):
         assert f">{col}</th>" in h
 
 
