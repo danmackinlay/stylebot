@@ -398,6 +398,43 @@ def _stat(xs: list[float]) -> dict:
     return {"mean": round(float(np.mean(xs)), 4), "std": round(float(np.std(xs)), 4), "n": len(xs)}
 
 
+def _fold_metrics(p_slop, y, ds: Dataset, test_rows: list[int], *, pair_idx, row_stratum) -> dict:
+    """Content-matched metrics for ONE evaluation split, from P(slop) scores.
+
+    The measurement core shared by `evaluate` (accumulating across CV folds)
+    and `evaluate_holdout` (a single split): pairwise twin accuracy + AUC over
+    the matched test rows (free positives excluded), globally and per
+    provenance stratum. Values are raw (unrounded) `(value_or_None, n)` tuples;
+    the callers own aggregation and formatting.
+    """
+    from sklearn.metrics import roc_auc_score
+
+    matched_rows = {r for pair in ds.pair_rows for r in pair}
+    test_set = set(test_rows)
+
+    def _auc(rows: list[int]) -> tuple[float | None, int]:
+        if len(set(y[rows].tolist())) == 2:
+            return float(roc_auc_score(y[rows], p_slop[rows])), len(rows)
+        return None, len(rows)
+
+    def _pairwise(pairs) -> tuple[float | None, int]:
+        correct, total = _pairwise_score(p_slop, pairs, test_set)
+        return (correct / total if total else None), int(total)
+
+    matched_test = [r for r in test_rows if r in matched_rows]
+    return {
+        "auc": _auc(matched_test),
+        "pairwise": _pairwise(ds.pair_rows),
+        "facets": {
+            name: {
+                "auc": _auc([r for r in matched_test if row_stratum[r] == name]),
+                "pairwise": _pairwise(ds.pair_rows[k] for k in pair_idx[name]),
+            }
+            for name in pair_idx
+        },
+    }
+
+
 def evaluate(
     X,
     ds: Dataset,
@@ -425,12 +462,10 @@ def evaluate(
     generator".
     """
     np = _np()
-    from sklearn.metrics import roc_auc_score
     from sklearn.model_selection import GroupShuffleSplit
 
     y = np.asarray(ds.labels)
     groups = np.asarray(ds.groups)
-    matched_rows = {r for pair in ds.pair_rows for r in pair}
     pair_idx, row_stratum = _provenance_strata(ds)
 
     gss = GroupShuffleSplit(n_splits=n_splits, test_size=test_size, random_state=random_state)
@@ -446,24 +481,16 @@ def evaluate(
         clf.fit(X[train_idx], y[train_idx])
         p_slop = clf.predict_proba(X)[:, list(clf.classes_).index(LABEL_SLOP)]
 
-        test_set = set(test_idx.tolist())
-        # AUC over matched test rows only (free positives excluded).
-        matched_test = [r for r in test_idx.tolist() if r in matched_rows]
-        ytest = y[matched_test]
-        if len(set(ytest.tolist())) == 2:
-            aucs.append(float(roc_auc_score(ytest, p_slop[matched_test])))
-        for name in pair_idx:
-            rows = [r for r in matched_test if row_stratum[r] == name]
-            if len(set(y[rows].tolist())) == 2:
-                facet_aucs[name].append(float(roc_auc_score(y[rows], p_slop[rows])))
-
-        correct, total = _pairwise_score(p_slop, ds.pair_rows, test_set)
-        if total:
-            pair_accs.append(correct / total)
-        for name in pair_idx:
-            c, t = _pairwise_score(p_slop, (ds.pair_rows[k] for k in pair_idx[name]), test_set)
-            if t:
-                facet_pair_accs[name].append(c / t)
+        fm = _fold_metrics(p_slop, y, ds, test_idx.tolist(), pair_idx=pair_idx, row_stratum=row_stratum)
+        if (auc := fm["auc"][0]) is not None:
+            aucs.append(auc)
+        if (pa := fm["pairwise"][0]) is not None:
+            pair_accs.append(pa)
+        for name, facet in fm["facets"].items():
+            if (f_auc := facet["auc"][0]) is not None:
+                facet_aucs[name].append(f_auc)
+            if (f_pa := facet["pairwise"][0]) is not None:
+                facet_pair_accs[name].append(f_pa)
 
     result = {
         "pairwise_accuracy": _stat(pair_accs),
@@ -530,7 +557,6 @@ def evaluate_holdout(X, ds: Dataset, holdout: set, *, C: float | None = None) ->
     holdout), mirroring the nested contract.
     """
     np = _np()
-    from sklearn.metrics import roc_auc_score
 
     y = np.asarray(ds.labels)
     train_rows = [i for i, g in enumerate(ds.groups) if g not in holdout]
@@ -544,22 +570,13 @@ def evaluate_holdout(X, ds: Dataset, holdout: set, *, C: float | None = None) ->
     p_slop = clf.predict_proba(X)[:, list(clf.classes_).index(LABEL_SLOP)]
     pair_idx, row_stratum = _provenance_strata(ds)
 
-    def _auc(rows: list[int]) -> tuple[float | None, int]:
-        if len(set(y[rows].tolist())) == 2:
-            return round(float(roc_auc_score(y[rows], p_slop[rows])), 4), len(rows)
-        return None, len(rows)
+    def _rounded(pair: tuple[float | None, int]) -> tuple[float | None, int]:
+        value, n = pair
+        return (round(value, 4) if value is not None else None), n
 
-    matched = {r for pair in ds.pair_rows for r in pair}
-    matched_test = [r for r in test_rows if r in matched]
-    auc, n_auc = _auc(matched_test)
-
-    test_set = set(test_rows)
-
-    def _pairwise(pairs: Iterable[tuple[int, int]]) -> tuple[float | None, int]:
-        correct, total = _pairwise_score(p_slop, pairs, test_set)
-        return (round(correct / total, 4) if total else None), int(total)
-
-    pa_mean, n_pairs = _pairwise(ds.pair_rows)
+    fm = _fold_metrics(p_slop, y, ds, test_rows, pair_idx=pair_idx, row_stratum=row_stratum)
+    pa_mean, n_pairs = _rounded(fm["pairwise"])
+    auc, n_auc = _rounded(fm["auc"])
     result = {
         "pairwise_accuracy": {"mean": pa_mean, "std": None, "n": n_pairs},
         "auc": {"mean": auc, "std": None, "n": n_auc},
@@ -569,8 +586,8 @@ def evaluate_holdout(X, ds: Dataset, holdout: set, *, C: float | None = None) ->
     if pair_idx:
         by = {}
         for name in STRATA:
-            f_pa, f_n = _pairwise(ds.pair_rows[k] for k in pair_idx[name])
-            f_auc, f_n_auc = _auc([r for r in matched_test if row_stratum[r] == name])
+            f_pa, f_n = _rounded(fm["facets"][name]["pairwise"])
+            f_auc, f_n_auc = _rounded(fm["facets"][name]["auc"])
             by[name] = {
                 "pairwise_accuracy": {"mean": f_pa, "std": None, "n": f_n},
                 "auc": {"mean": f_auc, "std": None, "n": f_n_auc},
@@ -696,6 +713,112 @@ def _resolve_head_C(X, ds: Dataset, rows, C: float | None) -> tuple[float, dict]
     return select_C(X, ds, rows)
 
 
+def _ship_head(
+    X, ds: Dataset, *, rows, head_C: float, head_C_info: dict, metrics: dict,
+    split: dict | None, ship_kw: dict,
+) -> tuple[Path, dict]:
+    """Fit the final head (optionally on a row subset) and write the artifact.
+
+    The shared tail of every train mode; `ship_kw` carries the artifact
+    plumbing (out_dir, embed_model, normalize, git_repo, save_joblib) that
+    `train` resolves once. C resolution stays with the mode (the rows it
+    selects over differ, and the splits mode reuses head_C mid-flight).
+    """
+    clf, coef, intercept = fit_head(X, ds, C=head_C, rows=rows)
+    out = write_artifact(
+        clf=clf, coef=coef, intercept=intercept, ds=ds, metrics=metrics,
+        split=split, head_C=head_C_info, **ship_kw,
+    )
+    return out, metrics
+
+
+def _train_splits_mode(
+    ds: Dataset, splits_path: str | Path, *,
+    test_size: float, n_splits: int, C: float | None,
+    embed_model: str, normalize: bool, batch_size: int, ship_kw: dict,
+) -> tuple[Path, dict]:
+    """The shared three-role contract: fit on the detector pool only.
+
+    Eval-role posts are excluded BEFORE embedding (the frozen stratum is never
+    touched, not even to encode it); the styler posts supply the bonus
+    unseen-posts metric, scored with the same C the shipped head uses.
+    """
+    from stylebot import splits as splits_mod
+
+    sp = splits_mod.load_splits(splits_path)
+    warnings = splits_mod.check_splits(sp, ds)
+    for w in warnings:
+        logger.warning("splits: %s", w)
+    role = {g: splits_mod.role_of(g, sp) for g in set(ds.groups)}
+    det_groups = {g for g, r in role.items() if r == "detector"}
+    sty_groups = {g for g, r in role.items() if r == "styler"}
+
+    work_ds, _ = subset_dataset(ds, det_groups | sty_groups)
+    det_ds, det_rows = subset_dataset(work_ds, det_groups)
+    if det_ds.n_pairs == 0:
+        raise ValueError("splits: the detector pool has no pairs — nothing to train on")
+    logger.info(
+        "embedding %d passages with %s (%d eval-role posts excluded)",
+        len(work_ds.texts), embed_model, sum(1 for r in role.values() if r == "eval"),
+    )
+    X = embed_texts(work_ds.texts, model_id=embed_model, normalize=normalize, batch_size=batch_size)
+    X_det = X[det_rows]
+
+    metrics = evaluate(X_det, det_ds, test_size=test_size, n_splits=n_splits, C=C)
+    head_C, head_C_info = _resolve_head_C(X_det, det_ds, list(range(len(det_ds.texts))), C)
+    if any(g in sty_groups for g in work_ds.groups):
+        # Bonus honest number: the detector-pool head scored on the styler's
+        # (unseen) posts — the deployment-relevant condition for reward use.
+        metrics["styler_holdout"] = evaluate_holdout(X, work_ds, sty_groups, C=head_C)
+    split = {
+        "mode": "splits",
+        "path": str(splits_path),
+        "seed": sp.get("seed"),
+        "rest_rule": sp["rest_rule"],
+        "roles": splits_mod.summarize_roles(sp, ds),
+        "warnings": warnings,
+    }
+    return _ship_head(
+        X_det, det_ds, rows=None, head_C=head_C, head_C_info=head_C_info,
+        metrics=metrics, split=split, ship_kw=ship_kw,
+    )
+
+
+def _train_holdout_mode(
+    X, ds: Dataset, train_posts: set, holdout: set, *,
+    holdout_frac: float, holdout_seed: int, C: float | None, ship_kw: dict,
+) -> tuple[Path, dict]:
+    """Hold out POSTs: report the single-split unseen-posts metric and ship a
+    head fit on the train posts ONLY."""
+    metrics = evaluate_holdout(X, ds, holdout, C=C)
+    train_rows = [i for i, g in enumerate(ds.groups) if g in train_posts]
+    head_C, head_C_info = _resolve_head_C(X, ds, train_rows, C)
+    split = {
+        "mode": "holdout",
+        "holdout_frac": holdout_frac,
+        "holdout_seed": holdout_seed,
+        "n_train_posts": len(train_posts),
+        "n_holdout_posts": len(holdout),
+        "holdout_posts": sorted(holdout),
+    }
+    return _ship_head(
+        X, ds, rows=train_rows, head_C=head_C, head_C_info=head_C_info,
+        metrics=metrics, split=split, ship_kw=ship_kw,
+    )
+
+
+def _train_fit_all(
+    X, ds: Dataset, *, test_size: float, n_splits: int, C: float | None, ship_kw: dict,
+) -> tuple[Path, dict]:
+    """Cross-validated metric over POST splits, then ship the head fit on ALL posts."""
+    metrics = evaluate(X, ds, test_size=test_size, n_splits=n_splits, C=C)
+    head_C, head_C_info = _resolve_head_C(X, ds, list(range(len(ds.texts))), C)
+    return _ship_head(
+        X, ds, rows=None, head_C=head_C, head_C_info=head_C_info,
+        metrics=metrics, split=None, ship_kw=ship_kw,
+    )
+
+
 def train(
     pairs_path: str | Path,
     out_dir: str | Path,
@@ -737,53 +860,19 @@ def train(
     if ds.n_pairs == 0:
         raise ValueError(f"no content-matched pairs found in {pairs_path}")
 
+    ship_kw = dict(
+        out_dir=out_dir, embed_model=embed_model, normalize=normalize,
+        git_repo=git_repo, save_joblib=save_joblib,
+    )
+
     if splits_path is not None:
         if holdout_frac or holdout_posts:
             raise ValueError("splits_path is mutually exclusive with holdout_frac/holdout_posts")
-        from stylebot import splits as splits_mod
-
-        sp = splits_mod.load_splits(splits_path)
-        warnings = splits_mod.check_splits(sp, ds)
-        for w in warnings:
-            logger.warning("splits: %s", w)
-        role = {g: splits_mod.role_of(g, sp) for g in set(ds.groups)}
-        det_groups = {g for g, r in role.items() if r == "detector"}
-        sty_groups = {g for g, r in role.items() if r == "styler"}
-
-        # Eval posts are excluded BEFORE embedding — the frozen stratum is never
-        # touched by this trainer, not even to encode it.
-        work_ds, _ = subset_dataset(ds, det_groups | sty_groups)
-        det_ds, det_rows = subset_dataset(work_ds, det_groups)
-        if det_ds.n_pairs == 0:
-            raise ValueError("splits: the detector pool has no pairs — nothing to train on")
-        logger.info(
-            "embedding %d passages with %s (%d eval-role posts excluded)",
-            len(work_ds.texts), embed_model, sum(1 for r in role.values() if r == "eval"),
+        return _train_splits_mode(
+            ds, splits_path, test_size=test_size, n_splits=n_splits, C=C,
+            embed_model=embed_model, normalize=normalize, batch_size=batch_size,
+            ship_kw=ship_kw,
         )
-        X = embed_texts(work_ds.texts, model_id=embed_model, normalize=normalize, batch_size=batch_size)
-        X_det = X[det_rows]
-
-        metrics = evaluate(X_det, det_ds, test_size=test_size, n_splits=n_splits, C=C)
-        head_C, head_C_info = _resolve_head_C(X_det, det_ds, list(range(len(det_ds.texts))), C)
-        if any(g in sty_groups for g in work_ds.groups):
-            # Bonus honest number: the detector-pool head scored on the styler's
-            # (unseen) posts — the deployment-relevant condition for reward use.
-            metrics["styler_holdout"] = evaluate_holdout(X, work_ds, sty_groups, C=head_C)
-        clf, coef, intercept = fit_head(X_det, det_ds, C=head_C)
-        split = {
-            "mode": "splits",
-            "path": str(splits_path),
-            "seed": sp.get("seed"),
-            "rest_rule": sp["rest_rule"],
-            "roles": splits_mod.summarize_roles(sp, ds),
-            "warnings": warnings,
-        }
-        out = write_artifact(
-            out_dir, clf=clf, coef=coef, intercept=intercept, ds=det_ds, metrics=metrics,
-            embed_model=embed_model, normalize=normalize, git_repo=git_repo,
-            save_joblib=save_joblib, split=split, head_C=head_C_info,
-        )
-        return out, metrics
 
     logger.info("embedding %d passages with %s", len(ds.texts), embed_model)
     X = embed_texts(ds.texts, model_id=embed_model, normalize=normalize, batch_size=batch_size)
@@ -792,26 +881,8 @@ def train(
         ds.groups, holdout_frac=holdout_frac, holdout_seed=holdout_seed, holdout_posts=holdout_posts
     )
     if holdout:
-        metrics = evaluate_holdout(X, ds, holdout, C=C)
-        train_rows = [i for i, g in enumerate(ds.groups) if g in train_posts]
-        head_C, head_C_info = _resolve_head_C(X, ds, train_rows, C)
-        clf, coef, intercept = fit_head(X, ds, C=head_C, rows=train_rows)
-        split = {
-            "mode": "holdout",
-            "holdout_frac": holdout_frac,
-            "holdout_seed": holdout_seed,
-            "n_train_posts": len(train_posts),
-            "n_holdout_posts": len(holdout),
-            "holdout_posts": sorted(holdout),
-        }
-    else:
-        metrics = evaluate(X, ds, test_size=test_size, n_splits=n_splits, C=C)
-        head_C, head_C_info = _resolve_head_C(X, ds, list(range(len(ds.texts))), C)
-        clf, coef, intercept = fit_head(X, ds, C=head_C)
-        split = None
-    out = write_artifact(
-        out_dir, clf=clf, coef=coef, intercept=intercept, ds=ds, metrics=metrics,
-        embed_model=embed_model, normalize=normalize, git_repo=git_repo,
-        save_joblib=save_joblib, split=split, head_C=head_C_info,
-    )
-    return out, metrics
+        return _train_holdout_mode(
+            X, ds, train_posts, holdout,
+            holdout_frac=holdout_frac, holdout_seed=holdout_seed, C=C, ship_kw=ship_kw,
+        )
+    return _train_fit_all(X, ds, test_size=test_size, n_splits=n_splits, C=C, ship_kw=ship_kw)
