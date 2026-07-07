@@ -30,6 +30,50 @@ REQUIRED_META_KEYS = (
     "chunk_total",
 )
 
+# --- meta.gen schema (synthetic pairs only) ----------------------------------
+# The generation covariates recorded under `meta.gen`, assembled by
+# stylebot.synth's generator factories and consumed by stylebot.eval (flattened
+# onto score records) and stylebot.report (row columns). One list, so a key
+# rename fails a test instead of silently producing empty facet columns
+# downstream. Callers may extend the dict via a factory's `extra_meta`; the
+# stock schema is what's listed here.
+GEN_META_KEYS = (
+    "model",
+    "reasoning_effort",
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "finish_reason",
+    "prompt_tokens",
+    "completion_tokens",
+    "reasoning_tokens",
+    "cached_tokens",
+    "cost",
+    "gen_seconds",
+    "provider",
+    "provider_sort",
+    "prompt_id",
+    "prompt_version",
+    "prompt_label",
+)
+# Added by the session loop only (`session_turns > 1`).
+GEN_SESSION_KEYS = ("session_id", "session_turn", "context_window", "window_fill")
+# The experiment-relevant subset eval flattens onto each score record so
+# `summarize_scores(by=...)` and the report can facet by them directly.
+GEN_FACET_KEYS = (
+    "model",
+    "reasoning_effort",
+    "temperature",
+    "top_p",
+    "prompt_id",
+    "prompt_version",
+    "prompt_label",
+    "session_turn",
+    "window_fill",
+    "provider",
+    "finish_reason",
+)
+
 
 def build_pair_content(context: str, body: str) -> str:
     """Assemble a pair message body: heading context (verbatim) + the prose body.

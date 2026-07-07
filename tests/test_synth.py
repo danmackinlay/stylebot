@@ -468,6 +468,22 @@ def test_openrouter_reasoning_effort_enum(monkeypatch):
     assert out.meta["provider_sort"] == "throughput"  # the routing request, recorded
 
 
+def test_gen_meta_keys_match_schema_constants(monkeypatch):
+    # The recorded meta.gen dict must stay within the schema constants in
+    # stylebot.pairs — eval and report facet by those names, so a key renamed
+    # here but not there would silently produce empty columns downstream.
+    from stylebot import pairs
+
+    calls = _patch_openai(
+        monkeypatch,
+        _FakeResponse([_FakeChoice("slop out")], _FakeUsage(prompt_tokens=10, completion_tokens=5)),
+    )
+    out = _run_gen(synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x"), "x")
+    assert calls  # the fake client was exercised
+    unknown = set(out.meta) - set(pairs.GEN_META_KEYS)
+    assert not unknown, f"meta.gen keys missing from pairs.GEN_META_KEYS: {sorted(unknown)}"
+
+
 def test_openrouter_reasoning_budget_family(monkeypatch):
     # Budget-style families (qwen/nvidia/google/…) get a token budget instead.
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))

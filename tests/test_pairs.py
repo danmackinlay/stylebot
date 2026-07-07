@@ -110,3 +110,12 @@ def test_context_must_prefix_both_sides():
 def test_absent_context_unconstrained():
     # No meta.context -> no prefix requirement (back-compat with the 254 pairs).
     assert validate_pair_record(_good_record()) == []
+
+
+def test_gen_facet_keys_are_a_subset_of_recorded_keys():
+    # Every key eval facets by must be one synth actually records — a rename
+    # on either side fails here instead of silently emptying facet columns.
+    from stylebot.pairs import GEN_FACET_KEYS, GEN_META_KEYS, GEN_SESSION_KEYS
+
+    unknown = set(GEN_FACET_KEYS) - set(GEN_META_KEYS) - set(GEN_SESSION_KEYS)
+    assert not unknown, f"facet keys nothing records: {sorted(unknown)}"

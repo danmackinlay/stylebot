@@ -51,7 +51,7 @@ from statistics import mean
 from typing import Protocol
 
 from stylebot.jsonl import iter_jsonl, read_jsonl
-from stylebot.pairs import iter_pairs
+from stylebot.pairs import GEN_FACET_KEYS, iter_pairs
 
 SCHEMA_VERSION = 2
 
@@ -418,11 +418,8 @@ _CARRIED_META = ("source", "synthetic", "generator", "slop_strategy", "chunk_ind
 # Generation covariates live nested under `meta.gen` (synthetic pairs only). Flatten
 # the experiment-relevant ones onto each score record so `summarize_scores(by=…)` can
 # facet by them directly; real pairs lack `meta.gen` and simply omit these (null bucket).
-_CARRIED_GEN = (
-    "model", "reasoning_effort", "temperature", "top_p",
-    "prompt_id", "prompt_version", "prompt_label",
-    "session_turn", "window_fill", "provider", "finish_reason",
-)
+# The list itself is the shared schema constant in stylebot.pairs.
+_CARRIED_GEN = GEN_FACET_KEYS
 
 
 def record_id(record: dict) -> str:
