@@ -766,9 +766,18 @@ def openai_generator(
             if not resp.choices:
                 raise RuntimeError(f"{model}: provider returned no choices (upstream error?)")
             choice = resp.choices[0]
-            # A truncated slop (finish_reason "length") is a broken pair — fail loudly.
+            # A truncated slop (finish_reason "length") is a broken pair — fail loudly,
+            # and say where the tokens went: reasoning eating the whole budget wants
+            # a lower --reasoning-effort, an actually-long answer wants --max-tokens.
             if choice.finish_reason == "length":
-                raise RuntimeError(f"slop truncated at max_tokens={max_tokens} (raise --max-tokens)")
+                trunc_usage = getattr(resp, "usage", None)
+                trunc_details = getattr(trunc_usage, "completion_tokens_details", None)
+                raise RuntimeError(
+                    f"slop truncated at max_tokens={max_tokens} "
+                    f"(completion={getattr(trunc_usage, 'completion_tokens', '?')}, "
+                    f"reasoning={getattr(trunc_details, 'reasoning_tokens', '?')} — "
+                    f"raise --max-tokens or lower --reasoning-effort)"
+                )
             served_provider = getattr(resp, "provider", None)
             if pin_state is not None and served_provider:
                 pin_state.setdefault("provider", served_provider)  # pin to turn 1's provider
@@ -1327,6 +1336,20 @@ def synthesize_pairs(
                     history += _exchange(turn.target.text, slop)
                 continue
             claimed.add(turn.key)
+
+            # A failed pair is never written, so its synth_key resolves to
+            # nothing — the recorded error must carry the config that produced
+            # it or the failure is unattributable.
+            who = f"{gen.name} strategy={gen.strategy} effort={gen.reasoning_effort}"
+            if sess.session_id:
+                who += f" turn={turn.index}"
+
+            def _fail(message: str, *, _who: str = who, _key: str = turn.key) -> None:
+                msg = f"[{_who}] {message}"
+                result.errors.append((_key, msg))
+                if on_error is not None:
+                    on_error(_key, msg)
+
             try:
                 out = call(turn.target.text, history=history or None)
                 if inspect.isawaitable(out):
@@ -1334,16 +1357,11 @@ def synthesize_pairs(
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # API error etc. — record, end this session
-                msg = f"{type(exc).__name__}: {exc}"
-                result.errors.append((turn.key, msg))
-                if on_error is not None:
-                    on_error(turn.key, msg)
+                _fail(f"{type(exc).__name__}: {exc}")
                 break
             slop, gen_meta = _normalize_gen_output(out)
             if not slop.strip():
-                result.errors.append((turn.key, "generator returned empty output"))
-                if on_error is not None:
-                    on_error(turn.key, "generator returned empty output")
+                _fail("generator returned empty output")
                 break
             prompt_tokens = gen_meta.get("prompt_tokens")
             if sess.session_id:

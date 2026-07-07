@@ -535,7 +535,9 @@ def test_truncated_slop_raises(monkeypatch):
 
     _patch_openai(monkeypatch, _FakeResponse([_FakeChoice(finish_reason="length")]))
     gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x")
-    with pytest.raises(RuntimeError, match="truncated"):
+    # The message says where the tokens went (completion vs reasoning) and
+    # names both remedies — that is the attribution for a never-written pair.
+    with pytest.raises(RuntimeError, match="truncated.*reasoning-effort"):
         _run_gen(gen, "rewrite me")
 
 
@@ -704,6 +706,9 @@ def test_turn_error_ends_only_its_session(tmp_path):
     assert result.per_generator.get("good") == 2
     assert "bad" not in result.per_generator
     assert len(result.errors) == 1  # session ended at its first failure
+    # The error is attributable: generator, strategy, effort, and session turn.
+    _key, msg = result.errors[0]
+    assert msg.startswith("[bad strategy=polish effort=high turn=1] RuntimeError")
 
 
 def test_session_budget_stops_session(tmp_path):

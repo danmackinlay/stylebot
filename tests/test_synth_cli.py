@@ -153,6 +153,9 @@ def test_run_synth_exits_nonzero_on_generation_errors(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "generation error(s)" in err  # exit summary
     assert "!!" in err and "api down" in err  # surfaced immediately, not just at exit
+    # Attribution: a failed pair is never written, so the message itself must
+    # name the config that produced it.
+    assert "[boom strategy=polish effort=high]" in err
 
 
 def test_timeout_reaches_generator_factories(tmp_path, monkeypatch):
