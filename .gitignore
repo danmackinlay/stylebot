@@ -229,3 +229,5 @@ __marimo__/
 /stylebot_data/
 # .env is already covered above; reassert intent next to the secrets policy.
 .env
+# open-webui drops its JWT secret in cwd when run from here
+.webui_secret_key
