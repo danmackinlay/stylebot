@@ -264,6 +264,101 @@ def synth_options(*, exclude: Iterable[str] = (), **default_overrides):
     return deco
 
 
+def _inspect_targets(
+    targets: list[synth.Target],
+    *,
+    sample_n: int | None,
+    report_path: Path | None,
+    report_max_rows: int,
+    report_title: str | None,
+    data_dir: Path | Callable[[], Path],
+    generation_flags_set: bool,
+) -> None:
+    """The read-only --sample/--report modes: print/write and return, before
+    any generation — no --data-dir resolution, no API keys."""
+    from stylebot import report
+
+    click.echo("[inspection] targets only — nothing generated.", err=True)
+    # Generation flags alongside --report/--sample are a classic trap: the
+    # run exits before any generator fires. Say so, and point at the pair
+    # browser (the eval scores report) that DOES show generated slop.
+    if generation_flags_set:
+        pairs_hint = f"{data_dir}/pairs.jsonl" if isinstance(data_dir, Path) else "<data-dir>/pairs.jsonl"
+        click.echo(
+            "[inspection] generation flags ignored; to generate then browse pairs: "
+            "re-run without --report/--sample, then: "
+            f"ai-style eval --pairs {pairs_hint} --report FILE.html --facet-by generator",
+            err=True,
+        )
+    if sample_n is not None:
+        click.echo(report.format_sample(report.sample_targets(targets, sample_n)))
+    if report_path is not None:
+        title_kw = {"title": report_title} if report_title else {}
+        written = report.render_targets_report(
+            targets, report_path, max_rows=(None if report_max_rows == 0 else report_max_rows), **title_kw
+        )
+        click.echo(f"wrote report -> {written}")
+
+
+def _resolve_windows(
+    generators: Sequence[synth.Generator],
+    *,
+    session_turns: int,
+    dry_run: bool,
+    context_window: int | None,
+) -> dict[str, int]:
+    """Per-generator context-window sizes — live sessions only (the overflow
+    guard + the window_fill covariate). OpenRouter models resolve from the
+    models registry (ground truth); presets / injected generators take
+    --context-window."""
+    windows: dict[str, int] = {}
+    if session_turns <= 1 or dry_run:
+        return windows
+    or_names = [g.name for g in generators if g.name.startswith("openrouter/")]
+    if or_names:
+        try:
+            registry = synth.openrouter_context_windows()
+        except Exception as exc:
+            raise click.ClickException(
+                f"could not fetch OpenRouter context windows for the session sweep: {exc}"
+            )
+        for n in or_names:
+            w = registry.get(n.removeprefix("openrouter/"))
+            if w:
+                windows[n] = w
+    if context_window:
+        for g in generators:
+            windows.setdefault(g.name, context_window)
+    return windows
+
+
+def _report_result(
+    result: synth.SynthResult, pairs_path: Path, *, dry_run: bool, session_turns: int
+) -> None:
+    """Echo the run summary; exit 1 when any generation failed."""
+    if dry_run:
+        click.echo(
+            f"[dry-run] would write {result.planned - result.skipped_existing} new pair(s) "
+            f"({result.skipped_existing} already present) to {pairs_path}"
+        )
+        if session_turns > 1:
+            click.echo(f"  {result.planned_sessions} live session(s) of <= {session_turns} turn(s)")
+        for name, count in sorted(result.per_generator.items()):
+            click.echo(f"  {name}: {count}")
+        return
+    click.echo(
+        f"wrote {result.written} pair(s) "
+        f"({result.skipped_existing} already present, skipped) -> {pairs_path}"
+    )
+    for name, count in sorted(result.per_generator.items()):
+        click.echo(f"  {name}: {count}")
+    if result.errors:
+        click.echo(f"{len(result.errors)} generation error(s):", err=True)
+        for key, msg in result.errors[:10]:
+            click.echo(f"  {key}: {msg}", err=True)
+        raise SystemExit(1)
+
+
 def run_synth(
     targets: list[synth.Target],
     *,
@@ -323,28 +418,18 @@ def run_synth(
     # Read-only inspection modes — print/write and exit before any generation,
     # so no --data-dir or API keys are needed to vet the targets.
     if sample_n is not None or report_path is not None:
-        from stylebot import report
-
-        click.echo("[inspection] targets only — nothing generated.", err=True)
-        # Generation flags alongside --report/--sample are a classic trap: the
-        # run exits before any generator fires. Say so, and point at the pair
-        # browser (the eval scores report) that DOES show generated slop.
-        if generator_names or openrouter_models or tuple(slop_strategies) != (synth.DEFAULT_STRATEGY,):
-            pairs_hint = f"{data_dir}/pairs.jsonl" if isinstance(data_dir, Path) else "<data-dir>/pairs.jsonl"
-            click.echo(
-                "[inspection] generation flags ignored; to generate then browse pairs: "
-                "re-run without --report/--sample, then: "
-                f"ai-style eval --pairs {pairs_hint} --report FILE.html --facet-by generator",
-                err=True,
-            )
-        if sample_n is not None:
-            click.echo(report.format_sample(report.sample_targets(targets, sample_n)))
-        if report_path is not None:
-            title_kw = {"title": report_title} if report_title else {}
-            written = report.render_targets_report(
-                targets, report_path, max_rows=(None if report_max_rows == 0 else report_max_rows), **title_kw
-            )
-            click.echo(f"wrote report -> {written}")
+        _inspect_targets(
+            targets,
+            sample_n=sample_n,
+            report_path=report_path,
+            report_max_rows=report_max_rows,
+            report_title=report_title,
+            data_dir=data_dir,
+            generation_flags_set=bool(
+                generator_names or openrouter_models
+                or tuple(slop_strategies) != (synth.DEFAULT_STRATEGY,)
+            ),
+        )
         return None
 
     if generators is None:
@@ -414,26 +499,9 @@ def run_synth(
         openrouter_only = bool(openrouter_models) and not generator_names
         max_workers = 16 if (openrouter_only and not dry_run) else 1
 
-    # Window sizes: needed only for live sessions (overflow guard + the
-    # window_fill covariate). OpenRouter models resolve from the registry
-    # (ground truth); presets/injected generators use --context-window.
-    windows: dict[str, int] = {}
-    if session_turns > 1 and not dry_run:
-        or_names = [g.name for g in generators if g.name.startswith("openrouter/")]
-        if or_names:
-            try:
-                registry = synth.openrouter_context_windows()
-            except Exception as exc:
-                raise click.ClickException(
-                    f"could not fetch OpenRouter context windows for the session sweep: {exc}"
-                )
-            for n in or_names:
-                w = registry.get(n.removeprefix("openrouter/"))
-                if w:
-                    windows[n] = w
-        if context_window:
-            for g in generators:
-                windows.setdefault(g.name, context_window)
+    windows = _resolve_windows(
+        generators, session_turns=session_turns, dry_run=dry_run, context_window=context_window
+    )
 
     resolved_dir = data_dir() if callable(data_dir) else data_dir
 
@@ -470,27 +538,7 @@ def run_synth(
         context_windows=windows or None,
     )
 
-    pairs_path = resolved_dir / "pairs.jsonl"
-    if dry_run:
-        click.echo(
-            f"[dry-run] would write {result.planned - result.skipped_existing} new pair(s) "
-            f"({result.skipped_existing} already present) to {pairs_path}"
-        )
-        if session_turns > 1:
-            click.echo(f"  {result.planned_sessions} live session(s) of <= {session_turns} turn(s)")
-        for name, count in sorted(result.per_generator.items()):
-            click.echo(f"  {name}: {count}")
-        return result
-
-    click.echo(
-        f"wrote {result.written} pair(s) "
-        f"({result.skipped_existing} already present, skipped) -> {pairs_path}"
+    _report_result(
+        result, resolved_dir / "pairs.jsonl", dry_run=dry_run, session_turns=session_turns
     )
-    for name, count in sorted(result.per_generator.items()):
-        click.echo(f"  {name}: {count}")
-    if result.errors:
-        click.echo(f"{len(result.errors)} generation error(s):", err=True)
-        for key, msg in result.errors[:10]:
-            click.echo(f"  {key}: {msg}", err=True)
-        raise SystemExit(1)
     return result
