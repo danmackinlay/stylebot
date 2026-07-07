@@ -128,7 +128,7 @@ blog's `livingthing.training_targets`):
 Real-blog dry-run: ~3.6k passages from 492 quality>6 posts, 85% heading-framed.
 
 **Slop strategy + OpenRouter (built 2026-06-28; rotation 2026-07-06).** The slop
-*prompt* is a knob: `STRATEGIES` / `--slop-strategy` (`polish`|`engaging`|`catalogue`,
+*prompt* is a knob: `STRATEGIES` / `--slop-strategy` (`polish`|`engaging`|`casual`,
 **repeatable** — the rotation becomes models × strategies at no cost multiplier;
 `dan-style synth` defaults to rotating all three via
 `training_targets.SLOP_STRATEGIES`) / `--slop-system-file` (single-strategy),

@@ -54,7 +54,7 @@ uv run dan-style synth --dry-run --report /tmp/targets.html   # or --sample 10
 
 # 1. AUDITION GENERATION: small paid batch per candidate config, scratch dir
 direnv exec . uv run dan-style synth --data-dir /tmp/slop-experiments \
-  --slop-strategy catalogue \
+  --slop-strategy casual \
   --openrouter-model anthropic/claude-opus-4.8 --openrouter-model qwen/qwen3-32b \
   --limit 40
 #    repeat with other strategies/models/--reasoning-effort into the SAME

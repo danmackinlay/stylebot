@@ -68,8 +68,11 @@ policy `HEADING_CONTEXT="immediate"`. See [`heading-context.md`](heading-context
 not guessed once:
 
 - `STRATEGIES` (`stylebot.synth`) maps a label → a system-prompt flavour:
-  `polish` (neutral baseline), `engaging` (hooks/signposting), `catalogue` (the
-  stereotypical hedged LLM register, on purpose). The label is recorded as
+  `polish` (neutral baseline), `engaging` (hooks/signposting), `casual` (the
+  friendly-technical-blog register). A `catalogue` strategy (exaggerated
+  stereotypical-LLM tics, requested outright) was removed 2026-07-07 — it
+  produced cartoonish slop unlike the real drafting distribution; old pairs
+  stay resolvable via their data-dir's prompts.jsonl. The label is recorded as
   `meta.slop_strategy` **and folded into `synth_key`** (now
   `hash(generator, strategy, context, target)`), so iterating a prompt
   regenerates rather than colliding on resume, and flavours stay distinguishable
@@ -184,7 +187,7 @@ Append to the same `$STYLEBOT_DATA_DIR/pairs.jsonl`:
       ```sh
       # one strategy, into a throwaway dir, off the OpenRouter key:
       uv run ai-style synth --blog-root ~/Source/livingthing \
-        --data-dir /tmp/slop-experiments --slop-strategy catalogue \
+        --data-dir /tmp/slop-experiments --slop-strategy casual \
         --openrouter-model anthropic/claude-opus-4-8 \
         --openrouter-model openai/gpt-4o --limit 40 --report /tmp/exp.html
       ```

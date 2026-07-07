@@ -88,15 +88,18 @@ SLOP_SYSTEM_ENGAGING = (  # "engaging": hooks, signposting, surfaced takeaways
     "add helpful signposting, surface the key takeaways, and keep the reader "
     "moving. " + _SLOP_PRESERVE
 )
-SLOP_SYSTEM_CATALOGUE = (  # "catalogue": the stereotypical LLM register, on purpose
-    "You are a typical AI writing assistant. Rewrite the user's passage in the "
-    "default polished register of a large language model: smooth, measured, and "
-    "explanatory. Lean into the characteristic moves — open with throat-clearing "
-    "context ('In today's world', 'It's worth noting that'), add signposting and "
-    "a tidy summary, prefer abstract Latinate vocabulary and rule-of-three "
-    "phrasing, hedge claims ('can', 'may', 'often', 'arguably'), and even out the "
-    "rhythm so sentences land at a similar measured length. " + _SLOP_PRESERVE
+SLOP_SYSTEM_CASUAL = (  # "casual": the friendly-technical-blog register
+    "You are a friendly technical blogger. Rewrite the user's passage in the "
+    "approachable register of a popular developer blog: conversational and "
+    "upbeat, address the reader as 'you', break dense phrasing into short "
+    "clear sentences, add light connective tissue ('so', 'basically', 'the "
+    "nice thing is'), and round each idea off so nothing lands abruptly. "
+    + _SLOP_PRESERVE
 )
+# A "catalogue" strategy (exaggerated stereotypical-LLM tics, requested
+# outright) was removed 2026-07-07: it produced cartoonish slop unlike
+# anything in the real drafting distribution. Old catalogue pairs remain
+# resolvable via their data-dir's prompts.jsonl; the text is in git history.
 
 @dataclass(frozen=True)
 class SlopStrategy:
@@ -116,7 +119,7 @@ class SlopStrategy:
 STRATEGIES: dict[str, SlopStrategy] = {
     "polish": SlopStrategy("polish", SLOP_SYSTEM, version=1),
     "engaging": SlopStrategy("engaging", SLOP_SYSTEM_ENGAGING, version=1),
-    "catalogue": SlopStrategy("catalogue", SLOP_SYSTEM_CATALOGUE, version=1),
+    "casual": SlopStrategy("casual", SLOP_SYSTEM_CASUAL, version=1),
 }
 DEFAULT_STRATEGY = "polish"
 

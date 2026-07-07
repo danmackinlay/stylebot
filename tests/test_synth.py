@@ -246,9 +246,9 @@ def test_prompt_id_stable_and_distinct():
 def test_openrouter_generator_name_and_strategy():
     # Construction is offline (no request); pass an explicit key so it doesn't
     # require OPENROUTER_API_KEY from the environment.
-    gen = synth.openrouter_generator(model="anthropic/claude-opus-4-8", api_key="x", strategy="catalogue")
+    gen = synth.openrouter_generator(model="anthropic/claude-opus-4-8", api_key="x", strategy="casual")
     assert gen.name == "openrouter/anthropic/claude-opus-4-8"
-    assert gen.strategy == "catalogue"
+    assert gen.strategy == "casual"
 
 
 def test_dry_run_writes_nothing(tmp_path):

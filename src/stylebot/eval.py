@@ -613,7 +613,7 @@ def summarize_scores(scores: str | Path | Iterable[dict], *, by: str | None = No
     Fields-across-rows are the "groups" the styler is judged by movement across
     (slop vs target vs output). `by` additionally facets by a carried `meta` key
     — `by="slop_strategy"` gives per-strategy means, the experimental-loop view
-    that turns "is catalogue slop better than polish" into a number.
+    that turns "is casual slop better than polish" into a number.
     """
     records = load_scores(scores)
     summary: dict = {

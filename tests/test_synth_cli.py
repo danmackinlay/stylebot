@@ -271,7 +271,7 @@ def test_strategy_rotation_cross_product(tmp_path):
     result = CliRunner().invoke(
         ai_style_main,
         ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
-         "--openrouter-model", "x/y", "--slop-strategy", "polish", "--slop-strategy", "catalogue",
+         "--openrouter-model", "x/y", "--slop-strategy", "polish", "--slop-strategy", "casual",
          "--dry-run"],
     )
     assert result.exit_code == 0, result.output
@@ -293,12 +293,12 @@ def test_strategy_rotation_cross_product(tmp_path):
         live = CliRunner().invoke(
             ai_style_main,
             ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
-             "--openrouter-model", "x/y", "--slop-strategy", "polish", "--slop-strategy", "catalogue"],
+             "--openrouter-model", "x/y", "--slop-strategy", "polish", "--slop-strategy", "casual"],
         )
     assert live.exit_code == 0, live.output
-    assert captured == ["polish", "catalogue"]  # one generator per strategy
+    assert captured == ["polish", "casual"]  # one generator per strategy
     recs = [json.loads(ln) for ln in (tmp_path / "corpus" / "pairs.jsonl").read_text().splitlines()]
-    assert {r["meta"]["slop_strategy"] for r in recs} == {"polish", "catalogue"}
+    assert {r["meta"]["slop_strategy"] for r in recs} == {"polish", "casual"}
 
 
 def test_custom_system_file_rejects_multiple_strategies(tmp_path):

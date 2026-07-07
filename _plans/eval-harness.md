@@ -170,7 +170,7 @@ it consumes the `meta.gen` covariates Phase-2 now records. See
   is **idempotent/resumable** (scored ids skipped), like `synth`.
 - **A summary** (`summarize_scores`, `schema_version: 2`) aggregating per field
   across rows (fields-across-rows = the movement view: slop vs target vs output),
-  optionally faceted `by` a meta key — `by="slop_strategy"` turns "is `catalogue`
+  optionally faceted `by` a meta key — `by="slop_strategy"` turns "is `casual`
   slop better than `polish`?" into per-strategy mean judge/vale/detector scores.
 
 ## Done-criteria
