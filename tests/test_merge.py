@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from stylebot import synth
-from stylebot.synth import _is_link_list, _is_list_item, _pack_paragraphs, _split_sections
+from stylebot.targets import _is_link_list, _is_list_item, _pack_paragraphs, _split_sections
 
 
 def _write(root, rel, text):

@@ -58,7 +58,7 @@ def test_empty_frontmatter_block_gives_empty_meta():
 
 def test_malformed_frontmatter_raises():
     # Contract: garbage YAML propagates — callers own the guard (see
-    # synth._load_meta_body, which treats an unreadable post as unselected).
+    # targets._load_meta_body, which treats an unreadable post as unselected).
     with pytest.raises(Exception):
         read_w_frontmatter_text("---\ntitle: x\nno closing delimiter")
 
