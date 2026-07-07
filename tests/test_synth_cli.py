@@ -331,3 +331,19 @@ def test_plan_sessions_separates_same_model_strategies():
     by_strategy = {s.generator.strategy: s for s in sessions}
     assert set(by_strategy) == {"polish", "catalogue"}
     assert by_strategy["polish"].session_id != by_strategy["catalogue"].session_id
+
+
+def test_missing_openrouter_key_aborts_before_any_generation(tmp_path, monkeypatch):
+    # A keyless run must die at generator construction with the actionable
+    # config error — never reach the API, never write a partial corpus.
+    # (Empty env var wins over any .env file dotenv might discover.)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    root = _make_blog(tmp_path)
+    result = CliRunner().invoke(
+        ai_style_main,
+        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
+         "--openrouter-model", "qwen/qwen3-8b"],
+    )
+    assert result.exit_code != 0
+    assert "Missing required secret 'OPENROUTER_API_KEY'" in result.output
+    assert not (tmp_path / "corpus" / "pairs.jsonl").exists()
