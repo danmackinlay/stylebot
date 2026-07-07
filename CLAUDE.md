@@ -127,9 +127,12 @@ blog's `livingthing.training_targets`):
 - a read-only **report**/`--sample` visualiser (`stylebot.report`).
 Real-blog dry-run: ~3.6k passages from 492 quality>6 posts, 85% heading-framed.
 
-**Slop strategy + OpenRouter (built 2026-06-28).** The slop *prompt* is a knob:
-`STRATEGIES` / `--slop-strategy` (`polish`|`engaging`|`catalogue`) /
-`--slop-system-file`, recorded as `meta.slop_strategy` and folded into `synth_key`.
+**Slop strategy + OpenRouter (built 2026-06-28; rotation 2026-07-06).** The slop
+*prompt* is a knob: `STRATEGIES` / `--slop-strategy` (`polish`|`engaging`|`catalogue`,
+**repeatable** — the rotation becomes models × strategies at no cost multiplier;
+`dan-style synth` defaults to rotating all three via
+`training_targets.SLOP_STRATEGIES`) / `--slop-system-file` (single-strategy),
+recorded as `meta.slop_strategy` and folded into `synth_key`.
 `openrouter_generator` / `--openrouter-model` reach many models off one
 **`OPENROUTER_API_KEY`** (the blog's `dan-style synth` now defaults to an OpenRouter
 rotation). Add `OPENROUTER_API_KEY` to `.env` / `.envrc` (gitignored).

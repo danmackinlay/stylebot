@@ -257,3 +257,77 @@ def test_run_synth_sessions_end_to_end(tmp_path):
     assert [g["session_turn"] for g in gens_meta] == [1, 2]
     assert all(g["context_window"] == 8000 for g in gens_meta)
     assert gens_meta[1]["window_fill"] == round(400 / 8000, 4)
+
+
+# -- prompt rotation (models x strategies cross product) --
+
+
+def test_strategy_rotation_cross_product(tmp_path):
+    import json
+
+    # 2 strategies x 1 model: one run spreads targets across both prompts, at
+    # no cost multiplier (still one generation per target).
+    root = _make_blog(tmp_path)
+    result = CliRunner().invoke(
+        ai_style_main,
+        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
+         "--openrouter-model", "x/y", "--slop-strategy", "polish", "--slop-strategy", "catalogue",
+         "--dry-run"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "would write 2 new pair(s)" in result.output  # cross product rotates, not multiplies
+
+    captured = []
+
+    def fake_factory(*, model, strategy, **kw):
+        captured.append(strategy)
+        return synth.Generator(
+            name=f"openrouter/{model}", strategy=strategy,
+            generate=lambda t, history=None: f"[{strategy}] {t}",
+        )
+
+    import pytest as _pytest
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(synth, "openrouter_generator", fake_factory)
+        live = CliRunner().invoke(
+            ai_style_main,
+            ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
+             "--openrouter-model", "x/y", "--slop-strategy", "polish", "--slop-strategy", "catalogue"],
+        )
+    assert live.exit_code == 0, live.output
+    assert captured == ["polish", "catalogue"]  # one generator per strategy
+    recs = [json.loads(ln) for ln in (tmp_path / "corpus" / "pairs.jsonl").read_text().splitlines()]
+    assert {r["meta"]["slop_strategy"] for r in recs} == {"polish", "catalogue"}
+
+
+def test_custom_system_file_rejects_multiple_strategies(tmp_path):
+    root = _make_blog(tmp_path)
+    prompt = tmp_path / "my-slop.txt"
+    prompt.write_text("Rewrite it my way.", encoding="utf-8")
+    result = CliRunner().invoke(
+        ai_style_main,
+        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
+         "--openrouter-model", "x/y", "--slop-system-file", str(prompt),
+         "--slop-strategy", "a", "--slop-strategy", "b", "--dry-run"],
+    )
+    assert result.exit_code != 0
+    assert "ONE custom prompt" in result.output
+
+
+def test_plan_sessions_separates_same_model_strategies():
+    # Same model under two strategies must NOT merge into one session bucket
+    # (grouping is by generator identity), and their session ids differ.
+    targets = [
+        synth.Target(text=f"Long enough paragraph number {i} of prose.", source="p.qmd",
+                     chunk_index=i, chunk_total=4)
+        for i in range(4)
+    ]
+    g_polish = synth.Generator(name="openrouter/x", strategy="polish")
+    g_cat = synth.Generator(name="openrouter/x", strategy="catalogue")
+    assignments = [(t, g, "") for t, g in zip(targets, [g_polish, g_cat, g_polish, g_cat])]
+    sessions = synth._plan_sessions(assignments, session_turns=2)
+    assert len(sessions) == 2
+    by_strategy = {s.generator.strategy: s for s in sessions}
+    assert set(by_strategy) == {"polish", "catalogue"}
+    assert by_strategy["polish"].session_id != by_strategy["catalogue"].session_id

@@ -100,7 +100,7 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "provider_sort": (("--provider-sort",), dict(type=click.Choice(["throughput", "price", "latency", "none"]), default="throughput", show_default=True, help="OpenRouter provider-routing preference (default load-balancing favours price and can land on ~10 tok/s upstreams; 'none' restores it). OpenRouter models only; recorded in meta.gen next to the served provider.")),
     "sticky_provider": (("--sticky-provider/--no-sticky-provider",), dict(default=True, show_default=True, help="Pin each live session to the provider that served its first turn — keeps its prefix cache hot AND the serving stack constant, so window-position covariates aren't confounded by provider hops. OpenRouter models only; no effect on stateless runs.")),
     "prompt_cache": (("--prompt-cache/--no-prompt-cache",), dict(default=True, show_default=True, help="Anthropic models: mark session history with a moving cache_control breakpoint (cache reads at 0.1x after a 1.25x write; inert under ~1024-token prefixes and for other model families). Verify via meta.gen cached_tokens/cost.")),
-    "slop_strategy": (("--slop-strategy",), dict(default=synth.DEFAULT_STRATEGY, show_default=True, help=f"Named slop-prompt flavour ({', '.join(synth.STRATEGIES)}); recorded as meta.slop_strategy and folded into synth_key. With --slop-system-file the name is just a label.")),
+    "slop_strategies": (("--slop-strategy", "slop_strategies"), dict(multiple=True, default=(synth.DEFAULT_STRATEGY,), show_default=True, help=f"Slop-prompt flavour ({', '.join(synth.STRATEGIES)}); repeatable — the rotation becomes models x strategies, so one run diversifies prompts like it already diversifies models. Recorded as meta.slop_strategy and folded into synth_key. With --slop-system-file, pass exactly one label for the custom prompt.")),
     "slop_system_file": (("--slop-system-file",), dict(type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="Override the slop system prompt with this file's contents (e.g. an author's own slop catalogue), labelled by --slop-strategy. Keeps blog-specific prompts out of stylebot.")),
     "gpt_model": (("--gpt-model",), dict(default="gpt-4o", show_default=True)),
     "local_model": (("--local-model",), dict(default="", help="Local model id (else $LOCAL_LLM_MODEL).")),
@@ -156,7 +156,7 @@ def run_synth(
     provider_sort: str = "throughput",
     sticky_provider: bool = True,
     prompt_cache: bool = True,
-    slop_strategy: str = synth.DEFAULT_STRATEGY,
+    slop_strategies: Sequence[str] = (synth.DEFAULT_STRATEGY,),
     slop_system_file: Path | None = None,
     gpt_model: str = "gpt-4o",
     local_model: str = "",
@@ -210,7 +210,7 @@ def run_synth(
         # Generation flags alongside --report/--sample are a classic trap: the
         # run exits before any generator fires. Say so, and point at the pair
         # browser (the eval scores report) that DOES show generated slop.
-        if generator_names or openrouter_models or slop_strategy != synth.DEFAULT_STRATEGY:
+        if generator_names or openrouter_models or tuple(slop_strategies) != (synth.DEFAULT_STRATEGY,):
             pairs_hint = f"{data_dir}/pairs.jsonl" if isinstance(data_dir, Path) else "<data-dir>/pairs.jsonl"
             click.echo(
                 "[inspection] generation flags ignored; to generate then browse pairs: "
@@ -236,53 +236,68 @@ def run_synth(
                 "no generators selected: pass --generator {gpt,local} and/or "
                 "--openrouter-model MODEL (synth needs at least one slop source)"
             )
-        # Resolve the slop prompt once (fail fast on a bad strategy name). For a registry
-        # strategy we pass the *name* (system=None) down to the factory so it resolves the
-        # registry entry and keeps its version; only a custom --slop-system-file overrides
-        # the system text. prompt_id/version computed here drive the dry-run stubs so their
+        # Resolve every requested slop prompt up front (fail fast on a bad name;
+        # dedupe repeats, order-preserving). For a registry strategy the *name*
+        # (system=None) goes down to the factory so it resolves the registry entry
+        # and keeps its version; a custom --slop-system-file overrides the system
+        # text and is single-strategy by construction (one file = one prompt).
+        # prompt_id/version computed here drive the dry-run stubs so their
         # synth_key matches a real run's.
         custom_system = slop_system_file.read_text(encoding="utf-8") if slop_system_file else None
-        try:
-            strategy_label, _slop_system, prompt_version, prompt_id = synth.resolve_strategy(
-                slop_strategy, custom_system
+        strategy_names = list(dict.fromkeys(slop_strategies)) or [synth.DEFAULT_STRATEGY]
+        if custom_system is not None and len(strategy_names) > 1:
+            raise click.UsageError(
+                "--slop-system-file provides ONE custom prompt; pass exactly one "
+                "--slop-strategy label for it (registry strategies can rotate, a file cannot)"
             )
+        try:
+            resolved_strategies = [synth.resolve_strategy(s, custom_system) for s in strategy_names]
         except ValueError as exc:
             raise click.BadParameter(str(exc), param_hint="--slop-strategy")
 
+        # The rotation is the models x strategies cross product: round-robin
+        # assignment then spreads targets across every combination, so one run
+        # diversifies prompts the same way it diversifies models (same cost —
+        # still one generation per target, just a finer rotation).
         if dry_run:
             # Name-only stubs — no API clients, no keys needed to vet selection. Carry the
             # covariates that feed synth_key so dry-run resume counts match a real run.
             preset_names = {"gpt": gpt_model, "local": f"local-{local_model or 'local'}"}
 
-            def _stub(name: str) -> synth.Generator:
+            def _stub(name: str, label: str, prompt_id: str, prompt_version: int) -> synth.Generator:
                 return synth.Generator(
                     name=name,
-                    strategy=strategy_label,
+                    strategy=label,
                     reasoning_effort=reasoning_effort,
                     prompt_id=prompt_id,
                     prompt_version=prompt_version,
                 )
 
-            generators = [_stub(preset_names[g]) for g in generator_names]
-            generators += [_stub(f"openrouter/{m}") for m in openrouter_models]
+            generators = [
+                _stub(name, label, pid, version)
+                for label, _sys, version, pid in resolved_strategies
+                for name in [*(preset_names[g] for g in generator_names),
+                             *(f"openrouter/{m}" for m in openrouter_models)]
+            ]
         else:
-            gen_kw = dict(
-                strategy=strategy_label, system=custom_system, max_tokens=max_tokens,
-                reasoning_effort=reasoning_effort, temperature=temperature, top_p=top_p,
-                timeout=timeout,
-            )
             try:
                 generators = []
-                for g in generator_names:
-                    if g == "gpt":
-                        generators.append(synth.openai_generator(model=gpt_model, **gen_kw))
-                    elif g == "local":
-                        generators.append(synth.local_generator(model=local_model or None, **gen_kw))
-                for m in openrouter_models:
-                    generators.append(synth.openrouter_generator(
-                        model=m, provider_sort=None if provider_sort == "none" else provider_sort,
-                        sticky_provider=sticky_provider, prompt_cache=prompt_cache, **gen_kw
-                    ))
+                for label, _sys, _version, _pid in resolved_strategies:
+                    gen_kw = dict(
+                        strategy=label, system=custom_system, max_tokens=max_tokens,
+                        reasoning_effort=reasoning_effort, temperature=temperature, top_p=top_p,
+                        timeout=timeout,
+                    )
+                    for g in generator_names:
+                        if g == "gpt":
+                            generators.append(synth.openai_generator(model=gpt_model, **gen_kw))
+                        elif g == "local":
+                            generators.append(synth.local_generator(model=local_model or None, **gen_kw))
+                    for m in openrouter_models:
+                        generators.append(synth.openrouter_generator(
+                            model=m, provider_sort=None if provider_sort == "none" else provider_sort,
+                            sticky_provider=sticky_provider, prompt_cache=prompt_cache, **gen_kw
+                        ))
             except RuntimeError as exc:  # missing key, surfaced by config.require_key
                 raise click.ClickException(str(exc))
 
@@ -363,8 +378,7 @@ def run_synth(
             f"({result.skipped_existing} already present) to {pairs_path}"
         )
         if session_turns > 1:
-            n_sessions = sum(-(-c // session_turns) for c in result.per_generator.values())
-            click.echo(f"  ~{n_sessions} live session(s) of <= {session_turns} turn(s)")
+            click.echo(f"  {result.planned_sessions} live session(s) of <= {session_turns} turn(s)")
         for name, count in sorted(result.per_generator.items()):
             click.echo(f"  {name}: {count}")
         return result

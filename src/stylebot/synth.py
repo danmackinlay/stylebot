@@ -1063,6 +1063,7 @@ class SynthResult:
     written: int = 0
     skipped_existing: int = 0
     planned: int = 0  # (target, generator) assignments before dedup
+    planned_sessions: int = 0  # sessions holding >=1 not-yet-generated turn
     errors: list[tuple[str, str]] = field(default_factory=list)  # (synth_key, message)
     per_generator: dict[str, int] = field(default_factory=dict)
 
@@ -1126,16 +1127,23 @@ def _plan_sessions(
     resumable pair. `session_id` is derived from the generator name and the
     ordered turn inputs — never from prior generations.
     """
-    per_gen: dict[str, tuple[Generator, list[tuple[Target, str]]]] = {}
+    # Group by generator IDENTITY, not name: a rotation may carry the same
+    # model under several slop strategies (same .name, different .strategy),
+    # and name-keying would silently merge them.
+    per_gen: dict[int, tuple[Generator, list[tuple[Target, str]]]] = {}
     for target, gen, ctx in assignments:
-        per_gen.setdefault(gen.name, (gen, []))[1].append((target, ctx))
+        per_gen.setdefault(id(gen), (gen, []))[1].append((target, ctx))
 
     sessions: list[_Session] = []
     for gen, items in per_gen.values():
         for start in range(0, len(items), max(1, session_turns)):
             chunk = items[start : start + max(1, session_turns)]
             if session_turns > 1:
-                sid_h = hashlib.sha256(gen.name.encode("utf-8"))
+                # Strategy/prompt distinguish sessions of the same model, so
+                # session_id stays a unique grouping id across the rotation.
+                sid_h = hashlib.sha256(
+                    f"{gen.name}\x00{gen.strategy}\x00{gen.prompt_id}".encode("utf-8")
+                )
                 for target, ctx in chunk:
                     sid_h.update(b"\x00")
                     sid_h.update(ctx.encode("utf-8"))
@@ -1256,6 +1264,9 @@ def synthesize_pairs(
     seen = existing_synth_keys(pairs_path)
     total = sum(1 for _, t in all_turns if t.key not in seen)
     result.skipped_existing = len(all_turns) - total
+    result.planned_sessions = sum(
+        1 for s in sessions if any(t.key not in seen for t in s.turns)
+    )
 
     if dry_run:
         for s, t in all_turns:
