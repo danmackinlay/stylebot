@@ -50,6 +50,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Protocol
 
+from stylebot.jsonl import iter_jsonl, read_jsonl
 from stylebot.pairs import iter_pairs
 
 SCHEMA_VERSION = 2
@@ -443,23 +444,7 @@ def record_id(record: dict) -> str:
 
 def existing_scored_ids(out_path: str | Path) -> set[str]:
     """Read the `id`s already present in a `scores.jsonl` (for resumable runs)."""
-    out_path = Path(out_path)
-    ids: set[str] = set()
-    if not out_path.exists():
-        return ids
-    with out_path.open(encoding="utf-8") as fp:
-        for line in fp:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            rid = rec.get("id") if isinstance(rec, dict) else None
-            if rid:
-                ids.add(str(rid))
-    return ids
+    return {str(rec["id"]) for rec in iter_jsonl(out_path) if rec.get("id")}
 
 
 @dataclass
@@ -571,26 +556,12 @@ def score_pairs_file(
 def load_scores(scores: str | Path | Iterable[dict]) -> list[dict]:
     """Load score records from a `scores.jsonl` path (or accept them in-memory).
 
-    The shared reader for the scores artifact — mirrors `stylebot.pairs.iter_pairs`
-    for `pairs.jsonl`. A path is read line-by-line (UTF-8, blank/undecodable lines
-    skipped); an iterable is returned as a list unchanged.
+    The shared reader for the scores artifact (`stylebot.jsonl` under the hood:
+    UTF-8, blank/undecodable lines skipped, missing file → empty). An iterable
+    is returned as a list unchanged.
     """
     if isinstance(scores, (str, Path)):
-        path = Path(scores)
-        out: list[dict] = []
-        if path.exists():
-            with path.open(encoding="utf-8") as fp:
-                for line in fp:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        rec = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(rec, dict):
-                        out.append(rec)
-        return out
+        return read_jsonl(scores)
     return list(scores)
 
 

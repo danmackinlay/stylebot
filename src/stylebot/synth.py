@@ -56,6 +56,7 @@ from stylebot.lib import (
     read_w_frontmatter_text,
     split_paragraphs,
 )
+from stylebot.jsonl import iter_jsonl
 from stylebot.pairs import build_pair_content, iter_pairs
 
 # Instruction we hand a generic LLM to manufacture "slop" from Dan's prose.
@@ -1270,11 +1271,7 @@ def _record_prompts(data_dir: Path, generators: Sequence[Generator]) -> None:
     custom `--slop-system-file` prompts and superseded registry versions.
     """
     path = data_dir / "prompts.jsonl"
-    seen: set[str] = set()
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                seen.add(json.loads(line).get("prompt_id", ""))
+    seen = {rec.get("prompt_id", "") for rec in iter_jsonl(path)}
     with path.open("a", encoding="utf-8") as fp:
         for g in generators:
             if g.prompt_id and g.prompt_system and g.prompt_id not in seen:

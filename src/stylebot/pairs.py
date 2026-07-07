@@ -17,6 +17,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from stylebot.ai_core import STYLE_SYSTEM
+from stylebot.jsonl import iter_jsonl
 
 # meta keys every well-formed pair record carries (chunk 0 additionally may
 # carry before_frontmatter/after_frontmatter; tags/synthetic/generator are
@@ -131,23 +132,9 @@ def validate_pairs_file(path: str | Path) -> list[tuple[int, list[str]]]:
 def iter_pairs(path: str | Path) -> Iterator[dict]:
     """Yield each JSON object from a `pairs.jsonl`, one per non-blank line.
 
-    The shared, tolerant line-by-line reader for the corpus schema (UTF-8, blank
-    lines skipped, undecodable / non-object lines skipped rather than raising) —
-    the same idiom as `synth.existing_synth_keys`. Yields the raw parsed dict;
-    callers validate with `validate_pair_record` if they need the contract
-    enforced. A missing file yields nothing.
+    The tolerant reader for the corpus schema (`stylebot.jsonl` under the hood:
+    UTF-8, blank / undecodable / non-object lines skipped rather than raising).
+    Yields the raw parsed dict; callers validate with `validate_pair_record` if
+    they need the contract enforced. A missing file yields nothing.
     """
-    path = Path(path)
-    if not path.exists():
-        return
-    with path.open(encoding="utf-8") as fp:
-        for line in fp:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(rec, dict):
-                yield rec
+    yield from iter_jsonl(path)

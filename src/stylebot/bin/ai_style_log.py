@@ -253,6 +253,7 @@ from pathlib import Path
 import click
 
 from stylebot.ai_core import STYLE_SYSTEM
+from stylebot.jsonl import read_jsonl
 from stylebot.lib import read_w_frontmatter_text, split_paragraphs
 from stylebot.pairs import build_pair_content
 
@@ -463,22 +464,12 @@ def _append_pair(record: dict) -> None:
 
 
 def _iter_pairs() -> list[dict]:
-    """Read pairs.jsonl into memory. Returns [] if file is missing."""
-    if not PAIRS_PATH.exists():
-        return []
-    out: list[dict] = []
-    with PAIRS_PATH.open(encoding="utf-8") as fp:
-        for line in fp:
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
-                # Preserve unparseable lines as raw text wrapped so the
-                # rewrite path doesn't silently drop them.
-                out.append({"_raw": line})
-    return out
+    """Read pairs.jsonl into memory. Returns [] if file is missing.
+
+    Unparseable lines come back as ``{"_raw": line}`` so the rewrite path
+    (`_write_pairs_atomic`) round-trips them instead of silently dropping.
+    """
+    return read_jsonl(PAIRS_PATH, keep_undecodable=True)
 
 
 def _corpus_confirmation() -> str:
