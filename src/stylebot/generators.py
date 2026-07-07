@@ -158,8 +158,9 @@ DEFAULT_SLOP_MAX_TOKENS = 8192
 # Per-request HTTP timeout for slop generation. Without one, the openai SDK
 # waits 600s per attempt (x its automatic retries) — a bad upstream stalls a
 # sequential run for half an hour in silence. 300s clears even slow
-# high-reasoning generations (~60-120s observed) with headroom; a timed-out
-# pair is recorded in SynthResult.errors and the run continues.
+# high-reasoning generations (~60-120s observed) with headroom. A timed-out
+# pair is recorded in SynthResult.errors and ends ITS session (remaining turns
+# defer to the next run, same keys); other sessions continue.
 DEFAULT_GEN_TIMEOUT = 300.0
 
 

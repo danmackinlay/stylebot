@@ -282,7 +282,7 @@ def _assign(
     *,
     per_generator: bool,
     context_dropout: float = 0.0,
-    assign_salt: str = "",
+    assign_seed: str = "",
 ) -> list[tuple[Target, Generator, str]]:
     """Pair targets with generators → ``(target, generator, effective_context)``.
 
@@ -294,7 +294,7 @@ def _assign(
     independent of the rest of the target set, so corpus resume stays stable as
     the blog grows. Balance across arms is multinomial, not exact (~√n wobble)
     — experiments wanting exact within-target crossing use `per_generator=True`
-    (every target × every generator, n× the pairs/cost). `assign_salt`
+    (every target × every generator, n× the pairs/cost). `assign_seed`
     re-randomizes the whole assignment (a fresh replicate of the design; NOTE
     it changes which arm generated each target, so changed assignments
     regenerate on resume). `context` is the effective heading context after
@@ -311,7 +311,7 @@ def _assign(
     else:
         n = len(generators)
         for t in targets:
-            digest = hashlib.sha256(f"{assign_salt}\x00{t.text}".encode("utf-8")).digest()
+            digest = hashlib.sha256(f"{assign_seed}\x00{t.text}".encode("utf-8")).digest()
             idx = int.from_bytes(digest[:8], "big") % n
             out.append((t, generators[idx], _effective_context(t, context_dropout)))
     return out
@@ -403,6 +403,193 @@ def _exchange(user_text: str, assistant_text: str) -> list[dict]:
     ]
 
 
+@dataclass
+class _RunState:
+    """Shared mutable state for one `synthesize_pairs` run.
+
+    Explicit where it used to be closure cells: `_run_session` coroutines for
+    every session share this one object. Single-threaded asyncio — mutations
+    interleave only between awaits, so no locks.
+    """
+
+    result: SynthResult
+    seen: set[str]  # synth_keys already in the file (resume)
+    claimed: set[str]  # in-run dup guard, claimed BEFORE the await
+    recorded_slop: dict[str, str]  # already-recorded turns, replayed into history
+    windows: dict[str, int]  # generator name -> context window (live sessions)
+    session_max_tokens: int | None
+    data_dir: Path
+    extra_tags: Sequence[str]
+    total: int  # pairs this run will attempt (for progress)
+    done: int = 0
+    on_progress: Callable[[int, int], None] | None = None
+    on_error: Callable[[str, str], None] | None = None
+
+
+def _session_token_cap(gen: Generator, window: int | None, session_max_tokens: int | None) -> int | None:
+    """One session's prompt-token budget: the generator's own budget (else the
+    global default), further capped at `SESSION_WINDOW_FILL_CAP` × window."""
+    caps = [gen.session_budget or session_max_tokens]
+    if window:
+        caps.append(int(window * SESSION_WINDOW_FILL_CAP))
+    return min((c for c in caps if c), default=None)
+
+
+def _estimate_next_prompt(history: Sequence[dict], last_prompt: int, last_visible: int, next_text: str) -> int:
+    """Estimate the next turn's prompt tokens.
+
+    Last measured prompt + what the last reply added + the next passage
+    (~4 chars/token) — or a pure char estimate before any live turn has
+    reported usage (e.g. resume replayed history without generating yet).
+    """
+    if last_prompt:
+        return last_prompt + last_visible + len(next_text) // 4
+    return (sum(len(m["content"]) for m in history) + len(next_text)) // 4
+
+
+def _load_recorded_slop(pairs_path: Path, sessions: Sequence[_Session], seen: set[str]) -> dict[str, str]:
+    """Session resume: the recorded slop of already-done turns, for history replay.
+
+    One extra pass over the file, restricted to keys that can actually matter
+    (multi-turn sessions with an already-recorded turn).
+    """
+    from stylebot.eval import extract_slop  # lazy: eval pulls in scorer deps
+
+    needed = {t.key for s in sessions if len(s.turns) > 1 for t in s.turns} & seen
+    out: dict[str, str] = {}
+    if needed:
+        for rec in iter_pairs(pairs_path):
+            k = (rec.get("meta") or {}).get("synth_key")
+            if k in needed:
+                out[k] = extract_slop(rec)
+    return out
+
+
+def _pop_reasoning_to_sidecar(data_dir: Path, turn: _Turn, gen: Generator, gen_meta: dict, *, in_session: bool) -> None:
+    """Route a reasoning trace to the `reasoning.jsonl` sidecar (keyed to the pair).
+
+    Traces are diagnostics, not corpus: `reasoning_text` is POPPED from
+    `gen_meta` so it never enters `pairs.jsonl`. No-op when the generator
+    captured none.
+    """
+    reasoning_text = gen_meta.pop("reasoning_text", None)
+    if reasoning_text is None:
+        return
+    with (data_dir / "reasoning.jsonl").open("a", encoding="utf-8") as rf:
+        rf.write(json.dumps({
+            "synth_key": turn.key,
+            "generator": gen.name,
+            "slop_strategy": gen.strategy,
+            "reasoning_effort": gen.reasoning_effort,
+            "session_turn": turn.index if in_session else None,
+            "reasoning_tokens": gen_meta.get("reasoning_tokens"),
+            "reasoning": reasoning_text,
+        }, ensure_ascii=False) + "\n")
+
+
+async def _run_session(sess: _Session, fp, st: _RunState) -> None:
+    """Run one session's turns in order, appending records as they complete.
+
+    A turn error ends THIS session (later turns would see a hole in history);
+    other sessions continue, and the failed turn retries next run under the
+    same key. Already-recorded turns are replayed into history from
+    `st.recorded_slop` instead of regenerating.
+    """
+    gen = sess.generator
+    # Multi-turn sessions get a per-session callable when the generator
+    # offers one (sticky provider routing state); stateless stays on the
+    # plain path.
+    call = gen.begin_session() if (len(sess.turns) > 1 and gen.begin_session is not None) else gen
+    window = st.windows.get(gen.name)
+    cap = _session_token_cap(gen, window, st.session_max_tokens)
+    history: list[dict] = []
+    last_prompt = 0  # prompt_tokens reported for the last live turn
+    last_visible = 0  # ~tokens the last reply added to history
+
+    for turn in sess.turns:
+        if history and cap is not None:
+            if _estimate_next_prompt(history, last_prompt, last_visible, turn.target.text) > cap:
+                break
+        if turn.key in st.seen or turn.key in st.claimed:
+            if (slop := st.recorded_slop.get(turn.key)) is not None:
+                history += _exchange(turn.target.text, slop)
+            continue
+        st.claimed.add(turn.key)
+
+        # A failed pair is never written, so its synth_key resolves to
+        # nothing — the recorded error must carry the config that produced
+        # it or the failure is unattributable.
+        who = f"{gen.name} strategy={gen.strategy} effort={gen.reasoning_effort}"
+        if sess.session_id:
+            who += f" turn={turn.index}"
+
+        def _fail(message: str, *, _who: str = who, _key: str = turn.key) -> None:
+            msg = f"[{_who}] {message}"
+            st.result.errors.append((_key, msg))
+            if st.on_error is not None:
+                st.on_error(_key, msg)
+
+        try:
+            out = call(turn.target.text, history=history or None)
+            if inspect.isawaitable(out):
+                out = await out
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # API error etc. — record, end this session
+            _fail(f"{type(exc).__name__}: {exc}")
+            break
+        slop, gen_meta = _normalize_gen_output(out)
+        if not slop.strip():
+            _fail("generator returned empty output")
+            break
+        prompt_tokens = gen_meta.get("prompt_tokens")
+        if sess.session_id:
+            gen_meta.update(
+                session_id=sess.session_id,
+                session_turn=turn.index,
+                context_window=window,
+                window_fill=(
+                    round(prompt_tokens / window, 4) if prompt_tokens and window else None
+                ),
+            )
+        _pop_reasoning_to_sidecar(st.data_dir, turn, gen, gen_meta, in_session=bool(sess.session_id))
+        record = _build_record(
+            slop=slop,
+            target=turn.target,
+            generator_name=gen.name,
+            synth_key=turn.key,
+            strategy=gen.strategy,
+            context=turn.context,
+            extra_tags=st.extra_tags,
+            gen_meta=gen_meta,
+        )
+        fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+        fp.flush()
+        st.result.written += 1
+        st.result.per_generator[gen.name] = st.result.per_generator.get(gen.name, 0) + 1
+        st.done += 1
+        if st.on_progress is not None:
+            st.on_progress(st.done, st.total)
+        history += _exchange(turn.target.text, slop)
+        if prompt_tokens:
+            last_prompt = prompt_tokens
+        completion = gen_meta.get("completion_tokens") or 0
+        reasoning = gen_meta.get("reasoning_tokens") or 0
+        last_visible = max(completion - reasoning, len(slop) // 4)
+
+
+async def _run_sessions(sessions: Sequence[_Session], pairs_path: Path, st: _RunState, max_workers: int) -> None:
+    """Run sessions concurrently, `max_workers` at a time, on one append handle."""
+    sem = asyncio.Semaphore(max(1, max_workers))
+
+    async def _gated(sess: _Session, fp) -> None:
+        async with sem:
+            await _run_session(sess, fp, st)
+
+    with pairs_path.open("a", encoding="utf-8") as fp:
+        await asyncio.gather(*(_gated(s, fp) for s in sessions))
+
+
 def synthesize_pairs(
     targets: Sequence[Target],
     data_dir: Path | str,
@@ -418,7 +605,7 @@ def synthesize_pairs(
     session_turns: int = 1,
     session_max_tokens: int | None = DEFAULT_SESSION_MAX_TOKENS,
     context_windows: Mapping[str, int] | None = None,
-    assign_salt: str = "",
+    assign_seed: str = "",
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
@@ -460,7 +647,7 @@ def synthesize_pairs(
 
     assignments = _assign(
         targets, generators,
-        per_generator=per_generator, context_dropout=context_dropout, assign_salt=assign_salt,
+        per_generator=per_generator, context_dropout=context_dropout, assign_seed=assign_seed,
     )
     sessions = _plan_sessions(assignments, session_turns=session_turns)
     all_turns = [(s, t) for s in sessions for t in s.turns]
@@ -479,140 +666,24 @@ def synthesize_pairs(
                 result.per_generator[s.generator.name] = result.per_generator.get(s.generator.name, 0) + 1
         return result
 
-    # Session resume needs the recorded slop of already-done turns to replay
-    # into history. One extra pass over the file, only when it can matter.
     recorded_slop: dict[str, str] = {}
     if session_turns > 1 and result.skipped_existing:
-        from stylebot.eval import extract_slop  # lazy: eval pulls in scorer deps
-
-        needed = {t.key for s in sessions if len(s.turns) > 1 for t in s.turns} & seen
-        if needed:
-            for rec in iter_pairs(pairs_path):
-                k = (rec.get("meta") or {}).get("synth_key")
-                if k in needed:
-                    recorded_slop[k] = extract_slop(rec)
+        recorded_slop = _load_recorded_slop(pairs_path, sessions, seen)
 
     data_dir.mkdir(parents=True, exist_ok=True)
     _record_prompts(data_dir, generators)
-    windows = dict(context_windows or {})
-    claimed: set[str] = set()  # in-run dup guard, claimed BEFORE the await
-    state = {"done": 0}
-
-    async def _run_session(sess: _Session, fp) -> None:
-        gen = sess.generator
-        # Multi-turn sessions get a per-session callable when the generator
-        # offers one (sticky provider routing state); stateless stays on the
-        # plain path.
-        call = gen.begin_session() if (len(sess.turns) > 1 and gen.begin_session is not None) else gen
-        window = windows.get(gen.name)
-        caps = [gen.session_budget or session_max_tokens]
-        if window:
-            caps.append(int(window * SESSION_WINDOW_FILL_CAP))
-        cap = min((c for c in caps if c), default=None)
-        history: list[dict] = []
-        last_prompt = 0  # prompt_tokens reported for the last live turn
-        last_visible = 0  # ~tokens the last reply added to history
-
-        for turn in sess.turns:
-            if history and cap is not None:
-                # Estimate the next prompt: last measured prompt + what the
-                # last reply added + the next passage (~4 chars/token), or a
-                # pure char estimate before any live turn has reported usage.
-                if last_prompt:
-                    est = last_prompt + last_visible + len(turn.target.text) // 4
-                else:
-                    est = (sum(len(m["content"]) for m in history) + len(turn.target.text)) // 4
-                if est > cap:
-                    break
-            if turn.key in seen or turn.key in claimed:
-                if (slop := recorded_slop.get(turn.key)) is not None:
-                    history += _exchange(turn.target.text, slop)
-                continue
-            claimed.add(turn.key)
-
-            # A failed pair is never written, so its synth_key resolves to
-            # nothing — the recorded error must carry the config that produced
-            # it or the failure is unattributable.
-            who = f"{gen.name} strategy={gen.strategy} effort={gen.reasoning_effort}"
-            if sess.session_id:
-                who += f" turn={turn.index}"
-
-            def _fail(message: str, *, _who: str = who, _key: str = turn.key) -> None:
-                msg = f"[{_who}] {message}"
-                result.errors.append((_key, msg))
-                if on_error is not None:
-                    on_error(_key, msg)
-
-            try:
-                out = call(turn.target.text, history=history or None)
-                if inspect.isawaitable(out):
-                    out = await out
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # API error etc. — record, end this session
-                _fail(f"{type(exc).__name__}: {exc}")
-                break
-            slop, gen_meta = _normalize_gen_output(out)
-            if not slop.strip():
-                _fail("generator returned empty output")
-                break
-            prompt_tokens = gen_meta.get("prompt_tokens")
-            if sess.session_id:
-                gen_meta.update(
-                    session_id=sess.session_id,
-                    session_turn=turn.index,
-                    context_window=window,
-                    window_fill=(
-                        round(prompt_tokens / window, 4) if prompt_tokens and window else None
-                    ),
-                )
-            # Reasoning traces are diagnostics, not corpus: route them to the
-            # reasoning.jsonl sidecar (keyed to the pair) and keep pairs.jsonl lean.
-            reasoning_text = gen_meta.pop("reasoning_text", None)
-            if reasoning_text is not None:
-                with (data_dir / "reasoning.jsonl").open("a", encoding="utf-8") as rf:
-                    rf.write(json.dumps({
-                        "synth_key": turn.key,
-                        "generator": gen.name,
-                        "slop_strategy": gen.strategy,
-                        "reasoning_effort": gen.reasoning_effort,
-                        "session_turn": turn.index if sess.session_id else None,
-                        "reasoning_tokens": gen_meta.get("reasoning_tokens"),
-                        "reasoning": reasoning_text,
-                    }, ensure_ascii=False) + "\n")
-            record = _build_record(
-                slop=slop,
-                target=turn.target,
-                generator_name=gen.name,
-                synth_key=turn.key,
-                strategy=gen.strategy,
-                context=turn.context,
-                extra_tags=extra_tags,
-                gen_meta=gen_meta,
-            )
-            fp.write(json.dumps(record, ensure_ascii=False) + "\n")
-            fp.flush()
-            result.written += 1
-            result.per_generator[gen.name] = result.per_generator.get(gen.name, 0) + 1
-            state["done"] += 1
-            if on_progress is not None:
-                on_progress(state["done"], total)
-            history += _exchange(turn.target.text, slop)
-            if prompt_tokens:
-                last_prompt = prompt_tokens
-            completion = gen_meta.get("completion_tokens") or 0
-            reasoning = gen_meta.get("reasoning_tokens") or 0
-            last_visible = max(completion - reasoning, len(slop) // 4)
-
-    async def _run_all() -> None:
-        sem = asyncio.Semaphore(max(1, max_workers))
-
-        async def _gated(sess: _Session, fp) -> None:
-            async with sem:
-                await _run_session(sess, fp)
-
-        with pairs_path.open("a", encoding="utf-8") as fp:
-            await asyncio.gather(*(_gated(s, fp) for s in sessions))
-
-    asyncio.run(_run_all())
+    st = _RunState(
+        result=result,
+        seen=seen,
+        claimed=set(),
+        recorded_slop=recorded_slop,
+        windows=dict(context_windows or {}),
+        session_max_tokens=session_max_tokens,
+        data_dir=data_dir,
+        extra_tags=extra_tags,
+        total=total,
+        on_progress=on_progress,
+        on_error=on_error,
+    )
+    asyncio.run(_run_sessions(sessions, pairs_path, st, max_workers))
     return result

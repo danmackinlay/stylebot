@@ -71,7 +71,7 @@ def test_hash_assignment_is_set_stable_and_position_free():
     tail = {t.text: g.name for t, g, _ in synth._assign(targets[1:], gens, per_generator=False)}
     assert all(tail[text] == full[text] for text in tail)  # set-stable
 
-    salted = {t.text: g.name for t, g, _ in synth._assign(targets, gens, per_generator=False, assign_salt="rep2")}
+    salted = {t.text: g.name for t, g, _ in synth._assign(targets, gens, per_generator=False, assign_seed="rep2")}
     assert salted != full  # a fresh replicate of the design
 
 
@@ -726,6 +726,24 @@ def test_turn_error_ends_only_its_session(tmp_path):
     # The error is attributable: generator, strategy, effort, and session turn.
     _key, msg = result.errors[0]
     assert msg.startswith("[bad strategy=polish effort=high turn=1] RuntimeError")
+
+
+def test_estimate_next_prompt():
+    # Pure token-estimate arithmetic (hoisted out of the session loop so it is
+    # directly testable): measured path = last prompt + last reply's visible
+    # tokens + next passage at ~4 chars/token; unmeasured path = pure chars/4.
+    history = [{"role": "user", "content": "x" * 400}, {"role": "assistant", "content": "y" * 400}]
+    assert synth._estimate_next_prompt(history, 1000, 50, "z" * 400) == 1000 + 50 + 100
+    assert synth._estimate_next_prompt(history, 0, 0, "z" * 400) == (800 + 400) // 4
+
+
+def test_session_token_cap():
+    g = synth.Generator("x")
+    assert synth._session_token_cap(g, None, 32_000) == 32_000
+    assert synth._session_token_cap(g, 10_000, 32_000) == 8_000  # 0.8 x window wins
+    assert synth._session_token_cap(g, None, None) is None
+    g_budget = synth.Generator("x", session_budget=5_000)
+    assert synth._session_token_cap(g_budget, 10_000, 32_000) == 5_000  # per-generator beats both
 
 
 def test_session_budget_stops_session(tmp_path):
