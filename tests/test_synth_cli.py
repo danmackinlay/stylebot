@@ -350,3 +350,44 @@ def test_missing_openrouter_key_aborts_before_any_generation(tmp_path, monkeypat
     assert result.exit_code != 0
     assert "Missing required secret 'OPENROUTER_API_KEY'" in result.output
     assert not (tmp_path / "corpus" / "pairs.jsonl").exists()
+
+
+def test_reasoning_effort_rotation_cross_product(tmp_path):
+    import json
+
+    # 2 efforts x 1 strategy x 1 model: effort joins the rotation at no cost
+    # multiplier, and each pair records the effort that produced it.
+    root = _make_blog(tmp_path)
+    dry = CliRunner().invoke(
+        ai_style_main,
+        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
+         "--openrouter-model", "x/y", "--reasoning-effort", "off", "--reasoning-effort", "high",
+         "--dry-run"],
+    )
+    assert dry.exit_code == 0, dry.output
+    assert "would write 2 new pair(s)" in dry.output  # rotation, not multiplication
+
+    captured = []
+
+    def fake_factory(*, model, strategy, reasoning_effort, **kw):
+        captured.append(reasoning_effort)
+        return synth.Generator(
+            name=f"openrouter/{model}", strategy=strategy, reasoning_effort=reasoning_effort,
+            generate=lambda t, history=None: synth.GenOutput(
+                f"[slop] {t}", {"reasoning_effort": reasoning_effort}
+            ),
+        )
+
+    import pytest as _pytest
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(synth, "openrouter_generator", fake_factory)
+        live = CliRunner().invoke(
+            ai_style_main,
+            ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
+             "--openrouter-model", "x/y", "--reasoning-effort", "off", "--reasoning-effort", "high"],
+        )
+    assert live.exit_code == 0, live.output
+    assert captured == ["off", "high"]  # one generator per effort
+    recs = [json.loads(ln) for ln in (tmp_path / "corpus" / "pairs.jsonl").read_text().splitlines()]
+    assert {r["meta"]["gen"]["reasoning_effort"] for r in recs} == {"off", "high"}

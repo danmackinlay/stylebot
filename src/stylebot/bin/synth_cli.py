@@ -106,7 +106,7 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "local_model": (("--local-model",), dict(default="", help="Local model id (else $LOCAL_LLM_MODEL).")),
     "max_tokens": (("--max-tokens",), dict(default=synth.DEFAULT_SLOP_MAX_TOKENS, show_default=True, type=int, help="Max completion tokens per slop generation. Raise if a model truncates.")),
     "timeout": (("--timeout",), dict(default=synth.DEFAULT_GEN_TIMEOUT, show_default=True, type=float, help="Per-request HTTP timeout (seconds) for slop generation. A timed-out pair is reported immediately, recorded as an error, and the run continues.")),
-    "reasoning_effort": (("--reasoning-effort",), dict(type=click.Choice(["high", "medium", "low", "off"]), default=synth.DEFAULT_REASONING_EFFORT, show_default=True, help="Reasoning effort for the slop generator, recorded as a covariate in meta.gen ('off' disables reasoning). Mapping to each provider is best-effort; the requested effort is recorded regardless of what the provider honors.")),
+    "reasoning_efforts": (("--reasoning-effort", "reasoning_efforts"), dict(type=click.Choice(["high", "medium", "low", "off"]), multiple=True, default=(synth.DEFAULT_REASONING_EFFORT,), show_default=True, help="Reasoning effort for the slop generator ('off' disables reasoning); repeatable — the rotation becomes models x strategies x efforts, so effort joins the sweep (facet eval by reasoning_effort). Recorded in meta.gen and folded into synth_key; the requested effort is recorded regardless of what the provider honors.")),
     "temperature": (("--temperature",), dict(type=float, default=None, help="Sampling temperature, sent to the API and recorded (provider default if unset).")),
     "top_p": (("--top-p", "top_p"), dict(type=float, default=None, help="Nucleus top_p, sent to the API and recorded (provider default if unset).")),
     "per_generator": (("--per-generator",), dict(is_flag=True, help="Emit a pair from EVERY generator per target (n× cost), not round-robin.")),
@@ -162,7 +162,7 @@ def run_synth(
     local_model: str = "",
     max_tokens: int = synth.DEFAULT_SLOP_MAX_TOKENS,
     timeout: float | None = synth.DEFAULT_GEN_TIMEOUT,
-    reasoning_effort: str = synth.DEFAULT_REASONING_EFFORT,
+    reasoning_efforts: Sequence[str] = (synth.DEFAULT_REASONING_EFFORT,),
     temperature: float | None = None,
     top_p: float | None = None,
     per_generator: bool = False,
@@ -254,28 +254,31 @@ def run_synth(
             resolved_strategies = [synth.resolve_strategy(s, custom_system) for s in strategy_names]
         except ValueError as exc:
             raise click.BadParameter(str(exc), param_hint="--slop-strategy")
+        efforts = list(dict.fromkeys(reasoning_efforts)) or [synth.DEFAULT_REASONING_EFFORT]
 
-        # The rotation is the models x strategies cross product: round-robin
-        # assignment then spreads targets across every combination, so one run
-        # diversifies prompts the same way it diversifies models (same cost —
-        # still one generation per target, just a finer rotation).
+        # The rotation is the models x strategies x efforts cross product:
+        # round-robin assignment then spreads targets across every combination,
+        # so one run diversifies prompts and reasoning depth the same way it
+        # diversifies models (same cost — still one generation per target, just
+        # a finer rotation).
         if dry_run:
             # Name-only stubs — no API clients, no keys needed to vet selection. Carry the
             # covariates that feed synth_key so dry-run resume counts match a real run.
             preset_names = {"gpt": gpt_model, "local": f"local-{local_model or 'local'}"}
 
-            def _stub(name: str, label: str, prompt_id: str, prompt_version: int) -> synth.Generator:
+            def _stub(name: str, label: str, effort: str, prompt_id: str, prompt_version: int) -> synth.Generator:
                 return synth.Generator(
                     name=name,
                     strategy=label,
-                    reasoning_effort=reasoning_effort,
+                    reasoning_effort=effort,
                     prompt_id=prompt_id,
                     prompt_version=prompt_version,
                 )
 
             generators = [
-                _stub(name, label, pid, version)
+                _stub(name, label, effort, pid, version)
                 for label, _sys, version, pid in resolved_strategies
+                for effort in efforts
                 for name in [*(preset_names[g] for g in generator_names),
                              *(f"openrouter/{m}" for m in openrouter_models)]
             ]
@@ -283,21 +286,22 @@ def run_synth(
             try:
                 generators = []
                 for label, _sys, _version, _pid in resolved_strategies:
-                    gen_kw = dict(
-                        strategy=label, system=custom_system, max_tokens=max_tokens,
-                        reasoning_effort=reasoning_effort, temperature=temperature, top_p=top_p,
-                        timeout=timeout,
-                    )
-                    for g in generator_names:
-                        if g == "gpt":
-                            generators.append(synth.openai_generator(model=gpt_model, **gen_kw))
-                        elif g == "local":
-                            generators.append(synth.local_generator(model=local_model or None, **gen_kw))
-                    for m in openrouter_models:
-                        generators.append(synth.openrouter_generator(
-                            model=m, provider_sort=None if provider_sort == "none" else provider_sort,
-                            sticky_provider=sticky_provider, prompt_cache=prompt_cache, **gen_kw
-                        ))
+                    for effort in efforts:
+                        gen_kw = dict(
+                            strategy=label, system=custom_system, max_tokens=max_tokens,
+                            reasoning_effort=effort, temperature=temperature, top_p=top_p,
+                            timeout=timeout,
+                        )
+                        for g in generator_names:
+                            if g == "gpt":
+                                generators.append(synth.openai_generator(model=gpt_model, **gen_kw))
+                            elif g == "local":
+                                generators.append(synth.local_generator(model=local_model or None, **gen_kw))
+                        for m in openrouter_models:
+                            generators.append(synth.openrouter_generator(
+                                model=m, provider_sort=None if provider_sort == "none" else provider_sort,
+                                sticky_provider=sticky_provider, prompt_cache=prompt_cache, **gen_kw
+                            ))
             except RuntimeError as exc:  # missing key, surfaced by config.require_key
                 raise click.ClickException(str(exc))
 
