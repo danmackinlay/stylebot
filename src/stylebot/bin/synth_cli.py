@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -119,6 +120,120 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "limit": (("--limit",), dict(type=int, default=None, help="Cap the number of target chunks (cost control / smoke runs).")),
     "dry_run": (("--dry-run",), dict(is_flag=True, help="Report planned targets/pairs without calling any API or writing.")),
 }
+
+
+@dataclass(frozen=True)
+class Arm:
+    """One rotation arm: a (model, slop strategy, reasoning effort) combination.
+
+    Reifies the unit the round-robin assignment spreads targets across
+    (previously "arm" existed only in comments). ``name`` is the single
+    computation of the generator name that feeds ``synth_key`` — dry-run stubs
+    and real factory generators both take it from here, so the two paths
+    cannot drift apart.
+    """
+
+    kind: str  # "gpt" | "local" | "openrouter"
+    model: str  # resolved model id (env fallbacks already applied)
+    strategy: synth.ResolvedStrategy
+    effort: str
+
+    @property
+    def name(self) -> str:
+        if self.kind == "openrouter":
+            return f"openrouter/{self.model}"
+        if self.kind == "local":
+            return f"local-{self.model}"
+        return self.model  # gpt preset: the raw model id
+
+
+def iter_arms(
+    resolved_strategies: Sequence[synth.ResolvedStrategy],
+    efforts: Sequence[str],
+    generator_names: Sequence[str],
+    openrouter_models: Sequence[str],
+    *,
+    gpt_model: str,
+    local_model: str,
+) -> list[Arm]:
+    """The rotation cross product, in corpus-affecting enumeration order.
+
+    Strategies (outer) × efforts × [presets in flag order, then OpenRouter
+    models in flag order]. `synth._assign` picks ``generators[digest % n]``,
+    so this enumeration order decides which arm owns which target — reordering
+    it reassigns the corpus on resume. The local model id is resolved here
+    (flag, else ``$LOCAL_LLM_MODEL``, else ``"local"`` — mirroring
+    `synth.local_generator`) so dry-run stub names match a real run's even
+    when the env var supplies the model.
+    """
+    from stylebot import config
+
+    models: list[tuple[str, str]] = []
+    for g in generator_names:
+        if g == "gpt":
+            models.append(("gpt", gpt_model))
+        else:
+            models.append(("local", local_model or config.get_key("LOCAL_LLM_MODEL") or "local"))
+    models += [("openrouter", m) for m in openrouter_models]
+    return [
+        Arm(kind=kind, model=model, strategy=rs, effort=effort)
+        for rs in resolved_strategies
+        for effort in efforts
+        for kind, model in models
+    ]
+
+
+def build_generators(
+    arms: Sequence[Arm],
+    *,
+    dry_run: bool,
+    custom_system: str | None,
+    max_tokens: int,
+    timeout: float | None,
+    capture_reasoning: bool,
+    temperature: float | None,
+    top_p: float | None,
+    provider_sort: str,
+    sticky_provider: bool,
+    prompt_cache: bool,
+) -> list[synth.Generator]:
+    """One generator per arm.
+
+    Dry-run stubs (name-only, no API clients, no keys) and real factory
+    generators share ``arm.name`` and the key covariates, so their synth_keys
+    are identical by construction — dry-run resume counts are the real run's.
+    Factories are reached as ``synth.<factory>`` attribute lookups on purpose:
+    tests monkeypatch them on the synth module.
+    """
+    out: list[synth.Generator] = []
+    for arm in arms:
+        if dry_run:
+            out.append(
+                synth.Generator(
+                    name=arm.name,
+                    strategy=arm.strategy.label,
+                    reasoning_effort=arm.effort,
+                    prompt_id=arm.strategy.prompt_id,
+                    prompt_version=arm.strategy.version,
+                )
+            )
+            continue
+        gen_kw = dict(
+            strategy=arm.strategy.label, system=custom_system, max_tokens=max_tokens,
+            reasoning_effort=arm.effort, temperature=temperature, top_p=top_p,
+            timeout=timeout, capture_reasoning=capture_reasoning,
+        )
+        if arm.kind == "gpt":
+            out.append(synth.openai_generator(model=arm.model, **gen_kw))
+        elif arm.kind == "local":
+            out.append(synth.local_generator(model=arm.model, **gen_kw))
+        else:
+            out.append(synth.openrouter_generator(
+                model=arm.model,
+                provider_sort=None if provider_sort == "none" else provider_sort,
+                sticky_provider=sticky_provider, prompt_cache=prompt_cache, **gen_kw,
+            ))
+    return out
 
 
 def synth_options(*, exclude: Iterable[str] = (), **default_overrides):
@@ -245,8 +360,6 @@ def run_synth(
         # (system=None) goes down to the factory so it resolves the registry entry
         # and keeps its version; a custom --slop-system-file overrides the system
         # text and is single-strategy by construction (one file = one prompt).
-        # prompt_id/version computed here drive the dry-run stubs so their
-        # synth_key matches a real run's.
         custom_system = slop_system_file.read_text(encoding="utf-8") if slop_system_file else None
         strategy_names = list(dict.fromkeys(slop_strategies)) or [synth.DEFAULT_STRATEGY]
         if custom_system is not None and len(strategy_names) > 1:
@@ -265,49 +378,26 @@ def run_synth(
         # so one run diversifies prompts and reasoning depth the same way it
         # diversifies models (same cost — still one generation per target, just
         # a finer rotation).
-        if dry_run:
-            # Name-only stubs — no API clients, no keys needed to vet selection. Carry the
-            # covariates that feed synth_key so dry-run resume counts match a real run.
-            preset_names = {"gpt": gpt_model, "local": f"local-{local_model or 'local'}"}
-
-            def _stub(name: str, label: str, effort: str, prompt_id: str, prompt_version: int) -> synth.Generator:
-                return synth.Generator(
-                    name=name,
-                    strategy=label,
-                    reasoning_effort=effort,
-                    prompt_id=prompt_id,
-                    prompt_version=prompt_version,
-                )
-
-            generators = [
-                _stub(name, label, effort, pid, version)
-                for label, _sys, version, pid in resolved_strategies
-                for effort in efforts
-                for name in [*(preset_names[g] for g in generator_names),
-                             *(f"openrouter/{m}" for m in openrouter_models)]
-            ]
-        else:
-            try:
-                generators = []
-                for label, _sys, _version, _pid in resolved_strategies:
-                    for effort in efforts:
-                        gen_kw = dict(
-                            strategy=label, system=custom_system, max_tokens=max_tokens,
-                            reasoning_effort=effort, temperature=temperature, top_p=top_p,
-                            timeout=timeout, capture_reasoning=capture_reasoning,
-                        )
-                        for g in generator_names:
-                            if g == "gpt":
-                                generators.append(synth.openai_generator(model=gpt_model, **gen_kw))
-                            elif g == "local":
-                                generators.append(synth.local_generator(model=local_model or None, **gen_kw))
-                        for m in openrouter_models:
-                            generators.append(synth.openrouter_generator(
-                                model=m, provider_sort=None if provider_sort == "none" else provider_sort,
-                                sticky_provider=sticky_provider, prompt_cache=prompt_cache, **gen_kw
-                            ))
-            except RuntimeError as exc:  # missing key, surfaced by config.require_key
-                raise click.ClickException(str(exc))
+        arms = iter_arms(
+            resolved_strategies, efforts, generator_names, openrouter_models,
+            gpt_model=gpt_model, local_model=local_model,
+        )
+        try:
+            generators = build_generators(
+                arms,
+                dry_run=dry_run,
+                custom_system=custom_system,
+                max_tokens=max_tokens,
+                timeout=timeout,
+                capture_reasoning=capture_reasoning,
+                temperature=temperature,
+                top_p=top_p,
+                provider_sort=provider_sort,
+                sticky_provider=sticky_provider,
+                prompt_cache=prompt_cache,
+            )
+        except RuntimeError as exc:  # missing key, surfaced by config.require_key
+            raise click.ClickException(str(exc))
 
     # Per-model session budgets (policy hook, e.g. a blog's model->budget map).
     if session_budgets:

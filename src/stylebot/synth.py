@@ -45,6 +45,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 import re
 
@@ -174,8 +175,22 @@ def prompt_id_of(system_text: str) -> str:
     return hashlib.sha256(system_text.encode("utf-8")).hexdigest()[:12]
 
 
-def resolve_strategy(name: str, system: str | None = None) -> tuple[str, str, int, str]:
-    """Resolve a strategy name to ``(label, system_prompt, version, prompt_id)``.
+class ResolvedStrategy(NamedTuple):
+    """A slop strategy resolved to its prompt-content identity.
+
+    A NamedTuple on purpose: existing ``label, system, version, prompt_id``
+    unpack sites keep working; new code reads the attributes. ``prompt_id``
+    (content hash) and ``version`` feed ``synth_key`` / ``meta.gen``.
+    """
+
+    label: str
+    system: str
+    version: int
+    prompt_id: str
+
+
+def resolve_strategy(name: str, system: str | None = None) -> ResolvedStrategy:
+    """Resolve a strategy name to a `ResolvedStrategy`.
 
     An explicit ``system`` overrides the registry, so a caller can inject a custom
     (e.g. blog-specific) slop prompt under any label without stylebot needing to
@@ -184,7 +199,7 @@ def resolve_strategy(name: str, system: str | None = None) -> tuple[str, str, in
     explicit ``system`` is supplied.
     """
     if system is not None:
-        return name, system, 0, prompt_id_of(system)
+        return ResolvedStrategy(name, system, 0, prompt_id_of(system))
     try:
         strat = STRATEGIES[name]
     except KeyError:
@@ -193,7 +208,7 @@ def resolve_strategy(name: str, system: str | None = None) -> tuple[str, str, in
             f"unknown slop strategy {name!r}; known: {known} "
             f"(or pass an explicit system prompt / --slop-system-file)"
         ) from None
-    return strat.label, strat.system, strat.version, prompt_id_of(strat.system)
+    return ResolvedStrategy(strat.label, strat.system, strat.version, prompt_id_of(strat.system))
 
 # Chunk hygiene. There is no voice transform to learn from a bare heading, a
 # fenced code block, a link list, or a stub paragraph — so trim them.

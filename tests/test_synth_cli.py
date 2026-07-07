@@ -60,6 +60,44 @@ def test_pop_chunk_kwargs_shapes_iter_targets_args():
     assert kw == {"dry_run": True}  # generation params stay for run_synth
 
 
+# -- the rotation: Arm / iter_arms / build_generators --
+
+
+def test_dry_run_stub_names_match_real_generator_names(monkeypatch):
+    # The property the old duplicated loops maintained by hand: a dry-run
+    # stub's synth_key covariates (name, strategy, effort, prompt id/version)
+    # must equal the real factory generator's, or dry-run resume counts lie.
+    # The env-supplied local model was the latent divergence: the old stub was
+    # named local-local while the real run generated as local-<env-model>.
+    monkeypatch.setenv("LOCAL_LLM_MODEL", "qwen-local-x")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    arms = synth_cli.iter_arms(
+        [synth.resolve_strategy("polish"), synth.resolve_strategy("casual")],
+        ["off", "high"],
+        ["gpt", "local"],
+        ["a/b"],
+        gpt_model="gpt-4o",
+        local_model="",
+    )
+    kw = dict(
+        custom_system=None, max_tokens=1000, timeout=5.0, capture_reasoning=False,
+        temperature=None, top_p=None, provider_sort="throughput",
+        sticky_provider=True, prompt_cache=True,
+    )
+    stubs = synth_cli.build_generators(arms, dry_run=True, **kw)
+    real = synth_cli.build_generators(arms, dry_run=False, **kw)
+    key_covariates = [
+        (g.name, g.strategy, g.reasoning_effort, g.prompt_id, g.prompt_version) for g in stubs
+    ]
+    assert key_covariates == [
+        (g.name, g.strategy, g.reasoning_effort, g.prompt_id, g.prompt_version) for g in real
+    ]
+    assert "local-qwen-local-x" in {g.name for g in stubs}
+    # 2 strategies x 2 efforts x 3 models, strategies outermost.
+    assert len(stubs) == 12
+
+
 # -- end-to-end through the rebuilt ai-style synth --
 
 
