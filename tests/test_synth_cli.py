@@ -36,6 +36,22 @@ def _make_blog(tmp_path):
     return root
 
 
+def _make_blog_many(tmp_path, n=10):
+    # n distinct paragraphs: content-hash arm assignment is multinomial, so
+    # rotation tests need enough targets for every arm to appear.
+    root = tmp_path / "blog"
+    (root / "post").mkdir(parents=True)
+    paras = "\n\n".join(
+        f"Distinct paragraph number {i} about abstraction, long enough to clear "
+        f"every character floor we impose on prose chunks in these tests, easily."
+        for i in range(n)
+    )
+    (root / "post" / "many.qmd").write_text(
+        f"---\ntitle: Many\nautomation: 0\n---\n\n{paras}\n", encoding="utf-8"
+    )
+    return root
+
+
 # -- synth_options machinery --
 
 
@@ -270,7 +286,7 @@ def test_strategy_rotation_cross_product(tmp_path):
 
     # 2 strategies x 1 model: one run spreads targets across both prompts, at
     # no cost multiplier (still one generation per target).
-    root = _make_blog(tmp_path)
+    root = _make_blog_many(tmp_path)
     result = CliRunner().invoke(
         ai_style_main,
         ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
@@ -278,7 +294,7 @@ def test_strategy_rotation_cross_product(tmp_path):
          "--dry-run"],
     )
     assert result.exit_code == 0, result.output
-    assert "would write 2 new pair(s)" in result.output  # cross product rotates, not multiplies
+    assert "would write 10 new pair(s)" in result.output  # cross product rotates, not multiplies
 
     captured = []
 
@@ -357,7 +373,7 @@ def test_reasoning_effort_rotation_cross_product(tmp_path):
 
     # 2 efforts x 1 strategy x 1 model: effort joins the rotation at no cost
     # multiplier, and each pair records the effort that produced it.
-    root = _make_blog(tmp_path)
+    root = _make_blog_many(tmp_path)
     dry = CliRunner().invoke(
         ai_style_main,
         ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
@@ -365,7 +381,7 @@ def test_reasoning_effort_rotation_cross_product(tmp_path):
          "--dry-run"],
     )
     assert dry.exit_code == 0, dry.output
-    assert "would write 2 new pair(s)" in dry.output  # rotation, not multiplication
+    assert "would write 10 new pair(s)" in dry.output  # rotation, not multiplication
 
     captured = []
 

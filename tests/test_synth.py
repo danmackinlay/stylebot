@@ -78,14 +78,44 @@ def test_pairs_validate_and_carry_synthetic_meta(tmp_path):
 
 
 def test_rotation_uses_at_least_two_generators(tmp_path):
-    root = _make_blog(tmp_path)
+    # Content-hash assignment: balance is multinomial, so use enough targets
+    # that both arms deterministically appear for these fixed texts.
     data_dir = tmp_path / "corpus"
-    targets = synth.iter_targets(blog_root=root)
+    targets = _targets(12)
 
     result = synth.synthesize_pairs(
         targets, data_dir, [_fake("claude-x"), _fake("gpt-y")]
     )
     assert set(result.per_generator) == {"claude-x", "gpt-y"}
+    assert sum(result.per_generator.values()) == 12
+
+
+def test_hash_assignment_is_set_stable_and_position_free():
+    # Each target's arm depends only on its own text (+ salt): dropping the
+    # first target must not reassign the rest (round-robin would shift every
+    # arm), and a different salt re-randomizes.
+    targets = _targets(12)
+    gens = [synth.Generator("a"), synth.Generator("b"), synth.Generator("c")]
+
+    full = {t.text: g.name for t, g, _ in synth._assign(targets, gens, per_generator=False)}
+    tail = {t.text: g.name for t, g, _ in synth._assign(targets[1:], gens, per_generator=False)}
+    assert all(tail[text] == full[text] for text in tail)  # set-stable
+
+    salted = {t.text: g.name for t, g, _ in synth._assign(targets, gens, per_generator=False, assign_salt="rep2")}
+    assert salted != full  # a fresh replicate of the design
+
+
+def test_hash_assignment_roughly_balances():
+    targets = [
+        synth.Target(text=f"Unique paragraph {i}: " + "prose " * 30, source="p.qmd",
+                     chunk_index=i, chunk_total=300)
+        for i in range(300)
+    ]
+    gens = [synth.Generator("a"), synth.Generator("b"), synth.Generator("c")]
+    counts = {}
+    for _, g, _ in synth._assign(targets, gens, per_generator=False):
+        counts[g.name] = counts.get(g.name, 0) + 1
+    assert all(60 <= c <= 140 for c in counts.values()), counts  # ~100 each
 
 
 def test_idempotent_resume(tmp_path):
@@ -592,7 +622,8 @@ def test_parallel_stateless_run_writes_each_pair_once(tmp_path):
     gens = [_fake("a"), _fake("b")]
     first = synth.synthesize_pairs(targets, tmp_path / "c", gens, max_workers=4)
     assert first.written == 10
-    assert first.per_generator == {"a": 5, "b": 5}
+    assert set(first.per_generator) == {"a", "b"}  # hash split, not exactly even
+    assert sum(first.per_generator.values()) == 10
 
     second = synth.synthesize_pairs(targets, tmp_path / "c", gens, max_workers=4)
     assert second.written == 0 and second.skipped_existing == 10

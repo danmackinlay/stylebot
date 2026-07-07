@@ -1139,14 +1139,24 @@ def _assign(
     *,
     per_generator: bool,
     context_dropout: float = 0.0,
+    assign_salt: str = "",
 ) -> list[tuple[Target, Generator, str]]:
     """Pair targets with generators → ``(target, generator, effective_context)``.
 
-    Default (rotate, `per_generator=False`): round-robin — target *i* goes to
-    generator *i % n*. Cheap, and across the corpus yields ≥2 generators.
-    `per_generator=True`: every target × every generator (n× the pairs/cost).
-    `context` is the effective heading context after dropout. Keys are computed
-    in `_plan_sessions` (they may fold in session membership).
+    Default (rotate, `per_generator=False`): **content-hash assignment** —
+    target → generator ``hash(salt, text) % n``. Statistically this makes the
+    arm exchangeable with respect to document position (a round-robin cycle can
+    phase-lock with chunk structure, aliasing arm with position-in-post and
+    confounding any arm contrast); operationally it keeps each target's arm
+    independent of the rest of the target set, so corpus resume stays stable as
+    the blog grows. Balance across arms is multinomial, not exact (~√n wobble)
+    — experiments wanting exact within-target crossing use `per_generator=True`
+    (every target × every generator, n× the pairs/cost). `assign_salt`
+    re-randomizes the whole assignment (a fresh replicate of the design; NOTE
+    it changes which arm generated each target, so changed assignments
+    regenerate on resume). `context` is the effective heading context after
+    dropout. Keys are computed in `_plan_sessions` (they may fold in session
+    membership).
     """
     if not generators:
         return []
@@ -1157,8 +1167,10 @@ def _assign(
                 out.append((t, gen, _effective_context(t, context_dropout)))
     else:
         n = len(generators)
-        for i, t in enumerate(targets):
-            out.append((t, generators[i % n], _effective_context(t, context_dropout)))
+        for t in targets:
+            digest = hashlib.sha256(f"{assign_salt}\x00{t.text}".encode("utf-8")).digest()
+            idx = int.from_bytes(digest[:8], "big") % n
+            out.append((t, generators[idx], _effective_context(t, context_dropout)))
     return out
 
 
@@ -1267,6 +1279,7 @@ def synthesize_pairs(
     session_turns: int = 1,
     session_max_tokens: int | None = DEFAULT_SESSION_MAX_TOKENS,
     context_windows: Mapping[str, int] | None = None,
+    assign_salt: str = "",
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
@@ -1306,7 +1319,10 @@ def synthesize_pairs(
     data_dir = Path(data_dir)
     pairs_path = data_dir / "pairs.jsonl"
 
-    assignments = _assign(targets, generators, per_generator=per_generator, context_dropout=context_dropout)
+    assignments = _assign(
+        targets, generators,
+        per_generator=per_generator, context_dropout=context_dropout, assign_salt=assign_salt,
+    )
     sessions = _plan_sessions(assignments, session_turns=session_turns)
     all_turns = [(s, t) for s in sessions for t in s.turns]
     result = SynthResult(planned=len(all_turns))
