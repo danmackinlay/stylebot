@@ -107,6 +107,7 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "max_tokens": (("--max-tokens",), dict(default=synth.DEFAULT_SLOP_MAX_TOKENS, show_default=True, type=int, help="Max completion tokens per slop generation. Raise if a model truncates.")),
     "timeout": (("--timeout",), dict(default=synth.DEFAULT_GEN_TIMEOUT, show_default=True, type=float, help="Per-request HTTP timeout (seconds) for slop generation. A timed-out pair is reported immediately, recorded as an error, and the run continues.")),
     "reasoning_efforts": (("--reasoning-effort", "reasoning_efforts"), dict(type=click.Choice(["high", "medium", "low", "off"]), multiple=True, default=(synth.DEFAULT_REASONING_EFFORT,), show_default=True, help="Reasoning effort for the slop generator ('off' disables reasoning); repeatable — the rotation becomes models x strategies x efforts, so effort joins the sweep (facet eval by reasoning_effort). Recorded in meta.gen and folded into synth_key; the requested effort is recorded regardless of what the provider honors.")),
+    "capture_reasoning": (("--capture-reasoning",), dict(is_flag=True, help="Save each pair's reasoning/thinking trace to <data-dir>/reasoning.jsonl (keyed by synth_key; never enters pairs.jsonl). Diagnose reasoning blowouts by READING what the model deliberated about; costs nothing extra (the tokens were already paid for).")),
     "temperature": (("--temperature",), dict(type=float, default=None, help="Sampling temperature, sent to the API and recorded (provider default if unset).")),
     "top_p": (("--top-p", "top_p"), dict(type=float, default=None, help="Nucleus top_p, sent to the API and recorded (provider default if unset).")),
     "per_generator": (("--per-generator",), dict(is_flag=True, help="Emit a pair from EVERY generator per target (n× cost) — the fully-crossed within-target design for experiments; default assigns each target ONE arm by content hash.")),
@@ -163,6 +164,7 @@ def run_synth(
     local_model: str = "",
     max_tokens: int = synth.DEFAULT_SLOP_MAX_TOKENS,
     timeout: float | None = synth.DEFAULT_GEN_TIMEOUT,
+    capture_reasoning: bool = False,
     reasoning_efforts: Sequence[str] = (synth.DEFAULT_REASONING_EFFORT,),
     temperature: float | None = None,
     top_p: float | None = None,
@@ -292,7 +294,7 @@ def run_synth(
                         gen_kw = dict(
                             strategy=label, system=custom_system, max_tokens=max_tokens,
                             reasoning_effort=effort, temperature=temperature, top_p=top_p,
-                            timeout=timeout,
+                            timeout=timeout, capture_reasoning=capture_reasoning,
                         )
                         for g in generator_names:
                             if g == "gpt":

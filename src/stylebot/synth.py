@@ -715,6 +715,25 @@ def openrouter_context_windows(base_url: str | None = None) -> dict[str, int]:
     return _CONTEXT_WINDOWS_CACHE[base]
 
 
+def _reasoning_text_of(message) -> str | None:
+    """The reasoning/thinking trace of a response message, if the provider sent one.
+
+    OpenRouter normalizes most reasoning models to `message.reasoning` (a plain
+    string); some providers instead return `message.reasoning_details` (a list
+    of typed blocks). Returns None when neither is present (non-reasoning model,
+    reasoning disabled, or an upstream that withholds traces).
+    """
+    text = getattr(message, "reasoning", None)
+    if text:
+        return text
+    details = getattr(message, "reasoning_details", None)
+    if details:
+        parts = [d.get("text") if isinstance(d, dict) else getattr(d, "text", None) for d in details]
+        joined = "\n".join(p for p in parts if p)
+        return joined or None
+    return None
+
+
 def openai_generator(
     *,
     model: str = "gpt-4o",
@@ -732,6 +751,7 @@ def openai_generator(
     timeout: float | None = DEFAULT_GEN_TIMEOUT,
     sticky_provider: bool = False,
     cache_breakpoints: bool = False,
+    capture_reasoning: bool = False,
 ) -> Generator:
     """OpenAI-compatible slop generator (`openai` SDK; key `OPENAI_API_KEY`).
 
@@ -806,11 +826,15 @@ def openai_generator(
             if choice.finish_reason == "length":
                 trunc_usage = getattr(resp, "usage", None)
                 trunc_details = getattr(trunc_usage, "completion_tokens_details", None)
+                # The tail of the trace is the diagnosis: a deliberation loop
+                # ("wait, let me reconsider...") vs a genuinely long rewrite.
+                trace = _reasoning_text_of(choice.message)
+                tail = f"; reasoning tail: ...{trace[-240:]}" if trace else ""
                 raise RuntimeError(
                     f"slop truncated at max_tokens={max_tokens} "
                     f"(completion={getattr(trunc_usage, 'completion_tokens', '?')}, "
                     f"reasoning={getattr(trunc_details, 'reasoning_tokens', '?')} — "
-                    f"raise --max-tokens or lower --reasoning-effort)"
+                    f"raise --max-tokens or lower --reasoning-effort){tail}"
                 )
             served_provider = getattr(resp, "provider", None)
             if pin_state is not None and served_provider:
@@ -851,6 +875,10 @@ def openai_generator(
             }
             if extra_meta:
                 gen_meta.update(extra_meta)
+            if capture_reasoning:
+                # Routed by synthesize_pairs to <data-dir>/reasoning.jsonl —
+                # never into pairs.jsonl (traces are diagnostics, not corpus).
+                gen_meta["reasoning_text"] = _reasoning_text_of(choice.message)
             return GenOutput((choice.message.content or "").strip(), gen_meta)
 
         return generate
@@ -882,6 +910,7 @@ def local_generator(
     temperature: float | None = None,
     top_p: float | None = None,
     timeout: float | None = DEFAULT_GEN_TIMEOUT,
+    capture_reasoning: bool = False,
 ) -> Generator:
     """Local/utility base-model generator via an OpenAI-compatible endpoint.
 
@@ -907,6 +936,7 @@ def local_generator(
         base_url=base_url,
         name=f"local-{model}",
         timeout=timeout,
+        capture_reasoning=capture_reasoning,
     )
 
 
@@ -925,6 +955,7 @@ def openrouter_generator(
     provider_sort: str | None = "throughput",
     sticky_provider: bool = True,
     prompt_cache: bool = True,
+    capture_reasoning: bool = False,
 ) -> Generator:
     """OpenRouter slop generator — one key, many upstream models.
 
@@ -978,6 +1009,7 @@ def openrouter_generator(
         # other families cache automatically or not at all).
         sticky_provider=sticky_provider,
         cache_breakpoints=prompt_cache and model.startswith("anthropic/"),
+        capture_reasoning=capture_reasoning,
     )
 
 
@@ -1427,6 +1459,20 @@ def synthesize_pairs(
                         round(prompt_tokens / window, 4) if prompt_tokens and window else None
                     ),
                 )
+            # Reasoning traces are diagnostics, not corpus: route them to the
+            # reasoning.jsonl sidecar (keyed to the pair) and keep pairs.jsonl lean.
+            reasoning_text = gen_meta.pop("reasoning_text", None)
+            if reasoning_text is not None:
+                with (data_dir / "reasoning.jsonl").open("a", encoding="utf-8") as rf:
+                    rf.write(json.dumps({
+                        "synth_key": turn.key,
+                        "generator": gen.name,
+                        "slop_strategy": gen.strategy,
+                        "reasoning_effort": gen.reasoning_effort,
+                        "session_turn": turn.index if sess.session_id else None,
+                        "reasoning_tokens": gen_meta.get("reasoning_tokens"),
+                        "reasoning": reasoning_text,
+                    }, ensure_ascii=False) + "\n")
             record = _build_record(
                 slop=slop,
                 target=turn.target,

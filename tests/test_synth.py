@@ -974,3 +974,57 @@ def test_measured_strategy_registered():
     assert label == "measured" and version == 1
     # The whole point: describe texture, never quote a stock phrase.
     assert "In today's world" not in system
+
+
+# ---------------------------------------------------------------------------
+# Reasoning-trace capture (the diagnosis instrument for reasoning blowouts)
+# ---------------------------------------------------------------------------
+
+
+def test_reasoning_text_routed_to_sidecar_not_corpus(tmp_path):
+    import json
+
+    def gen(text, history=None):
+        return synth.GenOutput(
+            "[slop] " + text,
+            {"reasoning_tokens": 4321, "reasoning_text": "Hmm, let me deliberate at absurd length..."},
+        )
+
+    data_dir = tmp_path / "corpus"
+    result = synth.synthesize_pairs(_targets(1), data_dir, [synth.Generator("g", generate=gen)])
+    assert result.written == 1
+
+    rec = json.loads((data_dir / "pairs.jsonl").read_text().splitlines()[0])
+    assert "reasoning_text" not in rec["meta"]["gen"]  # corpus stays lean
+    side = json.loads((data_dir / "reasoning.jsonl").read_text().splitlines()[0])
+    assert side["synth_key"] == rec["meta"]["synth_key"]  # joinable to its pair
+    assert side["generator"] == "g" and side["reasoning_tokens"] == 4321
+    assert "deliberate" in side["reasoning"]
+
+
+def test_no_sidecar_without_capture(tmp_path):
+    result = synth.synthesize_pairs(_targets(1), tmp_path / "c", [_fake("g")])
+    assert result.written == 1
+    assert not (tmp_path / "c" / "reasoning.jsonl").exists()
+
+
+def test_wire_capture_reasoning_and_truncation_tail(monkeypatch):
+    import pytest
+
+    # Provider sends a reasoning trace: capture puts it in gen_meta...
+    resp = _FakeResponse([_FakeChoice("slop out")], usage=_FakeUsage(10, 20))
+    resp.choices[0].message.reasoning = "Step 1: overthink. Step 2: overthink more."
+    _patch_openai(monkeypatch, resp)
+    out = _run_gen(
+        synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", capture_reasoning=True), "x"
+    )
+    assert out.meta["reasoning_text"].startswith("Step 1")
+
+    # ...and a truncated response includes the trace tail in the error even
+    # without the capture flag (that IS the truncation diagnosis).
+    trunc = _FakeResponse([_FakeChoice(finish_reason="length")])
+    trunc.choices[0].message.reasoning = "x" * 500 + " FINAL THOUGHT"
+    _patch_openai(monkeypatch, trunc)
+    gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x")
+    with pytest.raises(RuntimeError, match="FINAL THOUGHT"):
+        _run_gen(gen, "rewrite me")
