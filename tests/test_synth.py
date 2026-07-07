@@ -16,46 +16,16 @@ def _fake(name: str) -> synth.Generator:
     return synth.Generator(name=name, generate=lambda text: f"[{name}-slop] {text}")
 
 
-HUMAN_POST = """---
-title: A Human Post
-automation: 0
----
-
-This is a sufficiently long human-authored paragraph about graph theory and the
-quiet dignity of well-chosen abstractions, long enough to clear the min-chars bar.
-
-Another paragraph, also comfortably past the minimum length, musing on the way
-synthetic data both helps and quietly lies to the model that consumes it.
-"""
-
-AI_POST = """---
-title: An AI-Touched Post
-automation: 2
----
-
-This paragraph was heavily AI-assisted and must never become a training target,
-no matter how long and superficially reasonable it manages to appear here.
-"""
-
-
-def _make_blog(tmp_path):
-    root = tmp_path / "blog"
-    (root / "post").mkdir(parents=True)
-    (root / "post" / "human.qmd").write_text(HUMAN_POST, encoding="utf-8")
-    (root / "post" / "ai.qmd").write_text(AI_POST, encoding="utf-8")
-    return root
-
-
-def test_selector_keeps_only_human_authored(tmp_path):
-    root = _make_blog(tmp_path)
+def test_selector_keeps_only_human_authored(tmp_path, make_blog):
+    root = make_blog()
     targets = synth.iter_targets(blog_root=root)
     assert targets, "expected human-authored chunks"
     assert {t.source for t in targets} == {"post/human.qmd"}
     assert len(targets) == 2  # two prose paragraphs in the human post
 
 
-def test_pairs_validate_and_carry_synthetic_meta(tmp_path):
-    root = _make_blog(tmp_path)
+def test_pairs_validate_and_carry_synthetic_meta(tmp_path, make_blog):
+    root = make_blog()
     data_dir = tmp_path / "corpus"
     targets = synth.iter_targets(blog_root=root)
 
@@ -118,8 +88,8 @@ def test_hash_assignment_roughly_balances():
     assert all(60 <= c <= 140 for c in counts.values()), counts  # ~100 each
 
 
-def test_idempotent_resume(tmp_path):
-    root = _make_blog(tmp_path)
+def test_idempotent_resume(tmp_path, make_blog):
+    root = make_blog()
     data_dir = tmp_path / "corpus"
     targets = synth.iter_targets(blog_root=root)
     gens = [_fake("claude-x"), _fake("gpt-y")]
@@ -137,8 +107,8 @@ def test_idempotent_resume(tmp_path):
     assert n_lines == len(targets)
 
 
-def test_per_generator_mode_doubles_pairs(tmp_path):
-    root = _make_blog(tmp_path)
+def test_per_generator_mode_doubles_pairs(tmp_path, make_blog):
+    root = make_blog()
     data_dir = tmp_path / "corpus"
     targets = synth.iter_targets(blog_root=root)
 
@@ -281,8 +251,8 @@ def test_openrouter_generator_name_and_strategy():
     assert gen.strategy == "casual"
 
 
-def test_dry_run_writes_nothing(tmp_path):
-    root = _make_blog(tmp_path)
+def test_dry_run_writes_nothing(tmp_path, make_blog):
+    root = make_blog()
     data_dir = tmp_path / "corpus"
     targets = synth.iter_targets(blog_root=root)
 
@@ -294,10 +264,10 @@ def test_dry_run_writes_nothing(tmp_path):
     assert not (data_dir / "pairs.jsonl").exists()
 
 
-def test_pre_selected_files_skip_selector(tmp_path):
+def test_pre_selected_files_skip_selector(tmp_path, make_blog):
     # A pre-selected list is taken as-is — even an AI-touched post — because the
     # caller owns selection in that mode.
-    root = _make_blog(tmp_path)
+    root = make_blog()
     targets = synth.iter_targets(files=[root / "post" / "ai.qmd"])
     assert targets
     assert {t.source for t in targets} == {str(root / "post" / "ai.qmd")}
@@ -389,9 +359,9 @@ def test_max_chars_caps_giant_chunk(tmp_path):
     assert len(synth.iter_targets(blog_root=root, max_chars=None)) == 1
 
 
-def test_backward_compat_defaults_unchanged(tmp_path):
+def test_backward_compat_defaults_unchanged(tmp_path, make_blog):
     # The original two-paragraph human post still yields exactly two targets.
-    root = _make_blog(tmp_path)
+    root = make_blog()
     assert len(synth.iter_targets(blog_root=root)) == 2
 
 

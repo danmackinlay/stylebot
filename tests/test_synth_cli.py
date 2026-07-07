@@ -16,45 +16,6 @@ from stylebot import synth
 from stylebot.bin import synth_cli
 from stylebot.bin.ai_style import main as ai_style_main
 
-HUMAN_POST = """---
-title: A Human Post
-automation: 0
----
-
-This is a sufficiently long human-authored paragraph about graph theory and the
-quiet dignity of well-chosen abstractions, long enough to clear the min-chars bar.
-
-Another paragraph, also comfortably past the minimum length, musing on the way
-synthetic data both helps and quietly lies to the model that consumes it.
-"""
-
-
-def _make_blog(tmp_path):
-    root = tmp_path / "blog"
-    (root / "post").mkdir(parents=True)
-    (root / "post" / "human.qmd").write_text(HUMAN_POST, encoding="utf-8")
-    return root
-
-
-def _make_blog_many(tmp_path, n=10):
-    # n distinct paragraphs: content-hash arm assignment is multinomial, so
-    # rotation tests need enough targets for every arm to appear.
-    root = tmp_path / "blog"
-    (root / "post").mkdir(parents=True)
-    paras = "\n\n".join(
-        f"Distinct paragraph number {i} about abstraction, long enough to clear "
-        f"every character floor we impose on prose chunks in these tests, easily."
-        for i in range(n)
-    )
-    (root / "post" / "many.qmd").write_text(
-        f"---\ntitle: Many\nautomation: 0\n---\n\n{paras}\n", encoding="utf-8"
-    )
-    return root
-
-
-# -- synth_options machinery --
-
-
 def test_synth_options_overrides_defaults():
     @click.command()
     @synth_cli.synth_options(merge=True, min_chars=123)
@@ -102,8 +63,8 @@ def test_pop_chunk_kwargs_shapes_iter_targets_args():
 # -- end-to-end through the rebuilt ai-style synth --
 
 
-def test_ai_style_synth_dry_run(tmp_path):
-    root = _make_blog(tmp_path)
+def test_ai_style_synth_dry_run(tmp_path, make_blog):
+    root = make_blog(ai=False)
     result = CliRunner().invoke(
         ai_style_main,
         ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
@@ -115,18 +76,18 @@ def test_ai_style_synth_dry_run(tmp_path):
     assert "openrouter/test/model: 2" in result.output
 
 
-def test_ai_style_synth_sample_needs_no_data_dir(tmp_path):
-    root = _make_blog(tmp_path)
+def test_ai_style_synth_sample_needs_no_data_dir(tmp_path, make_blog):
+    root = make_blog(ai=False)
     result = CliRunner().invoke(
         ai_style_main, ["synth", "--blog-root", str(root), "--sample", "1"]
     )
     assert result.exit_code == 0, result.output
 
 
-def test_inspection_mode_banner_and_generation_flag_pointer(tmp_path):
+def test_inspection_mode_banner_and_generation_flag_pointer(tmp_path, make_blog):
     # Generation flags alongside --sample/--report are silently inert; the
     # inspection banner must say so and point at the eval pair browser.
-    root = _make_blog(tmp_path)
+    root = make_blog(ai=False)
     runner = CliRunner()
     with_flags = runner.invoke(
         ai_style_main,
@@ -143,8 +104,8 @@ def test_inspection_mode_banner_and_generation_flag_pointer(tmp_path):
     assert "ai-style eval --pairs" not in without_flags.output  # pointer only on the trap
 
 
-def test_ai_style_synth_requires_a_generator(tmp_path):
-    root = _make_blog(tmp_path)
+def test_ai_style_synth_requires_a_generator(tmp_path, make_blog):
+    root = make_blog(ai=False)
     result = CliRunner().invoke(
         ai_style_main,
         ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"), "--dry-run"],
@@ -156,8 +117,8 @@ def test_ai_style_synth_requires_a_generator(tmp_path):
 # -- run_synth body --
 
 
-def test_run_synth_exits_nonzero_on_generation_errors(tmp_path, capsys):
-    targets = synth.iter_targets(blog_root=_make_blog(tmp_path))
+def test_run_synth_exits_nonzero_on_generation_errors(tmp_path, capsys, make_blog):
+    targets = synth.iter_targets(blog_root=make_blog(ai=False))
 
     def _boom(_text: str) -> str:
         raise RuntimeError("api down")
@@ -174,10 +135,10 @@ def test_run_synth_exits_nonzero_on_generation_errors(tmp_path, capsys):
     assert "[boom strategy=polish effort=high]" in err
 
 
-def test_timeout_reaches_generator_factories(tmp_path, monkeypatch):
+def test_timeout_reaches_generator_factories(tmp_path, monkeypatch, make_blog):
     # --timeout must be plumbed into the HTTP client construction; without it
     # the openai SDK waits 600s x retries and a bad upstream stalls in silence.
-    root = _make_blog(tmp_path)
+    root = make_blog(ai=False)
     captured = {}
 
     def fake_factory(*, model, timeout=None, provider_sort=None, **kw):
@@ -207,9 +168,9 @@ def test_timeout_reaches_generator_factories(tmp_path, monkeypatch):
     assert captured["provider_sort"] is None
 
 
-def test_run_synth_defers_data_dir_for_inspection(tmp_path):
+def test_run_synth_defers_data_dir_for_inspection(tmp_path, make_blog):
     # A callable data_dir must not be invoked in --sample mode.
-    targets = synth.iter_targets(blog_root=_make_blog(tmp_path))
+    targets = synth.iter_targets(blog_root=make_blog(ai=False))
 
     def _explode() -> None:
         raise AssertionError("data_dir resolved during inspection")
@@ -221,8 +182,8 @@ def test_run_synth_defers_data_dir_for_inspection(tmp_path):
 # -- parallelism + sessions through the shared surface --
 
 
-def test_max_workers_auto_rule(tmp_path, monkeypatch):
-    root = _make_blog(tmp_path)
+def test_max_workers_auto_rule(tmp_path, monkeypatch, make_blog):
+    root = make_blog(ai=False)
     captured = {}
 
     def spy(targets, data_dir, generators, **kw):
@@ -252,10 +213,10 @@ def test_max_workers_auto_rule(tmp_path, monkeypatch):
     assert captured["max_workers"] == 3
 
 
-def test_run_synth_sessions_end_to_end(tmp_path):
+def test_run_synth_sessions_end_to_end(tmp_path, make_blog):
     import json
 
-    targets = synth.iter_targets(blog_root=_make_blog(tmp_path))
+    targets = synth.iter_targets(blog_root=make_blog(ai=False))
     hist_lens = []
 
     def gen(text, history=None):
@@ -281,12 +242,12 @@ def test_run_synth_sessions_end_to_end(tmp_path):
 # -- prompt rotation (models x strategies cross product) --
 
 
-def test_strategy_rotation_cross_product(tmp_path):
+def test_strategy_rotation_cross_product(tmp_path, make_blog):
     import json
 
     # 2 strategies x 1 model: one run spreads targets across both prompts, at
     # no cost multiplier (still one generation per target).
-    root = _make_blog_many(tmp_path)
+    root = make_blog(ai=False, many=10)
     result = CliRunner().invoke(
         ai_style_main,
         ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
@@ -320,8 +281,8 @@ def test_strategy_rotation_cross_product(tmp_path):
     assert {r["meta"]["slop_strategy"] for r in recs} == {"polish", "casual"}
 
 
-def test_custom_system_file_rejects_multiple_strategies(tmp_path):
-    root = _make_blog(tmp_path)
+def test_custom_system_file_rejects_multiple_strategies(tmp_path, make_blog):
+    root = make_blog(ai=False)
     prompt = tmp_path / "my-slop.txt"
     prompt.write_text("Rewrite it my way.", encoding="utf-8")
     result = CliRunner().invoke(
@@ -352,12 +313,12 @@ def test_plan_sessions_separates_same_model_strategies():
     assert by_strategy["polish"].session_id != by_strategy["catalogue"].session_id
 
 
-def test_missing_openrouter_key_aborts_before_any_generation(tmp_path, monkeypatch):
+def test_missing_openrouter_key_aborts_before_any_generation(tmp_path, monkeypatch, make_blog):
     # A keyless run must die at generator construction with the actionable
     # config error — never reach the API, never write a partial corpus.
     # (Empty env var wins over any .env file dotenv might discover.)
     monkeypatch.setenv("OPENROUTER_API_KEY", "")
-    root = _make_blog(tmp_path)
+    root = make_blog(ai=False)
     result = CliRunner().invoke(
         ai_style_main,
         ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
@@ -368,12 +329,12 @@ def test_missing_openrouter_key_aborts_before_any_generation(tmp_path, monkeypat
     assert not (tmp_path / "corpus" / "pairs.jsonl").exists()
 
 
-def test_reasoning_effort_rotation_cross_product(tmp_path):
+def test_reasoning_effort_rotation_cross_product(tmp_path, make_blog):
     import json
 
     # 2 efforts x 1 strategy x 1 model: effort joins the rotation at no cost
     # multiplier, and each pair records the effort that produced it.
-    root = _make_blog_many(tmp_path)
+    root = make_blog(ai=False, many=10)
     dry = CliRunner().invoke(
         ai_style_main,
         ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
