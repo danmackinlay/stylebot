@@ -165,6 +165,24 @@ document.getElementById('q').addEventListener('input',applyFilter);
 """
 
 
+def _page_shell(*, title: str, body: str, extra_css: str = "", js: str = "") -> str:
+    """The one HTML scaffold both reports share.
+
+    Doctype, head (viewport, the shared `_CSS` plus a report's additive CSS),
+    the `<h1>`, the report body, and the trailing behaviour script. Deliberately
+    a function, not a builder class — two fixed reports, no variation points.
+    """
+    return f"""<!doctype html>
+<html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>{html.escape(title)}</title><style>{_CSS}{extra_css}</style></head>
+<body>
+<h1>{html.escape(title)}</h1>
+{body}
+<script>{js}</script>
+</body></html>"""
+
+
 def _page(*, title: str, stats: dict, svg: str, rows_html: str, note: str) -> str:
     s = stats
     stat = lambda v, lab: f'<div class=stat><b>{v:,}</b><span>{lab}</span></div>'  # noqa: E731
@@ -178,13 +196,7 @@ def _page(*, title: str, stats: dict, svg: str, rows_html: str, note: str) -> st
             stat(s["n_sources"], "sources"),
         ]
     )
-    return f"""<!doctype html>
-<html lang=en><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1">
-<title>{html.escape(title)}</title><style>{_CSS}</style></head>
-<body>
-<h1>{html.escape(title)}</h1>
-<div class=stats>{stats_html}</div>
+    body = f"""<div class=stats>{stats_html}</div>
 {svg}
 <div class=controls>
   <input id=q placeholder="filter by source or text…" size=32>
@@ -198,9 +210,8 @@ def _page(*, title: str, stats: dict, svg: str, rows_html: str, note: str) -> st
 <table><thead><tr><th onclick="sortBy('src')">source</th><th onclick="sortBy('len')">len</th><th>text</th></tr></thead>
 <tbody>
 {rows_html}
-</tbody></table>
-<script>{_JS}</script>
-</body></html>"""
+</tbody></table>"""
+    return _page_shell(title=title, body=body, js=_JS)
 
 
 def render_targets_report(
@@ -559,20 +570,13 @@ def _scores_stat_cards(stats: dict, fields: Sequence[str]) -> str:
 
 
 def _scores_page(*, title, stat_cards, headline, histos, controls, table, note) -> str:
-    return f"""<!doctype html>
-<html lang=en><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1">
-<title>{html.escape(title)}</title><style>{_CSS}{_SCORES_CSS}</style></head>
-<body>
-<h1>{html.escape(title)}</h1>
-<div class=stats>{stat_cards}</div>
+    body = f"""<div class=stats>{stat_cards}</div>
 {headline}
 {histos}
 <div class=controls>{controls}</div>
 <p class=note>{html.escape(note)}</p>
-{table}
-<script>{_JS_SCORES}</script>
-</body></html>"""
+{table}"""
+    return _page_shell(title=title, body=body, extra_css=_SCORES_CSS, js=_JS_SCORES)
 
 
 def render_scores_report(
