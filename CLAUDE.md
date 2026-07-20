@@ -32,8 +32,10 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
 - **Library-first, CLI second.** Each phase is a module with a typed function
   over explicit paths/params; the `click` CLI is a thin wrapper. The blog build
   imports the function directly.
-- **One entry point, subcommands** (`ai-style synth|split|train|eval`) + the
-  shipped `ai-style-log`. Not a scatter of loose scripts.
+- **One entry point, subcommands** (`ai-style log|synth|split|train|eval`). Not
+  a scatter of loose scripts. `ai-style-log` is a shorthand alias for
+  `ai-style log` — the same group object, installed under both names, so a
+  command added to it appears under both.
 - **Explicit paths, precedence `--flag` > `$STYLEBOT_DATA_DIR` > default**,
   resolved in `stylebot.config`. Two distinct inputs, never collapsed:
   `--blog-root` (read source) vs `--data-dir` (read/write state).

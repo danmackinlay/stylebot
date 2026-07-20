@@ -7,8 +7,11 @@ eval | serve` — not a scatter of loose scripts. Each subcommand is a thin
 scoring sidecar, `stylebot.serve`) are built; `split` / `train` land with their
 phases.
 
-The shipped `ai-style-log` (Phase 1) stays its own console script — it is
-daily-used and its CLI predates this group.
+Phase 1's capture logger is `ai-style log` here, and is ALSO installed as the
+standalone `ai-style-log` console script. Same group object, two spellings: the
+subcommand keeps the surface consistent (and discoverable in `--help`), the
+short script keeps the daily muscle memory. Neither is a fork — adding a command
+to `ai_style_log.main` surfaces it under both.
 """
 
 from __future__ import annotations
@@ -21,12 +24,18 @@ import click
 
 from stylebot import config, synth
 from stylebot.bin import synth_cli
+from stylebot.bin.ai_style_log import main as _log
 from stylebot.lib import is_human_authored
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def main() -> None:
-    """stylebot tooling — synthetic pairs, training, eval (subcommands)."""
+    """stylebot tooling — capture, synthetic pairs, training, eval (subcommands)."""
+
+
+# Phase 1 capture. The same group backs the standalone `ai-style-log` script;
+# this is the consistent spelling, that one is the shorthand.
+main.add_command(_log, name="log")
 
 
 @main.command("synth")

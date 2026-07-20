@@ -52,9 +52,11 @@ whole pipeline from its own build.
   a thin `click` wrapper that parses flags and calls it. The blog build can
   `import` the function directly — no subprocess/parse tax — *or* shell out to
   the CLI. Build the function; the CLI is a shell over it.
-- **One entry point, subcommands** — `ai-style synth | split | train | eval`
-  plus the shipped `ai-style-log` — not a scatter of loose scripts. Shared
-  option parsing, one `--help` tree; loose scripts drift in flag conventions.
+- **One entry point, subcommands** — `ai-style log | synth | split | train |
+  eval` — not a scatter of loose scripts. Shared option parsing, one `--help`
+  tree; loose scripts drift in flag conventions. Phase 1's logger is exempt from
+  nothing: it is `ai-style log`, and `ai-style-log` is an alias console script
+  pointing at the same group (daily-driver shorthand, not a second CLI).
 - **Two distinct path inputs, never collapsed:**
   - `--blog-root` — a *read* source (authored `.qmd` prose, sample paragraphs).
   - `--data-dir` — *read/write* state (the `pairs.jsonl` corpus, manifests).
