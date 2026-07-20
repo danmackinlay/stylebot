@@ -15,7 +15,7 @@ Narrative/rationale: the blog post [*Fine-tuning danbot*](https://danmackinlay.n
 ```sh
 uv sync                 # install (incl. dev group: pytest, ruff)
 uv run pytest -q        # must stay green
-uv run ai-style-log --help
+uv run ai-style log --help
 uv run ai-style --help  # synth (Phase 2); split/train/eval land with their phases
 ```
 
@@ -33,14 +33,14 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
   over explicit paths/params; the `click` CLI is a thin wrapper. The blog build
   imports the function directly.
 - **One entry point, subcommands** (`ai-style log|synth|split|train|eval`). Not
-  a scatter of loose scripts. `ai-style-log` is a shorthand alias for
-  `ai-style log` — the same group object, installed under both names, so a
-  command added to it appears under both.
+  a scatter of loose scripts — and no exceptions: Phase 1's logger shipped as a
+  standalone `ai-style-log` script until 2026-07-20, and was folded in. One
+  console script, one `--help` tree.
 - **Explicit paths, precedence `--flag` > `$STYLEBOT_DATA_DIR` > default**,
   resolved in `stylebot.config`. Two distinct inputs, never collapsed:
   `--blog-root` (read source) vs `--data-dir` (read/write state).
 - **Defaults where a mistake is cheap, required flags where it isn't.**
-  `ai-style-log` has a default data-dir; `train`/`split` must not.
+  `ai-style log` has a default data-dir; `train`/`split` must not.
 - **Selection is a user-supplied policy.** Phases accept a
   `selector: Callable[[dict], bool]` (+ optional `sort_key`/`sampler`),
   defaulting to `stylebot.lib.is_human_authored` (the `automation: 0` example).
@@ -103,7 +103,7 @@ The data-heavy phases need the prose corpus. Wired in against Dan's live blog:
 
 | Piece | State |
 | --- | --- |
-| Phase 0 scaffolding + Phase 1 `ai-style-log` | done; daily-used; captures heading context ([`_plans/heading-context.md`](_plans/heading-context.md)) |
+| Phase 0 scaffolding + Phase 1 `ai-style log` | done; daily-used; captures heading context ([`_plans/heading-context.md`](_plans/heading-context.md)) |
 | Phase 2 `ai-style synth` / `dan-style synth` | built + curated: merge chunking + hygiene guards, OpenRouter rotation (models × strategies × efforts, all folded into `synth_key`), async parallel + window-position sessions ([`_plans/phase-2-synthetic-pairs.md`](_plans/phase-2-synthetic-pairs.md)) |
 | Eval harness `ai-style eval` | built: four signals (Vale, LLM judge, detector, eyeball), JSONL-batched + resumable, scores HTML browser ([`_plans/eval-harness.md`](_plans/eval-harness.md)) |
 | Voice classifier (the detector signal) | built: StyleDistance embedding + logistic head; dep-free runtime `stylebot.classify`, trainer behind the `[classifier]` extra; artifact committed at livingthing `_models/voice-clf/` |

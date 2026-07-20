@@ -16,7 +16,7 @@ public — see [Data & secrets](#data--secrets) below.
 
 | Phase | Status | Component |
 |-------|--------|-----------|
-| 1 | ✅ shipped | `ai-style-log` — manual (slop → Dan) pair capture |
+| 1 | ✅ shipped | `ai-style log` — manual (slop → Dan) pair capture |
 | 2 | 🔧 built | `ai-style synth` — synthetic-pair generation (OpenRouter multi-model) |
 | 3 | planned | LoRA SFT (Tinker-trained; Fireworks/local-MLX served) |
 | 4 | planned | `ai-style` inference CLI |
@@ -27,7 +27,7 @@ public — see [Data & secrets](#data--secrets) below.
 
 ```sh
 uv sync
-uv run ai-style-log --help
+uv run ai-style log --help
 uv run ai-style --help
 ```
 
@@ -81,7 +81,7 @@ before trusting it.
 that marks each prose paragraph of a markdown/Quarto document with a graded
 **P(slop)** — a faint background tint plus scrollbar hotspots, the number on
 hover — so suspect paragraphs get noticed, rewritten, and captured as training
-pairs by the existing `ai-style-log` tasks. It is the front-end of the capture
+pairs by the existing `ai-style log` tasks. It is the front-end of the capture
 loop, not a verdict machine: the classifier is a soft signal (held-out AUC
 ~0.72), so the marks are framed as *suspicion* and your eyeball stays the
 arbiter. Design and caveats: [`_plans/vscode-marker.md`](_plans/vscode-marker.md).

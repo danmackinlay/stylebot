@@ -47,7 +47,7 @@ def resolve_data_dir(flag: str | os.PathLike | None = None) -> Path:
       2. else ``$STYLEBOT_DATA_DIR`` from the environment / ``.env``;
       3. else the cwd-relative default ``_training_pairs``.
 
-    Convenience commands (the interactive ``ai-style-log``) call this with no
+    Convenience commands (the interactive ``ai-style log``) call this with no
     argument and happily take the env/default. Expensive, stateful commands
     (``train``, ``split``) should instead make ``--data-dir`` a *required*
     option and pass it here, so a run can never silently target the wrong or

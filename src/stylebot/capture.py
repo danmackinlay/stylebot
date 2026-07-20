@@ -1,6 +1,6 @@
 """Phase-1 capture mechanism: paragraph diffing + pair-record I/O, as a library.
 
-The `ai-style-log` CLI (`stylebot.bin.ai_style_log`) is a thin wrapper over
+The `ai-style log` CLI (`stylebot.bin.ai_style_log`) is a thin wrapper over
 this module; it keeps the *path policy* (its ``$STYLEBOT_DATA_DIR``-derived
 defaults) and the interactive session-snapshot workflow. Everything here takes
 explicit paths and strings, so a non-CLI producer (an editor integration, a

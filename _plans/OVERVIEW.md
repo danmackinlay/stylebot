@@ -55,8 +55,9 @@ whole pipeline from its own build.
 - **One entry point, subcommands** — `ai-style log | synth | split | train |
   eval` — not a scatter of loose scripts. Shared option parsing, one `--help`
   tree; loose scripts drift in flag conventions. Phase 1's logger is exempt from
-  nothing: it is `ai-style log`, and `ai-style-log` is an alias console script
-  pointing at the same group (daily-driver shorthand, not a second CLI).
+  nothing: it shipped as a standalone `ai-style-log` console script until
+  2026-07-20 (history, not design) and is now `ai-style log` like everything
+  else. There is exactly one console script.
 - **Two distinct path inputs, never collapsed:**
   - `--blog-root` — a *read* source (authored `.qmd` prose, sample paragraphs).
   - `--data-dir` — *read/write* state (the `pairs.jsonl` corpus, manifests).
@@ -65,7 +66,7 @@ whole pipeline from its own build.
   Resolved in one place, `stylebot.config`. The env var is a convenience for
   interactive use, not the primary mechanism.
 - **Defaults where a mistake is cheap; required flags where it isn't.**
-  `ai-style-log` keeps a cwd-relative default `--data-dir` (run dozens of times
+  `ai-style log` keeps a cwd-relative default `--data-dir` (run dozens of times
   a day against the focused file — zero friction). The expensive/stateful
   commands (`train`, `split`) take **no default `--data-dir`**: an explicit
   path is the reproducibility record, and you never want to silently train on

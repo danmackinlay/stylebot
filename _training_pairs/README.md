@@ -16,7 +16,7 @@ portability) — the never-commit rule is about this repo, not the data.
 _training_pairs/
 ├── README.md            # tracked (this file)
 ├── pairs.jsonl          # the corpus: one chat-completion record per line  [gitignored]
-└── snapshots/           # open ai-style-log sessions (transient)            [gitignored]
+└── snapshots/           # open ai-style log sessions (transient)            [gitignored]
     └── <rel-path>.json
 ```
 
@@ -29,7 +29,7 @@ and the module docstring in `src/stylebot/bin/ai_style_log.py`.
 The corpus location is `$STYLEBOT_DATA_DIR`, defaulting to `./_training_pairs`
 relative to the current working directory. So:
 
-- **Capturing pairs** with `ai-style-log` happens inside the prose working
+- **Capturing pairs** with `ai-style log` happens inside the prose working
   tree (the blog repo). With no env var set, pairs land in
   `<blog>/_training_pairs/pairs.jsonl`.
 - **Downstream phases** (synthesis, training, eval) run from *this* repo and
@@ -47,7 +47,7 @@ avoids the classic "which pairs.jsonl is the real one" failure.
 The canonical corpus is versioned in the (livingthing) blog repo as of
 2026-07, so git history is the primary backstop. Remaining practical care:
 
-- Treat `pairs.jsonl` as precious: a careless `ai-style-log save --replace`
+- Treat `pairs.jsonl` as precious: a careless `ai-style log save --replace`
   (or `--append` then `tidy`) can drop pairs irrecoverably.
 - Snapshot it before any bulk/destructive operation. A dated copy is enough:
 

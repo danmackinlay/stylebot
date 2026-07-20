@@ -16,7 +16,7 @@ mirror-parity) + `tests/test_train_targets_cli.py` (2/2); `ruff` clean. The QA d
 (2026-06-29) removed dead blog-build code + the direct-Anthropic generator/dep
 (hosted models go via OpenRouter).
 
-- **Phase 0/1** — scaffolding + `ai-style-log` (daily pair capture) shipped;
+- **Phase 0/1** — scaffolding + `ai-style log` (daily pair capture) shipped;
   heading context added.
 - **Phase 2** — `ai-style synth` / blog `dan-style synth` built + curated. Slop is
   a **knob** (`STRATEGIES` / `--slop-strategy` / `--slop-system-file`) and

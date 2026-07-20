@@ -1,7 +1,7 @@
 """Direct tests for stylebot.capture — the Phase-1 mechanism as a library.
 
 The CLI-level behaviour (heading context, opt-outs) is pinned in
-test_ai_style_log.py through the `ai-style-log` wrappers; these exercise the
+test_ai_style_log.py through the `ai-style log` wrappers; these exercise the
 library surface with explicit paths — no module globals, no monkeypatching —
 which is exactly what the extraction buys a non-CLI producer.
 """

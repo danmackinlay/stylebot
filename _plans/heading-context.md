@@ -14,7 +14,7 @@ gated so nothing changed until opted in:
   fraction heading-less; CLI `--heading-context` / `--context-dropout`;
   `stylebot.report` shows the heading. Blog policy: `HEADING_CONTEXT="immediate"`,
   `CONTEXT_DROPOUT=0.1` in `livingthing.training_targets`.
-- **Phase 1:** `ai-style-log` `diff_chunks(..., heading_context=)` resolves the
+- **Phase 1:** `ai-style log` `diff_chunks(..., heading_context=)` resolves the
   nearest preceding heading; default **ON** (`--no-heading-context` to opt out);
   `--whole`/preamble carry none; forward-only.
 - Tested: cross-producer pairs are byte-identical for the same heading. 85% of
@@ -108,7 +108,7 @@ Phase 2):
 3. Compute context from the **after** body (the kept text); if the before body's
    nearest heading differs, prefer after's (the edit may have moved a heading) —
    record both only if they diverge (rare).
-4. Flag `ai-style-log save|pair --heading-context/--no-heading-context`.
+4. Flag `ai-style log save|pair --heading-context/--no-heading-context`.
 
 ### Back-compat ↔ faithfulness trade-off
 

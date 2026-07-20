@@ -7,11 +7,9 @@ eval | serve` — not a scatter of loose scripts. Each subcommand is a thin
 scoring sidecar, `stylebot.serve`) are built; `split` / `train` land with their
 phases.
 
-Phase 1's capture logger is `ai-style log` here, and is ALSO installed as the
-standalone `ai-style-log` console script. Same group object, two spellings: the
-subcommand keeps the surface consistent (and discoverable in `--help`), the
-short script keeps the daily muscle memory. Neither is a fork — adding a command
-to `ai_style_log.main` surfaces it under both.
+Phase 1's capture logger is `ai-style log` — a subcommand like every other, not
+a separate console script. It shipped as a standalone `ai-style-log` until
+2026-07-20; that alias is gone, one canonical spelling.
 """
 
 from __future__ import annotations
@@ -33,8 +31,8 @@ def main() -> None:
     """stylebot tooling — capture, synthetic pairs, training, eval (subcommands)."""
 
 
-# Phase 1 capture. The same group backs the standalone `ai-style-log` script;
-# this is the consistent spelling, that one is the shorthand.
+# Phase 1 capture — the group defined in bin/ai_style_log.py, mounted here as
+# its only entry point.
 main.add_command(_log, name="log")
 
 

@@ -1,5 +1,5 @@
 """
-ai-style-log: capture (slop -> Dan rewrite) training pairs for the future
+ai-style log: capture (slop -> Dan rewrite) training pairs for the future
 ai-style fine-tune.
 
 Phase 1 of the plan at `_plans/ai-style-fine-tune.md`. This module is a
@@ -12,16 +12,16 @@ The canonical use is the open/save cycle. Each rewrite of a file is a
 **session**: opened explicitly, saved when finished, optionally banked
 mid-stream and superseded later.
 
-    uv run ai-style-log open <file>         # begin a rewrite session
+    uv run ai-style log open <file>         # begin a rewrite session
     # ... user edits the file by hand, across one or more sittings ...
-    uv run ai-style-log save <file>         # write pair(s) for what changed, close session
+    uv run ai-style log save <file>         # write pair(s) for what changed, close session
 
 Every command (except `list`) ends by printing a short reminder of
 currently-open sessions to stderr, with their relative age, so stale
 sessions become visible. Pass `-q` / `--quiet` at the group level to
 suppress the reminder for one invocation:
 
-    uv run ai-style-log -q save <file>      # no reminder appended
+    uv run ai-style log -q save <file>      # no reminder appended
 
 The session is **sticky** — `open` refuses to overwrite an existing one,
 so the original ("worst") state of the file survives across editing
@@ -180,9 +180,9 @@ One-shot entry (no session dance)
 For ad-hoc pairs (clipboard paste, ephemeral content, scripted pipelines)
 use `pair` with explicit before/after:
 
-    uv run ai-style-log pair --before before.txt --after after.txt
-    uv run ai-style-log pair --before - --after after.txt   # stdin
-    pbpaste | uv run ai-style-log pair --before - --after rewritten.txt \\
+    uv run ai-style log pair --before before.txt --after after.txt
+    uv run ai-style log pair --before - --after after.txt   # stdin
+    pbpaste | uv run ai-style log pair --before - --after rewritten.txt \\
         --source clipboard --tag hand-typed
 
 `pair` chunks by default (same paragraph diff as `save`); pass `--whole`
@@ -403,7 +403,7 @@ def _remind_open_sessions(ctx: click.Context) -> None:
     click.echo(f"Open sessions ({len(entries)}):", err=True)
     for source, age in entries:
         click.echo(f"  {source:<{width}}  (opened {age})", err=True)
-    click.echo("  use `ai-style-log -q ...` to suppress, `ai-style-log drop <file>` to abandon", err=True)
+    click.echo("  use `ai-style log -q ...` to suppress, `ai-style log drop <file>` to abandon", err=True)
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})

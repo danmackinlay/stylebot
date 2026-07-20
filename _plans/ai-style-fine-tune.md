@@ -23,7 +23,7 @@ Why Tinker + Fireworks (and the local/Modal fallbacks): decisions.md#D1. Why Tin
 
 ### Phase 1: Pair-logging infrastructure ✓ shipped
 
-Implemented as `uv run ai-style-log`. User-facing workflow docs in [`_training_pairs/README.md`](../_training_pairs/README.md); implementation reference in the module docstring of [`src/livingthing/bin/ai_style_log.py`](../src/livingthing/bin/ai_style_log.py). The system prompt for pair records is the `STYLE_SYSTEM` constant in [`src/livingthing/ai_core.py`](../src/livingthing/ai_core.py) — single source of truth shared with Phase 2 / Phase 5.
+Implemented as `uv run ai-style log`. User-facing workflow docs in [`_training_pairs/README.md`](../_training_pairs/README.md); implementation reference in the module docstring of [`src/livingthing/bin/ai_style_log.py`](../src/livingthing/bin/ai_style_log.py). The system prompt for pair records is the `STYLE_SYSTEM` constant in [`src/livingthing/ai_core.py`](../src/livingthing/ai_core.py) — single source of truth shared with Phase 2 / Phase 5.
 
 ### Phase 2: Synthetic pair generation (~1–2 days, ~$100–250 in API calls)
 

@@ -5,7 +5,7 @@ and the canonical `pairs.jsonl` schema that every other phase depends on.
 
 ## What it is
 
-`ai-style-log`: a manual logger. Every time Dan rewrites an AI draft into his
+`ai-style log`: a manual logger. Every time Dan rewrites an AI draft into his
 own voice, it captures the `(before, after)` diff at paragraph granularity into
 `pairs.jsonl`. No automation, no git hook, no surprise side effects — invoked
 by hand. Full behaviour is in the module docstring of
@@ -15,7 +15,7 @@ mechanics, this file for the contract.
 ## Inputs
 
 - Prose files (`.qmd`/markdown) being hand-rewritten, in the prose working tree.
-- Run as `uv run ai-style-log <cmd>` (or the installed `ai-style-log`).
+- Run as `uv run ai-style log <cmd>` (or the installed `ai-style`).
 
 ## Outputs (THE shared contract)
 

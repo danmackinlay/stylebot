@@ -92,7 +92,7 @@ GEN_FACET_KEYS = (
 def build_pair_content(context: str, body: str) -> str:
     """Assemble a pair message body: heading context (verbatim) + the prose body.
 
-    The **shared contract** between Phase 1 (`ai-style-log`) and Phase 2
+    The **shared contract** between Phase 1 (`ai-style log`) and Phase 2
     (`stylebot.synth`): `context` — a section heading the body sits under — is
     prepended *identically* to both the user (slop) and assistant (target) sides
     so the styler learns to preserve the heading and restyle only the body

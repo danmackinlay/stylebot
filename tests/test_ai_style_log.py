@@ -1,4 +1,4 @@
-"""Tests for Phase 1 heading-context capture in `ai-style-log`.
+"""Tests for Phase 1 heading-context capture in `ai-style log`.
 
 Covers the `diff_chunks` heading resolution, the context prefix on captured
 pairs (gated through the shared `validate_pair_record`), the

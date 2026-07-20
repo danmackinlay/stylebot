@@ -3,7 +3,7 @@
 Mark paragraphs **dan-or-bot** live in the editor, using the trained voice
 classifier. A paragraph's `P(slop)` shows as a graded background tint +
 scrollbar mark while Dan drafts; suspicious paragraphs get rewritten, and the
-existing `ai-style-log` tasks capture the `(before, after)` pair. The marker is
+existing `ai-style log` tasks capture the `(before, after)` pair. The marker is
 the **front-end of the capture loop**, not a standalone gadget.
 
 Lives here (stylebot): nothing in the sidecar or extension is Dan-specific —
@@ -118,7 +118,7 @@ blog's `.vscode/settings.json`; recalibrate after retraining the head.
       *(needs an eyeball in the Extension Dev Host / installed .vsix)*
 - [x] Thresholds calibrated from `scores.jsonl` quantiles, recorded above.
 - [ ] The loop closes: a flagged-then-rewritten paragraph is capturable via the
-      existing `ai-style-log` save task with no extra steps. *(manual check)*
+      existing `ai-style log` save task with no extra steps. *(manual check)*
 
 ## Parked alternatives
 

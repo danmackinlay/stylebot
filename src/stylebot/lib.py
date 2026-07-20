@@ -51,7 +51,7 @@ def split_paragraphs(text: str) -> list[str]:
     code-fence blocks each become their own paragraph block. Trailing newlines
     inside a block are stripped.
 
-    This is the **shared** chunk shape for the corpus: Phase 1 (`ai-style-log`)
+    This is the **shared** chunk shape for the corpus: Phase 1 (`ai-style log`)
     diffs against it and Phase 2 (`stylebot.synth`) samples it, so real edit
     pairs and synthetic paraphrase pairs are the same granularity and mixable.
     Keep both producers calling this one splitter.

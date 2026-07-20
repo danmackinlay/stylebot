@@ -22,7 +22,7 @@ def test_skips_non_object_json(tmp_path):
 
 
 def test_keep_undecodable_wraps_raw(tmp_path):
-    # The rewrite paths (ai-style-log) must round-trip corrupt lines verbatim,
+    # The rewrite paths (ai-style log) must round-trip corrupt lines verbatim,
     # not drop them; non-object JSON gets the same treatment.
     p = _write(tmp_path, '{"a": 1}\nnot json\n42\n')
     assert read_jsonl(p, keep_undecodable=True) == [

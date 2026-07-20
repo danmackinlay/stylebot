@@ -25,7 +25,6 @@ classifier = [
 ]
 
 [project.scripts]
-ai-style-log = "stylebot.bin.ai_style_log:main"
 ai-style = "stylebot.bin.ai_style:main"
 
 [dependency-groups]
