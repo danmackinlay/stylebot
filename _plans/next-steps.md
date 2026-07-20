@@ -42,9 +42,14 @@ only via `direnv exec` (see Environment).
 **Where the preferred config is recorded:** the winner of each audition is
 promoted into the constants of
 `livingthing/src/livingthing/training_targets.py` — `SLOP_MODELS` (the
-generator rotation), `SLOP_STRATEGY`, `REASONING_EFFORT` — and committed.
-Audition flags override those defaults; the corpus run uses them bare, so the
-committed constants ARE the record of what we decided.
+generator rotation), `SLOP_STRATEGIES` (the prompt rotation), `REASONING_EFFORT`
+— and committed. Audition flags override those defaults; the corpus run uses
+them bare, so the committed constants ARE the record of what we decided.
+
+**The blog-side operational copy** of this runbook (the full ordered pipeline,
+capture → train-clf → audition → corpus run → retrain, with the paid/free
+markings) lives at livingthing `_training_pairs/RUNBOOK.md` — that's the one to
+follow when actually running; keep the two in sync.
 
 ```sh
 cd ~/Source/livingthing            # every step runs here

@@ -60,6 +60,13 @@ GEN_META_KEYS = (
 GEN_SESSION_KEYS = ("session_id", "session_turn", "context_window", "window_fill")
 # The experiment-relevant subset eval flattens onto each score record so
 # `summarize_scores(by=...)` and the report can facet by them directly.
+#
+# This is also the *durable* record of an experiment: a scores.jsonl outlives
+# the pairs.jsonl it was scored from (the corpus is regenerable slop; the
+# analysis is not). So it carries the covariates that explain an outcome —
+# cost, latency and context position — not just the knobs that were set. A
+# sweep whose scores omit `gen_seconds` cannot answer "what did that effort
+# level buy", and no amount of re-aggregation gets it back.
 GEN_FACET_KEYS = (
     "model",
     "reasoning_effort",
@@ -68,8 +75,15 @@ GEN_FACET_KEYS = (
     "prompt_id",
     "prompt_version",
     "prompt_label",
+    "session_id",
     "session_turn",
+    "context_window",
     "window_fill",
+    "prompt_tokens",
+    "completion_tokens",
+    "reasoning_tokens",
+    "cost",
+    "gen_seconds",
     "provider",
     "finish_reason",
 )
