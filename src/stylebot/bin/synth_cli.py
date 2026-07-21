@@ -340,6 +340,27 @@ def _resolve_windows(
     return windows
 
 
+def _model_economics(ms: dict | None) -> str:
+    """Per-model cost/cache/throughput suffix for the exit summary.
+
+    Everything here is folded from meta.gen covariates already recorded on the
+    pairs — this prints run economics, it does not measure anything new. The
+    cached share is the direct check on whether session prefix caching pays;
+    tok/s (visible completion over wall generation time) is the provider-
+    throughput check. Empty string when the generator reported no usage.
+    """
+    if not ms or not (ms["cost"] or ms["prompt_tokens"]):
+        return ""
+    parts = [f"${ms['cost']:.3f} (${ms['cost'] / ms['pairs']:.4f}/pair)"]
+    if ms["prompt_tokens"]:
+        parts.append(f"cached {100 * ms['cached_tokens'] / ms['prompt_tokens']:.0f}%")
+    if ms["gen_seconds"] and ms["completion_tokens"]:
+        parts.append(f"{ms['completion_tokens'] / ms['gen_seconds']:.0f} tok/s")
+    if ms["reasoning_tokens"]:
+        parts.append(f"{ms['reasoning_tokens'] / ms['pairs']:.0f} reasoning tok/pair")
+    return "  " + "  ".join(parts)
+
+
 def _report_result(
     result: synth.SynthResult, pairs_path: Path, *, dry_run: bool, session_turns: int
 ) -> None:
@@ -363,7 +384,9 @@ def _report_result(
     if result.skipped_covered:
         click.echo(f"  {result.skipped_covered} target(s) already covered, skipped (--skip-covered)")
     for name, count in sorted(result.per_generator.items()):
-        click.echo(f"  {name}: {count}")
+        click.echo(f"  {name}: {count}{_model_economics(result.model_stats.get(name))}")
+    if result.total_cost:
+        click.echo(f"  total cost: ${result.total_cost:.2f}")
     if result.budget_bound_sessions or result.reflow_sessions:
         click.echo(
             f"  {result.budget_bound_sessions} session(s) ended on the token budget; "
@@ -564,11 +587,14 @@ def run_synth(
     # any slow pair the very next tick prints.
     last_echo = [0.0]
 
-    def _progress(i: int, total: int) -> None:
+    def _progress(i: int, total: int, live: synth.SynthResult) -> None:
         now = time.monotonic()
         if i == 1 or i == total or now - last_echo[0] >= _HEARTBEAT_SECS:
             last_echo[0] = now
-            click.echo(f"  ... {i}/{total} pairs", err=True)
+            # Billed credits so far (OpenRouter usage.include ground truth);
+            # silent for generators that report no cost.
+            spent = f"  ≈${live.total_cost:.2f}" if live.total_cost else ""
+            click.echo(f"  ... {i}/{total} pairs{spent}", err=True)
 
     def _on_error(key: str, msg: str) -> None:
         # Surface failures the moment they happen, not just in the exit summary.

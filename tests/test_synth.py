@@ -654,6 +654,36 @@ def test_keys_are_content_only_in_all_modes():
     assert respun.session_id != sessioned.session_id
 
 
+def test_model_stats_fold_run_economics(tmp_path):
+    # Cost/cache/token stats accumulate per model from meta.gen as the run
+    # goes, and the live SynthResult reaches the progress callback so the CLI
+    # heartbeat can show spend without new plumbing.
+    def gen(text, history=None):
+        return synth.GenOutput(
+            "[slop] " + text,
+            {"cost": 0.01, "prompt_tokens": 100, "completion_tokens": 40,
+             "reasoning_tokens": 5, "cached_tokens": 60, "gen_seconds": 2.0},
+        )
+
+    seen_costs: list[float] = []
+    result = synth.synthesize_pairs(
+        _targets(2), tmp_path / "c", [synth.Generator("g", generate=gen)],
+        on_progress=lambda i, total, live: seen_costs.append(live.total_cost),
+    )
+    ms = result.model_stats["g"]
+    assert ms["pairs"] == 2 and ms["cost"] == 0.02
+    assert ms["prompt_tokens"] == 200 and ms["cached_tokens"] == 120
+    assert ms["gen_seconds"] == 4.0 and ms["reasoning_tokens"] == 10
+    assert result.total_cost == 0.02
+    assert seen_costs == [0.01, 0.02]  # live accumulation, visible mid-run
+    # Generators reporting no usage stay out of the stats' way.
+    bare = synth.synthesize_pairs(
+        _targets(3)[2:], tmp_path / "c2",
+        [synth.Generator("plain", generate=lambda t, history=None: "[slop] " + t)],
+    )
+    assert bare.model_stats["plain"]["cost"] == 0.0 and bare.total_cost == 0.0
+
+
 def test_replicate_mints_new_cells(tmp_path):
     # A replicate label deliberately resamples the same substrate: same target,
     # same config, new cells — recorded as meta.gen.replicate for faceting.

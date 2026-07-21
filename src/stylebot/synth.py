@@ -301,6 +301,26 @@ class SynthResult:
     budget_bound_sessions: int = 0  # sessions ended by the token budget
     reflow_sessions: int = 0  # fresh sessions spawned to carry leftovers
     reflowed_turns: int = 0  # leftover turns respun (a turn respun twice counts twice)
+    # Per-model run economics, folded live from each pair's meta.gen (cost is
+    # OpenRouter's billed credits via usage.include — ground truth, not an
+    # estimate; zeros for generators that report no usage). Keyed by gen.name.
+    model_stats: dict[str, dict] = field(default_factory=dict)
+
+    def add_gen_stats(self, name: str, gen_meta: Mapping) -> None:
+        ms = self.model_stats.setdefault(name, {
+            "pairs": 0, "cost": 0.0, "gen_seconds": 0.0,
+            "prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0,
+            "cached_tokens": 0,
+        })
+        ms["pairs"] += 1
+        ms["cost"] += gen_meta.get("cost") or 0.0
+        ms["gen_seconds"] += gen_meta.get("gen_seconds") or 0.0
+        for k in ("prompt_tokens", "completion_tokens", "reasoning_tokens", "cached_tokens"):
+            ms[k] += gen_meta.get(k) or 0
+
+    @property
+    def total_cost(self) -> float:
+        return sum(ms["cost"] for ms in self.model_stats.values())
 
 
 @dataclass
@@ -481,7 +501,7 @@ class _RunState:
     total: int  # pairs this run will attempt (for progress)
     replicate: str = ""  # deliberate-resample label, keyed AND recorded
     done: int = 0
-    on_progress: Callable[[int, int], None] | None = None
+    on_progress: Callable[[int, int, "SynthResult"], None] | None = None
     on_error: Callable[[str, str], None] | None = None
 
 
@@ -635,9 +655,10 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
         fp.flush()
         st.result.written += 1
         st.result.per_generator[gen.name] = st.result.per_generator.get(gen.name, 0) + 1
+        st.result.add_gen_stats(gen.name, gen_meta)
         st.done += 1
         if st.on_progress is not None:
-            st.on_progress(st.done, st.total)
+            st.on_progress(st.done, st.total, st.result)
         history += _exchange(turn.target.text, slop)
         if prompt_tokens:
             last_prompt = prompt_tokens
@@ -678,7 +699,7 @@ def synthesize_pairs(
     dry_run: bool = False,
     extra_tags: Sequence[str] = (),
     context_dropout: float = 0.0,
-    on_progress: Callable[[int, int], None] | None = None,
+    on_progress: Callable[[int, int, "SynthResult"], None] | None = None,
     on_error: Callable[[str, str], None] | None = None,
     max_workers: int = 1,
     session_turns: int = 1,
