@@ -64,6 +64,7 @@ from stylebot.generators import (  # noqa: F401
     SLOP_SYSTEM,
     SLOP_SYSTEM_CASUAL,
     SLOP_SYSTEM_ENGAGING,
+    SLOP_SYSTEM_LINKEDIN,
     SLOP_SYSTEM_MEASURED,
     STRATEGIES,
     GenOutput,

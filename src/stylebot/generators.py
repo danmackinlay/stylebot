@@ -67,6 +67,25 @@ SLOP_SYSTEM_MEASURED = (  # "measured": the mild stereotypical-LLM register — 
     "your sentence openings and structure naturally from passage to passage. "
     + _SLOP_PRESERVE
 )
+SLOP_SYSTEM_LINKEDIN = (  # "linkedin": the personal-brand / thought-leadership register
+    "You are a personal-brand content strategist. Rewrite the user's passage so it "
+    "performs on LinkedIn: lead with the payoff instead of the setup, recast "
+    "observations as hard-won professional lessons, replace the original's hedging "
+    "with flat confidence, tell the reader what to take away, and land each point "
+    "as its own short declarative sentence. Aim for a brisk motivational cadence "
+    "and an air of earned authority. Let the register show in the texture, not in "
+    "any stock phrase — no emoji, no hashtags, no stock openers or sign-offs, and "
+    "vary your sentence openings naturally from passage to passage. "
+    + _SLOP_PRESERVE
+)
+# Why "linkedin" bans emoji/hashtags despite them being the format's loudest tell:
+# they are lexical giveaways, so the classifier would learn "emoji -> slop" and
+# stop reading the prose — a degenerate shortcut that inflates the detector's
+# score while teaching the styler nothing. The register we want to capture is the
+# rhetorical move (payoff-first, hedges stripped, lesson-ised, reader instructed),
+# which is exactly what survives when someone pastes real LinkedIn prose into a
+# blog. Same reasoning as the catalogue removal below: describe texture, not tokens.
+
 # "measured" replaces a removed "catalogue" strategy (2026-07-07) that QUOTED
 # the stereotypical tics ("In today's world", ...) — samplers converge hard on
 # quoted tokens, so every output opened identically and the slop was cartoonish.
@@ -95,6 +114,7 @@ STRATEGIES: dict[str, SlopStrategy] = {
     "engaging": SlopStrategy("engaging", SLOP_SYSTEM_ENGAGING, version=1),
     "casual": SlopStrategy("casual", SLOP_SYSTEM_CASUAL, version=1),
     "measured": SlopStrategy("measured", SLOP_SYSTEM_MEASURED, version=1),
+    "linkedin": SlopStrategy("linkedin", SLOP_SYSTEM_LINKEDIN, version=1),
 }
 DEFAULT_STRATEGY = "polish"
 
