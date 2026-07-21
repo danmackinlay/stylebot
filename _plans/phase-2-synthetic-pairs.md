@@ -193,6 +193,19 @@ Window position stays a live treatment: depth accumulates as a recorded
 covariate on every session run, and a deliberate deep arm is
 `--replicate <label> --session-max-tokens <depth>`. Original analysis below.
 
+**Coverage mode (`--skip-covered`), the cross-epoch dedup:** cell-level keys
+deliberately let config variants coexist — which means every re-key epoch
+(the effort flip, the key narrowing) would regenerate already-covered
+targets and double their training weight (~1,970 doubled targets after the
+2026-07 epoch, an imbalance correlated with walk order). `--skip-covered`
+is the corpus-building answer: skip any target whose text has >=1 pair
+under ANY config (context-agnostic — the recorded `meta.context` prefix is
+stripped), so a coverage run generates only the genuinely uncovered
+remainder. Experiments wanting the cross product simply don't pass it. The
+complementary knob — a per-target cap/weighting at training-set assembly —
+is Phase-3 policy, useful once multiple deliberate variants per target
+exist (`--per-generator`, `--replicate`).
+
 #### The original queued rationale (2026-07-21, retained for the record)
 
 `session_id` hashes the generator config **plus every turn's text in order**

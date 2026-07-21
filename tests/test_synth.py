@@ -670,6 +670,41 @@ def test_replicate_mints_new_cells(tmp_path):
     assert recs[1]["meta"]["gen"]["replicate"] == "draw2"
 
 
+def test_skip_covered_prevents_cross_epoch_target_doubling(tmp_path):
+    # The cross-epoch scenario: the corpus holds a pair for target A from an
+    # old config (effort=high, WITH heading context). A new run under a new
+    # config would mint a fresh cell for A — doubling A's training weight.
+    # skip_covered says a target with ANY pair is done; only B generates.
+    # Coverage is context-agnostic (the recorded meta.context prefix is
+    # stripped), so config drift in heading context does not defeat it.
+    import json
+
+    a, b = _targets(2)
+    old = synth.Generator(
+        "g", generate=lambda t, history=None: "[old slop] " + t, reasoning_effort="high"
+    )
+    first = synth.synthesize_pairs([a], tmp_path / "c", [old], context_dropout=0.0)
+    assert first.written == 1
+    # Give the recorded pair a heading context, as the old corpus has.
+    rec_path = tmp_path / "c" / "pairs.jsonl"
+    rec = json.loads(rec_path.read_text())
+    rec["messages"][2]["content"] = "## Heading\n\n" + rec["messages"][2]["content"]
+    rec["meta"]["context"] = "## Heading"
+    rec_path.write_text(json.dumps(rec) + "\n")
+
+    new = synth.Generator("g", generate=lambda t, history=None: "[new slop] " + t)  # effort=off
+    covered_run = synth.synthesize_pairs([a, b], tmp_path / "c", [new], skip_covered=True)
+    assert covered_run.written == 1  # B only
+    assert covered_run.skipped_covered == 1
+    recs = [json.loads(ln) for ln in rec_path.read_text().splitlines()]
+    a_pairs = [r for r in recs if r["messages"][2]["content"].endswith(a.text)]
+    assert len(a_pairs) == 1  # still only the old-epoch pair for A
+
+    # Without the flag the same run WOULD double target A (distinct effort cell).
+    doubled = synth.synthesize_pairs([a, b], tmp_path / "c", [new])
+    assert doubled.written == 1 and doubled.skipped_existing == 1  # A regenerates, B dedupes
+
+
 def test_identical_cells_collapse_within_a_run(tmp_path):
     # Two chunks with identical (config, context, text) are ONE cell: a single
     # pair is generated, not two. (Formerly the session fold gave duplicated

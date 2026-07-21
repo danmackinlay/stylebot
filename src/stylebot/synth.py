@@ -193,6 +193,34 @@ def _capture_id(source: str, generator_name: str, strategy: str = DEFAULT_STRATE
     return h.hexdigest()[:8]
 
 
+def covered_target_bodies(pairs_path: Path | str) -> set[str]:
+    """The target BODIES that already have >=1 pair in a corpus, any config.
+
+    Coverage is target-level and context-agnostic: the assistant side of every
+    record is `build_pair_content(meta.context, body)` (the shared Phase-1/2
+    contract), so the body is recovered by stripping the recorded context
+    prefix. Used by `skip_covered` — the corpus-building mode where the goal is
+    one pair per passage, not the config cross product: without it, every
+    re-key epoch (an effort default flip, a key-recipe change) doubles the
+    already-covered half of the corpus and skews per-target weighting.
+    """
+    bodies: set[str] = set()
+    for rec in iter_pairs(pairs_path):
+        msgs = rec.get("messages") or []
+        if len(msgs) < 3 or not isinstance(msgs[2], dict):
+            continue
+        content = msgs[2].get("content")
+        if not isinstance(content, str):
+            continue
+        context = ((rec.get("meta") or {}).get("context") or "").strip()
+        prefix = f"{context}\n\n"
+        if context and content.startswith(prefix):
+            bodies.add(content[len(prefix):])
+        else:
+            bodies.add(content)
+    return bodies
+
+
 def existing_synth_keys(pairs_path: Path | str) -> set[str]:
     """Read the `meta.synth_key`s already present in a `pairs.jsonl`.
 
@@ -263,6 +291,7 @@ class SynthResult:
 
     written: int = 0
     skipped_existing: int = 0
+    skipped_covered: int = 0  # targets dropped by skip_covered (any-config coverage)
     planned: int = 0  # (target, generator) assignments before dedup
     planned_sessions: int = 0  # sessions holding >=1 not-yet-generated turn
     errors: list[tuple[str, str]] = field(default_factory=list)  # (synth_key, message)
@@ -657,6 +686,7 @@ def synthesize_pairs(
     context_windows: Mapping[str, int] | None = None,
     assign_seed: str = "",
     replicate: str = "",
+    skip_covered: bool = False,
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
@@ -702,11 +732,22 @@ def synthesize_pairs(
     data_dir = Path(data_dir)
     pairs_path = data_dir / "pairs.jsonl"
 
+    skipped_covered = 0
+    if skip_covered:
+        # Coverage mode: a target with ANY existing pair (any model/strategy/
+        # effort/epoch) is done. Cell-level dedup below still governs the rest —
+        # this is the coarser corpus-building filter, cutting cross-epoch
+        # target doubling off before assignment.
+        covered = covered_target_bodies(pairs_path)
+        kept = [t for t in targets if t.text not in covered]
+        skipped_covered = len(targets) - len(kept)
+        targets = kept
+
     assignments = _assign(
         targets, generators,
         per_generator=per_generator, context_dropout=context_dropout, assign_seed=assign_seed,
     )
-    result = SynthResult(planned=len(assignments))
+    result = SynthResult(planned=len(assignments), skipped_covered=skipped_covered)
 
     # Resume is a set difference over content-keyed cells: key everything,
     # drop what the corpus already has (plus in-run duplicates — identical
