@@ -529,19 +529,41 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> None:
             if st.on_error is not None:
                 st.on_error(_key, msg)
 
-        try:
-            out = call(turn.target.text, history=history or None)
+        async def _attempt(fn, _turn: _Turn = turn) -> tuple[str, dict]:
+            out = fn(_turn.target.text, history=history or None)
             if inspect.isawaitable(out):
                 out = await out
+            slop, gen_meta = _normalize_gen_output(out)
+            if not slop.strip():
+                raise RuntimeError("generator returned empty output")
+            return slop, gen_meta
+
+        try:
+            slop, gen_meta = await _attempt(call)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # API error etc. — record, end this session
-            _fail(f"{type(exc).__name__}: {exc}")
-            break
-        slop, gen_meta = _normalize_gen_output(out)
-        if not slop.strip():
-            _fail("generator returned empty output")
-            break
+        except Exception as exc:
+            # Sticky routing pins a session to whoever served turn 1, and some
+            # upstreams cannot serve the rest of it at all: OpenRouter replays
+            # assistant turns with a `reasoning_content` some providers reject,
+            # and others answer a valid request with empty content. Ending the
+            # session on the first such error does not merely lose turns, it
+            # loses the LATE ones — which silently truncates every session that
+            # lands on a bad provider and biases any window-position analysis
+            # toward low context fill. Re-pin onto a fresh provider once before
+            # giving up; single-turn sessions have nothing to salvage.
+            if sess.session_id and gen.begin_session is not None:
+                try:
+                    call = gen.begin_session()
+                    slop, gen_meta = await _attempt(call)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as retry_exc:
+                    _fail(f"{type(retry_exc).__name__}: {retry_exc} (after re-pinning provider)")
+                    break
+            else:
+                _fail(f"{type(exc).__name__}: {exc}")
+                break
         prompt_tokens = gen_meta.get("prompt_tokens")
         if sess.session_id:
             gen_meta.update(
