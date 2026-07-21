@@ -36,6 +36,8 @@ detector.
 
 from __future__ import annotations
 
+import csv
+import datetime as _dt
 import hashlib
 import json
 import os
@@ -596,3 +598,115 @@ def summarize_scores(scores: str | Path | Iterable[dict], *, by: str | None = No
             buckets.setdefault("null" if key is None else str(key), []).append(rec)
         summary["by"] = {k: _aggregate_fields(v) for k, v in sorted(buckets.items())}
     return summary
+
+
+# --- the publishable artifact -------------------------------------------------
+# A scores.jsonl is the durable half of an experiment, but it is not a shape you
+# can commit next to a blog post: it nests, and Vale's `raw` alert objects are
+# most of its bytes. `covariate_table` projects it to one tidy row per pair with
+# no prose text — which is small enough to version, and sufficient to redraw
+# every figure, including re-cuts nobody thought of when the run happened.
+
+
+def _flatten_scores(scores: dict) -> dict:
+    """`{"slop": {"detector": {"score": .4}}}` -> `{"slop.detector.score": .4}`.
+
+    Scalars only. Nested payloads (notably Vale's per-alert `raw` list) are
+    dropped: they are the bulk of the file and none of its analysable signal.
+    """
+    flat: dict = {}
+    for field_name, signals in (scores or {}).items():
+        for signal, value in (signals or {}).items():
+            if value is None or isinstance(value, (str, int, float, bool)):
+                flat[f"{field_name}.{signal}"] = value
+            elif isinstance(value, dict):
+                for key, inner in value.items():
+                    if inner is None or isinstance(inner, (str, int, float, bool)):
+                        flat[f"{field_name}.{signal}.{key}"] = inner
+    return flat
+
+
+def covariate_table(
+    scores: str | Path | Iterable[dict], *, drop_constant: bool = True
+) -> tuple[list[dict], dict]:
+    """Project a `scores.jsonl` to tidy per-pair rows -> `(rows, constants)`.
+
+    Each row is `id` + the carried `meta` covariates + one column per scalar
+    signal. No prose text: the passages and the slop are ~95% of a corpus's
+    bytes and contribute to no figure, and for a synthetic sweep they are
+    regenerable besides.
+
+    `drop_constant` hoists columns that never vary into the returned
+    `constants` dict rather than repeating them on every row — an embedder id
+    or a detector name describes the *run*, not the pair, and on a real corpus
+    that repetition is ~40% of the file.
+    """
+    records = load_scores(scores)
+    rows: list[dict] = []
+    for rec in records:
+        row: dict = {"id": rec.get("id")}
+        row.update(rec.get("meta") or {})
+        row.update(_flatten_scores(rec.get("scores") or {}))
+        rows.append(row)
+
+    # Column order: id, then generation covariates in schema order, then the
+    # rest alphabetically — so a human opening the CSV reads design before signal.
+    seen = {k for row in rows for k in row}
+    ordered = ["id", *(k for k in GEN_FACET_KEYS if k in seen)]
+    ordered += sorted(seen - set(ordered))
+
+    constants: dict = {}
+    if drop_constant:
+        for col in list(ordered):
+            if col == "id":
+                continue
+            values = {row.get(col) for row in rows}
+            if len(values) == 1 and len(rows) > 1:
+                constants[col] = values.pop()
+                ordered.remove(col)
+        rows = [{k: row.get(k) for k in ordered} for row in rows]
+    else:
+        rows = [{k: row.get(k) for k in ordered} for row in rows]
+    return rows, constants
+
+
+def write_covariate_table(
+    scores: str | Path,
+    out_path: str | Path,
+    *,
+    extra: dict | None = None,
+) -> dict:
+    """Write the tidy table as CSV plus a `<stem>.meta.json` provenance sidecar.
+
+    The sidecar is the half that survives a lost working directory: it records
+    the hoisted constants, the row/column counts, and a digest of the scores
+    file the table came from, so a future reader can tell whether a re-run is
+    comparable or merely similar. `extra` carries the caller's experiment
+    config (model list, splits role, sample fraction) into that record.
+    """
+    out_path = Path(out_path)
+    rows, constants = covariate_table(scores)
+    if not rows:
+        raise ValueError(f"no score records in {scores} — nothing to export")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    columns = list(rows[0])
+    with out_path.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    digest = hashlib.sha256(Path(scores).read_bytes()).hexdigest()[:16] if Path(scores).exists() else None
+    sidecar = {
+        "schema_version": SCHEMA_VERSION,
+        "exported_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "source": str(scores),
+        "source_sha256": digest,
+        "rows": len(rows),
+        "columns": columns,
+        "constant_columns": constants,
+        **({"experiment": extra} if extra else {}),
+    }
+    sidecar_path = out_path.with_suffix(".meta.json")
+    sidecar_path.write_text(json.dumps(sidecar, indent=2, default=str) + "\n", encoding="utf-8")
+    return {"csv": out_path, "sidecar": sidecar_path, "rows": len(rows), "columns": columns, "constants": constants}

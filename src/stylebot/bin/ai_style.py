@@ -14,6 +14,7 @@ a separate console script. It shipped as a standalone `ai-style-log` until
 
 from __future__ import annotations
 
+import json
 import sys
 from functools import partial
 from pathlib import Path
@@ -234,6 +235,37 @@ def eval_cmd(
                 facet_by=facet_by,
             )
             click.echo(f"wrote report -> {written}")
+
+
+@main.command("export-table")
+@click.option("--scores", "scores_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path), help="The scores.jsonl to project.")
+@click.option("--out", "out_path", required=True, type=click.Path(dir_okay=False, path_type=Path), help="CSV to write; a <stem>.meta.json provenance sidecar lands beside it.")
+@click.option("--note", default=None, help="Free-text description of the run, recorded in the sidecar.")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="A JSON experiment config to embed in the sidecar (the pinned arms/substrate that produced these scores).")
+def export_table_cmd(scores_path: Path, out_path: Path, note: str | None, config_path: Path | None) -> None:
+    """Project a scores.jsonl to a committable tidy CSV (+ provenance sidecar).
+
+    One row per pair, no prose text: small enough to version next to a write-up,
+    and sufficient to redraw every figure — including re-cuts nobody planned at
+    run time. The sidecar records the hoisted run-constants, a digest of the
+    source scores file and the experiment config, so a later reader can tell
+    whether a re-run is comparable or merely similar.
+
+        ai-style export-table --scores sweep/scores.jsonl --out notebook/data/sweep.csv
+    """
+    from stylebot.eval import write_covariate_table
+
+    extra: dict = {}
+    if note:
+        extra["note"] = note
+    if config_path:
+        extra["config"] = json.loads(config_path.read_text(encoding="utf-8"))
+
+    res = write_covariate_table(scores_path, out_path, extra=extra or None)
+    size = Path(res["csv"]).stat().st_size
+    click.echo(f"wrote {res['rows']} rows x {len(res['columns'])} cols -> {res['csv']} ({size / 1024:.1f} KB)")
+    if res["constants"]:
+        click.echo(f"hoisted {len(res['constants'])} run-constant column(s) into {res['sidecar'].name}")
 
 
 @main.command("serve")
