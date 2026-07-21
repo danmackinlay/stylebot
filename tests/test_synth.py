@@ -458,11 +458,16 @@ def _run_gen(gen, text, history=None):
 
 
 def test_openrouter_reasoning_effort_enum(monkeypatch):
-    # Effort-enum families (claude/gpt/…) get {"effort": <level>}; default is high.
+    # Effort-enum families (claude/gpt/…) get {"effort": <level>}. Asked for
+    # explicitly: the DEFAULT is "off" (see DEFAULT_REASONING_EFFORT), which maps to
+    # {"enabled": False} and is covered below — this case is the enum mapping itself.
     # Provider routing defaults to throughput sort (price-balanced routing can
     # land on ~10 tok/s upstreams).
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice("slop out")]))
-    out = _run_gen(synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x"), "rewrite me")
+    out = _run_gen(
+        synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x", reasoning_effort="high"),
+        "rewrite me",
+    )
     assert out.text == "slop out"  # GenOutput, not a bare string
     assert calls["extra_body"] == {"reasoning": {"effort": "high"}, "provider": {"sort": "throughput"}, "usage": {"include": True}}
     assert out.meta["provider_sort"] == "throughput"  # the routing request, recorded
@@ -725,7 +730,7 @@ def test_turn_error_ends_only_its_session(tmp_path):
     assert len(result.errors) == 1  # session ended at its first failure
     # The error is attributable: generator, strategy, effort, and session turn.
     _key, msg = result.errors[0]
-    assert msg.startswith("[bad strategy=polish effort=high turn=1] RuntimeError")
+    assert msg.startswith("[bad strategy=polish effort=off turn=1] RuntimeError")
 
 
 def test_estimate_next_prompt():

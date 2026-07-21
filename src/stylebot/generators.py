@@ -98,10 +98,15 @@ STRATEGIES: dict[str, SlopStrategy] = {
 }
 DEFAULT_STRATEGY = "polish"
 
-# Reasoning is a recorded *covariate*, not a silent default. Slop generation is a
-# paraphrase, but real AI prose is often produced at high reasoning, so we default
-# HIGH and let experiments sweep down (see `_reasoning_extra_body`).
-DEFAULT_REASONING_EFFORT = "high"
+# Reasoning is a recorded *covariate*, not a silent default. HIGH used to be the
+# default on the guess that real AI prose is produced at high reasoning — a 1241-pair
+# sweep (2026-07, six models, `off` vs `medium`) found the detector gap flat (means
+# 0.088 vs 0.092, i.e. noise) for ~3x the wall clock, so the guess bought nothing and
+# the cheap end wins. Sweep it back up with repeated `--reasoning-effort` if a model
+# looks effort-sensitive. Caveats worth knowing: `high` itself was never measured
+# (only off vs medium), and providers may ignore the request — qwen3-32b still emitted
+# ~700 reasoning tokens at `off`. We record what was *asked for*.
+DEFAULT_REASONING_EFFORT = "off"
 
 
 def prompt_id_of(system_text: str) -> str:

@@ -170,7 +170,7 @@ def test_run_synth_exits_nonzero_on_generation_errors(tmp_path, capsys, make_blo
     assert "!!" in err and "api down" in err  # surfaced immediately, not just at exit
     # Attribution: a failed pair is never written, so the message itself must
     # name the config that produced it.
-    assert "[boom strategy=polish effort=high]" in err
+    assert "[boom strategy=polish effort=off]" in err
 
 
 def test_timeout_reaches_generator_factories(tmp_path, monkeypatch, make_blog):

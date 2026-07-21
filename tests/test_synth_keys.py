@@ -16,7 +16,9 @@ from stylebot import synth
 
 def test_synth_key_golden_stateless_defaults():
     # Defaults (strategy/effort/prompt_id/context) feed the key when omitted.
-    assert synth._synth_key("gpt-4o", "Some target paragraph.") == "edb78227d998267d"
+    # Re-keyed 2026-07-20 when DEFAULT_REASONING_EFFORT went high -> off: a
+    # flag-less run no longer dedupes against pairs generated before that date.
+    assert synth._synth_key("gpt-4o", "Some target paragraph.") == "0cdf691440f1288b"
 
 
 def test_synth_key_golden_all_axes():
@@ -56,4 +58,4 @@ def test_default_key_axes_pinned():
     # These defaults are folded into every key generated without explicit
     # flags; changing either deliberately re-keys default runs.
     assert synth.DEFAULT_STRATEGY == "polish"
-    assert synth.DEFAULT_REASONING_EFFORT == "high"
+    assert synth.DEFAULT_REASONING_EFFORT == "off"
