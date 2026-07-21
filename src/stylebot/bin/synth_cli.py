@@ -31,6 +31,7 @@ from pathlib import Path
 import click
 
 from stylebot import synth
+from stylebot.splits import ROLES as SPLIT_ROLES
 
 # Progress heartbeat cadence for generation (seconds of wall-clock silence).
 _HEARTBEAT_SECS = 20.0
@@ -117,7 +118,12 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "session_turns": (("--session-turns",), dict(default=1, show_default=True, type=int, help="Turns per live session: each turn sees the real prior (passage -> slop) exchanges, sweeping window position (meta.gen session_turn / window_fill). 1 = stateless.")),
     "session_max_tokens": (("--session-max-tokens",), dict(default=synth.DEFAULT_SESSION_MAX_TOKENS, show_default=True, type=int, help="Per-session prompt-token budget (absolute; input cost grows ~quadratically with it). Also capped at 80% of each model's context window.")),
     "context_window": (("--context-window",), dict(type=int, default=None, help="Context window (tokens) for gpt/local preset generators when sweeping sessions — OpenRouter models resolve theirs from the models registry automatically.")),
-    "limit": (("--limit",), dict(type=int, default=None, help="Cap the number of target chunks (cost control / smoke runs).")),
+    # -- substrate selection: WHICH population this run measures (before --limit) --
+    "splits_path": (("--splits", "splits_path"), dict(type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="splits.json of by-post roles (see ai-style make-splits). Required by --role.")),
+    "role": (("--role",), dict(type=click.Choice(SPLIT_ROLES), default=None, help="Keep only chunks whose post holds this role. Measurement runs want 'styler': disjoint from the detector's training pool, so the voice classifier stays an unbiased instrument.")),
+    "sample_frac": (("--sample-frac",), dict(type=float, default=None, help="Keep this fraction of chunks by content hash. Growth-stable: a later run on a larger corpus is a SUPERSET of this one, so the two stay comparable (--limit is not, its first N shifts as posts are added).")),
+    "sample_salt": (("--sample-salt",), dict(default="", show_default=True, help="Re-draw an independent subsample of the same size (a fresh replicate of the design).")),
+    "limit": (("--limit",), dict(type=int, default=None, help="Cap the number of target chunks (cost control / smoke runs). A cap on the substrate, not a definition of it — see --sample-frac.")),
     "dry_run": (("--dry-run",), dict(is_flag=True, help="Report planned targets/pairs without calling any API or writing.")),
 }
 
@@ -386,6 +392,10 @@ def run_synth(
     session_max_tokens: int = synth.DEFAULT_SESSION_MAX_TOKENS,
     context_window: int | None = None,
     session_budgets: Mapping[str, int] | None = None,
+    splits_path: Path | None = None,
+    role: str | None = None,
+    sample_frac: float | None = None,
+    sample_salt: str = "",
     limit: int | None = None,
     dry_run: bool = False,
     sample_n: int | None = None,
@@ -405,6 +415,24 @@ def run_synth(
     SynthResult, or None when an inspection mode short-circuited. Exits 1 on
     generation errors.
     """
+    # Substrate selection runs BEFORE --limit: role and sample-frac define
+    # *which* population this run measures, --limit is only a cost cap on it.
+    if role is not None or sample_frac is not None:
+        from stylebot import splits as splits_mod
+        from stylebot.targets import select_targets
+
+        before = len(targets)
+        loaded = splits_mod.load_splits(splits_path) if role is not None else None
+        if role is not None and splits_path is None:
+            raise click.UsageError("--role requires --splits")
+        targets = select_targets(
+            targets, splits=loaded, role=role, sample_frac=sample_frac, sample_salt=sample_salt
+        )
+        detail = ", ".join(
+            p for p in (f"role={role}" if role else "", f"sample-frac={sample_frac}" if sample_frac else "") if p
+        )
+        click.echo(f"substrate: {before} -> {len(targets)} target chunk(s) ({detail})")
+
     if limit is not None:
         targets = targets[:limit]
 

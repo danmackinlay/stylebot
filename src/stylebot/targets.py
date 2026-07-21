@@ -12,6 +12,7 @@ policy arrives via the caller's `selector`, markers and header names).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections.abc import Callable, Sequence
@@ -393,3 +394,69 @@ def iter_targets(
     if sort_key is not None:
         targets.sort(key=sort_key)
     return targets
+
+
+def hash_unit(*parts: object, salt: str = "") -> float:
+    """A stable coordinate in [0, 1) for a tuple of identifiers.
+
+    Pure function of the identifiers — no RNG state, no ordering, no corpus
+    size. That is the whole point: it is what lets a subsample stay put while
+    the thing it is sampled from grows underneath it.
+    """
+    blob = "\x00".join([str(salt), *(str(p) for p in parts)]).encode("utf-8")
+    return int.from_bytes(hashlib.sha256(blob).digest()[:8], "big") / 2**64
+
+
+def select_targets(
+    targets: Sequence[Target],
+    *,
+    splits: dict | None = None,
+    role: str | None = None,
+    sample_frac: float | None = None,
+    sample_salt: str = "",
+) -> list[Target]:
+    """Narrow a target list to an experiment's substrate: by splits role, then subsample.
+
+    Two independent filters, both deliberately *not* random:
+
+    - **`role`** keeps only chunks whose post carries that role under the
+      by-post splits contract (`stylebot.splits.role_of`). An experiment that
+      measures with the voice classifier must not draw passages from the
+      classifier's own training pool, or the detector is marking its own
+      homework; `role="styler"` is the usual answer, since it is disjoint from
+      both the detector pool and the frozen eval stratum. Filtering on the
+      *contract* rather than on the posts a particular artifact happened to see
+      keeps that guarantee true across retrains.
+
+    - **`sample_frac`** keeps a fraction by `hash_unit(source, text)`, NOT by
+      taking the first N or by sampling randomly. Membership is a property of
+      the chunk's *content* (an index would churn the whole post's membership
+      the moment a paragraph is inserted above it), so as the corpus grows
+      every previously selected chunk stays selected and new ones join at the
+      same rate: a later run is a strict **superset** of an earlier one. Old
+      measurements stay valid on their subset, and the two runs can be
+      compared on the intersection. `--limit` cannot do this — its first N
+      shifts the moment a new post sorts in ahead of an old one. Identical
+      text twice in one post co-selects; harmless, since `synth_key` is
+      content-keyed and collapses identical (config, context, text) anyway.
+
+    `sample_salt` re-draws an independent subsample of the same size (a fresh
+    replicate of the design).
+    """
+    out = list(targets)
+    if role is not None:
+        if splits is None:
+            raise ValueError("select_targets: role= requires splits=")
+        from stylebot import splits as splits_mod
+
+        out = [t for t in out if splits_mod.role_of(t.source, splits) == role]
+    if sample_frac is not None:
+        if not 0.0 < sample_frac <= 1.0:
+            raise ValueError(f"select_targets: sample_frac must be in (0, 1], got {sample_frac}")
+        if sample_frac < 1.0:
+            out = [
+                t
+                for t in out
+                if hash_unit(t.source, t.text, salt=sample_salt) < sample_frac
+            ]
+    return out
