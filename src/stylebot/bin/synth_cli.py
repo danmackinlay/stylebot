@@ -363,7 +363,8 @@ def _model_economics(ms: dict | None) -> str:
 
 
 def _report_result(
-    result: synth.SynthResult, pairs_path: Path, *, dry_run: bool, session_turns: int
+    result: synth.SynthResult, pairs_path: Path, *, dry_run: bool, session_turns: int,
+    max_transform_sim: float | None = None,
 ) -> None:
     """Echo the run summary; exit 1 when any generation failed."""
     if dry_run:
@@ -633,6 +634,7 @@ def run_synth(
     )
 
     _report_result(
-        result, resolved_dir / "pairs.jsonl", dry_run=dry_run, session_turns=session_turns
+        result, resolved_dir / "pairs.jsonl", dry_run=dry_run, session_turns=session_turns,
+        max_transform_sim=max_transform_sim,
     )
     return result

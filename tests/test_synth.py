@@ -1175,3 +1175,17 @@ def test_max_transform_sim_gate_drops_identity_outputs(tmp_path):
     # Unset gate (default): even identity output is written — covariate only.
     result = synth.synthesize_pairs(_targets(3), data_dir, [echo])
     assert result.skipped_degenerate == 0 and result.written == 3
+
+
+def test_report_result_echoes_degenerate_count(capsys, tmp_path):
+    """The CLI summary path must render the degenerate-drop line (regression:
+    it referenced a name not in scope and crashed after a paid run)."""
+    from stylebot.bin import synth_cli
+
+    result = synth.SynthResult(planned=3, skipped_degenerate=3)
+    synth_cli._report_result(
+        result, tmp_path / "pairs.jsonl", dry_run=False, session_turns=1,
+        max_transform_sim=0.95,
+    )
+    out = capsys.readouterr().out
+    assert "3 degenerate pair(s) DROPPED" in out and "0.95" in out
