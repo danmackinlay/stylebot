@@ -139,7 +139,44 @@ not guessed once:
    - **Keys/resume**: multi-turn keys fold `session_id:turn` into `synth_key`
      (turns coexist; a crashed session resumes by replaying recorded slop into
      history). Stateless keys carry NO session component, so corpus resume is
-     stable as the blog grows.
+     stable as the blog grows. (Full keying semantics: next section.)
+
+## Keying semantics — append-first (settled 2026-07-21)
+
+`synth_key` is a **cell identity**, not a completion marker:
+`hash(model, strategy, effort, prompt_id, context, target[, session])`. Skip
+means "this exact cell already has a pair", never "this target is done". Any
+change on a design axis mints new keys and *appends* alongside the old pairs —
+variants coexist, covariates ride in `meta.gen`, the corpus is append-only.
+Consequences, written down so we stop re-deriving them:
+
+- **Changing a default re-keys flag-less runs** (e.g. effort high→off,
+  2026-07-20). That is a *budget* decision, not data damage: old cells remain
+  valid training data with their covariates recorded; a new run fills new
+  cells. Decide spend, not "dedup loss".
+- **Purging is a covariate filter, never key surgery.** A variate found to
+  produce defective pairs (cf. the removed `catalogue` strategy) is dropped by
+  filtering `meta.gen`/`meta.slop_strategy` over pairs.jsonl. Keys never
+  encode good/bad; expected to be infrequent.
+- **Determinism is content-anchored, not positional.** The guarantee: an
+  unchanged (text, config) cell never regenerates; edited text regenerates —
+  we *want* pairs for the current prose (stale-voice policy is selection-side,
+  `MIN_DATE_MODIFIED`, not purge-side). The mechanism is one convention:
+  **hash content, never position** — generator assignment hashes the target
+  text, context dropout hashes the body, and any subsampling must do the same
+  (a `chunk_index` in the hash breaks superset stability the moment a
+  paragraph is inserted above it).
+- **Two accepted weak spots:** (1) merge-mode packing — an edit early in a
+  section can shift passage boundaries and re-key later chunks whose own text
+  didn't change (costed as regeneration, not corruption); (2) session keys are
+  snapshot-scoped — session chunking depends on the whole target list, so a
+  multi-turn run resumes exactly only against the same target snapshot. Runs
+  that must resume across blog drift use `session_turns=1`.
+- **Known gap — replicates.** One cell = one sample; temperature means a
+  second draw would be genuinely new data, but the key says done. When wanted,
+  add an opt-in `replicate` tag folded into the key the way `session` is
+  (empty default → existing keys untouched). `assign_seed` is NOT this — it
+  *moves* arms between targets rather than resampling a cell.
    - **Cache exploitation (2026-07-07)**: live sessions pin to the provider
      that served turn 1 (`--sticky-provider`, default on) — keeps that
      provider's prefix cache hot AND holds the serving stack constant so the
@@ -212,12 +249,13 @@ metaphors — and reasoning was wrongly hard-disabled.)
   onto score records (`eval._CARRIED_GEN`), so `ai-style eval --by <covariate>` and
   the report's `--facet-by` work for free.
 - **Reasoning is a covariate** (`--reasoning-effort high|medium|low|off`, default
-  **high** — real AI prose is often high-reasoning). `synth._reasoning_extra_body`
-  maps it to OpenRouter's `reasoning` field per model family (effort enum vs
-  `max_tokens` budget vs `enabled:false`); the *requested* effort is recorded
-  regardless of what the provider honors, and `finish_reason`/`completion_tokens`
-  expose a model that reasoned anyway. **Do not assume reasoning=off is "identical
-  quality"** — that is exactly what the sweep below measures.
+  **off** since 2026-07-20 — the sweep ran: 1241 pairs, six models, off vs medium,
+  detector gap flat for ~3x the wall clock, so the cheap end won and effort is now
+  swept *up* on suspicion, not down). `synth._reasoning_extra_body` maps it to
+  OpenRouter's `reasoning` field per model family (effort enum vs `max_tokens`
+  budget vs `enabled:false`); the *requested* effort is recorded regardless of what
+  the provider honors, and `finish_reason`/`completion_tokens` expose a model that
+  reasoned anyway (qwen3-32b emitted ~700 reasoning tokens at `off`).
 - **Sampling** (`--temperature`, `--top-p`) is now sent (previously the API default
   ran, uncontrolled) and recorded. Recorded-only — NOT in `synth_key`.
 - **Versioned prompt library**: `STRATEGIES` values are `SlopStrategy(label, system,
