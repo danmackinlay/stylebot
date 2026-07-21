@@ -503,5 +503,126 @@ def train_clf_cmd(
     click.echo(f"wrote artifact -> {out}/ ({files})")
 
 
+@main.command("train")
+@click.option("--data-dir", "data_dir", required=True, type=click.Path(exists=True, file_okay=False, path_type=Path), help="Corpus directory holding pairs.jsonl. Required, no default: the explicit path is the reproducibility record — never silently train on the wrong corpus.")
+@click.option("--manifest-out", required=True, type=click.Path(dir_okay=False, path_type=Path), help="Where to write the run manifest JSON (the ONLY artifact that gets committed).")
+@click.option("--work-dir", required=True, type=click.Path(file_okay=False, path_type=Path), help="Scratch dir for assembled data, tinker logs, and the exported adapter (never committed).")
+@click.option("--splits", "splits_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="The shared splits.json: train on STYLER-role posts only (the contract; see make-splits). Omit only for fixture/experiment corpora.")
+@click.option("--base-model", default=None, help="Tinker base model id. [default: Qwen/Qwen3.5-9B]")
+@click.option("--lora-rank", default=None, type=int, help="LoRA rank. [default: 32]")
+@click.option("--lr", "learning_rate", default=None, type=float, help="Learning rate. Default: the cookbook's per-model recommendation (hyperparam_utils.get_lr).")
+@click.option("--lr-schedule", default="linear", show_default=True, type=click.Choice(["linear", "cosine", "constant"]))
+@click.option("--epochs", "num_epochs", default=None, type=int, help="Training epochs. [default: 1]")
+@click.option("--batch-size", default=None, type=int, help="Examples per training batch. [default: 64]")
+@click.option("--max-length", default=None, type=int, help="Max sequence length after tokenisation. [default: 8192]")
+@click.option("--renderer", "renderer_name", default=None, help="Cookbook renderer name (chat template). Default: the model's recommended renderer — pass e.g. qwen3_5_disable_thinking to pin no-think.")
+@click.option("--val-frac", default=None, type=float, help="Fraction of POSTs held out for val loss (by-post, deterministic). [default: 0.1]")
+@click.option("--seed", default=0, show_default=True, type=int, help="Seed for the val split and epoch shuffling.")
+@click.option("--run-id", default=None, help="Run id for the manifest. [default: UTC timestamp]")
+@click.option("--price-per-mtok", "train_price_per_mtok", default=None, type=float, help="Train price $/1M tokens for the cost estimate (see the Tinker models page; deliberately not hardcoded).")
+@click.option("--download-adapter/--no-download-adapter", default=True, show_default=True, help="Export the trained LoRA as a PEFT adapter into work-dir after the run.")
+@click.option("--dry-run", is_flag=True, help="Assemble, write the manifest preview + token/cost estimate, and stop. No key, no spend.")
+@click.option("--yes", "assume_yes", is_flag=True, help="Skip the pre-spend confirmation prompt.")
+def train_cmd(
+    data_dir: Path,
+    manifest_out: Path,
+    work_dir: Path,
+    splits_path: Path | None,
+    base_model: str | None,
+    lora_rank: int | None,
+    learning_rate: float | None,
+    lr_schedule: str,
+    num_epochs: int | None,
+    batch_size: int | None,
+    max_length: int | None,
+    renderer_name: str | None,
+    val_frac: float | None,
+    seed: int,
+    run_id: str | None,
+    train_price_per_mtok: float | None,
+    download_adapter: bool,
+    dry_run: bool,
+    assume_yes: bool,
+) -> None:
+    """Phase 3: LoRA-SFT the styler on Tinker (stylebot.train.run_training).
+
+    Assembles the corpus (styler-role posts only under --splits, near-copy
+    pairs KEPT by design), cuts a deterministic by-POST val split, writes the
+    reproducibility manifest, and runs the Tinker cookbook's supervised recipe.
+    Needs the `trainer` extra (`uv add 'stylebot[trainer]'`) and
+    TINKER_API_KEY for the paid step; --dry-run needs neither.
+    """
+    from stylebot import train as tr
+
+    pairs_path = data_dir / "pairs.jsonl"
+    if not pairs_path.exists():
+        raise click.ClickException(f"no pairs.jsonl in {data_dir}")
+
+    kwargs = dict(
+        base_model=base_model or tr.DEFAULT_BASE_MODEL,
+        lora_rank=lora_rank if lora_rank is not None else tr.DEFAULT_LORA_RANK,
+        learning_rate=learning_rate,
+        lr_schedule=lr_schedule,
+        num_epochs=num_epochs if num_epochs is not None else tr.DEFAULT_NUM_EPOCHS,
+        batch_size=batch_size if batch_size is not None else tr.DEFAULT_BATCH_SIZE,
+        max_length=max_length if max_length is not None else tr.DEFAULT_MAX_LENGTH,
+        renderer_name=renderer_name,
+        splits_path=splits_path,
+        val_frac=val_frac if val_frac is not None else tr.DEFAULT_VAL_FRAC,
+        seed=seed,
+        run_id=run_id,
+        train_price_per_mtok=train_price_per_mtok,
+        download_adapter=download_adapter,
+    )
+
+    # Always preview first: the dry-run manifest is also the pre-spend estimate.
+    try:
+        preview = tr.run_training(pairs_path, work_dir, manifest_out, dry_run=True, **kwargs)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+    data = preview.manifest["data"]
+    est = preview.manifest["estimate"]
+    click.echo(
+        f"{data['n_train']} train / {data['n_val']} val pair(s) "
+        f"({data['n_real']} real / {data['n_synthetic']} synthetic; "
+        f"dropped {data['dropped']}) from {data['n_source_records']} record(s), "
+        f"pairs sha256 {data['pairs_sha256']}"
+    )
+    cost = f" ≈ ${est['cost_usd']}" if est["cost_usd"] is not None else ""
+    click.echo(
+        f"~{est['train_tokens']:,} train tokens ({est['basis']}){cost} on "
+        f"{preview.manifest['hyperparameters']['base_model']}"
+    )
+    if dry_run:
+        click.echo(f"[dry-run] manifest preview -> {preview.manifest_path}")
+        return
+
+    config.load()
+    if not config.get_key("TINKER_API_KEY"):
+        raise click.ClickException(
+            "TINKER_API_KEY is not set — the paid run needs it (see .env.example)."
+        )
+    if not assume_yes:
+        click.confirm("Launch the paid Tinker run?", abort=True)
+
+    try:
+        result = tr.run_training(pairs_path, work_dir, manifest_out, dry_run=False, **kwargs)
+    except ImportError as exc:
+        raise click.ClickException(str(exc))
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+
+    run_result = result.manifest["result"] or {}
+    for key in ("train_mean_nll", "test/nll", "train_tokens"):
+        if key in run_result:
+            click.echo(f"{key}: {run_result[key]}")
+    checkpoints = run_result.get("checkpoints") or {}
+    if checkpoints.get("sampler_path"):
+        click.echo(f"sampler checkpoint: {checkpoints['sampler_path']}")
+    if result.adapter_dir:
+        click.echo(f"PEFT adapter -> {result.adapter_dir} (never commit this)")
+    click.echo(f"manifest -> {result.manifest_path} (commit this)")
+
+
 if __name__ == "__main__":
     main()

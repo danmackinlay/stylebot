@@ -23,6 +23,10 @@ classifier = [
     "numpy>=1.26",
     "sentence-transformers>=3.0",
 ]
+trainer = [
+    "tinker>=0.23.2",
+    "tinker-cookbook>=0.5.2",
+]
 
 [project.scripts]
 ai-style = "stylebot.bin.ai_style:main"

@@ -1,7 +1,58 @@
-# Phase 3 · LoRA training — 📋 PLANNED
+# Phase 3 · LoRA training — 🔧 BUILT (2026-07-21); first paid run pending
 
 Run LoRA SFT on a small open-weights model so the style lives in weights, not
 the prompt. Data-gated: needs enough pairs, not more engineering.
+
+## As built (2026-07-21)
+
+`stylebot.train` ships `assemble_training_corpus` (validate → styler-role
+filter → policy hooks → deterministic by-POST val split), `run_training`
+(manifest → Tinker cookbook supervised recipe → PEFT-adapter export), and the
+thin `ai-style train` / `dan-style train` CLIs; `tests/test_train.py` covers
+assembly, the pinned data policy, and the paid path through the `runner` seam.
+Deps live behind the `trainer` extra (`uv add 'stylebot[trainer]'`).
+
+Decisions taken at build time (superseding the older pins below):
+
+- **Base model `Qwen/Qwen3.5-9B`** ($1.463/1M train tokens). The Qwen3-8B pin
+  and the "escalate to 70B" option predate Tinker's 2026-06-12 retirements
+  (all Llama-3.x, Qwen3-32B/30B); current step-up candidates are Qwen3.6-27B
+  (dense) or Qwen3.6-35B-A3B (MoE — also the local-serving-friendly shape).
+- **Thinking disabled** (`qwen3_5_disable_thinking` renderer): the pairs carry
+  no reasoning traces and the styler is a pipe; a thinking A/B is a cheap
+  follow-up run, not the default.
+- **Manifest home: livingthing `_training_pairs/runs/<run-id>.json`**
+  (committed, beside the corpus it hash-pins); scratch in `_tmp/train/<id>/`,
+  adapter at `_models/styler/<id>/` (both gitignored).
+- **Val split**: 10% of styler POSTs, seeded shuffle — not the cookbook's
+  row-shuffle `test_size`, which would leak val posts' sibling chunks.
+- `meta.weight` stays a hook (`pair_weight`/`per_target` callables), uniform
+  by default for run 1.
+
+**Data hygiene (2026-07-21 corpus QA)** — sharpening, not repealing, the
+keep-near-copies policy below. QA found 386 *identity* pairs (qwen3-8b @
+effort=off returned the input: median `transform_sim` 0.98, length-ratio p10
+1.00) plus stragglers ≥0.95 elsewhere; identity ≠ near-copy — they teach the
+styler to copy. Two gates now exist:
+
+- **Training side**: livingthing's `train_styler.styler_pair_ok` selector
+  (drop the qwen3-8b@off cell + any pair ≥0.95) via the `selector` hook;
+  recorded in the manifest's `filters`/`dropped`. qwen3-32b's 334 florid pairs
+  (4.4–6.8× inflation) stay in run 1 — directionally-real compressions; facet
+  a v2 ablation by generator if eval frowns.
+- **Synth side**: `synthesize_pairs(max_transform_sim=…)` /
+  `--max-transform-sim` drops degenerate generations at birth, loudly
+  (`SynthResult.skipped_degenerate`); blog policy pins 0.95
+  (`training_targets.MAX_TRANSFORM_SIM`). Follow-ups for the promote step:
+  audition `qwen/qwen3.5-9b` as a slop generator (has the anti-degeneration
+  sampler knobs qwen3-8b lacks); reconsider qwen3-32b's roster spot (it
+  ignores `reasoning: {enabled: false}`).
+
+Dry-run against the settled-ish corpus (2026-07-21, sha `a38610bc71290d87`),
+selector active: 1,666 train / 148 val pairs (116 real / 1,698 synthetic; 235
+styler-role identity pairs dropped), ~1.12M train tokens ≈ **$1.64/epoch**.
+The first paid run awaits corpus settlement (the coverage run still plans
+~480 new pairs) — precondition 2 below.
 
 ## Inputs
 

@@ -1150,3 +1150,28 @@ def test_wire_capture_reasoning_and_truncation_tail(monkeypatch):
     gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x")
     with pytest.raises(RuntimeError, match="FINAL THOUGHT"):
         _run_gen(gen, "rewrite me")
+
+
+def test_max_transform_sim_gate_drops_identity_outputs(tmp_path):
+    """A generator that returns the input verbatim is degenerate: with the gate
+    set, its pairs are counted (skipped_degenerate) and never written; healthy
+    transforms pass. (The 2026-07-21 corpus QA fix — identity pairs teach the
+    styler to copy.)"""
+    data_dir = tmp_path / "corpus"
+    targets = _targets(6)
+
+    echo = synth.Generator(name="echo-model", generate=lambda text: text)
+    result = synth.synthesize_pairs(targets, data_dir, [echo], max_transform_sim=0.95)
+    assert result.skipped_degenerate == 6
+    assert result.written == 0
+    assert not (data_dir / "pairs.jsonl").exists() or not (data_dir / "pairs.jsonl").read_text().strip()
+    # The spend is still accounted even though nothing was written.
+    assert result.model_stats["echo-model"]["pairs"] == 6
+
+    healthy = _fake("ok-model")
+    result = synth.synthesize_pairs(targets, data_dir, [healthy], max_transform_sim=0.95)
+    assert result.written == 6 and result.skipped_degenerate == 0
+
+    # Unset gate (default): even identity output is written — covariate only.
+    result = synth.synthesize_pairs(_targets(3), data_dir, [echo])
+    assert result.skipped_degenerate == 0 and result.written == 3

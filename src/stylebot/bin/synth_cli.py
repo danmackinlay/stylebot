@@ -119,6 +119,7 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "session_max_tokens": (("--session-max-tokens",), dict(default=synth.DEFAULT_SESSION_MAX_TOKENS, show_default=True, type=int, help="THE session depth control: per-session prompt-token budget (absolute; input cost grows ~quadratically with it). Also capped at 80% of each model's context window. Turns beyond the budget reflow into fresh sessions, never dropped.")),
     "replicate": (("--replicate",), dict(default="", show_default=True, help="Deliberate-resample label folded into synth_key: the same substrate under a new label mints new cells without colliding with the base corpus (e.g. 'deep128k' for a deep-window arm, 'draw2' for a second sample). Recorded as meta.gen.replicate. Empty = the base corpus.")),
     "skip_covered": (("--skip-covered/--no-skip-covered",), dict(default=False, show_default=True, help="Corpus-building coverage mode: skip any target whose text already has >=1 pair in the data-dir under ANY config or epoch (cell-level dedup still applies to the rest). Use when the goal is one pair per passage — without it, a re-key epoch (e.g. an effort-default change) regenerates already-covered targets and doubles their training weight.")),
+    "max_transform_sim": (("--max-transform-sim",), dict(type=float, default=None, help="Degenerate-output gate: drop (don't write) any generated pair whose transform_sim exceeds this — the model returned (nearly) the input, which would teach the styler to copy. Dropped pairs are counted loudly (skipped_degenerate) and their cells retry next run. Unset = record everything (the covariate is always stored).")),
     "context_window": (("--context-window",), dict(type=int, default=None, help="Context window (tokens) for gpt/local preset generators when sweeping sessions — OpenRouter models resolve theirs from the models registry automatically.")),
     # -- substrate selection: WHICH population this run measures (before --limit) --
     "splits_path": (("--splits", "splits_path"), dict(type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="splits.json of by-post roles (see ai-style make-splits). Required by --role.")),
@@ -383,6 +384,13 @@ def _report_result(
     )
     if result.skipped_covered:
         click.echo(f"  {result.skipped_covered} target(s) already covered, skipped (--skip-covered)")
+    if result.skipped_degenerate:
+        click.secho(
+            f"  {result.skipped_degenerate} degenerate pair(s) DROPPED "
+            f"(transform_sim > {max_transform_sim}) — paid for, not written; "
+            "a persistently degenerate model should leave the roster",
+            fg="yellow",
+        )
     for name, count in sorted(result.per_generator.items()):
         click.echo(f"  {name}: {count}{_model_economics(result.model_stats.get(name))}")
     if result.total_cost:
@@ -396,7 +404,10 @@ def _report_result(
     # The post-mortem invariant: every planned turn is written, skipped, or
     # individually errored. Anything else is silent work-dropping — the bug
     # class that cost 46% of a paid run in 2026-07 — so make it loud.
-    unattempted = result.planned - result.skipped_existing - result.written - len(result.errors)
+    unattempted = (
+        result.planned - result.skipped_existing - result.written
+        - result.skipped_degenerate - len(result.errors)
+    )
     if unattempted > 0:
         click.secho(
             f"WARNING: {unattempted} planned turn(s) were never attempted — "
@@ -438,6 +449,7 @@ def run_synth(
     session_max_tokens: int = synth.DEFAULT_SESSION_MAX_TOKENS,
     replicate: str = "",
     skip_covered: bool = False,
+    max_transform_sim: float | None = None,
     context_window: int | None = None,
     session_budgets: Mapping[str, int] | None = None,
     splits_path: Path | None = None,
@@ -617,6 +629,7 @@ def run_synth(
         context_windows=windows or None,
         replicate=replicate,
         skip_covered=skip_covered,
+        max_transform_sim=max_transform_sim,
     )
 
     _report_result(

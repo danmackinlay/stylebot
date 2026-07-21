@@ -108,7 +108,8 @@ The data-heavy phases need the prose corpus. Wired in against Dan's live blog:
 | Eval harness `ai-style eval` | built: four signals (Vale, LLM judge, detector, eyeball), JSONL-batched + resumable, scores HTML browser ([`_plans/eval-harness.md`](_plans/eval-harness.md)) |
 | Voice classifier (the detector signal) | built: StyleDistance embedding + logistic head; dep-free runtime `stylebot.classify`, trainer behind the `[classifier]` extra; artifact committed at livingthing `_models/voice-clf/` |
 | Splits contract | `stylebot.splits` / `ai-style make-splits` → blog's committed `splits.json`: frozen eval posts, styler posts, hash-stable detector pool ([`_plans/eval-harness.md`](_plans/eval-harness.md) "The detector decision") |
-| Phase 3 train / Phase 4 | not started (data-/adapter-gated); see OVERVIEW |
+| Phase 3 `ai-style train` / `dan-style train` | built 2026-07-21 (Tinker cookbook LoRA SFT, `[trainer]` extra, manifest → blog `_training_pairs/runs/`); first paid run pending corpus settlement ([`_plans/phase-3-training.md`](_plans/phase-3-training.md)) |
+| Phase 4 | not started (adapter-gated); see OVERVIEW |
 
 **Naming rule:** `dan-style X` is the blog-policy mirror of `ai-style X` — same
 subcommand, swap the prefix. (The `train-targets` / `train-voice-clf` legacy

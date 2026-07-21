@@ -40,6 +40,7 @@ import difflib
 import hashlib
 import inspect
 import json
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -48,6 +49,8 @@ from pathlib import Path
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.jsonl import iter_jsonl
 from stylebot.pairs import build_pair_content, iter_pairs
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Strategies + generators — implemented in stylebot.generators; re-exported here
@@ -292,6 +295,14 @@ class SynthResult:
     written: int = 0
     skipped_existing: int = 0
     skipped_covered: int = 0  # targets dropped by skip_covered (any-config coverage)
+    # Degenerate-output gate (max_transform_sim): generations whose
+    # transform_sim exceeded the threshold — the model returned (nearly) the
+    # input — are counted here and NOT written. The 2026-07-21 corpus QA found
+    # 386 such identity pairs (qwen3-8b@off) had walked in silently; this is
+    # the no-silent-failure fix. NB the cell stays un-keyed in the corpus, so a
+    # re-run retries it (and a consistently degenerate model burns spend each
+    # run until dropped from the roster — the loud count is the signal).
+    skipped_degenerate: int = 0
     planned: int = 0  # (target, generator) assignments before dedup
     planned_sessions: int = 0  # sessions holding >=1 not-yet-generated turn
     errors: list[tuple[str, str]] = field(default_factory=list)  # (synth_key, message)
@@ -499,6 +510,7 @@ class _RunState:
     data_dir: Path
     extra_tags: Sequence[str]
     total: int  # pairs this run will attempt (for progress)
+    max_transform_sim: float | None = None  # degenerate-output gate (None = off)
     replicate: str = ""  # deliberate-resample label, keyed AND recorded
     done: int = 0
     on_progress: Callable[[int, int, "SynthResult"], None] | None = None
@@ -651,11 +663,28 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             extra_tags=st.extra_tags,
             gen_meta=gen_meta,
         )
-        fp.write(json.dumps(record, ensure_ascii=False) + "\n")
-        fp.flush()
-        st.result.written += 1
-        st.result.per_generator[gen.name] = st.result.per_generator.get(gen.name, 0) + 1
-        st.result.add_gen_stats(gen.name, gen_meta)
+        sim = record["meta"].get("transform_sim")
+        if (
+            st.max_transform_sim is not None
+            and sim is not None
+            and sim > st.max_transform_sim
+        ):
+            # Degenerate output: the model returned (nearly) the input. Count
+            # loudly, record the spend, write nothing — an identity pair
+            # teaches the styler to copy. (The cell stays missing, so a re-run
+            # retries it; see SynthResult.skipped_degenerate.)
+            st.result.skipped_degenerate += 1
+            st.result.add_gen_stats(gen.name, gen_meta)
+            logger.warning(
+                "degenerate output dropped: %s transform_sim=%.3f > %s (%s)",
+                gen.name, sim, st.max_transform_sim, turn.key,
+            )
+        else:
+            fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+            fp.flush()
+            st.result.written += 1
+            st.result.per_generator[gen.name] = st.result.per_generator.get(gen.name, 0) + 1
+            st.result.add_gen_stats(gen.name, gen_meta)
         st.done += 1
         if st.on_progress is not None:
             st.on_progress(st.done, st.total, st.result)
@@ -708,6 +737,7 @@ def synthesize_pairs(
     assign_seed: str = "",
     replicate: str = "",
     skip_covered: bool = False,
+    max_transform_sim: float | None = None,
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
@@ -805,6 +835,7 @@ def synthesize_pairs(
         data_dir=data_dir,
         extra_tags=extra_tags,
         total=len(missing),
+        max_transform_sim=max_transform_sim,
         replicate=replicate,
         on_progress=on_progress,
         on_error=on_error,

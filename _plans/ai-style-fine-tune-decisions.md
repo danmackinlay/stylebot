@@ -14,6 +14,8 @@ Companion to [`ai-style-fine-tune.md`](./ai-style-fine-tune.md). Carries the *wh
 
 **Re-evaluate if**: Tinker's adapter→Fireworks/MLX handoff disappoints on the first run (→ Together training fallback); or Fireworks changes its scale-to-zero terms (→ Modal/local).
 
+**Phase-3 build note (2026-07-21)**: Tinker's current export docs document the PEFT-adapter path (`weights.download` + `weights.build_lora_adapter` → `adapter_config.json` + `adapter_model.safetensors`) and show serving via **vLLM/SGLang only** — neither Fireworks nor MLX appears in their deployment tutorials. The adapter is standard PEFT, so both handoffs *should* work, but they are now a **Phase-4 verification item**, not a documented path. Also: cookbook checkpoints default to a 7-day TTL (the final checkpoint is kept indefinitely); `ai-style train` downloads the adapter right after the run regardless.
+
 ## D2: Qwen3 8B as the primary base
 
 **Decision**: Qwen3 8B Instruct as the base model for the LoRA SFT.
@@ -29,6 +31,8 @@ Companion to [`ai-style-fine-tune.md`](./ai-style-fine-tune.md). Carries the *wh
 **Deciding constraint**: must run locally on the M-series Mac (MLX or GGUF) for the Phase 6 exit; cheap enough to retrain iteratively (~$7/run for 8B vs ~$43 for 70B); large enough that a LoRA can meaningfully move the style needle without obliterating general competence. 8B hits all three. The 35B+ candidates fit on the Mac but cost ~5× per training run and slow iteration speed for v1.
 
 **Re-evaluate if**: Phase 4 eval shows ceiling effects (the 8B styler still hedges or over-structures after training). The upgrade should pick whichever base the eval reveals as bottleneck-limited, not the placeholder "70B."
+
+**Superseded (2026-07-21, Phase-3 build)**: the primary base is now **`Qwen/Qwen3.5-9B`** — Tinker's 2026-06-12 retirements removed Qwen3-32B/30B and all Llama-3.x (so "70B" no longer exists there), Qwen3-8B survives but is last-gen, and Qwen3.5-9B is the current small dense at $1.463/1M train tokens (~$1.6/epoch at corpus scale — the ~3× rate over Qwen3-8B is immaterial). Step-up candidates if 9B lacks headroom: **Qwen3.6-27B** (dense) or **Qwen3.6-35B-A3B** (MoE — priced by active params and the friendliest shape for the Mac-local exit, per the alternatives list above). Trained no-think (`qwen3_5_disable_thinking`): the pairs carry no reasoning traces; a thinking A/B is a cheap follow-up run.
 
 ## D3: Source-agnostic framing ("Dan-ifier" not "de-Claude-er")
 
