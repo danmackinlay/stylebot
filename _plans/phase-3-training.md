@@ -38,6 +38,54 @@ train` is the thin CLI. The blog build can import the function directly.
   contract above (the detector never saw the styler posts). Absolute-probability
   use wants calibration; ranking does not.
 
+## Data policy — pinned 2026-07-21 (decisions an implementer must not re-derive)
+
+- **KEEP near-copy pairs for the styler.** ~19% of synthetic pairs have
+  `meta.transform_sim > 0.85` (the model barely changed Dan's text). They are
+  label noise for the *detector* — `classify_train.assemble_dataset` drops
+  them, and that filter must NOT be copied here — but they are good styler
+  data: they teach the model to leave alone prose that is already fine.
+  Restraint is half the job.
+- **Per-target multiplicity is a policy hook, not an accident.** The corpus
+  aims at ~1 synthetic pair per passage (`synth --skip-covered`), but re-key
+  epochs and deliberate variants (`--per-generator`, `--replicate`) can stack
+  several pairs on one target. Assembly should expose a per-target cap/weight
+  (selector-style callable, like every other stylebot policy knob) so
+  duplicated targets don't silently up-weight their passages.
+- **Covariates available for mix/filter/weight decisions** (all per-pair):
+  `meta.synthetic` (real/synthetic strata — 331 real / 3,231 synthetic as of
+  2026-07-21), `meta.transform_sim`, `meta.gen.reasoning_effort` (two epochs:
+  ~1,970 `high`, the rest `off` — equivalent per the effort sweep, but
+  recorded), `meta.gen.model` / `slop_strategy` / `prompt_id`, `meta.gen.replicate`,
+  `meta.context` (heading context, prepended identically to BOTH sides —
+  train on messages as-is, never strip it from one side only).
+- **`STYLE_SYSTEM` is frozen** (`stylebot.ai_core`) and is `messages[0]` of
+  every pair; `validate_pairs_file` enforces it. Train with it verbatim —
+  inference (Phase 4) sends the same string, so it must be the trained-in
+  system prompt.
+
+## Handing this phase to an implementing agent
+
+Start a FRESH session in the stylebot repo; do not import chat history. The
+contract stack to read, in order: `CLAUDE.md` → this file →
+`phase-1-pair-capture.md` (the pairs schema) → `eval-harness.md` ("the split
+contract"). Preconditions to verify before any paid run:
+
+1. `uv sync && uv run pytest -q` green; `TINKER_API_KEY` present in `.env`
+   (copy `.env.example`; never commit either).
+2. The corpus coverage run has FINISHED (`dan-style synth --skip-covered ...`
+   writes nothing new) — the manifest pins a content hash of `pairs.jsonl`,
+   so train on a settled corpus, not a moving one.
+3. `uv run python -c "from stylebot.pairs import validate_pairs_file; ..."`
+   passes on the real corpus, and `splits.json` loads (`stylebot.splits`).
+
+Architecture rules that bind this phase: library-first
+(`stylebot.train.run_training(...)`, `ai-style train` a thin wrapper, and a
+`dan-style train` mirror in livingthing carrying blog paths/policy); explicit
+`--data-dir`, no default; the corpus and adapter weights never enter this
+repo — only the manifest is committed. Tinker usage should follow the Tinker
+cookbook's SFT recipe (fetch current docs; do not code the API from memory).
+
 ## Outputs
 
 - A trained LoRA adapter (Tinker-trained → HF export; served on Fireworks or local MLX).
