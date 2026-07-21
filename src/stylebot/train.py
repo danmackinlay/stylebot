@@ -524,6 +524,38 @@ def _read_final_metrics(log_path: Path) -> dict:
     return final
 
 
+def _patch_pyqwest_tls_trust() -> None:
+    """Make the tinker SDK's Rust transport trust the system cert store.
+
+    tinker (0.23.x) routes HTTP through pyqwest (reqwest/rustls) constructed
+    with `tls_include_system_certs=False`, whose bundled roots reject the
+    Google Trust Services chain tinker.thinkingmachines.dev serves
+    (`invalid peer certificate: UnknownIssuer` on the very first auth-token
+    call — observed 2026-07-22). Rebuilding the transport with system certs
+    included fixes it; there is no supported env/config knob, so this patches
+    the SDK's private transport factory. Best-effort: if the internals move,
+    log and let the SDK try its own default.
+    """
+    try:
+        import pyqwest
+        from pyqwest.httpx import AsyncPyqwestTransport
+
+        import tinker._base_client as bc
+
+        def _with_system_certs():
+            return AsyncPyqwestTransport(
+                transport=pyqwest.HTTPTransport(tls_include_system_certs=True)
+            )
+
+        bc._default_pyqwest_transport = _with_system_certs
+    except Exception:  # pragma: no cover - only reachable on SDK refactors
+        logger.warning(
+            "could not patch pyqwest TLS trust; if the run fails with "
+            "'invalid peer certificate: UnknownIssuer', the tinker SDK "
+            "internals have moved — see _patch_pyqwest_tls_trust"
+        )
+
+
 def _tinker_runner(corpus: TrainCorpus, manifest: dict, work_dir: Path, **cfg) -> dict:
     """The real Tinker execution: the cookbook supervised recipe (LoRA SFT)
     over the assembled corpus, then a PEFT-adapter export. All heavy imports
@@ -536,6 +568,8 @@ def _tinker_runner(corpus: TrainCorpus, manifest: dict, work_dir: Path, **cfg) -
         from tinker_cookbook.supervised.types import ChatDatasetBuilderCommonConfig
     except ImportError as exc:
         raise ImportError(_EXTRA_HINT) from exc
+
+    _patch_pyqwest_tls_trust()
 
     base_model = cfg["base_model"]
     renderer_name = cfg["renderer_name"] or model_info.get_recommended_renderer_name(base_model)
