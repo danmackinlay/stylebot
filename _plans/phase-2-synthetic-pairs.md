@@ -177,6 +177,26 @@ Consequences, written down so we stop re-deriving them:
   add an opt-in `replicate` tag folded into the key the way `session` is
   (empty default → existing keys untouched). `assign_seed` is NOT this — it
   *moves* arms between targets rather than resampling a cell.
+
+### Queued (2026-07-21): drop the session component from corpus-run keys
+
+`session_id` hashes the generator config **plus every turn's text in order**
+(`_plan_sessions`), so ANY target-list drift — one new post, one edit, a
+different `--limit` — re-chunks sessions and re-keys nearly every turn in the
+arm. Cross-run, a multi-turn corpus build therefore never dedupes: the same
+target regenerates under the same config, differing only in an unstable
+session coordinate — correlated near-duplicate pairs, pseudo-replication.
+This was the right trade while window position was a candidate *treatment*
+(the fold is what let the same text be resampled at different fills); the
+sweep retired that treatment (drift r = −0.05), leaving cost without benefit.
+
+The change: session folding becomes opt-in (`key_by_session`, default off);
+window fill stays a recorded covariate in `meta.gen`; deliberate resampling
+goes through the explicit `replicate` tag above (stable because user-chosen).
+Timing: land it in the same generation epoch as the effort high→off flip —
+that flip already re-keyed every flag-less cell, so the narrowing costs zero
+additional regeneration — but NOT while a multi-turn run is in flight (its
+partial session-keyed pairs would stop matching on resume).
    - **Cache exploitation (2026-07-07)**: live sessions pin to the provider
      that served turn 1 (`--sticky-provider`, default on) — keeps that
      provider's prefix cache hot AND holds the serving stack constant so the
