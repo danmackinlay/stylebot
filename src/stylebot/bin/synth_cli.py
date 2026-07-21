@@ -115,8 +115,9 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "per_generator": (("--per-generator",), dict(is_flag=True, help="Emit a pair from EVERY generator per target (n× cost) — the fully-crossed within-target design for experiments; default assigns each target ONE arm by content hash.")),
     "assign_seed": (("--assign-seed",), dict(default="", help="Salt for the content-hash arm assignment. Change it to re-randomize which (model, strategy, effort) arm each target gets — a fresh replicate of the design (changed assignments regenerate on resume).")),
     "max_workers": (("--max-workers",), dict(default=0, show_default="auto", type=int, help="Concurrent sessions (asyncio). 0 = auto: 16 when all generators are OpenRouter-backed, 1 when a gpt/local preset is in the mix (a local server wants sequential).")),
-    "session_turns": (("--session-turns",), dict(default=1, show_default=True, type=int, help="Turns per live session: each turn sees the real prior (passage -> slop) exchanges, sweeping window position (meta.gen session_turn / window_fill). 1 = stateless.")),
-    "session_max_tokens": (("--session-max-tokens",), dict(default=synth.DEFAULT_SESSION_MAX_TOKENS, show_default=True, type=int, help="Per-session prompt-token budget (absolute; input cost grows ~quadratically with it). Also capped at 80% of each model's context window.")),
+    "session_turns": (("--session-turns",), dict(default=1, show_default=True, type=int, help="Session mode switch + backstop: 1 = stateless; >1 groups turns into live sessions (each turn sees the real prior passage->slop exchanges, meta.gen session_turn / window_fill). Depth is controlled by --session-max-tokens, NOT this number — sessions end when the token budget binds and leftover turns reflow into fresh sessions; the value only caps turns per session as a runaway guard.")),
+    "session_max_tokens": (("--session-max-tokens",), dict(default=synth.DEFAULT_SESSION_MAX_TOKENS, show_default=True, type=int, help="THE session depth control: per-session prompt-token budget (absolute; input cost grows ~quadratically with it). Also capped at 80% of each model's context window. Turns beyond the budget reflow into fresh sessions, never dropped.")),
+    "replicate": (("--replicate",), dict(default="", show_default=True, help="Deliberate-resample label folded into synth_key: the same substrate under a new label mints new cells without colliding with the base corpus (e.g. 'deep128k' for a deep-window arm, 'draw2' for a second sample). Recorded as meta.gen.replicate. Empty = the base corpus.")),
     "context_window": (("--context-window",), dict(type=int, default=None, help="Context window (tokens) for gpt/local preset generators when sweeping sessions — OpenRouter models resolve theirs from the models registry automatically.")),
     # -- substrate selection: WHICH population this run measures (before --limit) --
     "splits_path": (("--splits", "splits_path"), dict(type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="splits.json of by-post roles (see ai-style make-splits). Required by --role.")),
@@ -358,6 +359,23 @@ def _report_result(
     )
     for name, count in sorted(result.per_generator.items()):
         click.echo(f"  {name}: {count}")
+    if result.budget_bound_sessions or result.reflow_sessions:
+        click.echo(
+            f"  {result.budget_bound_sessions} session(s) ended on the token budget; "
+            f"{result.reflowed_turns} leftover turn(s) reflowed into "
+            f"{result.reflow_sessions} fresh session(s)"
+        )
+    # The post-mortem invariant: every planned turn is written, skipped, or
+    # individually errored. Anything else is silent work-dropping — the bug
+    # class that cost 46% of a paid run in 2026-07 — so make it loud.
+    unattempted = result.planned - result.skipped_existing - result.written - len(result.errors)
+    if unattempted > 0:
+        click.secho(
+            f"WARNING: {unattempted} planned turn(s) were never attempted — "
+            "this should be impossible now that leftover turns reflow; report it.",
+            fg="yellow",
+            err=True,
+        )
     if result.errors:
         click.echo(f"{len(result.errors)} generation error(s):", err=True)
         for key, msg in result.errors[:10]:
@@ -390,6 +408,7 @@ def run_synth(
     max_workers: int = 0,
     session_turns: int = 1,
     session_max_tokens: int = synth.DEFAULT_SESSION_MAX_TOKENS,
+    replicate: str = "",
     context_window: int | None = None,
     session_budgets: Mapping[str, int] | None = None,
     splits_path: Path | None = None,
@@ -564,6 +583,7 @@ def run_synth(
         session_turns=session_turns,
         session_max_tokens=session_max_tokens,
         context_windows=windows or None,
+        replicate=replicate,
     )
 
     _report_result(

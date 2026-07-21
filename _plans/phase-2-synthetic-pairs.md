@@ -178,7 +178,22 @@ Consequences, written down so we stop re-deriving them:
   (empty default → existing keys untouched). `assign_seed` is NOT this — it
   *moves* arms between targets rather than resampling a cell.
 
-### Queued (2026-07-21): drop the session component from corpus-run keys
+### DONE (2026-07-21): session component dropped from keys; leftovers reflow
+
+Landed together with the silent-drop fix from the same day's post-mortem (a
+`--session-turns 128` run silently discarded 46% of planned work when the
+32k token budget bound): keys are content-only (+ optional `--replicate`
+label), turns a session can't run reflow into fresh sessions instead of
+dying at the `break`, resume is a set difference over cells (the replay
+machinery is deleted), and the exit summary reports budget-bound sessions,
+reflow volume, and — as a tripwire — any turn neither written, skipped, nor
+errored. `--session-max-tokens` is documented as THE depth control;
+`--session-turns` is a mode switch (1 = stateless) plus per-session backstop.
+Window position stays a live treatment: depth accumulates as a recorded
+covariate on every session run, and a deliberate deep arm is
+`--replicate <label> --session-max-tokens <depth>`. Original analysis below.
+
+#### The original queued rationale (2026-07-21, retained for the record)
 
 `session_id` hashes the generator config **plus every turn's text in order**
 (`_plan_sessions`), so ANY target-list drift — one new post, one edit, a

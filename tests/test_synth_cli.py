@@ -343,7 +343,10 @@ def test_plan_sessions_separates_same_model_strategies():
     ]
     g_polish = synth.Generator(name="openrouter/x", strategy="polish")
     g_cat = synth.Generator(name="openrouter/x", strategy="catalogue")
-    assignments = [(t, g, "") for t, g in zip(targets, [g_polish, g_cat, g_polish, g_cat])]
+    assignments = [
+        (t, g, "", synth._synth_key(g.name, t.text, strategy=g.strategy))
+        for t, g in zip(targets, [g_polish, g_cat, g_polish, g_cat])
+    ]
     sessions = synth._plan_sessions(assignments, session_turns=2)
     assert len(sessions) == 2
     by_strategy = {s.generator.strategy: s for s in sessions}

@@ -55,6 +55,7 @@ GEN_META_KEYS = (
     "prompt_id",
     "prompt_version",
     "prompt_label",
+    "replicate",  # deliberate-resample label (folded into synth_key; absent = base corpus)
 )
 # Added by the session loop only (`session_turns > 1`).
 GEN_SESSION_KEYS = ("session_id", "session_turn", "context_window", "window_fill")
@@ -75,6 +76,7 @@ GEN_FACET_KEYS = (
     "prompt_id",
     "prompt_version",
     "prompt_label",
+    "replicate",
     "session_id",
     "session_turn",
     "context_window",

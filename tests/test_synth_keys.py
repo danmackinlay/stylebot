@@ -33,7 +33,11 @@ def test_synth_key_golden_all_axes():
     assert key == "87f36078686c31cd"
 
 
-def test_synth_key_golden_session():
+def test_synth_key_golden_replicate():
+    # The deliberate-resample axis: a label mints a distinct cell; empty label
+    # keys identically to the base corpus (covered by the goldens above).
+    # (The session fold this replaced was retired 2026-07-21: session
+    # composition is a runtime outcome, so keying on it broke cross-run dedup.)
     key = synth._synth_key(
         "openrouter/qwen/qwen3-8b",
         "Some target paragraph.",
@@ -41,9 +45,9 @@ def test_synth_key_golden_session():
         strategy="casual",
         reasoning_effort="high",
         prompt_id="abc123def456",
-        session="deadbeef:2",
+        replicate="deep128k",
     )
-    assert key == "5288396bc9cbb6ce"
+    assert key == "05145d420de40486"
 
 
 def test_capture_id_golden():

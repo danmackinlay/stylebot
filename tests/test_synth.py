@@ -634,28 +634,55 @@ def test_async_injected_generator_works(tmp_path):
     assert result.written == 2
 
 
-def test_stateless_keys_have_no_session_component():
-    # session_turns=1 must key exactly like bare _synth_key, independent of the
-    # rest of the target list — corpus resume must survive the blog growing.
-    t = _targets(1)[0]
-    g = synth.Generator(name="g")
-    [sess] = synth._plan_sessions([(t, g, "")], session_turns=1)
-    assert sess.session_id == ""
-    assert sess.turns[0].key == synth._synth_key("g", t.text)
-
-
-def test_session_keys_distinct_per_turn_and_stable():
+def test_keys_are_content_only_in_all_modes():
+    # Keys never fold session membership: the same cell keys identically
+    # stateless, in a session, or after a reflow — corpus resume must survive
+    # the blog growing AND sessions re-chunking (2026-07-21 post-mortem).
     t1, t2 = _targets(2)
     g = synth.Generator(name="g")
-    plan = lambda: synth._plan_sessions([(t1, g, ""), (t2, g, "")], session_turns=2)  # noqa: E731
-    [sess] = plan()
-    keys = [t.key for t in sess.turns]
-    assert len(set(keys)) == 2
-    assert keys[0] != synth._synth_key("g", t1.text)  # session component folded in
-    assert [t.key for t in plan()[0].turns] == keys  # deterministic replan
-    # Even a duplicated target text gets distinct per-turn keys inside a session.
-    [dup] = synth._plan_sessions([(t1, g, ""), (t1, g, "")], session_turns=2)
-    assert len({t.key for t in dup.turns}) == 2
+    k1, k2 = synth._synth_key("g", t1.text), synth._synth_key("g", t2.text)
+    keyed = [(t1, g, "", k1), (t2, g, "", k2)]
+    [stateless1, stateless2] = synth._plan_sessions(keyed, session_turns=1)
+    [sessioned] = synth._plan_sessions(keyed, session_turns=2)
+    assert stateless1.session_id == "" and sessioned.session_id != ""
+    assert [t.key for t in sessioned.turns] == [stateless1.turns[0].key, stateless2.turns[0].key] == [k1, k2]
+    # Reflow keeps keys, renumbers indices, and re-derives the session label
+    # from the actual composition.
+    respun = synth._respin_session(g, sessioned.turns[1:])
+    assert [t.key for t in respun.turns] == [k2]
+    assert [t.index for t in respun.turns] == [1]
+    assert respun.session_id != sessioned.session_id
+
+
+def test_replicate_mints_new_cells(tmp_path):
+    # A replicate label deliberately resamples the same substrate: same target,
+    # same config, new cells — recorded as meta.gen.replicate for faceting.
+    import json
+
+    targets = _targets(1)
+    gen = synth.Generator("g", generate=lambda t, history=None: "[slop] " + t)
+    first = synth.synthesize_pairs(targets, tmp_path / "c", [gen])
+    again = synth.synthesize_pairs(targets, tmp_path / "c", [gen])
+    draw2 = synth.synthesize_pairs(targets, tmp_path / "c", [gen], replicate="draw2")
+    assert (first.written, again.written, draw2.written) == (1, 0, 1)
+    recs = [json.loads(ln) for ln in (tmp_path / "c" / "pairs.jsonl").read_text().splitlines()]
+    assert "replicate" not in (recs[0]["meta"].get("gen") or {})  # base corpus stays unlabelled
+    assert recs[1]["meta"]["gen"]["replicate"] == "draw2"
+
+
+def test_identical_cells_collapse_within_a_run(tmp_path):
+    # Two chunks with identical (config, context, text) are ONE cell: a single
+    # pair is generated, not two. (Formerly the session fold gave duplicated
+    # text distinct per-turn keys; content-only keys deliberately collapse it.)
+    t = _targets(1)[0]
+    dup = synth.Target(text=t.text, source="elsewhere.qmd", chunk_index=9, chunk_total=9)
+    result = synth.synthesize_pairs(
+        [t, dup], tmp_path / "c",
+        [synth.Generator("g", generate=lambda x, history=None: "[slop] " + x)],
+        session_turns=2,
+    )
+    assert result.written == 1
+    assert result.skipped_existing == 1
 
 
 def test_session_history_accumulates_and_covariates_recorded(tmp_path):
@@ -684,7 +711,10 @@ def test_session_history_accumulates_and_covariates_recorded(tmp_path):
     assert recs[1]["meta"]["gen"]["window_fill"] == round(200 / 10_000, 4)
 
 
-def test_session_resume_replays_recorded_history(tmp_path):
+def test_session_resume_packs_only_missing_cells(tmp_path):
+    # Resume is a set difference over content keys: the retried cell runs in a
+    # FRESH session (no replay of recorded turns — window position restarts and
+    # is recorded, not keyed).
     targets = _targets(3)
     calls = {"n": 0}
 
@@ -709,13 +739,12 @@ def test_session_resume_replays_recorded_history(tmp_path):
         targets, tmp_path / "c", [synth.Generator("g", generate=good)], session_turns=3
     )
     assert second.written == 1 and second.skipped_existing == 2
-    # The retried turn saw the two recorded exchanges replayed from the file.
-    assert len(hists) == 1 and len(hists[0]) == 4
-    assert hists[0][1]["content"] == "[slop] " + targets[0].text
+    # Exactly one generation, starting from clean history.
+    assert hists == [[]]
 
 
-def test_turn_error_ends_only_its_session(tmp_path):
-    targets = _targets(4)  # round-robin: bad gets 0,2; good gets 1,3
+def test_turn_error_reflows_remainder(tmp_path):
+    targets = _targets(4)  # hash assignment: bad gets 0,2; good gets 1,3
 
     def bad(text, history=None):
         raise RuntimeError("api down")
@@ -727,9 +756,13 @@ def test_turn_error_ends_only_its_session(tmp_path):
     )
     assert result.per_generator.get("good") == 2
     assert "bad" not in result.per_generator
-    assert len(result.errors) == 1  # session ended at its first failure
-    # The error is attributable: generator, strategy, effort, and session turn.
+    # The failed turn is shed, the REST of its session reflows and is attempted
+    # (and fails too, here) — errors name every attempted-and-failed turn, so
+    # nothing is silently dropped.
+    assert len(result.errors) == 2
+    assert result.reflow_sessions == 1 and result.reflowed_turns == 1
     _key, msg = result.errors[0]
+    # The error is attributable: generator, strategy, effort, and session turn.
     assert msg.startswith("[bad strategy=polish effort=off turn=1] RuntimeError")
 
 
@@ -751,7 +784,12 @@ def test_session_token_cap():
     assert synth._session_token_cap(g_budget, 10_000, 32_000) == 5_000  # per-generator beats both
 
 
-def test_session_budget_stops_session(tmp_path):
+def test_budget_bind_reflows_instead_of_dropping(tmp_path):
+    # The 2026-07-21 post-mortem: a binding token budget must END sessions, not
+    # DISCARD their remaining turns. Every planned turn gets written, across as
+    # many fresh sessions as the budget requires.
+    import json
+
     targets = _targets(3)
 
     def gen(text, history=None):
@@ -761,8 +799,14 @@ def test_session_budget_stops_session(tmp_path):
         targets, tmp_path / "c", [synth.Generator("g", generate=gen)],
         session_turns=3, session_max_tokens=100,
     )
-    assert result.written == 1  # turn 2 estimate blows the budget
+    assert result.written == 3  # budget binds after every turn — but nothing is lost
     assert not result.errors  # a budget stop is not an error
+    assert result.budget_bound_sessions == 2
+    assert result.reflow_sessions == 2 and result.reflowed_turns == 3  # (2 leftover) + (1 leftover)
+    # Each pair ran turn 1 of its own session: depth restarted, honestly recorded.
+    recs = [json.loads(ln) for ln in (tmp_path / "c" / "pairs.jsonl").read_text().splitlines()]
+    assert [r["meta"]["gen"]["session_turn"] for r in recs] == [1, 1, 1]
+    assert len({r["meta"]["gen"]["session_id"] for r in recs}) == 3
 
 
 def test_generator_session_budget_beats_global(tmp_path):
@@ -775,7 +819,9 @@ def test_generator_session_budget_beats_global(tmp_path):
     result = synth.synthesize_pairs(
         targets, tmp_path / "c", [g], session_turns=3, session_max_tokens=1_000_000
     )
-    assert result.written == 1
+    # Only the per-generator budget (50 < the huge global) can have bound here.
+    assert result.written == 3
+    assert result.budget_bound_sessions == 2
 
 
 def test_window_cap_stops_session(tmp_path):
@@ -788,8 +834,10 @@ def test_window_cap_stops_session(tmp_path):
         targets, tmp_path / "c", [synth.Generator("g", generate=gen)],
         session_turns=3, session_max_tokens=None, context_windows={"g": 1000},
     )
-    # cap = 0.8 * 1000 = 800; next-turn estimate from prompt_tokens=790 exceeds it.
-    assert result.written == 1
+    # cap = 0.8 * 1000 = 800; next-turn estimate from prompt_tokens=790 exceeds
+    # it, ending each session after one turn — reflow still writes all three.
+    assert result.written == 3
+    assert result.budget_bound_sessions == 2
 
 
 def test_openrouter_context_windows_registry(monkeypatch):
