@@ -77,7 +77,7 @@ def test_empty_styler_answer_keeps_input():
     assert result.text == "keep me"
 
 
-def test_best_of_reranks_with_detector():
+def test_best_of_picks_best_candidate_and_reports():
     def two_candidates(messages, num_samples=1):
         return ["sloppy version", "dan version"]
 
@@ -85,11 +85,30 @@ def test_best_of_reranks_with_detector():
         return {"score": 0.1 if "dan" in text else 0.9}
 
     result = infer.rewrite_text(
-        "x", two_candidates, best_of=2,
-        rerank=infer.detector_reranker(fake_detector),
+        "sloppy input", two_candidates, best_of=2,
+        scorer=infer.detector_scorer(fake_detector),
     )
     assert result.text == "dan version"
-    assert result.n_candidates == 2
+    assert result.n_candidates == 2 and result.n_kept_input == 0
+    assert "sample 2/2" in result.decisions[0]
+
+
+def test_do_no_harm_guard_keeps_better_input():
+    """With a scorer, the input competes: no candidate beating it => no edit."""
+
+    def worse_candidates(messages, num_samples=1):
+        return ["sloppy attempt A", "sloppy attempt B"]
+
+    def fake_detector(text):
+        return {"score": 0.2 if "dan" in text else 0.8}
+
+    result = infer.rewrite_text(
+        "dan-grade input prose", worse_candidates, best_of=2,
+        scorer=infer.detector_scorer(fake_detector),
+    )
+    assert result.text == "dan-grade input prose"
+    assert result.n_kept_input == 1
+    assert "kept input" in result.decisions[0]
 
 
 def test_rewrite_pairs_file_writes_output_and_resumes(tmp_path):

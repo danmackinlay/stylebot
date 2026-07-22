@@ -688,22 +688,28 @@ def run_cmd(
             temperature=temperature, max_tokens=max_tokens,
         )
 
-    rerank = None
+    scorer = None
     if best_of > 1:
         if detector_model is None:
-            raise click.UsageError("--best-of needs --detector-model for the p_dan rerank")
+            raise click.UsageError("--best-of needs --detector-model for the p_dan scoring")
         from stylebot.classify import sklearn_detector
 
-        rerank = infer.detector_reranker(sklearn_detector(detector_model))
+        scorer = infer.detector_scorer(sklearn_detector(detector_model))
 
     text = file.read_text(encoding="utf-8") if file else click.get_text_stream("stdin").read()
     result = infer.rewrite_text(
         text, styler,
         max_chunk_chars=max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK,
-        best_of=best_of, rerank=rerank,
+        best_of=best_of, scorer=scorer,
     )
+    if scorer is not None:
+        for line in result.decisions:
+            click.echo(f"  {line}", err=True)
     click.echo(
-        f"[{result.n_chunks} chunk(s), {result.n_candidates} sample(s)]", err=True
+        f"[{result.n_chunks} chunk(s), {result.n_candidates} sample(s)"
+        + (f", {result.n_kept_input} kept as input" if result.n_kept_input else "")
+        + "]",
+        err=True,
     )
     if write_in_place and file:
         file.with_suffix(file.suffix + ".bak").write_text(text, encoding="utf-8")

@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -198,18 +198,20 @@ class RewriteResult:
     text: str
     n_chunks: int = 0
     n_candidates: int = 0  # total samples drawn (n_chunks * best_of)
+    n_kept_input: int = 0  # chunks where no candidate beat the input (guard)
     chunk_chars: list[tuple[int, int]] = field(default_factory=list)  # (in, out)
+    decisions: list[str] = field(default_factory=list)  # one human line per chunk
 
 
-def detector_reranker(detector: Callable[[str], dict]) -> Callable[[Sequence[str]], int]:
-    """Best-of-N reranker: pick the candidate the voice classifier scores most
-    Dan (lowest P(slop)). `detector` is the `stylebot.classify` seam."""
+def detector_scorer(detector: Callable[[str], dict]) -> Callable[[str], float]:
+    """Best-of-N scorer from the voice classifier: lower = more Dan
+    (`P(slop)`; blank text scores worst). `detector` is the
+    `stylebot.classify` seam."""
 
-    def rank(candidates: Sequence[str]) -> int:
-        scores = [detector(c)["score"] if c.strip() else 1.0 for c in candidates]
-        return min(range(len(scores)), key=scores.__getitem__)
+    def score(text: str) -> float:
+        return detector(text)["score"] if text.strip() else 1.0
 
-    return rank
+    return score
 
 
 def rewrite_text(
@@ -218,7 +220,7 @@ def rewrite_text(
     *,
     max_chunk_chars: int = STYLE_CHARS_PER_CHUNK,
     best_of: int = 1,
-    rerank: Callable[[Sequence[str]], int] | None = None,
+    scorer: Callable[[str], float] | None = None,
 ) -> RewriteResult:
     """Rewrite prose chunk-by-chunk through the styler, mirroring training.
 
@@ -229,6 +231,12 @@ def rewrite_text(
     (`pair_body`) before reassembly. Original whitespace is reassembled
     verbatim; an empty/blank styler answer falls back to the input chunk
     (never destroy prose on a bad sample).
+
+    With a `scorer` (lower = better, e.g. `detector_scorer`), the INPUT chunk
+    competes with the candidates — the do-no-harm guard: a chunk is only
+    replaced by a rewrite the scorer rates strictly better, so best-of-N can
+    conclude "leave it alone". Each chunk's decision lands in
+    `result.decisions` for the CLI to surface.
     """
     from stylebot.eval import pair_body
     from stylebot.pairs import build_pair_content
@@ -247,6 +255,7 @@ def rewrite_text(
             out_chunks.append(chunk)
             continue
         result.n_chunks += 1
+        n = result.n_chunks
         messages = [
             {"role": "system", "content": STYLE_SYSTEM},
             {"role": "user", "content": build_pair_content(context, chunk)},
@@ -258,8 +267,29 @@ def rewrite_text(
         if not keep:
             logger.warning("styler returned nothing for a %d-char chunk; kept input", len(chunk))
             out = chunk
+            result.n_kept_input += 1
+            result.decisions.append(f"chunk {n}: kept input (no usable sample)")
+        elif scorer is None:
+            out = keep[0]
+            result.decisions.append(f"chunk {n}: sample 1/{len(keep)}")
         else:
-            out = keep[0] if (len(keep) == 1 or rerank is None) else keep[rerank(keep)]
+            input_score = scorer(chunk.strip())
+            scores = [scorer(c) for c in keep]
+            best = min(range(len(scores)), key=scores.__getitem__)
+            if scores[best] < input_score:
+                out = keep[best]
+                result.decisions.append(
+                    f"chunk {n}: sample {best + 1}/{len(keep)} "
+                    f"(score {scores[best]:.2f} < input {input_score:.2f})"
+                )
+            else:
+                out = chunk
+                result.n_kept_input += 1
+                result.decisions.append(
+                    f"chunk {n}: kept input (best sample {min(scores):.2f} "
+                    f">= input {input_score:.2f})"
+                )
+        if out is not chunk:
             # Backends strip sampled text; restore the chunk's edge newline
             # runs so reassembly (and EOF newlines) stay byte-faithful.
             lead = chunk[: len(chunk) - len(chunk.lstrip("\n"))]
@@ -284,7 +314,7 @@ def rewrite_pairs_file(
     limit: int | None = None,
     selector: Callable[[dict], bool] | None = None,
     best_of: int = 1,
-    rerank: Callable[[Sequence[str]], int] | None = None,
+    scorer: Callable[[str], float] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> int:
     """Style the slop side of a pairs corpus into an output JSONL for eval.
@@ -294,7 +324,7 @@ def rewrite_pairs_file(
     the eval extractor strips it like every other field). Resumable: records
     whose id is already in `out_path` are skipped. Returns the number written.
     """
-    from stylebot.eval import existing_scored_ids, record_id
+    from stylebot.eval import record_id
     from stylebot.pairs import iter_pairs
 
     out_path = Path(out_path)
@@ -320,10 +350,10 @@ def rewrite_pairs_file(
             if not keep:
                 logger.warning("styler returned nothing for %s; skipped", record_id(rec))
                 continue
-            if len(keep) == 1 or rerank is None:
+            if len(keep) == 1 or scorer is None:
                 output = keep[0]
             else:
-                output = keep[rerank(keep)]
+                output = min(keep, key=scorer)
             fp.write(json.dumps({**rec, "output": output}, ensure_ascii=False) + "\n")
             fp.flush()
             written += 1
