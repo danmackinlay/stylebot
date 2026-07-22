@@ -18,10 +18,38 @@ public — see [Data & secrets](#data--secrets) below.
 |-------|--------|-----------|
 | 1 | ✅ shipped | `ai-style log` — manual (slop → Dan) pair capture |
 | 2 | 🔧 built | `ai-style synth` — synthetic-pair generation (OpenRouter multi-model) |
-| 3 | planned | LoRA SFT (Tinker-trained; Fireworks/local-MLX served) |
-| 4 | planned | `ai-style` inference CLI |
+| 3 | 🔧 built | `ai-style train` — LoRA SFT (Tinker cookbook recipe; committed run manifests) |
+| 4 | 🔧 built | `ai-style run` — inference CLI (chunked, structure-protected, best-of-N with do-no-harm + anchor guards) |
 | E | 🔧 built | `ai-style eval` — multi-signal eval (Vale + LLM-judge + trained voice classifier) |
 | — | 🔧 built | `ai-style serve` + [VS Code voice marker](#vs-code-voice-marker) — live P(slop) paragraph marks |
+
+## What it does
+
+The first trained styler (Qwen3.5-9B + LoRA, one epoch, ~$2 of compute)
+de-slopping a machine-inflated paragraph of — fittingly — Dan's AI-usage
+policy. A held-out validation pair; the styler never saw this post in
+training:
+
+> **Input (machine slop):** I welcome disagreement regarding my definition of
+> "value" or where I draw its boundaries. Similarly, please feel free to point
+> out any errors in my application of AI or suggest more effective
+> methodologies. […] I also believe it is worthwhile to discuss the instances
+> where I choose *not* to use AI, and the reasoning behind those decisions.
+
+> **Styler output:** I welcome disagreement about my definition of "value" or
+> where I draw the boundaries. Please feel free to point out errors in my use
+> of AI or suggest better methods. […] I also think it is worth discussing the
+> instances where I choose *not* to use AI and why.
+
+> **Dan's original, for reference:** You are welcome to disagree with me about
+> what "value" means and where the line is. […] I think it might be worthwhile
+> mentioning where I _don't_ use AI, and why.
+
+Measured on the trained voice classifier, the rewrite moves `P(slop)` from
+0.56 to 0.27 against the original's 0.26; the LLM judge moves 2 → 3 (Dan's
+original: 4). Across 40 held-out pairs the styler closes about half the
+slop→Dan gap on every signal, where the same base model with the same prompt
+but no LoRA makes prose *more* AI-flavoured than the input.
 
 ## Quickstart
 
