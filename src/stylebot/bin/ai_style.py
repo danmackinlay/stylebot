@@ -624,5 +624,94 @@ def train_cmd(
     click.echo(f"manifest -> {result.manifest_path} (commit this)")
 
 
+@main.command("run")
+@click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=False)
+@click.option("--backend", type=click.Choice(["tinker", "openai"]), default="tinker", show_default=True, help="tinker: sample the trained checkpoint (no serving infra; needs TINKER_API_KEY + trainer extra). openai: any OpenAI-compatible endpoint (Fireworks, mlx_lm.server, Osaurus).")
+@click.option("--sampler-path", default=None, help="[tinker] tinker:// sampler checkpoint (from the training manifest result.checkpoints.sampler_path).")
+@click.option("--base-model", default=None, help="[tinker] Base model id the adapter was trained on (manifest hyperparameters.base_model).")
+@click.option("--renderer", "renderer_name", default=None, help="[tinker] Cookbook renderer used at training time (manifest result.renderer_name).")
+@click.option("--base-url", default=None, help="[openai] Endpoint base URL, e.g. http://localhost:8080/v1.")
+@click.option("--model", default=None, help="[openai] Served model name.")
+@click.option("--api-key-env", default=None, help="[openai] Env var holding the endpoint key (e.g. FIREWORKS_API_KEY); omit for keyless local servers.")
+@click.option("--temperature", default=0.3, show_default=True, type=float)
+@click.option("--max-tokens", default=2000, show_default=True, type=int)
+@click.option("--max-chunk-chars", default=None, type=int, help="Inference chunk budget. [default: 8000]")
+@click.option("--best-of", default=1, show_default=True, type=int, help="Sample N candidates per chunk and keep the most Dan-scored (needs --detector-model).")
+@click.option("--detector-model", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None, help="Voice-classifier artifact dir for --best-of reranking.")
+@click.option("--write", "write_in_place", is_flag=True, help="Rewrite FILE in place (a .bak backup is left beside it). Default prints to stdout.")
+def run_cmd(
+    file: Path | None,
+    backend: str,
+    sampler_path: str | None,
+    base_model: str | None,
+    renderer_name: str | None,
+    base_url: str | None,
+    model: str | None,
+    api_key_env: str | None,
+    temperature: float,
+    max_tokens: int,
+    max_chunk_chars: int | None,
+    best_of: int,
+    detector_model: Path | None,
+    write_in_place: bool,
+) -> None:
+    """Phase 4: rewrite FILE (or stdin) through the trained styler.
+
+    Chunks prose at training granularity (frontmatter and code fences
+    protected, original whitespace reassembled verbatim), sends each chunk
+    with the frozen STYLE_SYSTEM, and prints the rewrite to stdout (--write
+    edits in place with a backup). See `stylebot.infer` for the library seam.
+    """
+    from stylebot import infer
+
+    config.load()
+    if backend == "tinker":
+        if not sampler_path or not base_model:
+            raise click.UsageError("--backend tinker needs --sampler-path and --base-model (see the training manifest)")
+        if not config.get_key("TINKER_API_KEY"):
+            raise click.ClickException("TINKER_API_KEY is not set")
+        try:
+            styler = infer.tinker_backend(
+                sampler_path, base_model, renderer_name=renderer_name,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+        except ImportError as exc:
+            raise click.ClickException(str(exc))
+    else:
+        if not base_url or not model:
+            raise click.UsageError("--backend openai needs --base-url and --model")
+        api_key = config.get_key(api_key_env) if api_key_env else None
+        if api_key_env and not api_key:
+            raise click.ClickException(f"{api_key_env} is not set")
+        styler = infer.openai_backend(
+            base_url, model, api_key=api_key,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+
+    rerank = None
+    if best_of > 1:
+        if detector_model is None:
+            raise click.UsageError("--best-of needs --detector-model for the p_dan rerank")
+        from stylebot.classify import sklearn_detector
+
+        rerank = infer.detector_reranker(sklearn_detector(detector_model))
+
+    text = file.read_text(encoding="utf-8") if file else click.get_text_stream("stdin").read()
+    result = infer.rewrite_text(
+        text, styler,
+        max_chunk_chars=max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK,
+        best_of=best_of, rerank=rerank,
+    )
+    click.echo(
+        f"[{result.n_chunks} chunk(s), {result.n_candidates} sample(s)]", err=True
+    )
+    if write_in_place and file:
+        file.with_suffix(file.suffix + ".bak").write_text(text, encoding="utf-8")
+        file.write_text(result.text, encoding="utf-8")
+        click.echo(f"rewrote {file} (backup at {file}.bak)", err=True)
+    else:
+        click.echo(result.text, nl=not result.text.endswith("\n"))
+
+
 if __name__ == "__main__":
     main()

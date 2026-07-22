@@ -406,12 +406,19 @@ def extract_target(record: dict) -> str:
 _extract_slop = extract_slop
 _extract_target = extract_target
 
+def extract_output(record: dict) -> str:
+    """The styler-output body (top-level `"output"` of a Phase-4 rewrite
+    JSONL — `stylebot.infer.rewrite_pairs_file` — heading-context stripped)."""
+    return pair_body(record.get("output") or "", (record.get("meta") or {}).get("context"))
+
+
 # Field name -> (record -> body text). Defaults cover the pairs schema
-# (messages[1]=slop/user, messages[2]=Dan/assistant). A Phase-4 styler-output
-# JSONL adds an "output" extractor here; nothing else changes.
+# (messages[1]=slop/user, messages[2]=Dan/assistant); "output" is the Phase-4
+# styler rewrite, present only on infer.rewrite_pairs_file output JSONLs.
 FIELD_EXTRACTORS: dict[str, Callable[[dict], str]] = {
     "slop": extract_slop,
     "target": extract_target,
+    "output": extract_output,
 }
 
 # meta keys carried onto each score record, so scores group / filter / join

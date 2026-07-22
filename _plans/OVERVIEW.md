@@ -148,8 +148,8 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 | 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | 🔧 built + curated; slop-strategy/reasoning/sampling knobs recorded as `meta.gen` covariates; **experimental covariate sweeps are the active step** | corpus schema (have it) |
 | — · Heading context | [`heading-context.md`](heading-context.md) | 🔧 built (both producers; immediate depth) | — |
 | 3 · LoRA training | [`phase-3-training.md`](phase-3-training.md) | 🔧 built (`stylebot.train` / `ai-style train` / `dan-style train`, Tinker cookbook SFT) | first paid run: corpus settlement (`synth --skip-covered` must plan 0) |
-| 4 · Inference CLI | [`phase-4-inference-cli.md`](phase-4-inference-cli.md) | 📋 planned | a trained adapter |
 | E · Eval harness | [`eval-harness.md`](eval-harness.md) | 🔧 built (`stylebot.eval` / `ai-style eval`); **all four signals live** — detector = trained voice classifier (StyleDistance) | only sample prose |
+| 4 · Inference CLI | [`phase-4-inference-cli.md`](phase-4-inference-cli.md) | 🔧 built (`stylebot.infer` / `ai-style run` / `dan-style run`; Tinker-sampling v1; MLX/Fireworks slices open) | — |
 | — · VS Code marker | [`vscode-marker.md`](vscode-marker.md) | 🔧 in progress — `ai-style serve` sidecar + editor extension marking paragraphs with detector `P(slop)` | the trained detector (have it) |
 
 > **Codebase hygiene (2026-06-29).** A QA declutter pass removed the dead
