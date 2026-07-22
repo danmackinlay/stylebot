@@ -253,6 +253,7 @@ def rewrite_text(
     max_chunk_chars: int = STYLE_CHARS_PER_CHUNK,
     best_of: int = 1,
     scorer: Callable[[str], float] | None = None,
+    on_decision: Callable[..., None] | None = None,
 ) -> RewriteResult:
     """Rewrite prose chunk-by-chunk through the styler, mirroring training.
 
@@ -269,6 +270,13 @@ def rewrite_text(
     replaced by a rewrite the scorer rates strictly better, so best-of-N can
     conclude "leave it alone". Each chunk's decision lands in
     `result.decisions` for the CLI to surface.
+
+    `on_decision(chunk, context, candidates, scores, chosen_index,
+    kept_input)` is called once per prose chunk after its decision — the
+    preference-data seam (best-of choices are chosen-vs-rejected pairs on
+    real inputs). `candidates` are the cleaned sample bodies as considered,
+    `scores` aligns with it (None for unscored/anchor-rejected samples), and
+    `chosen_index` indexes `candidates` (None when the input was kept).
     """
     from stylebot.eval import pair_body
     from stylebot.pairs import build_pair_content
@@ -301,13 +309,17 @@ def rewrite_text(
         # must not delete information, however Dan they sound.
         lost: list[str] = []
         keep = []
-        for c in raw:
+        keep_idx: list[int] = []  # positions of `keep` entries within `raw`
+        for i, c in enumerate(raw):
             gone = missing_anchors(chunk, c)
             if gone:
                 lost.extend(gone)
                 result.n_anchor_rejected += 1
             else:
                 keep.append(c)
+                keep_idx.append(i)
+        raw_scores: list[float | None] = [None] * len(raw)
+        chosen_idx: int | None = None
         if not keep:
             out = chunk
             result.n_kept_input += 1
@@ -322,13 +334,17 @@ def rewrite_text(
                 result.decisions.append(f"chunk {n}: kept input (no usable sample)")
         elif scorer is None:
             out = keep[0]
+            chosen_idx = keep_idx[0]
             result.decisions.append(f"chunk {n}: sample 1/{len(keep)}")
         else:
             input_score = scorer(chunk.strip())
             scores = [scorer(c) for c in keep]
+            for i, s in zip(keep_idx, scores):
+                raw_scores[i] = s
             best = min(range(len(scores)), key=scores.__getitem__)
             if scores[best] < input_score:
                 out = keep[best]
+                chosen_idx = keep_idx[best]
                 result.decisions.append(
                     f"chunk {n}: sample {best + 1}/{len(keep)} "
                     f"(score {scores[best]:.2f} < input {input_score:.2f})"
@@ -340,6 +356,9 @@ def rewrite_text(
                     f"chunk {n}: kept input (best sample {min(scores):.2f} "
                     f">= input {input_score:.2f})"
                 )
+        if on_decision is not None:
+            on_decision(chunk, context, list(raw), raw_scores, chosen_idx,
+                        chosen_idx is None)
         if out is not chunk:
             # Backends strip sampled text; restore the chunk's edge newline
             # runs so reassembly (and EOF newlines) stay byte-faithful.

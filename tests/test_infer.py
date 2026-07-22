@@ -213,6 +213,90 @@ def test_anchor_guard_reverts_when_all_samples_lose_content():
     assert "example.org" in result.decisions[0]
 
 
+def test_on_decision_reports_candidates_scores_and_choice():
+    """The preference seam: per prose chunk the hook sees the candidate
+    texts, aligned scores, and which one shipped."""
+    calls = []
+
+    def two_candidates(messages, num_samples=1):
+        return ["sloppy version", "dan version"]
+
+    def fake_detector(text):
+        return {"score": 0.1 if "dan" in text else 0.9}
+
+    infer.rewrite_text(
+        "sloppy input", two_candidates, best_of=2,
+        scorer=infer.detector_scorer(fake_detector),
+        on_decision=lambda *args: calls.append(args),
+    )
+    assert len(calls) == 1
+    chunk, context, candidates, scores, chosen, kept_input = calls[0]
+    assert chunk == "sloppy input" and context is None
+    assert candidates == ["sloppy version", "dan version"]
+    assert scores == [0.9, 0.1]
+    assert chosen == 1 and kept_input is False
+
+
+def test_on_decision_kept_input_has_no_chosen_index():
+    calls = []
+
+    def worse_candidates(messages, num_samples=1):
+        return ["sloppy attempt A", "sloppy attempt B"]
+
+    def fake_detector(text):
+        return {"score": 0.2 if "dan" in text else 0.8}
+
+    infer.rewrite_text(
+        "dan-grade input prose", worse_candidates, best_of=2,
+        scorer=infer.detector_scorer(fake_detector),
+        on_decision=lambda *args: calls.append(args),
+    )
+    (_chunk, _ctx, candidates, scores, chosen, kept_input) = calls[0]
+    assert len(candidates) == 2 and scores == [0.8, 0.8]
+    assert chosen is None and kept_input is True
+
+
+def test_on_decision_anchor_rejected_candidate_is_unscored():
+    """Anchor-disqualified samples still appear as rejected candidates —
+    that's the preference signal — but carry score None (never voice-scored)."""
+    calls = []
+    chunk = "See [the notes](./notes.qmd#sec) for more."
+
+    def candidates(messages, num_samples=1):
+        return [
+            "Lost the link entirely.",
+            "See [the notes](./notes.qmd#sec); tighter.",
+        ]
+
+    def fake_detector(text):
+        return {"score": 0.3 if "tighter" in text else 0.5}
+
+    infer.rewrite_text(
+        chunk, candidates, best_of=2,
+        scorer=infer.detector_scorer(fake_detector),
+        on_decision=lambda *args: calls.append(args),
+    )
+    (_chunk, _ctx, cands, scores, chosen, kept_input) = calls[0]
+    assert cands == ["Lost the link entirely.", "See [the notes](./notes.qmd#sec); tighter."]
+    assert scores[0] is None and scores[1] == 0.3
+    assert chosen == 1 and kept_input is False
+
+
+def test_on_decision_receives_heading_context_and_fires_per_prose_chunk():
+    calls = []
+    text = "Intro paragraph.\n\n## The Heading\n\nUnder the heading."
+    infer.rewrite_text(
+        text, _upper_styler, max_chunk_chars=10,
+        on_decision=lambda *args: calls.append(args),
+    )
+    assert [(c[0], c[1]) for c in calls] == [
+        ("Intro paragraph.", None),
+        ("Under the heading.", "## The Heading"),
+    ]
+    # Without a scorer the first usable sample ships: chosen index 0.
+    assert all(c[4] == 0 and c[5] is False for c in calls)
+
+
 def test_content_anchors_counting():
     text = "A [link](./a.qmd), a bare https://b.org/c url, and [@Cite2020] twice: [@Cite2020]."
     anchors = infer.content_anchors(text)
