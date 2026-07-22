@@ -14,6 +14,24 @@ import { RewriteCandidate, Sidecar, SidecarState } from "./sidecar";
 
 const LANGS = new Set(["markdown", "quarto"]);
 
+/** Virtual documents backing the live rewrite-preview diff. */
+class RewritePreview implements vscode.TextDocumentContentProvider {
+  private contents = new Map<string, string>();
+  private emitter = new vscode.EventEmitter<vscode.Uri>();
+  onDidChange = this.emitter.event;
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.contents.get(uri.path) ?? "";
+  }
+
+  set(path: string, text: string): void {
+    this.contents.set(path, text);
+    this.emitter.fire(vscode.Uri.from({ scheme: "voice-marker", path }));
+  }
+}
+
+const preview = new RewritePreview();
+
 let sidecar: Sidecar | null = null;
 let decorations: Decorations | null = null;
 let statusBar: vscode.StatusBarItem;
@@ -173,23 +191,28 @@ async function rewriteCommand(): Promise<void> {
     void vscode.window.showErrorMessage(`Voice Marker: rewrite failed — ${(err as Error).message}`);
     return;
   }
-  if (resp.candidates.length === 0) {
-    void vscode.window.showInformationMessage("Voice Marker: the styler returned no usable candidates.");
+  const fmt = (s: number | null) => (s === null ? "?" : s.toFixed(2));
+  // Identity candidates (the styler declined to change the text) are the
+  // "Keep original" row by another name — don't present them as rewrites.
+  const distinct = resp.candidates.filter((c) => !c.identity);
+  if (distinct.length === 0) {
+    void vscode.window.showInformationMessage(
+      `Voice Marker: the styler proposes no change ` +
+        `(input P(slop) ${fmt(resp.input_score)}, ${resp.n_sampled ?? bestOf} sample(s)).`,
+    );
     return;
   }
 
   // Present ascending by P(slop) (unscored last); the presented order is what
   // gets logged — presentation bias is recorded, not hidden.
-  const presented = [...resp.candidates].sort(
+  const presented = [...distinct].sort(
     (a, b) => (a.score ?? Infinity) - (b.score ?? Infinity),
   );
-  const fmt = (s: number | null) => (s === null ? "?" : s.toFixed(2));
   const items: CandidateItem[] = presented.map((c, i) => ({
     label:
       `$(sparkle) P(slop) ${fmt(c.score)}` +
       (c.anchors_lost.length ? `  $(warning) loses ${c.anchors_lost.join(", ")}` : ""),
     description: firstLine(c.text),
-    detail: c.text.length > 90 ? c.text.replace(/\n/g, " ⏎ ") : undefined,
     candidate: c,
     presentedIndex: i,
   }));
@@ -200,11 +223,50 @@ async function rewriteCommand(): Promise<void> {
     presentedIndex: null,
   });
 
-  const pick = await vscode.window.showQuickPick(items, {
-    title: `Rewrite in Dan's voice — input P(slop) ${fmt(resp.input_score)}`,
-    placeHolder: "Choose a candidate (Esc aborts without logging a preference)",
-    ignoreFocusOut: true,
+  // A live diff (original ↔ highlighted candidate) opens beside the picker —
+  // the QuickPick rows are too cramped to judge a whole-paragraph rewrite.
+  const origUri = vscode.Uri.from({ scheme: "voice-marker", path: "/original.md" });
+  const candUri = vscode.Uri.from({ scheme: "voice-marker", path: "/candidate.md" });
+  preview.set(origUri.path, original);
+  let diffOpen = false;
+  const showPreview = (item: CandidateItem | undefined): void => {
+    if (!item) {
+      return;
+    }
+    preview.set(candUri.path, item.candidate ? item.candidate.text : original);
+    if (!diffOpen) {
+      diffOpen = true;
+      void vscode.commands.executeCommand(
+        "vscode.diff", origUri, candUri, "Voice Marker: rewrite preview",
+        { preview: true, preserveFocus: true, viewColumn: vscode.ViewColumn.Beside },
+      );
+    }
+  };
+
+  const qp = vscode.window.createQuickPick<CandidateItem>();
+  qp.title = `Rewrite in Dan's voice — input P(slop) ${fmt(resp.input_score)}`;
+  qp.placeholder = "Choose a candidate (Esc aborts without logging a preference)";
+  qp.ignoreFocusOut = true;
+  qp.items = items;
+  qp.onDidChangeActive((active) => showPreview(active[0]));
+  const pick = await new Promise<CandidateItem | undefined>((resolve) => {
+    qp.onDidAccept(() => resolve(qp.selectedItems[0]));
+    qp.onDidHide(() => resolve(undefined));
+    qp.show();
   });
+  qp.hide();
+  qp.dispose();
+  // Close the preview diff tab regardless of outcome.
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      if (
+        tab.input instanceof vscode.TabInputTextDiff &&
+        tab.input.modified.scheme === "voice-marker"
+      ) {
+        void vscode.window.tabGroups.close(tab);
+      }
+    }
+  }
   if (!pick) {
     return; // Esc: an abort is not a judgement — log nothing.
   }
@@ -235,6 +297,10 @@ export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel("Voice Marker");
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
   context.subscriptions.push(output, statusBar);
+
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider("voice-marker", preview),
+  );
 
   const cfg = config();
   if (cfg.command.length === 0) {

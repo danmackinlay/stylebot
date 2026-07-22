@@ -268,10 +268,15 @@ def rewrite_candidates(
     `max_chunk_chars` (which `_segment` would split), raise ValueError with a
     message fit to surface in an editor.
 
-    Returns `{"input_score": float|None,
-              "candidates": [{"text", "score", "anchors_lost"}, ...]}`
+    Returns `{"input_score": float|None, "n_sampled": int,
+              "candidates": [{"text", "score", "anchors_lost", "identity"},
+                             ...]}`
     in sampled order (the caller owns presentation order — and should log it;
-    see the presentation-bias note in the plan).
+    see the presentation-bias note in the plan). Duplicate sample texts are
+    collapsed (low temperature mode-collapses freely — `n_sampled` keeps the
+    draw count honest) and a candidate byte-equal to the input is flagged
+    `identity: true` — the styler declining to change already-Dan prose is a
+    do-no-harm answer, not a candidate worth presenting as new.
     """
     from stylebot.eval import pair_body
     from stylebot.pairs import build_pair_content
@@ -296,17 +301,20 @@ def rewrite_candidates(
     ]
     sampled = styler(messages, num_samples=best_of)
     cleaned = [pair_body(c, context).strip() for c in sampled if c and c.strip()]
-    cleaned = [c for c in cleaned if c]
+    seen: set[str] = set()
+    deduped = [c for c in cleaned if c and not (c in seen or seen.add(c))]
     candidates = [
         {
             "text": c,
             "score": scorer(c) if scorer is not None else None,
             "anchors_lost": missing_anchors(chunk, c),
+            "identity": c == chunk,
         }
-        for c in cleaned
+        for c in deduped
     ]
     return {
         "input_score": scorer(chunk) if scorer is not None else None,
+        "n_sampled": len(sampled),
         "candidates": candidates,
     }
 

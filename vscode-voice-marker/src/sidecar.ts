@@ -17,10 +17,16 @@ export interface RewriteCandidate {
   score: number | null;
   /** Links/URLs/citations the input had that this candidate lost (flag, not veto). */
   anchors_lost: string[];
+  /** True when the candidate is byte-equal to the input — the styler
+   * declining to change already-Dan prose (a do-no-harm answer). */
+  identity?: boolean;
 }
 
 export interface RewriteResponse {
   input_score: number | null;
+  /** Draws taken; the server dedupes identical samples, so
+   * candidates.length <= n_sampled. */
+  n_sampled?: number;
   candidates: RewriteCandidate[];
 }
 

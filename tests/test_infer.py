@@ -321,10 +321,27 @@ def test_rewrite_candidates_scores_and_flags_anchors():
     scores = {"See [that](./a.qmd). Fine.": 0.2, "Dropped the link entirely.": 0.1, chunk: 0.6}
     result = infer.rewrite_candidates(chunk, styler, best_of=2, scorer=scores.__getitem__)
     assert result["input_score"] == 0.6
+    assert result["n_sampled"] == 2
     kept, dropped = result["candidates"]
-    assert kept == {"text": "See [that](./a.qmd). Fine.", "score": 0.2, "anchors_lost": []}
+    assert kept == {
+        "text": "See [that](./a.qmd). Fine.", "score": 0.2,
+        "anchors_lost": [], "identity": False,
+    }
     # Anchor loss FLAGS, never disqualifies — the human decides.
     assert dropped["anchors_lost"] == ["./a.qmd"]
+
+
+def test_rewrite_candidates_dedupes_and_flags_identity():
+    chunk = "Already Dan prose."
+
+    def mode_collapsed(messages, num_samples=1):
+        # Low temperature in miniature: 3 identical identity draws + 1 rewrite.
+        return [chunk, chunk, chunk, "Dan prose, already."]
+
+    result = infer.rewrite_candidates(chunk, mode_collapsed, best_of=4)
+    assert result["n_sampled"] == 4  # the draw count stays honest
+    assert [c["text"] for c in result["candidates"]] == [chunk, "Dan prose, already."]
+    assert [c["identity"] for c in result["candidates"]] == [True, False]
 
 
 def test_rewrite_candidates_strips_heading_context_from_samples():

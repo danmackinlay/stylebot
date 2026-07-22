@@ -284,7 +284,7 @@ def export_table_cmd(scores_path: Path, out_path: Path, note: str | None, config
 @click.option("--base-url", default=None, help="[openai] Endpoint base URL, e.g. http://localhost:8123/v1.")
 @click.option("--model", default=None, help="[openai] Served model name.")
 @click.option("--api-key-env", default=None, help="[openai] Env var holding the endpoint key; omit for keyless local servers.")
-@click.option("--temperature", default=0.3, show_default=True, type=float)
+@click.option("--temperature", default=0.7, show_default=True, type=float, help="Hotter than run/eval's 0.3 on purpose: interactive best-of wants DISTINCT candidates; at 0.3 the sampler mode-collapses to near-identical draws.")
 @click.option("--max-tokens", default=2000, show_default=True, type=int)
 @click.option("--max-chunk-chars", default=None, type=int, help="Rewrite-op chunk budget; MUST match the adapter's training chunk scale.")
 @click.option("--preferences", "preferences_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Arm the 'prefer' op: append client decisions (plus a UTC ts) to this JSONL.")
