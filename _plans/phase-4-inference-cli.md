@@ -66,12 +66,16 @@ Tinker documents vLLM/SGLang export only — both handoffs unverified).
   like fences.
 - **Fireworks**: upload the PEFT adapter, `--min-replica-count 0`, retry on
   `503 DEPLOYMENT_SCALING_UP`; same parity acceptance test.
-- **`--mask` defense-in-depth** (D4): NB sentinel-prefix mismatch —
-  `STYLE_SYSTEM` promises `〈MASKED_*〉` preservation but livingthing's
-  `pandoc_mask` emits `〈CODE_*/MATH_*/URL_*〉`; reconcile (retrain or rename)
-  before wiring.
-- **Blog-build integration** (`workflow_style.py`, `date-ai-style`
-  frontmatter, ai-preen-style guards) on top of `stylebot.infer`.
+- **`--mask` defense-in-depth — ✅ done 2026-07-22** (blog-integration
+  slice): the sentinel mismatch resolved by a rename shim in the style path
+  only (`〈X_NNNN〉` → `〈MASKED_X_NNNN〉` around the rewrite,
+  integrity-validated, violating chunks reverted with visible decisions);
+  frozen STYLE_SYSTEM and pandoc_mask untouched. Off by default per D4.
+- **Blog-build integration — ✅ done 2026-07-22**: livingthing
+  `workflow_style.py` + `dan-style style` (batch, `--updated-since`,
+  `date-ai-style` stamps, `.bak`s) over `stylebot.infer`; best-of decisions
+  auto-append to `_training_pairs/preferences.jsonl` via the new
+  `on_decision` hook — Phase-7 preference data accrues from ordinary use.
 
 ## Done-criteria
 
