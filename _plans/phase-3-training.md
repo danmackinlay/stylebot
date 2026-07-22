@@ -147,14 +147,21 @@ cookbook's SFT recipe (fetch current docs; do not code the API from memory).
 
 ## Done-criteria
 
-- [ ] Input `pairs.jsonl` passes `stylebot.pairs.validate_pairs_file` before
-      the run (don't spend money training on a malformed corpus).
-- [ ] One reproducible training run end-to-end (data → adapter), manifest
-      committed.
-- [ ] Held-out val split; report the eval-harness numbers (Phase E) on it.
-- [ ] The adapter beats the prompt-only baseline on ≥1 eval signal without
-      tanking general fluency (the "8B headroom" risk).
-- [ ] Documented entrypoint to launch a run from a manifest.
+- [x] Input `pairs.jsonl` passes `stylebot.pairs.validate_pairs_file` before
+      the run (don't spend money training on a malformed corpus). Enforced in
+      code: `assemble_training_corpus` refuses a malformed corpus.
+- [x] One reproducible training run end-to-end (data → adapter), manifest
+      committed: livingthing `_training_pairs/runs/20260721-run1.json`
+      (corpus sha `0838ae470afef6c3`, val NLL 1.018, $1.97).
+- [x] Held-out val split; eval numbers on it (2026-07-22 smoke, 40 val
+      pairs, detector `P(slop)` means): slop 0.507 → **adapter 0.422** →
+      target 0.352; prompt-only baseline 0.552 (worse than the input).
+- [x] The adapter beats the prompt-only baseline on the detector signal on
+      **35/40** pairs; fluency intact by eyeball (it also reproduces the
+      sentence-per-line discipline). Judge cross-check deferred to Phase-4
+      eval.
+- [x] Documented entrypoint: `dan-style train` (RUNBOOK §8); a rerun from a
+      manifest is the same command with the manifest's hyperparameter flags.
 
 ## Risks
 
