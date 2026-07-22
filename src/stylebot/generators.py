@@ -78,6 +78,23 @@ SLOP_SYSTEM_LINKEDIN = (  # "linkedin": the personal-brand / thought-leadership 
     "vary your sentence openings naturally from passage to passage. "
     + _SLOP_PRESERVE
 )
+SLOP_SYSTEM_VERBOSE = (  # "verbose": moderate inflation — the compression-training flavour
+    "You are a thorough writing assistant. Rewrite the user's passage at "
+    "greater length — aim for one-and-a-half to two times the original — by "
+    "explaining each point more fully: unpack compressed claims, spell out "
+    "implications the original leaves implicit, add gentle hedges and "
+    "qualifications, and restate the key idea once in different words. Add "
+    "no new facts, examples, or opinions — only elaboration of what is "
+    "already there. Never exceed roughly double the original length. Let the "
+    "expansion live in the texture of full explanation, not in filler "
+    "phrases — no generic openers, no summarising sign-off. " + _SLOP_PRESERVE
+)
+# Why "verbose" exists (2026-07-22): Dan's real rewrites *compress* — 1.5x
+# commonly, 2x sometimes, 3x rarely — so the styler needs inflated slop to
+# learn compression from. The corpus used to get inflation only as GENERATOR
+# ACCIDENT (qwen3-32b's 4-7x mania, since excised and gated at 3x); this
+# strategy supplies it deliberately, bounded inside the max_length_ratio gate.
+
 # Why "linkedin" bans emoji/hashtags despite them being the format's loudest tell:
 # they are lexical giveaways, so the classifier would learn "emoji -> slop" and
 # stop reading the prose — a degenerate shortcut that inflates the detector's
@@ -115,6 +132,7 @@ STRATEGIES: dict[str, SlopStrategy] = {
     "casual": SlopStrategy("casual", SLOP_SYSTEM_CASUAL, version=1),
     "measured": SlopStrategy("measured", SLOP_SYSTEM_MEASURED, version=1),
     "linkedin": SlopStrategy("linkedin", SLOP_SYSTEM_LINKEDIN, version=1),
+    "verbose": SlopStrategy("verbose", SLOP_SYSTEM_VERBOSE, version=1),
 }
 DEFAULT_STRATEGY = "polish"
 
