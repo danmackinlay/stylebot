@@ -175,3 +175,48 @@ def test_headings_and_fences_protected_and_context_flows():
     assert seen[0] == "Intro paragraph."
     assert seen[1] == "## The Heading\n\nUnder the heading."
     assert seen[2] == "## The Heading\n\nAfter the fence."
+
+
+def test_anchor_guard_rejects_information_loss():
+    """A candidate that drops a link/citation is disqualified before voice
+    scoring; a candidate keeping all anchors wins even if it scores worse."""
+    chunk = "See [the notes](./notes.qmd#sec) and [@Halpern2016Actual] for more."
+
+    def candidates(messages, num_samples=1):
+        return [
+            "Tighter, very Dan, but the link and citation are gone.",
+            "See [the notes](./notes.qmd#sec) and [@Halpern2016Actual]; tighter.",
+        ]
+
+    def fake_detector(text):
+        # The lossy candidate would win on voice alone; the input is sloppiest.
+        if "gone" in text:
+            return {"score": 0.1}
+        return {"score": 0.5 if "for more" in text else 0.3}
+
+    result = infer.rewrite_text(
+        chunk, candidates, best_of=2, scorer=infer.detector_scorer(fake_detector),
+    )
+    assert "notes.qmd#sec" in result.text and "@Halpern2016Actual" in result.text
+    assert "tighter" in result.text  # the intact rewrite shipped
+    assert result.n_anchor_rejected == 1
+
+
+def test_anchor_guard_reverts_when_all_samples_lose_content():
+    chunk = "Read [this](https://example.org/x)."
+    result = infer.rewrite_text(
+        chunk, lambda m, num_samples=1: ["Read this — trust me."],
+    )
+    assert result.text == chunk
+    assert result.n_kept_input == 1 and result.n_anchor_rejected == 1
+    assert "lost anchors" in result.decisions[0]
+    assert "example.org" in result.decisions[0]
+
+
+def test_content_anchors_counting():
+    text = "A [link](./a.qmd), a bare https://b.org/c url, and [@Cite2020] twice: [@Cite2020]."
+    anchors = infer.content_anchors(text)
+    assert anchors["./a.qmd"] == 1
+    assert anchors["https://b.org/c"] == 1
+    assert anchors["@Cite2020"] == 2
+    assert infer.missing_anchors(text, text.replace(" [@Cite2020].", ".")) == ["@Cite2020"]

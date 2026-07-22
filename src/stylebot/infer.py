@@ -200,8 +200,39 @@ class RewriteResult:
     n_chunks: int = 0
     n_candidates: int = 0  # total samples drawn (n_chunks * best_of)
     n_kept_input: int = 0  # chunks where no candidate beat the input (guard)
+    n_anchor_rejected: int = 0  # samples disqualified for losing links/citations
     chunk_chars: list[tuple[int, int]] = field(default_factory=list)  # (in, out)
     decisions: list[str] = field(default_factory=list)  # one human line per chunk
+
+
+# Content anchors — the mechanically-checkable information a style rewrite
+# must never lose: markdown link destinations, bare URLs, citation keys. The
+# run-1 failure was exactly this (a rewrite deleted a link + a citation while
+# scoring WELL on voice), so anchor integrity is checked before any scoring.
+_ANCHOR_RES = (
+    re.compile(r"\]\(([^)\s]+)"),          # markdown link/image destination
+    re.compile(r"(?<!\()https?://[^\s)\]]+"),  # bare URL
+    re.compile(r"@[A-Za-z][A-Za-z0-9_:-]*"),   # Quarto/pandoc citation key
+)
+
+
+def content_anchors(text: str) -> dict[str, int]:
+    """Multiset of link targets / URLs / citation keys in `text`."""
+    counts: dict[str, int] = {}
+    for pattern in _ANCHOR_RES:
+        for m in pattern.finditer(text):
+            key = m.group(1) if m.groups() else m.group(0)
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def missing_anchors(source: str, candidate: str) -> list[str]:
+    """Anchors present in `source` that `candidate` lost (count decreased)."""
+    have = content_anchors(candidate)
+    return [
+        key for key, n in content_anchors(source).items()
+        if have.get(key, 0) < n
+    ]
 
 
 def detector_scorer(detector: Callable[[str], dict]) -> Callable[[str], float]:
@@ -263,13 +294,32 @@ def rewrite_text(
         ]
         candidates = styler(messages, num_samples=best_of)
         result.n_candidates += len(candidates)
-        keep = [pair_body(c, context).strip() for c in candidates if c and c.strip()]
-        keep = [c for c in keep if c]
+        raw = [pair_body(c, context).strip() for c in candidates if c and c.strip()]
+        raw = [c for c in raw if c]
+        # Anchor integrity: a candidate that lost a link/URL/citation the
+        # input had is disqualified BEFORE any voice scoring — style rewrites
+        # must not delete information, however Dan they sound.
+        lost: list[str] = []
+        keep = []
+        for c in raw:
+            gone = missing_anchors(chunk, c)
+            if gone:
+                lost.extend(gone)
+                result.n_anchor_rejected += 1
+            else:
+                keep.append(c)
         if not keep:
-            logger.warning("styler returned nothing for a %d-char chunk; kept input", len(chunk))
             out = chunk
             result.n_kept_input += 1
-            result.decisions.append(f"chunk {n}: kept input (no usable sample)")
+            if lost:
+                uniq = sorted(set(lost))
+                result.decisions.append(
+                    f"chunk {n}: kept input (all {len(raw)} sample(s) lost anchors: "
+                    f"{', '.join(uniq[:3])}{'…' if len(uniq) > 3 else ''})"
+                )
+            else:
+                logger.warning("styler returned nothing for a %d-char chunk; kept input", len(chunk))
+                result.decisions.append(f"chunk {n}: kept input (no usable sample)")
         elif scorer is None:
             out = keep[0]
             result.decisions.append(f"chunk {n}: sample 1/{len(keep)}")

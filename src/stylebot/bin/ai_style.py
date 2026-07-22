@@ -708,6 +708,7 @@ def run_cmd(
     click.echo(
         f"[{result.n_chunks} chunk(s), {result.n_candidates} sample(s)"
         + (f", {result.n_kept_input} kept as input" if result.n_kept_input else "")
+        + (f", {result.n_anchor_rejected} sample(s) rejected for anchor loss" if result.n_anchor_rejected else "")
         + "]",
         err=True,
     )
