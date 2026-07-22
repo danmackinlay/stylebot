@@ -1,3 +1,10 @@
+> **HISTORICAL (2026-07-22).** The original end-to-end design doc, superseded
+> by the per-phase files + [`ai-style-fine-tune-decisions.md`](ai-style-fine-tune-decisions.md)
+> (durable decisions) + the blog's `_training_pairs/RUNBOOK.md` (operations).
+> Kept for rationale archaeology; do NOT treat statements here as current
+> (e.g. Qwen3-8B, Fireworks-first serving, 8k inference chunks are all
+> superseded). Reality lives in the phase files.
+
 # Plan: `ai-style` — a fine-tuned prose styler
 
 ## Context

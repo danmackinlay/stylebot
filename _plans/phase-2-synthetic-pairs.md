@@ -1,4 +1,4 @@
-# Phase 2 · Synthetic pairs — 🔧 BUILT (scale run cost-gated)
+# Phase 2 · Synthetic pairs — ✅ SHIPPED (corpus settled 2026-07-22; hygiene-gated)
 
 Bulk up the corpus by manufacturing `(slop → Dan)` pairs: take Dan's own
 real prose as the *target*, ask LLMs to paraphrase it into slop as the

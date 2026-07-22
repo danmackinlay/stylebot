@@ -1,4 +1,4 @@
-# Phase 3 · LoRA training — 🔧 BUILT (2026-07-21); first paid run pending
+# Phase 3 · LoRA training — ✅ SHIPPED (runs 1–2 trained; see "Run 2" below)
 
 Run LoRA SFT on a small open-weights model so the style lives in weights, not
 the prompt. Data-gated: needs enough pairs, not more engineering.

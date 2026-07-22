@@ -99,30 +99,28 @@ The data-heavy phases need the prose corpus. Wired in against Dan's live blog:
 - [x] `is_human_authored` defaults (`field="automation"`, `max_level=0`) match
       the real frontmatter exactly — no retarget needed.
 
-## Current status (as of 2026-07-07)
+## Current status (as of 2026-07-22)
+
+**The pipeline runs end-to-end**: capture → gated synth → Tinker LoRA train →
+guarded inference → multi-signal eval. Two trained runs exist (manifests in the
+blog's `_training_pairs/runs/`; run 2 is the serving default).
 
 | Piece | State |
 | --- | --- |
 | Phase 0 scaffolding + Phase 1 `ai-style log` | done; daily-used; captures heading context ([`_plans/heading-context.md`](_plans/heading-context.md)) |
-| Phase 2 `ai-style synth` / `dan-style synth` | built + curated: merge chunking + hygiene guards, OpenRouter rotation (models × strategies × efforts, all folded into `synth_key`), async parallel + window-position sessions ([`_plans/phase-2-synthetic-pairs.md`](_plans/phase-2-synthetic-pairs.md)) |
-| Eval harness `ai-style eval` | built: four signals (Vale, LLM judge, detector, eyeball), JSONL-batched + resumable, scores HTML browser ([`_plans/eval-harness.md`](_plans/eval-harness.md)) |
-| Voice classifier (the detector signal) | built: StyleDistance embedding + logistic head; dep-free runtime `stylebot.classify`, trainer behind the `[classifier]` extra; artifact committed at livingthing `_models/voice-clf/` |
-| Splits contract | `stylebot.splits` / `ai-style make-splits` → blog's committed `splits.json`: frozen eval posts, styler posts, hash-stable detector pool ([`_plans/eval-harness.md`](_plans/eval-harness.md) "The detector decision") |
-| Phase 3 `ai-style train` / `dan-style train` | built 2026-07-21 (Tinker cookbook LoRA SFT, `[trainer]` extra, manifest → blog `_training_pairs/runs/`); first paid run pending corpus settlement ([`_plans/phase-3-training.md`](_plans/phase-3-training.md)) |
-| Phase 4 | not started (adapter-gated); see OVERVIEW |
+| Phase 2 `ai-style synth` / `dan-style synth` | shipped; corpus settled ~4k pairs with identity + inflation hygiene gates (`--max-transform-sim` / `--max-length-ratio`) ([`_plans/phase-2-synthetic-pairs.md`](_plans/phase-2-synthetic-pairs.md)) |
+| Eval harness `ai-style eval` | built: four signals (Vale, LLM judge, detector, eyeball) + the Phase-4 `output` field; JSONL-batched + resumable ([`_plans/eval-harness.md`](_plans/eval-harness.md)) |
+| Voice classifier (the detector signal) | built: StyleDistance embedding + logistic head; dep-free runtime `stylebot.classify`; artifact at livingthing `_models/voice-clf/` |
+| Splits contract | `stylebot.splits` → blog's committed `splits.json`: frozen eval posts, styler posts, hash-stable detector pool |
+| Phase 3 `ai-style train` / `dan-style train` | shipped: Tinker cookbook LoRA SFT behind the `[trainer]` extra; runs 1–2 trained ([`_plans/phase-3-training.md`](_plans/phase-3-training.md)) |
+| Phase 4 `ai-style run` / `dan-style run` | shipped: training-protocol-faithful chunking (headings/fences protected), do-no-harm + anchor-integrity guards, best-of-N; Tinker-sampling backend v1, MLX/Fireworks slices open ([`_plans/phase-4-inference-cli.md`](_plans/phase-4-inference-cli.md)) |
 
 **Naming rule:** `dan-style X` is the blog-policy mirror of `ai-style X` — same
 subcommand, swap the prefix. (The `train-targets` / `train-voice-clf` legacy
 aliases were removed 2026-07-07.)
 
-**The active step is the experimental Phase-2 generation loop**, not a one-shot
-paid run: generate a small batch into a *scratch* `--data-dir`, eyeball
-(`--report`/`--sample`), score with `ai-style eval`, promote a winner into the
-real corpus. **Experiments run through `dan-style synth`**
-(`cd ~/Source/livingthing && uv run dan-style synth --data-dir /tmp/scratch
---slop-strategy X --limit 40`), never bare `ai-style synth` — the wrapper
-carries the blog chunking/selection policy; the generic defaults produce
-fragments too short to judge style on. The full audition→generate→split
-runbook, including where preferred generators/strategies are recorded
-(`livingthing.training_targets` constants), is
-[`_plans/next-steps.md`](_plans/next-steps.md) §A.
+**Operations run blog-side**: the ordered what-do-I-type pipeline is the blog's
+`_training_pairs/RUNBOOK.md`; blog policy constants (roster, strategies, gates,
+chunking) live in `livingthing.training_targets`, and promoting a config change
+means editing those constants and committing. Open work: the "Open slices" list
+in [`_plans/OVERVIEW.md`](_plans/OVERVIEW.md).

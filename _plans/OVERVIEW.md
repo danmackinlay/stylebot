@@ -145,9 +145,9 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 |-------|------|--------|-----------|
 | 0 · Scaffolding | this repo's pyproject/.env/_plans | ✅ done | — |
 | 1 · Pair capture | [`phase-1-pair-capture.md`](phase-1-pair-capture.md) | ✅ shipped (daily use) + heading context | — |
-| 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | 🔧 built + curated; slop-strategy/reasoning/sampling knobs recorded as `meta.gen` covariates; **experimental covariate sweeps are the active step** | corpus schema (have it) |
+| 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | ✅ shipped; corpus settled 2026-07-22 (~4k pairs) with identity + inflation hygiene gates (`--max-transform-sim` / `--max-length-ratio`) | — |
 | — · Heading context | [`heading-context.md`](heading-context.md) | 🔧 built (both producers; immediate depth) | — |
-| 3 · LoRA training | [`phase-3-training.md`](phase-3-training.md) | 🔧 built (`stylebot.train` / `ai-style train` / `dan-style train`, Tinker cookbook SFT) | first paid run: corpus settlement (`synth --skip-covered` must plan 0) |
+| 3 · LoRA training | [`phase-3-training.md`](phase-3-training.md) | ✅ shipped — two paid runs (manifests in the blog's `_training_pairs/runs/`); run 2 (post-surgery corpus) is the serving default | — |
 | E · Eval harness | [`eval-harness.md`](eval-harness.md) | 🔧 built (`stylebot.eval` / `ai-style eval`); **all four signals live** — detector = trained voice classifier (StyleDistance) | only sample prose |
 | 4 · Inference CLI | [`phase-4-inference-cli.md`](phase-4-inference-cli.md) | 🔧 built (`stylebot.infer` / `ai-style run` / `dan-style run`; Tinker-sampling v1; MLX/Fireworks slices open) | — |
 | — · VS Code marker | [`vscode-marker.md`](vscode-marker.md) | 🔧 in progress — `ai-style serve` sidecar + editor extension marking paragraphs with detector `P(slop)` | the trained detector (have it) |
@@ -159,22 +159,25 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 > models go through OpenRouter now). The mechanism is lean — don't redo it; ship
 > functionality.
 
-**Next move:** the active track is **iterating the Phase-2 slop experiments**
-(small batches per `--slop-strategy` into a scratch dir, eyeball, score with
-`ai-style eval`, promote a winner) — needs only sample prose + an OpenRouter key.
-The eval harness is complete (the detector signal is the trained voice classifier,
-built 2026-06-30). The data-gated tail (Phase 3/4) waits on corpus volume + an
-adapter. Concrete commands + environment: [`next-steps.md`](next-steps.md).
+**Where things stand (2026-07-22):** the whole pipeline runs end-to-end —
+capture → synth (gated) → train (Tinker LoRA, manifests committed blog-side)
+→ `dan-style run` (guarded inference) → eval (detector + judge + Vale).
+Operations live in the blog's `_training_pairs/RUNBOOK.md`; durable decisions
+in [`ai-style-fine-tune-decisions.md`](ai-style-fine-tune-decisions.md).
 
-## Sequencing — what's parallel vs serial
+**Open slices** (each self-contained; see the phase files for detail):
 
-- **Serial, done-first:** Phase 0 scaffolding (✅). Unblocks everything.
-- **Parallel now (each needs only the schema + sample paragraphs):**
-  Phase 2 synthesis and the Eval harness (now complete, incl. the trained
-  detector). None of these need a trained styler. **Build the eval harness early**
-  — it's the ground truth every later phase reports against.
-- **Data-gated tail:** Phase 3 (needs corpus volume) and Phase 4 (needs an
-  adapter). These wait on *data*, not on engineering.
+- **Local MLX serving** (phase 4 "Open slices"): merge → quantize →
+  `mlx_lm.server`; acceptance = chat-template parity + quantization eval
+  re-check against the Tinker-sampling backend.
+- **Fireworks serving** (ditto): PEFT upload + scale-to-zero; same parity test.
+- **v3 data**: deliberate moderate-compression pairs (Dan compresses 1.5–2×
+  in real edits) now that generator-accident inflation is gated at 3×.
+- **`--mask` defense-in-depth** (phase 4): sentinel-prefix mismatch to
+  reconcile first (`〈MASKED_*〉` vs `〈CODE_/MATH_/URL_*〉`).
+- **Blog-build integration**: `workflow_style.py` over `stylebot.infer`.
+- **Phase 7 preference/DPO** on the same Tinker platform (decisions #D5),
+  with the eval-harness Goodhart guards.
 
 ## Subagent-friendliness checklist
 
