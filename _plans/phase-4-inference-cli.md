@@ -48,13 +48,22 @@ Tinker documents vLLM/SGLang export only — both handoffs unverified).
 
 ## Open slices
 
-- **Local MLX**: one-time `weights.build_hf_model` (base already in the HF
-  cache) → `mlx_lm.convert -q` → `mlx_lm.server`; then `dan-style run
-  --backend openai --base-url http://localhost:PORT/v1`. **Acceptance test:
-  chat-template parity** — score the same val slop through tinker and local
-  backends; detector numbers must match (the served tokenizer_config template
-  must reproduce `qwen3_5_disable_thinking` rendering), and re-check that
-  quantization doesn't move the eval numbers.
+- **Local MLX — ✅ done 2026-07-22** (run 2): livingthing `bin/styler-mlx`
+  (idempotent merge→4-bit from the newest manifest) + `mlx_lm.server
+  --chat-template-args '{"enable_thinking":false}'` — that flag is
+  load-bearing (verified string-identical to the training render; the
+  template default opens an unclosed think block). Parity on 20 val pairs
+  @0.3: detector output means tinker 0.4627 vs local 4-bit 0.4529
+  (Δ −0.0098 < 0.03 gate; quantization drift within gate, no 8-bit build
+  needed); zero template artifacts; real-post round-trip structure-clean.
+  Commands: blog RUNBOOK §12. Upstream shims (documented in the script):
+  transformers 4.57 lacks the `qwen3_5` arch (resolve base from HF cache);
+  cookbook `build_hf_model` expects raw Tinker adapter key naming (invert
+  the serving-PEFT renames).
+- **Blockquote integrity**: a reflowed `> quote` can lose its `>` prefix on
+  continuation lines — quotes aren't anchor-guarded. Candidate: add
+  blockquote-prefix counts to `content_anchors` or protect quote blocks
+  like fences.
 - **Fireworks**: upload the PEFT adapter, `--min-replica-count 0`, retry on
   `503 DEPLOYMENT_SCALING_UP`; same parity acceptance test.
 - **`--mask` defense-in-depth** (D4): NB sentinel-prefix mismatch —

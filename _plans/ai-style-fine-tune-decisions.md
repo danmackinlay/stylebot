@@ -121,3 +121,5 @@ The old "galaxy-brained reframe" (Goodharting Pangram ≈ de-slopping toward Dan
 - Diffusion serving (schedule-owned sampling, denoising-step budget) doesn't fit the Together-train → Fireworks-scale-to-zero autoregressive economics this plan is built on. Would need a different serving stack.
 
 **Re-evaluate if**: the autoregressive styler plateaus on *structure preservation* specifically (lost code fences, mangled math, dropped link syntax) — the one axis where the diffusion prior should genuinely help. Not the right reach for "still hedges too much" or "voice isn't sharp enough."
+
+**MLX exit verified (2026-07-22, run 2)**: `bin/styler-mlx` merge→4-bit; served template string-identical to training under `enable_thinking:false`; 20-pair parity vs tinker mean Δ −0.010 (<0.03 gate), quantization drift same (<0.05, no 8-bit needed). Caveats: cookbook `build_hf_model` needs the serving-PEFT keys inverted to raw Tinker naming (shim in the script) and a local base-model dir to dodge transformers-4.57's missing `qwen3_5` arch.
