@@ -10,7 +10,7 @@
 import * as vscode from "vscode";
 import { Decorations } from "./decorations";
 import { proseParagraphs } from "./segment";
-import { Sidecar, SidecarState } from "./sidecar";
+import { RewriteCandidate, Sidecar, SidecarState } from "./sidecar";
 
 const LANGS = new Set(["markdown", "quarto"]);
 
@@ -30,6 +30,7 @@ function config() {
     minChars: cfg.get<number>("minChars", 80),
     debounceMs: cfg.get<number>("debounceMs", 500),
     enabled: cfg.get<boolean>("enabled", true),
+    bestOf: cfg.get<number>("bestOf", 4),
   };
 }
 
@@ -103,6 +104,133 @@ async function scoreEditor(editor: vscode.TextEditor): Promise<void> {
   decorations.apply(editor, scored, sidecar.meta?.name ?? "voice-clf");
 }
 
+/** The rewrite target: the selection if non-empty, else the prose paragraph
+ * at the cursor (proseParagraphs offsets). Null when neither applies. */
+function rewriteTarget(editor: vscode.TextEditor): vscode.Range | null {
+  if (!editor.selection.isEmpty) {
+    return new vscode.Range(editor.selection.start, editor.selection.end);
+  }
+  const document = editor.document;
+  const offset = document.offsetAt(editor.selection.active);
+  for (const p of proseParagraphs(document.getText(), 0)) {
+    if (p.start <= offset && offset <= p.end) {
+      return new vscode.Range(document.positionAt(p.start), document.positionAt(p.end));
+    }
+  }
+  return null;
+}
+
+/** Nearest markdown heading line above `line` — the training-time context. */
+function headingAbove(document: vscode.TextDocument, line: number): string | null {
+  for (let i = line - 1; i >= 0; i--) {
+    const text = document.lineAt(i).text;
+    if (/^[ \t]{0,3}#{1,6}[ \t]/.test(text)) {
+      return text.trim();
+    }
+  }
+  return null;
+}
+
+const firstLine = (text: string, max = 90): string => {
+  const line = text.split("\n")[0];
+  return line.length > max ? line.slice(0, max - 1) + "…" : line;
+};
+
+interface CandidateItem extends vscode.QuickPickItem {
+  candidate: RewriteCandidate | null; // null = keep original
+  presentedIndex: number | null;
+}
+
+async function rewriteCommand(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !LANGS.has(editor.document.languageId)) {
+    return;
+  }
+  if (!sidecar) {
+    void vscode.window.showWarningMessage("Voice Marker: sidecar is not configured (voiceMarker.command).");
+    return;
+  }
+  const range = rewriteTarget(editor);
+  if (!range) {
+    void vscode.window.showInformationMessage("Voice Marker: put the cursor in a prose paragraph (or select prose).");
+    return;
+  }
+  const document = editor.document;
+  const original = document.getText(range);
+  const context = headingAbove(document, range.start.line);
+  const bestOf = config().bestOf;
+
+  let resp;
+  try {
+    resp = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Voice Marker: sampling ${bestOf} rewrite(s)…`,
+      },
+      () => sidecar!.rewrite(original, context, bestOf),
+    );
+  } catch (err) {
+    void vscode.window.showErrorMessage(`Voice Marker: rewrite failed — ${(err as Error).message}`);
+    return;
+  }
+  if (resp.candidates.length === 0) {
+    void vscode.window.showInformationMessage("Voice Marker: the styler returned no usable candidates.");
+    return;
+  }
+
+  // Present ascending by P(slop) (unscored last); the presented order is what
+  // gets logged — presentation bias is recorded, not hidden.
+  const presented = [...resp.candidates].sort(
+    (a, b) => (a.score ?? Infinity) - (b.score ?? Infinity),
+  );
+  const fmt = (s: number | null) => (s === null ? "?" : s.toFixed(2));
+  const items: CandidateItem[] = presented.map((c, i) => ({
+    label:
+      `$(sparkle) P(slop) ${fmt(c.score)}` +
+      (c.anchors_lost.length ? `  $(warning) loses ${c.anchors_lost.join(", ")}` : ""),
+    description: firstLine(c.text),
+    detail: c.text.length > 90 ? c.text.replace(/\n/g, " ⏎ ") : undefined,
+    candidate: c,
+    presentedIndex: i,
+  }));
+  items.push({
+    label: `$(discard) Keep original (P(slop) ${fmt(resp.input_score)})`,
+    description: firstLine(original),
+    candidate: null,
+    presentedIndex: null,
+  });
+
+  const pick = await vscode.window.showQuickPick(items, {
+    title: `Rewrite in Dan's voice — input P(slop) ${fmt(resp.input_score)}`,
+    placeHolder: "Choose a candidate (Esc aborts without logging a preference)",
+    ignoreFocusOut: true,
+  });
+  if (!pick) {
+    return; // Esc: an abort is not a judgement — log nothing.
+  }
+
+  if (pick.candidate) {
+    const ok = await editor.edit((edit) => edit.replace(range, pick.candidate!.text));
+    if (!ok) {
+      void vscode.window.showErrorMessage("Voice Marker: buffer edit failed; nothing logged.");
+      return;
+    }
+  }
+  // Fire-and-forget: preference capture must never block the editor.
+  sidecar
+    .prefer({
+      chunk: original,
+      context,
+      candidates: presented.map((c) => c.text),
+      scores: presented.map((c) => c.score),
+      chosen: pick.presentedIndex,
+      kept_input: pick.candidate === null,
+      doc: vscode.workspace.asRelativePath(document.uri),
+    })
+    .catch((err) => output.appendLine(`[prefer] not recorded: ${err}`));
+  scheduleScore(editor, 0);
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel("Voice Marker");
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
@@ -152,6 +280,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.commands.registerCommand("voiceMarker.restartSidecar", () => sidecar?.restart()),
+    vscode.commands.registerCommand("voiceMarker.rewrite", () => void rewriteCommand()),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("voiceMarker.thresholds")) {
         decorations?.dispose();

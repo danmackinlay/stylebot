@@ -1,8 +1,8 @@
 {
   "name": "voice-marker",
   "displayName": "Voice Marker",
-  "description": "Mark paragraphs with P(slop) from a stylebot voice-classifier sidecar (ai-style serve)",
-  "version": "0.0.1",
+  "description": "Mark paragraphs with P(slop) and rewrite them in Dan's voice via a stylebot sidecar (ai-style/dan-style serve)",
+  "version": "0.0.2",
   "publisher": "danmackinlay",
   "private": true,
   "license": "MIT",
@@ -34,8 +34,21 @@
       {
         "command": "voiceMarker.restartSidecar",
         "title": "Voice Marker: Restart Sidecar"
+      },
+      {
+        "command": "voiceMarker.rewrite",
+        "title": "Voice Marker: Rewrite in Dan's Voice"
       }
     ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "voiceMarker.rewrite",
+          "when": "editorLangId == markdown || editorLangId == quarto",
+          "group": "1_modification@9"
+        }
+      ]
+    },
     "configuration": {
       "title": "Voice Marker",
       "properties": {
@@ -74,6 +87,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show P(slop) marks."
+        },
+        "voiceMarker.bestOf": {
+          "type": "number",
+          "default": 4,
+          "description": "Candidates to sample per rewrite (the sidecar needs a styler armed — dan-style serve, or ai-style serve with --backend)."
         }
       }
     }

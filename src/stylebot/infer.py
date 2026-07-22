@@ -246,6 +246,71 @@ def detector_scorer(detector: Callable[[str], dict]) -> Callable[[str], float]:
     return score
 
 
+def rewrite_candidates(
+    text: str,
+    styler: Styler,
+    *,
+    context: str | None = None,
+    best_of: int = 4,
+    scorer: Callable[[str], float] | None = None,
+    max_chunk_chars: int = STYLE_CHARS_PER_CHUNK,
+) -> dict:
+    """All candidates for ONE prose chunk, none auto-chosen — the editor seam.
+
+    Where `rewrite_text` decides (do-no-harm guard, anchors disqualify), this
+    returns the full slate for a human to choose from: anchor violations FLAG
+    (`anchors_lost`) rather than disqualify, and the input's own score rides
+    along so the caller can show the delta. Serves the `rewrite` op of
+    `stylebot.serve` (see `_plans/slice-vscode-rewrite.md`).
+
+    Single-chunk contract: `text` must be prose at training chunk scale —
+    frontmatter, headings, or fences in the selection, or prose over
+    `max_chunk_chars` (which `_segment` would split), raise ValueError with a
+    message fit to surface in an editor.
+
+    Returns `{"input_score": float|None,
+              "candidates": [{"text", "score", "anchors_lost"}, ...]}`
+    in sampled order (the caller owns presentation order — and should log it;
+    see the presentation-bias note in the plan).
+    """
+    from stylebot.eval import pair_body
+    from stylebot.pairs import build_pair_content
+
+    frontmatter, body = split_frontmatter(text)
+    if frontmatter:
+        raise ValueError("selection includes YAML frontmatter — select prose only")
+    items, _seps = _segment(body, max_chars=max_chunk_chars)
+    kinds = [kind for kind, chunk in items if chunk.strip()]
+    if any(k != "prose" for k in kinds):
+        bad = next(k for k in kinds if k != "prose")
+        raise ValueError(f"selection contains a {bad} — select prose only")
+    if len(kinds) != 1:
+        raise ValueError(
+            f"selection is {len(body)} chars — over the {max_chunk_chars}-char "
+            "chunk budget; select less (a paragraph or two)"
+        )
+    chunk = body.strip("\n")
+    messages = [
+        {"role": "system", "content": STYLE_SYSTEM},
+        {"role": "user", "content": build_pair_content(context, chunk)},
+    ]
+    sampled = styler(messages, num_samples=best_of)
+    cleaned = [pair_body(c, context).strip() for c in sampled if c and c.strip()]
+    cleaned = [c for c in cleaned if c]
+    candidates = [
+        {
+            "text": c,
+            "score": scorer(c) if scorer is not None else None,
+            "anchors_lost": missing_anchors(chunk, c),
+        }
+        for c in cleaned
+    ]
+    return {
+        "input_score": scorer(chunk) if scorer is not None else None,
+        "candidates": candidates,
+    }
+
+
 def rewrite_text(
     text: str,
     styler: Styler,

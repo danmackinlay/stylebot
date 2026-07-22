@@ -10,6 +10,33 @@ import { ChildProcess, spawn } from "child_process";
 
 export type SidecarState = "stopped" | "starting" | "ready" | "failed";
 
+/** One styler candidate from the `rewrite` op (stylebot.infer.rewrite_candidates). */
+export interface RewriteCandidate {
+  text: string;
+  /** Detector P(slop); lower = more Dan. Null when unscored. */
+  score: number | null;
+  /** Links/URLs/citations the input had that this candidate lost (flag, not veto). */
+  anchors_lost: string[];
+}
+
+export interface RewriteResponse {
+  input_score: number | null;
+  candidates: RewriteCandidate[];
+}
+
+/** The `prefer` op payload — mirrors livingthing's preferences.jsonl schema. */
+export interface PreferenceDecision {
+  chunk: string;
+  context: string | null;
+  /** Candidate texts IN THE ORDER PRESENTED (presentation bias is logged, not hidden). */
+  candidates: string[];
+  scores: (number | null)[];
+  /** Index into `candidates`; null when the input was kept. */
+  chosen: number | null;
+  kept_input: boolean;
+  doc: string;
+}
+
 export interface SidecarEvents {
   onState: (state: SidecarState, detail?: string) => void;
   onStderr: (chunk: string) => void;
@@ -77,6 +104,16 @@ export class Sidecar {
   async score(texts: string[]): Promise<number[]> {
     const resp = await this.request<{ scores: number[] }>({ op: "score", texts });
     return resp.scores;
+  }
+
+  /** Best-of candidates for one prose chunk (server needs a styler armed). */
+  async rewrite(text: string, context: string | null, bestOf: number): Promise<RewriteResponse> {
+    return this.request<RewriteResponse>({ op: "rewrite", text, context, best_of: bestOf });
+  }
+
+  /** Record a human choice among candidates (server needs a preferences sink). */
+  async prefer(decision: PreferenceDecision): Promise<void> {
+    await this.request<{ ok: boolean }>({ op: "prefer", decision });
   }
 
   private request<T>(body: Record<string, any>): Promise<T> {

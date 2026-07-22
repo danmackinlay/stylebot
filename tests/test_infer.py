@@ -304,3 +304,47 @@ def test_content_anchors_counting():
     assert anchors["https://b.org/c"] == 1
     assert anchors["@Cite2020"] == 2
     assert infer.missing_anchors(text, text.replace(" [@Cite2020].", ".")) == ["@Cite2020"]
+
+
+# ---------------------------------------------------------------------------
+# rewrite_candidates — the editor seam (all candidates, none auto-chosen)
+# ---------------------------------------------------------------------------
+
+
+def test_rewrite_candidates_scores_and_flags_anchors():
+    chunk = "See [that](./a.qmd) and slop besides."
+
+    def styler(messages, num_samples=1):
+        assert messages[0]["content"] == STYLE_SYSTEM
+        return ["See [that](./a.qmd). Fine.", "Dropped the link entirely."]
+
+    scores = {"See [that](./a.qmd). Fine.": 0.2, "Dropped the link entirely.": 0.1, chunk: 0.6}
+    result = infer.rewrite_candidates(chunk, styler, best_of=2, scorer=scores.__getitem__)
+    assert result["input_score"] == 0.6
+    kept, dropped = result["candidates"]
+    assert kept == {"text": "See [that](./a.qmd). Fine.", "score": 0.2, "anchors_lost": []}
+    # Anchor loss FLAGS, never disqualifies — the human decides.
+    assert dropped["anchors_lost"] == ["./a.qmd"]
+
+
+def test_rewrite_candidates_strips_heading_context_from_samples():
+    def styler(messages, num_samples=1):
+        # The context heading rides along on the user content (build_pair_content)
+        assert messages[1]["content"].startswith("## Topic\n")
+        return ["## Topic\n\nRewritten body."]
+
+    result = infer.rewrite_candidates("Original body.", styler, context="## Topic", best_of=1)
+    assert result["candidates"][0]["text"] == "Rewritten body."
+
+
+def test_rewrite_candidates_enforces_the_single_prose_chunk_contract():
+    import pytest
+
+    with pytest.raises(ValueError, match="frontmatter"):
+        infer.rewrite_candidates("---\nt: x\n---\nprose", _identity_styler)
+    with pytest.raises(ValueError, match="heading"):
+        infer.rewrite_candidates("## H\n\nprose", _identity_styler)
+    with pytest.raises(ValueError, match="fence"):
+        infer.rewrite_candidates("```py\nx\n```", _identity_styler)
+    with pytest.raises(ValueError, match="chunk budget"):
+        infer.rewrite_candidates("one two\n\nthree four", _identity_styler, max_chunk_chars=5)

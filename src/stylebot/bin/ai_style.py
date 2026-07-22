@@ -277,17 +277,44 @@ def export_table_cmd(scores_path: Path, out_path: Path, note: str | None, config
     help="A trained voice-classifier artifact dir (head.json + meta.json); needs the "
     "pinned embedder (sentence-transformers) installed.",
 )
-def serve_cmd(detector_model: Path) -> None:
+@click.option("--backend", type=click.Choice(["tinker", "openai"]), default=None, help="Arm the 'rewrite' op with a styler backend (same flags as `ai-style run`). Omit for score-only serving.")
+@click.option("--sampler-path", default=None, help="[tinker] tinker:// sampler checkpoint (manifest result.checkpoints.sampler_path).")
+@click.option("--base-model", default=None, help="[tinker] Base model id the adapter was trained on.")
+@click.option("--renderer", "renderer_name", default=None, help="[tinker] Cookbook renderer used at training time.")
+@click.option("--base-url", default=None, help="[openai] Endpoint base URL, e.g. http://localhost:8123/v1.")
+@click.option("--model", default=None, help="[openai] Served model name.")
+@click.option("--api-key-env", default=None, help="[openai] Env var holding the endpoint key; omit for keyless local servers.")
+@click.option("--temperature", default=0.3, show_default=True, type=float)
+@click.option("--max-tokens", default=2000, show_default=True, type=int)
+@click.option("--max-chunk-chars", default=None, type=int, help="Rewrite-op chunk budget; MUST match the adapter's training chunk scale.")
+@click.option("--preferences", "preferences_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Arm the 'prefer' op: append client decisions (plus a UTC ts) to this JSONL.")
+def serve_cmd(
+    detector_model: Path,
+    backend: str | None,
+    sampler_path: str | None,
+    base_model: str | None,
+    renderer_name: str | None,
+    base_url: str | None,
+    model: str | None,
+    api_key_env: str | None,
+    temperature: float,
+    max_tokens: int,
+    max_chunk_chars: int | None,
+    preferences_path: Path | None,
+) -> None:
     """Score texts over stdin/stdout NDJSON (long-lived editor sidecar).
 
     Loads the detector once (the embedding model is the slow part), then serves
     {"id", "op": "score", "texts": [...]} -> {"id", "scores": [P(slop), ...]}
     one JSON object per line until EOF. {"op": "info"} returns the artifact's
-    meta.json and doubles as the client's ready handshake. Protocol details:
-    stylebot.serve.
+    meta.json and doubles as the client's ready handshake. With a --backend,
+    the 'rewrite' op returns best-of candidates for one prose chunk (scored,
+    anchor-flagged, none auto-chosen); with --preferences, the 'prefer' op
+    records the client's choice. Protocol details: stylebot.serve.
     """
-    from stylebot import classify, serve
+    from stylebot import classify, infer, serve
 
+    config.load()
     try:
         meta = classify.load_artifact_meta(detector_model)
         detector = classify.sklearn_detector(detector_model)
@@ -297,7 +324,55 @@ def serve_cmd(detector_model: Path) -> None:
         )
     except ValueError as exc:
         raise click.ClickException(str(exc))
-    serve.serve_loop(detector, sys.stdin, sys.stdout, meta=meta)
+
+    rewriter = None
+    if backend is not None:
+        # Build the styler LAZILY: the tinker client dials out at construction,
+        # and a flaky network at editor start must not take scoring down with it.
+        styler_box: list = []
+
+        def make_styler():
+            if backend == "tinker":
+                if not sampler_path or not base_model:
+                    raise ValueError("--backend tinker needs --sampler-path and --base-model")
+                return infer.tinker_backend(
+                    sampler_path, base_model, renderer_name=renderer_name,
+                    temperature=temperature, max_tokens=max_tokens,
+                )
+            if not base_url or not model:
+                raise ValueError("--backend openai needs --base-url and --model")
+            api_key = config.get_key(api_key_env) if api_key_env else None
+            return infer.openai_backend(
+                base_url, model, api_key=api_key,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+
+        scorer = infer.detector_scorer(detector)
+
+        def rewriter(text, *, context=None, best_of=4):
+            if not styler_box:
+                styler_box.append(make_styler())
+            return infer.rewrite_candidates(
+                text, styler_box[0], context=context, best_of=best_of,
+                scorer=scorer,
+                max_chunk_chars=max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK,
+            )
+
+    prefer = None
+    if preferences_path is not None:
+        import datetime
+        import json as _json
+
+        def prefer(decision: dict) -> None:
+            record = {
+                "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                **decision,
+            }
+            preferences_path.parent.mkdir(parents=True, exist_ok=True)
+            with preferences_path.open("a", encoding="utf-8") as fp:
+                fp.write(_json.dumps(record, ensure_ascii=False) + "\n")
+
+    serve.serve_loop(detector, sys.stdin, sys.stdout, meta=meta, rewriter=rewriter, prefer=prefer)
 
 
 def _echo_clf_metrics(metrics: dict, indent: str = "") -> None:
