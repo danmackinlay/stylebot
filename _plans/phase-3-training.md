@@ -169,3 +169,15 @@ cookbook's SFT recipe (fetch current docs; do not code the API from memory).
 - Synthetic/real distribution mismatch → adjust mix/weights, add real pairs.
 - Fine-tuning may be a dead end → fallback is a stronger prompt vs a frontier
   model; the labelled corpus remains useful regardless.
+
+## Run 2 (2026-07-22, post-surgery corpus)
+
+Retrained after the QA-driven surgery (qwen3-32b cell + >3x inflation tail
+excised; roster now sonnet / 9b / 3.6-35b-a3b / gemma with both hygiene
+gates live): corpus sha `ea9f5981f8074cb3`, val NLL **0.952** (run 1:
+1.018), $1.49. Same-40-val-pairs comparison: voice metrics marginally
+softer than run 1 (detector 0.425 vs 0.415, judge 3.48 vs 3.70) but the
+**over-compression tail retreats** (p10 output/slop 0.76 vs 0.60) and
+content fidelity improves (anchor losses 1 vs 2; the causal_hierarchy
+citation + link run 1 deleted both survive). Fidelity-first default; run 1
+remains reachable via `dan-style run --manifest`.
