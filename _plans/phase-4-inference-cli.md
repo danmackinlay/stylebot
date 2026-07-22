@@ -59,7 +59,14 @@ Tinker documents vLLM/SGLang export only — both handoffs unverified).
   Commands: blog RUNBOOK §12. Upstream shims (documented in the script):
   transformers 4.57 lacks the `qwen3_5` arch (resolve base from HF cache);
   cookbook `build_hf_model` expects raw Tinker adapter key naming (invert
-  the serving-PEFT renames).
+  the serving-PEFT renames). Post-verification hardening (same day): the
+  artifact is now built into `~/MLXModels/danmackinlay/` + the vllm-mlx
+  registry, with a finalize stage stripping the VLM config markers (else
+  vllm-mlx multimodal-dispatches the language-only export and dies — and
+  the strip also immunizes against the mlx-vlm 0.6.4 qwen3_5 load
+  corruption, waybarrios/vllm-mlx#632; env pinned safe at 0.6.3) and baking
+  UNCONDITIONAL no-think into the template (vllm-mlx passes
+  enable_thinking=True explicitly, defeating defaults).
 - **Blockquote integrity**: a reflowed `> quote` can lose its `>` prefix on
   continuation lines — quotes aren't anchor-guarded. Candidate: add
   blockquote-prefix counts to `content_anchors` or protect quote blocks
