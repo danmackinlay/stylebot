@@ -24,9 +24,10 @@ reassembled verbatim. A leading YAML frontmatter block is never sent to the
 model. `STYLE_SYSTEM` travels verbatim (`stylebot.ai_core`) — the adapter was
 trained on it; a different system prompt is out-of-distribution.
 
-Best-of-N: pass `best_of > 1` and a `rerank` callable (e.g. the trained voice
-classifier's `p_dan` via `detector_reranker`). Small N is Goodhart-gentle
-(KL ~ log N; see eval-harness.md "Eval vs reward").
+Best-of-N: pass `best_of > 1` and a `scorer` (lower = better, e.g. the voice
+classifier via `detector_scorer`). The scorer also arms the do-no-harm guard:
+the input chunk competes, so a rewrite ships only if scored strictly better.
+Small N is Goodhart-gentle (KL ~ log N; see eval-harness.md "Eval vs reward").
 """
 
 from __future__ import annotations

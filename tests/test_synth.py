@@ -1188,4 +1188,20 @@ def test_report_result_echoes_degenerate_count(capsys, tmp_path):
         max_transform_sim=0.95,
     )
     out = capsys.readouterr().out
-    assert "3 degenerate pair(s) DROPPED" in out and "0.95" in out
+    assert "3 identity pair(s) DROPPED" in out and "0.95" in out
+
+
+def test_max_length_ratio_gate_drops_inflated_outputs(tmp_path):
+    """A generator that emits several times the target length is degenerate:
+    with the inflation gate set, its pairs are counted (skipped_inflated) and
+    never written (the qwen3-32b failure mode, 2026-07-22 QA)."""
+    data_dir = tmp_path / "corpus"
+    targets = _targets(4)
+
+    inflate = synth.Generator(name="windbag", generate=lambda text: ("verily " + text + " ") * 5)
+    result = synth.synthesize_pairs(targets, data_dir, [inflate], max_length_ratio=3.0)
+    assert result.skipped_inflated == 4 and result.written == 0
+
+    healthy = _fake("ok-model")
+    result = synth.synthesize_pairs(targets, data_dir, [healthy], max_length_ratio=3.0)
+    assert result.written == 4 and result.skipped_inflated == 0
