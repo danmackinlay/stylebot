@@ -73,6 +73,11 @@ def test_merge_packs_short_paragraphs(tmp_path):
     merged = synth.iter_targets(blog_root=root, min_chars=200, merge=True, merge_max_chars=1500)
     assert len(merged) == 1
     assert merged[0].text.count("A short take") == 3
+    # The chunk-scale facet rides on the target (and thence into pair meta),
+    # so mixed-scale corpora stay ablatable by scale.
+    assert merged[0].merge_max_chars == 1500
+    unmerged = synth.iter_targets(blog_root=root, min_chars=50)
+    assert unmerged and all(t.merge_max_chars is None for t in unmerged)
 
 
 def test_merge_does_not_cross_section_headers(tmp_path):

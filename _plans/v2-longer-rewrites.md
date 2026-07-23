@@ -53,13 +53,18 @@ coherence-aware objectives when we get there.
 
 ## Path to v2 (design, not schedule)
 
-1. **Synth at scale** — the easy 80%: synthetic pairs need no new
-   groundwork (source posts are on disk). A v2 corpus batch generates at
-   e.g. `MERGE_MAX_CHARS = 4500` alongside the existing 1500 diet, with
-   the chunk scale recorded per-pair (a `scale` facet in `meta.gen`, like
-   the generator facet) so the manifest can ablate scale with a one-line
-   selector — the qwen3-32b lesson, applied in advance. Costs scale
-   linearly with tokens (~3× the 1500 batch).
+1. **Synth at scale** — the easy 80%: source posts are on disk, and
+   `--merge-max-chars` was already a per-batch flag. The missing piece —
+   the chunk scale was not RECORDED per pair, so a mixed-scale corpus
+   would have been un-ablatable — shipped 2026-07-22: `Target` carries
+   `merge_max_chars` and synth stamps it into `meta.merge_max_chars`
+   (None = unmerged; pre-facet records lack the key and were all 1500).
+   A v2 batch is now just `dan-style synth --merge-max-chars 4500 ...`
+   with the ablation selector free — the qwen3-32b lesson, applied in
+   advance. Costs scale linearly with tokens (~3× the 1500 batch).
+   Check the generation gates at the new scale before a big batch:
+   `max_length_ratio` / `max_transform_sim` were calibrated on 1500-char
+   chunks, and `max_tokens` must cover ~3× longer outputs.
 2. **Real pairs at scale** — re-cut the capture archive with a
    paragraph-window chunker once enough archived captures accrue. (The
    331 legacy pairs stay in the diet at their native scale; curriculum

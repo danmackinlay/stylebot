@@ -261,6 +261,11 @@ def _build_record(
         # covariate: near-identity pairs are label noise for the detector and
         # teach the styler to copy; consumers filter by threshold.
         "transform_sim": transform_similarity(slop, target.text),
+        # Chunk-scale facet: the merge budget the target was packed under
+        # (None = unmerged). Lets a mixed-scale corpus (v2 longer rewrites)
+        # be ablated by scale with a one-line selector, like the generator
+        # facet. Pre-2026-07-22 records lack the key — all were 1500.
+        "merge_max_chars": target.merge_max_chars,
         "synthetic": True,
         "generator": generator_name,
         "slop_strategy": strategy,

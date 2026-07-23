@@ -60,6 +60,12 @@ class Target:
     chunk_index: int
     chunk_total: int
     context: str = ""
+    # The merge budget this chunk was packed under (None = unmerged single
+    # paragraphs). Stamped into pair meta so a mixed-scale corpus stays
+    # ablatable by chunk scale — the v2 longer-rewrites plan trains 1500- and
+    # 4500-char diets together and needs the facet to compare them
+    # (`_plans/v2-longer-rewrites.md`; same lesson as the generator facet).
+    merge_max_chars: int | None = None
 
 
 @dataclass(frozen=True)
@@ -281,8 +287,10 @@ def _post_targets(path: Path, source: str, policy: ChunkPolicy) -> list[Target]:
                     chunks.append((block, ctx))
 
     total = len(chunks)
+    scale = policy.merge_max_chars if policy.merge else None
     return [
-        Target(text=t, source=source, chunk_index=i, chunk_total=total, context=c)
+        Target(text=t, source=source, chunk_index=i, chunk_total=total, context=c,
+               merge_max_chars=scale)
         for i, (t, c) in enumerate(chunks)
     ]
 
