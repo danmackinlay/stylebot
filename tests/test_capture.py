@@ -32,6 +32,31 @@ def test_capture_pairs_writes_valid_records_to_explicit_path(tmp_path):
     assert on_disk == written
 
 
+def test_capture_pairs_archives_full_texts_for_rechunking(tmp_path):
+    """The chunk records are a lossy view; the archive is the re-cuttable raw.
+
+    diff_chunks drops unchanged paragraphs and document offsets, so longer-
+    scale re-chunking (v2 multi-paragraph pairs) depends on this archive
+    existing from capture day one.
+    """
+    before = "## S\n\nKept paragraph.\n\nIt is worth noting the rich tapestry.\n\nAlso kept."
+    after = "## S\n\nKept paragraph.\n\nWe dig in.\n\nAlso kept."
+    written = capture.capture_pairs(
+        before,
+        after,
+        pairs_path=tmp_path / "pairs.jsonl",
+        source="post/foo.qmd",
+        snapped_at="2026-07-07T00:00:00+00:00",
+    )
+    cap_id = written[0]["meta"]["capture_id"]
+    archive = json.loads((tmp_path / "captures" / f"{cap_id}.json").read_text())
+    # Byte-exact full texts — the unchanged paragraphs the chunk view lost.
+    assert archive["before_text"] == before
+    assert archive["after_text"] == after
+    assert archive["source"] == "post/foo.qmd"
+    assert archive["whole"] is False
+
+
 def test_capture_pairs_raises_when_nothing_changed(tmp_path):
     with pytest.raises(ValueError, match="no changed text chunks"):
         capture.capture_pairs(

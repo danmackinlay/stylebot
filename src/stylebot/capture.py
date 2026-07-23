@@ -254,6 +254,13 @@ def capture_pairs(
     prefixed with the nearest preceding section heading (from the after body)
     as fixed context. `whole` mode spans many headings, so it never carries
     context regardless of this flag.
+
+    The full before/after texts are also archived beside the corpus
+    (`<pairs_dir>/captures/<capture_id>.json`) — the chunk records are a
+    lossy VIEW (changed regions only, no document offsets), and the archive
+    is what lets the corpus be re-cut at other chunk scales later (longer
+    multi-paragraph pairs, discourse context) without re-capturing. Captures
+    saved before 2026-07-22 predate the archive and are chunk-scale forever.
     """
     before_meta, before_body = split_frontmatter(before_text)
     after_meta, after_body = split_frontmatter(after_text)
@@ -274,6 +281,23 @@ def capture_pairs(
         )
 
     cap_id = new_capture_id()
+    archive_path = pairs_path.parent / "captures" / f"{cap_id}.json"
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_text(
+        json.dumps(
+            {
+                "capture_id": cap_id,
+                "source": source,
+                "snapped_at": snapped_at,
+                "whole": whole,
+                "before_text": before_text,
+                "after_text": after_text,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     total = len(chunk_pairs)
     written: list[dict] = []
     for i, (b, a, context) in enumerate(chunk_pairs):

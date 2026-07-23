@@ -41,6 +41,13 @@ export interface PreferenceDecision {
   chosen: number | null;
   kept_input: boolean;
   doc: string;
+  /** Character offsets of `chunk` in the document at decision time. */
+  offsets?: [number, number];
+  /** Adjacent prose paragraphs — discourse context for future longer-scale /
+   * coherence-aware training (v2); unrecoverable later since the working copy
+   * is uncommitted. Null at a document edge. */
+  para_before?: string | null;
+  para_after?: string | null;
 }
 
 export interface SidecarEvents {

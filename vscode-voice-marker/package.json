@@ -2,7 +2,7 @@
   "name": "voice-marker",
   "displayName": "Voice Marker",
   "description": "Mark paragraphs with P(slop) and rewrite them in Dan's voice via a stylebot sidecar (ai-style/dan-style serve)",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "danmackinlay",
   "private": true,
   "license": "MIT",

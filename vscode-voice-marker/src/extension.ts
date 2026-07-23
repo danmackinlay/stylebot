@@ -271,6 +271,16 @@ async function rewriteCommand(): Promise<void> {
     return; // Esc: an abort is not a judgement — log nothing.
   }
 
+  // Discourse context for the record, read BEFORE the edit mutates offsets:
+  // the prose paragraphs flanking the target. Future longer-scale /
+  // coherence-aware training (v2) needs this, and it cannot be backfilled —
+  // the working copy is uncommitted.
+  const startOffset = document.offsetAt(range.start);
+  const endOffset = document.offsetAt(range.end);
+  const paras = proseParagraphs(document.getText(), 0);
+  const before = [...paras].reverse().find((p) => p.end <= startOffset);
+  const after = paras.find((p) => p.start >= endOffset);
+
   if (pick.candidate) {
     const ok = await editor.edit((edit) => edit.replace(range, pick.candidate!.text));
     if (!ok) {
@@ -288,6 +298,9 @@ async function rewriteCommand(): Promise<void> {
       chosen: pick.presentedIndex,
       kept_input: pick.candidate === null,
       doc: vscode.workspace.asRelativePath(document.uri),
+      offsets: [startOffset, endOffset],
+      para_before: before ? before.text : null,
+      para_after: after ? after.text : null,
     })
     .catch((err) => output.appendLine(`[prefer] not recorded: ${err}`));
   scheduleScore(editor, 0);
