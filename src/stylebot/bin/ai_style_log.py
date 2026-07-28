@@ -107,6 +107,8 @@ Explicit override flags for the rare cases:
     --keep-open      orthogonal to the above: leaves the snapshot in
                      place after saving for further `save` calls
                      against the same starting state.
+    --redo           reopen the last closed session for this file, then
+                     save. For the after-the-fact do-over (see below).
 
 Typical interim-progress loop (no flags beyond --keep-open needed):
 
@@ -128,6 +130,25 @@ substantive edits — no flag needed; smart default keeps both:
     # ... de-slop, T2 -> T3 ...
     save foo.qmd                                   # session 2 pairs ADDED; session 1 pairs kept
                                                    # output: "kept 1 pair(s) from 1 earlier session(s)"
+
+The do-over: you saved, then noticed a typo in your own rewrite. Closing
+a session ARCHIVES its snapshot (to `snapshots-closed/`) rather than
+deleting it, so the base text survives and the pair can be recaptured
+against it:
+
+    open foo.qmd                                   # session 1, T0 recorded
+    save foo.qmd                                   # pairs written, session closed
+    # ... fix the typo, T1 -> T1' ...
+    save --redo foo.qmd                            # reopens session 1, re-diffs T0 -> T1'
+                                                   # smart disposition REPLACES the first
+                                                   # save's pairs (same snapped_at)
+
+`reopen foo.qmd` is the same restore as a separate step, for when you
+want to look before you save. Because the archive preserves the original
+`snapped_at`, the re-save lands in the same session — which is what makes
+it a correction rather than a near-duplicate pair in the corpus. The
+archive is also the recovery path for an accidental `drop`. One archive
+per source, overwritten each close; there is no deeper undo history.
 
 Critical: close session 1 before doing unrelated edits. If you used
 `save --keep-open` between sessions, session 2's diff would be against
@@ -264,6 +285,11 @@ from stylebot.jsonl import read_jsonl
 # Both default and override are gitignored. See `_training_pairs/README.md`.
 TRAINING_PAIRS_DIR = Path(os.environ.get("STYLEBOT_DATA_DIR", "_training_pairs"))
 SNAPSHOTS_DIR = TRAINING_PAIRS_DIR / "snapshots"
+# Closed sessions' snapshots, retained so `reopen` / `save --redo` can diff a
+# corrected rewrite against the SAME base. A sibling directory rather than a
+# suffix inside SNAPSHOTS_DIR, because the open-session listings rglob
+# `*.json` there and would otherwise report closed sessions as open.
+CLOSED_SNAPSHOTS_DIR = TRAINING_PAIRS_DIR / "snapshots-closed"
 PAIRS_PATH = TRAINING_PAIRS_DIR / "pairs.jsonl"
 
 
@@ -284,6 +310,32 @@ def _snapshot_path(source: Path) -> Path:
     `post/foo.qmd` -> `_training_pairs/snapshots/post/foo.qmd.json`.
     """
     return SNAPSHOTS_DIR / f"{source}.json"
+
+
+def _closed_snapshot_path(source: Path) -> Path:
+    """Where the retained snapshot of `source`'s last closed session lives.
+
+    Same mirrored layout as `_snapshot_path`, under CLOSED_SNAPSHOTS_DIR. One
+    archive per source, overwritten each time a session closes — the redo
+    workflow only ever wants the most recent base.
+    """
+    return CLOSED_SNAPSHOTS_DIR / f"{source}.json"
+
+
+def _close_snapshot(snap: Path, source: Path) -> None:
+    """Close a session by archiving its snapshot rather than deleting it.
+
+    Retaining the base text is what makes `reopen` / `save --redo` possible:
+    the pairs themselves cannot reconstruct it, since in chunk mode they hold
+    only the changed regions. The archive keeps the original `snapped_at`, so
+    a re-save after `reopen` lands in the same session and `save`'s smart
+    disposition REPLACES the earlier pairs instead of stacking a near-duplicate
+    onto the corpus.
+    """
+    closed = _closed_snapshot_path(source)
+    closed.parent.mkdir(parents=True, exist_ok=True)
+    closed.write_text(snap.read_text(encoding="utf-8"), encoding="utf-8")
+    snap.unlink()
 
 
 def _read_text(path: Path) -> str:
@@ -450,6 +502,63 @@ def open_session(ctx: click.Context, file: Path):
     _remind_open_sessions(ctx)
 
 
+def _restore_snapshot(file: Path) -> dict:
+    """Restore `file`'s archived session to the live snapshot path.
+
+    Returns the restored payload. Raises `FileNotFoundError` when there is no
+    archive to restore. Preserves `snapped_at` verbatim — see `_close_snapshot`
+    for why that is the load-bearing part.
+    """
+    closed = _closed_snapshot_path(file)
+    if not closed.exists():
+        raise FileNotFoundError(closed)
+    payload = json.loads(closed.read_text(encoding="utf-8"))
+    snap = _snapshot_path(file)
+    snap.parent.mkdir(parents=True, exist_ok=True)
+    snap.write_text(closed.read_text(encoding="utf-8"), encoding="utf-8")
+    closed.unlink()
+    return payload
+
+
+@main.command(name="reopen")
+@click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.pass_context
+def reopen_session(ctx: click.Context, file: Path):
+    """Reopen FILE's last closed session, restoring its original 'before' state.
+
+    For the do-over case: you saved, then spotted a typo in the rewrite. Fix
+    the file, `reopen`, then `save` again — the re-save diffs against the same
+    base and replaces the previous pairs rather than logging a near-duplicate.
+    `save --redo` does both steps in one.
+
+    Also recovers an accidental `drop`.
+    """
+    snap = _snapshot_path(file)
+    if snap.exists():
+        click.echo(
+            f"session already open for {file}; nothing to reopen "
+            "(`save` against it, or `drop` it first)",
+            err=True,
+        )
+        sys.exit(1)
+    try:
+        payload = _restore_snapshot(file)
+    except FileNotFoundError:
+        click.echo(
+            f"no closed session for {file}; run `open` to start a fresh one",
+            err=True,
+        )
+        sys.exit(1)
+    # Surface the age: resurrecting a weeks-old base against a much-changed
+    # file produces a huge, unrepresentative diff, and that should be visible.
+    age = _humanize_age(payload.get("snapped_at", ""))
+    click.echo(
+        f"reopened session for {file} "
+        f"({len(payload.get('content', ''))} chars, originally opened {age})"
+    )
+    _remind_open_sessions(ctx)
+
+
 @main.command(name="save")
 @click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--tag", "tags", multiple=True, help="Tag the pair(s) for later filtering.")
@@ -483,6 +592,13 @@ def open_session(ctx: click.Context, file: Path):
     "from the current session. Mutually exclusive with --replace.",
 )
 @click.option(
+    "--redo",
+    is_flag=True,
+    help="Reopen the last closed session for this file first, then save. The "
+    "do-over shorthand: you spotted a typo after saving and want the pair "
+    "recaptured against the same base. No-op if a session is already open.",
+)
+@click.option(
     "--heading-context/--no-heading-context",
     "heading_context",
     default=True,
@@ -500,6 +616,7 @@ def save_session(
     whole: bool,
     force_replace: bool,
     force_append: bool,
+    redo: bool,
     heading_context: bool,
 ):
     """Save FILE's rewrite as pair(s) in pairs.jsonl, then close the session.
@@ -523,8 +640,24 @@ def save_session(
         sys.exit(2)
 
     snap = _snapshot_path(file)
+    if redo and not snap.exists():
+        try:
+            restored = _restore_snapshot(file)
+        except FileNotFoundError:
+            click.echo(
+                f"--redo: no closed session for {file} to reopen; run `open` first",
+                err=True,
+            )
+            sys.exit(1)
+        click.echo(
+            f"reopened session for {file} "
+            f"(originally opened {_humanize_age(restored.get('snapped_at', ''))})"
+        )
     if not snap.exists():
-        click.echo(f"no open session for {file}; run `open` first", err=True)
+        hint = "run `open` first"
+        if _closed_snapshot_path(file).exists():
+            hint += ", or `save --redo` to reopen the last closed session"
+        click.echo(f"no open session for {file}; {hint}", err=True)
         sys.exit(1)
 
     payload = json.loads(snap.read_text(encoding="utf-8"))
@@ -602,7 +735,7 @@ def save_session(
         sys.exit(1)
 
     if not keep_open:
-        snap.unlink()
+        _close_snapshot(snap, file)
 
     total_before = sum(rec["meta"]["before_chars"] for rec in written)
     total_after = sum(rec["meta"]["after_chars"] for rec in written)
@@ -656,8 +789,8 @@ def drop_session(ctx: click.Context, file: Path):
     if not snap.exists():
         click.echo(f"no open session for {file}", err=True)
         sys.exit(1)
-    snap.unlink()
-    click.echo(f"dropped session for {file}")
+    _close_snapshot(snap, file)
+    click.echo(f"dropped session for {file} (`reopen` restores it if that was a mistake)")
     _remind_open_sessions(ctx)
 
 
@@ -696,6 +829,22 @@ def list_state():
             )
         except Exception as exc:
             click.echo(f"  {snap} [unreadable: {exc}]")
+
+    closed = (
+        sorted(CLOSED_SNAPSHOTS_DIR.rglob("*.json")) if CLOSED_SNAPSHOTS_DIR.exists() else []
+    )
+    if closed:
+        click.echo(f"{len(closed)} closed session(s), redoable via `reopen` / `save --redo`")
+        for snap in closed:
+            try:
+                payload = json.loads(snap.read_text(encoding="utf-8"))
+                click.echo(
+                    f"  {payload.get('source', snap)} "
+                    f"(opened {_humanize_age(payload.get('snapped_at', ''))}, "
+                    f"{len(payload.get('content', ''))} chars)"
+                )
+            except Exception as exc:
+                click.echo(f"  {snap} [unreadable: {exc}]")
 
 
 @main.command(name="tidy")

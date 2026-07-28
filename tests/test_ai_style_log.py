@@ -8,6 +8,9 @@ pairs (gated through the shared `validate_pair_record`), the
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from click.testing import CliRunner
 
@@ -26,6 +29,7 @@ def temp_corpus(tmp_path, monkeypatch):
     data_dir = tmp_path / "corpus"
     monkeypatch.setattr(log, "TRAINING_PAIRS_DIR", data_dir)
     monkeypatch.setattr(log, "SNAPSHOTS_DIR", data_dir / "snapshots")
+    monkeypatch.setattr(log, "CLOSED_SNAPSHOTS_DIR", data_dir / "snapshots-closed")
     monkeypatch.setattr(log, "PAIRS_PATH", data_dir / "pairs.jsonl")
     return data_dir
 
@@ -241,7 +245,7 @@ def test_preamble_change_is_valid_with_no_context(temp_corpus):
     assert validate_pair_record(rec) == []
 
 
-# ---- CLI-level harness + regression ------------------------------------
+# ---- session redo: close archives, reopen restores, re-save replaces ------
 
 
 @pytest.fixture
@@ -265,6 +269,155 @@ def _sources_and_stamps():
         (r["meta"].get("source"), r["meta"].get("snapped_at"), r["messages"][2]["content"])
         for r in recs
     ]
+
+
+def test_save_archives_snapshot_instead_of_deleting(session_repo):
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nIt is worth noting the rich tapestry.\n", encoding="utf-8")
+    _run("open", "post/foo.qmd")
+    f.write_text("## S\n\nWe dig in, with a typoo.\n", encoding="utf-8")
+    _run("save", "post/foo.qmd")
+
+    assert not log._snapshot_path(Path("post/foo.qmd")).exists()
+    archived = log._closed_snapshot_path(Path("post/foo.qmd"))
+    assert archived.exists()
+    # The archive holds the ORIGINAL base, not the saved state.
+    payload = json.loads(archived.read_text(encoding="utf-8"))
+    assert "rich tapestry" in payload["content"]
+
+
+def test_redo_replaces_prior_pair_against_same_base(session_repo):
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nIt is worth noting the rich tapestry.\n", encoding="utf-8")
+    _run("open", "post/foo.qmd")
+    f.write_text("## S\n\nWe dig in, with a typoo.\n", encoding="utf-8")
+    _run("save", "post/foo.qmd")
+    first = _sources_and_stamps()
+    assert len(first) == 1
+    assert "typoo" in first[0][2]
+
+    # Fix the typo and redo.
+    f.write_text("## S\n\nWe dig in, without a typo.\n", encoding="utf-8")
+    _run("save", "--redo", "post/foo.qmd")
+
+    after = _sources_and_stamps()
+    # Replaced, not stacked...
+    assert len(after) == 1
+    assert "typoo" not in after[0][2]
+    assert "without a typo" in after[0][2]
+    # ...because the session timestamp was preserved across the reopen.
+    assert after[0][1] == first[0][1]
+    # And the redo's own close re-archived the same base for a further redo.
+    payload = json.loads(
+        log._closed_snapshot_path(Path("post/foo.qmd")).read_text(encoding="utf-8")
+    )
+    assert "rich tapestry" in payload["content"]
+
+
+def test_reopen_then_save_matches_redo(session_repo):
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nIt is worth noting the rich tapestry.\n", encoding="utf-8")
+    _run("open", "post/foo.qmd")
+    f.write_text("## S\n\nWe dig in, with a typoo.\n", encoding="utf-8")
+    _run("save", "post/foo.qmd")
+    stamp = _sources_and_stamps()[0][1]
+
+    out = _run("reopen", "post/foo.qmd")
+    assert "reopened session" in out
+    assert log._snapshot_path(Path("post/foo.qmd")).exists()
+    # Restoring consumes the archive, so it cannot be double-restored.
+    assert not log._closed_snapshot_path(Path("post/foo.qmd")).exists()
+
+    f.write_text("## S\n\nWe dig in, without a typo.\n", encoding="utf-8")
+    _run("save", "post/foo.qmd")
+    after = _sources_and_stamps()
+    assert len(after) == 1
+    assert after[0][1] == stamp
+    assert "without a typo" in after[0][2]
+
+
+def test_redo_preserves_cross_session_pairs(session_repo):
+    """A redo must only replace ITS session's pairs, not an earlier session's."""
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nFirst slop draft here.\n", encoding="utf-8")
+    _run("open", "post/foo.qmd")
+    f.write_text("## S\n\nFirst rewrite here.\n", encoding="utf-8")
+    _run("save", "post/foo.qmd")
+
+    # Unrelated later session on the same file.
+    f.write_text("## S\n\nSecond slop draft here.\n", encoding="utf-8")
+    _run("open", "post/foo.qmd")
+    f.write_text("## S\n\nSecond rewrite, typoo.\n", encoding="utf-8")
+    _run("save", "post/foo.qmd")
+    assert len(_sources_and_stamps()) == 2
+
+    f.write_text("## S\n\nSecond rewrite, fixed.\n", encoding="utf-8")
+    _run("save", "--redo", "post/foo.qmd")
+
+    after = _sources_and_stamps()
+    assert len(after) == 2
+    bodies = sorted(b for _, _, b in after)
+    assert any("First rewrite" in b for b in bodies)
+    assert any("Second rewrite, fixed" in b for b in bodies)
+    assert not any("typoo" in b for b in bodies)
+
+
+def test_reopen_refuses_when_session_already_open(session_repo):
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nbody one.\n", encoding="utf-8")
+    _run("open", "post/foo.qmd")
+    result = CliRunner().invoke(log.main, ["-q", "reopen", "post/foo.qmd"])
+    assert result.exit_code == 1
+    assert "already open" in result.output
+
+
+def test_reopen_without_archive_errors(session_repo):
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nbody one.\n", encoding="utf-8")
+    result = CliRunner().invoke(log.main, ["-q", "reopen", "post/foo.qmd"])
+    assert result.exit_code == 1
+    assert "no closed session" in result.output
+
+
+def test_redo_without_archive_errors(session_repo):
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nbody one.\n", encoding="utf-8")
+    result = CliRunner().invoke(log.main, ["-q", "save", "--redo", "post/foo.qmd"])
+    assert result.exit_code == 1
+    assert "no closed session" in result.output
+
+
+def test_redo_is_noop_when_session_already_open(session_repo):
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nIt is worth noting the rich tapestry.\n", encoding="utf-8")
+    _run("open", "post/foo.qmd")
+    f.write_text("## S\n\nWe dig in.\n", encoding="utf-8")
+    out = _run("save", "--redo", "post/foo.qmd")
+    assert "reopened session" not in out
+    assert len(_sources_and_stamps()) == 1
+
+
+def test_drop_is_recoverable_via_reopen(session_repo):
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nIt is worth noting the rich tapestry.\n", encoding="utf-8")
+    _run("open", "post/foo.qmd")
+    _run("drop", "post/foo.qmd")
+    _run("reopen", "post/foo.qmd")
+    payload = json.loads(
+        log._snapshot_path(Path("post/foo.qmd")).read_text(encoding="utf-8")
+    )
+    assert "rich tapestry" in payload["content"]
+
+
+def test_closed_sessions_are_not_reported_as_open(session_repo):
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nIt is worth noting the rich tapestry.\n", encoding="utf-8")
+    _run("open", "post/foo.qmd")
+    f.write_text("## S\n\nWe dig in.\n", encoding="utf-8")
+    _run("save", "post/foo.qmd")
+    out = CliRunner().invoke(log.main, ["list"]).output
+    assert "0 open session(s)" in out
+    assert "1 closed session(s)" in out
 
 
 def test_save_reports_sessionless_prior_pairs_without_crashing(session_repo):
