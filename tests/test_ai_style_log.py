@@ -9,6 +9,7 @@ pairs (gated through the shared `validate_pair_record`), the
 from __future__ import annotations
 
 import pytest
+from click.testing import CliRunner
 
 from stylebot.bin import ai_style_log as log
 from stylebot.pairs import build_pair_content, validate_pair_record
@@ -238,3 +239,58 @@ def test_preamble_change_is_valid_with_no_context(temp_corpus):
     assert rec["messages"][1]["content"] == "Opening line, original."
     assert rec["messages"][2]["content"] == "Opening line, rewritten."
     assert validate_pair_record(rec) == []
+
+
+# ---- CLI-level harness + regression ------------------------------------
+
+
+@pytest.fixture
+def session_repo(temp_corpus, tmp_path, monkeypatch):
+    """A working tree with one .qmd, cwd'd into it, sharing temp_corpus."""
+    repo = tmp_path / "repo"
+    (repo / "post").mkdir(parents=True)
+    monkeypatch.chdir(repo)
+    return repo
+
+
+def _run(*args):
+    result = CliRunner().invoke(log.main, ["-q", *args])
+    assert result.exit_code == 0, result.output + str(result.exception)
+    return result.output
+
+
+def _sources_and_stamps():
+    recs = log._iter_pairs()
+    return [
+        (r["meta"].get("source"), r["meta"].get("snapped_at"), r["messages"][2]["content"])
+        for r in recs
+    ]
+
+
+def test_save_reports_sessionless_prior_pairs_without_crashing(session_repo):
+    """Regression: pairs logged via `log pair` carry snapped_at=None.
+
+    The post-save report sorted the set of prior snapped_at values, which
+    raised `TypeError: '<' not supported between 'str' and 'NoneType'` as soon
+    as a source had both session-logged and sessionless pairs.
+    """
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nbody\n", encoding="utf-8")
+    (session_repo / "b.txt").write_text("It is worth noting the tapestry.", encoding="utf-8")
+    (session_repo / "a.txt").write_text("We dig in.", encoding="utf-8")
+    # A sessionless pair (snapped_at=None) for this source...
+    _run("pair", "--before", "b.txt", "--after", "a.txt", "--source", "post/foo.qmd", "--whole")
+    # ...plus an earlier session's pair, so `other_session` mixes both kinds.
+    f.write_text("## S\n\nIt is worth noting the rich tapestry.\n", encoding="utf-8")
+    _run("open", "post/foo.qmd")
+    f.write_text("## S\n\nWe dig in here.\n", encoding="utf-8")
+    _run("save", "post/foo.qmd")
+
+    f.write_text("## S\n\nA later slop draft entirely.\n", encoding="utf-8")
+    _run("open", "post/foo.qmd")
+    f.write_text("## S\n\nA later rewrite entirely.\n", encoding="utf-8")
+    out = _run("save", "post/foo.qmd")
+
+    assert "1 earlier session(s)" in out
+    assert "1 logged outside a session" in out
+    assert len(_sources_and_stamps()) == 3

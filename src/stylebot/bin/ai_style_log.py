@@ -616,14 +616,26 @@ def save_session(
 
     # Post-save reporting of preserved cross-session / appended pairs
     if disposition == "smart" and other_session:
-        sessions_ts = sorted(
-            {rec.get("meta", {}).get("snapped_at") for rec in other_session if isinstance(rec, dict)}
+        # Pairs logged outside a session (`log pair`, `synth`) carry snapped_at=None;
+        # they have no session timestamp to sort or age, so count them separately.
+        stamps = {
+            rec.get("meta", {}).get("snapped_at") for rec in other_session if isinstance(rec, dict)
+        }
+        sessions_ts = sorted(ts for ts in stamps if ts)
+        sessionless = len(other_session) - sum(
+            1
+            for rec in other_session
+            if isinstance(rec, dict) and rec.get("meta", {}).get("snapped_at")
         )
-        oldest = sessions_ts[0] if sessions_ts else ""
-        click.echo(
-            f"  kept {len(other_session)} pair(s) from {len(sessions_ts)} earlier session(s) "
-            f"[oldest opened {_humanize_age(oldest)}]"
-        )
+        parts = []
+        if sessions_ts:
+            parts.append(
+                f"{len(sessions_ts)} earlier session(s) "
+                f"[oldest opened {_humanize_age(sessions_ts[0])}]"
+            )
+        if sessionless:
+            parts.append(f"{sessionless} logged outside a session")
+        click.echo(f"  kept {len(other_session)} pair(s) from {', '.join(parts)}")
     elif disposition == "append":
         total_kept = len(same_session) + len(other_session)
         if total_kept:
