@@ -58,9 +58,34 @@ export interface SidecarEvents {
 interface Pending {
   resolve: (value: any) => void;
   reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 const MAX_RESTARTS = 3;
+
+/**
+ * Per-op request budgets (ms). Without these a wedged sidecar hangs the UI
+ * forever: `request()` settles only on a matching response line or on process
+ * exit, and a Python process blocked on a dead socket does neither. Observed
+ * 2026-07-28 — a days-old sidecar on the tinker backend, parked on a
+ * CLOSE_WAIT socket to CloudFront left over from a previous network, 0% CPU,
+ * no timeout anywhere in the chain.
+ *
+ * `rewrite` is generous because a legitimate best-of-4 sample over the
+ * network (or a cold local MLX load) genuinely takes tens of seconds; `score`
+ * is local detector inference and should be near-instant; `info` covers the
+ * handshake's model load.
+ */
+const TIMEOUT_MS: Record<string, number> = {
+  info: 60_000,
+  score: 30_000,
+  rewrite: 180_000,
+  prefer: 15_000,
+};
+const DEFAULT_TIMEOUT_MS = 60_000;
+
+/** Consecutive timeouts before the process is presumed wedged and restarted. */
+const WEDGED_AFTER_TIMEOUTS = 2;
 
 export class Sidecar {
   private child: ChildProcess | null = null;
@@ -69,6 +94,8 @@ export class Sidecar {
   private buffer = "";
   private restarts = 0;
   private disposed = false;
+  /** Timeouts in a row with no intervening response — a wedged-process signal. */
+  private consecutiveTimeouts = 0;
   /** The artifact meta.json from the ready handshake (model name, metrics). */
   meta: Record<string, any> | null = null;
 
@@ -76,6 +103,8 @@ export class Sidecar {
     private command: string[],
     private cwd: string | undefined,
     private events: SidecarEvents,
+    /** Per-op timeout overrides (ms), e.g. from voiceMarker.timeouts. */
+    private timeouts?: Record<string, number>,
   ) {}
 
   start(): void {
@@ -134,11 +163,48 @@ export class Sidecar {
     if (!child || !child.stdin || !child.stdin.writable) {
       return Promise.reject(new Error("sidecar not running"));
     }
+    const op = String(body.op ?? "");
+    const budget = this.timeoutFor(op);
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => this.onTimeout(id, op, budget), budget);
+      // Never hold the extension host open on our behalf.
+      (timer as any).unref?.();
+      this.pending.set(id, { resolve, reject, timer });
       child.stdin!.write(JSON.stringify({ id, ...body }) + "\n");
     });
+  }
+
+  private timeoutFor(op: string): number {
+    const override = this.timeouts?.[op];
+    return override ?? TIMEOUT_MS[op] ?? DEFAULT_TIMEOUT_MS;
+  }
+
+  /** A request that outran its budget: fail it loudly, and restart the child
+   * if it looks wedged rather than merely slow. */
+  private onTimeout(id: number, op: string, budget: number): void {
+    const entry = this.pending.get(id);
+    if (!entry) {
+      return;
+    }
+    this.pending.delete(id);
+    this.consecutiveTimeouts += 1;
+    const secs = Math.round(budget / 1000);
+    const wedged = this.consecutiveTimeouts >= WEDGED_AFTER_TIMEOUTS;
+    entry.reject(
+      new Error(
+        `'${op}' timed out after ${secs}s — the sidecar is not responding. ` +
+          `A styler backend that dials out (tinker) can park on a dead socket; ` +
+          `check the Voice Marker output channel, or switch to the local ` +
+          `backend (DAN_STYLE_BACKEND=local with the MLX server up).` +
+          (wedged ? " Restarting the sidecar." : ""),
+      ),
+    );
+    if (wedged) {
+      this.events.onState("starting", `unresponsive after ${this.consecutiveTimeouts} timeouts; restarting`);
+      this.consecutiveTimeouts = 0;
+      this.restart();
+    }
   }
 
   private onData(chunk: string): void {
@@ -162,6 +228,8 @@ export class Sidecar {
         continue;
       }
       this.pending.delete(resp.id);
+      clearTimeout(entry.timer);
+      this.consecutiveTimeouts = 0; // the child is demonstrably alive
       if (resp.error) {
         entry.reject(new Error(resp.error));
       } else {
@@ -173,10 +241,7 @@ export class Sidecar {
   private onExit(detail: string): void {
     this.child = null;
     this.buffer = "";
-    for (const entry of this.pending.values()) {
-      entry.reject(new Error(`sidecar ${detail}`));
-    }
-    this.pending.clear();
+    this.failPending(`sidecar ${detail}`);
     if (this.disposed) {
       return;
     }
@@ -190,15 +255,20 @@ export class Sidecar {
     setTimeout(() => this.start(), delay);
   }
 
-  /** Manual restart (command changed, artifact retrained, …). */
+  /** Manual restart (command changed, artifact retrained, wedged child, …). */
   restart(): void {
     this.restarts = 0;
+    this.consecutiveTimeouts = 0;
     if (this.child) {
       const child = this.child;
       this.child = null; // suppress the auto-restart path's stale handle
       child.removeAllListeners();
       child.kill();
     }
+    // removeAllListeners() suppressed the exit path that would have settled
+    // these, so reject here or they hang for the life of the window.
+    this.failPending("sidecar restarted");
+    this.buffer = "";
     this.start();
   }
 
@@ -208,6 +278,15 @@ export class Sidecar {
       this.child.kill();
       this.child = null;
     }
+    this.failPending("sidecar disposed");
     this.events.onState("stopped");
+  }
+
+  private failPending(reason: string): void {
+    for (const entry of this.pending.values()) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error(reason));
+    }
+    this.pending.clear();
   }
 }

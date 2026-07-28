@@ -49,6 +49,7 @@ function config() {
     debounceMs: cfg.get<number>("debounceMs", 500),
     enabled: cfg.get<boolean>("enabled", true),
     bestOf: cfg.get<number>("bestOf", 4),
+    timeouts: cfg.get<Record<string, number>>("timeouts", {}),
   };
 }
 
@@ -326,7 +327,7 @@ export function activate(context: vscode.ExtensionContext): void {
   sidecar = new Sidecar(cfg.command, cfg.cwd, {
     onState: setStatus,
     onStderr: (chunk) => output.append(chunk),
-  });
+  }, cfg.timeouts);
   context.subscriptions.push({
     dispose: () => {
       sidecar?.dispose();

@@ -2,7 +2,7 @@
   "name": "voice-marker",
   "displayName": "Voice Marker",
   "description": "Mark paragraphs with P(slop) and rewrite them in Dan's voice via a stylebot sidecar (ai-style/dan-style serve)",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "danmackinlay",
   "private": true,
   "license": "MIT",
@@ -97,6 +97,25 @@
           "type": "number",
           "default": 4,
           "description": "Candidates to sample per rewrite (the sidecar needs a styler armed — dan-style serve, or ai-style serve with --backend)."
+        },
+        "voiceMarker.timeouts": {
+          "type": "object",
+          "default": {},
+          "description": "Per-op request budgets in ms, overriding the defaults (info 60000, score 30000, rewrite 180000, prefer 15000). A request that outruns its budget fails with an error instead of hanging the UI; two consecutive timeouts restart the presumed-wedged sidecar.",
+          "properties": {
+            "info": {
+              "type": "number"
+            },
+            "score": {
+              "type": "number"
+            },
+            "rewrite": {
+              "type": "number"
+            },
+            "prefer": {
+              "type": "number"
+            }
+          }
         }
       }
     }
