@@ -90,8 +90,50 @@ def _nearest_heading(paras: list[str], idx: int) -> str:
     return ""
 
 
+def _coalesce_regions(
+    regions: list[tuple[int, int, int, int]],
+    after_paras: list[str],
+    *,
+    gap_paras: int,
+    gap_chars: int,
+) -> list[tuple[int, int, int, int]]:
+    """Merge changed regions separated by only a short unchanged run.
+
+    Each region is `(i1, i2, j1, j2)` — before-span and after-span. Two adjacent
+    regions merge when the untouched paragraphs between them are within BOTH
+    tolerances, absorbing that gap into the merged pair.
+
+    Why this and not a fixed-width window: a document's untouched prose is text
+    Dan did not get to, not text he endorsed. A capture's before-side is
+    slop-bearing, so padding pairs out with their untouched neighbours would
+    teach the styler to leave slop alone. Bridging only *short* gaps keeps the
+    pair essentially all-changed (measured changed-fraction stays ~1.00 at
+    2 paragraphs / 800 chars) while letting one multi-paragraph intent stay one
+    pair. See `_plans/v2-longer-rewrites.md`.
+    """
+    if not regions or (gap_paras <= 0 and gap_chars <= 0):
+        return regions
+    out = [list(regions[0])]
+    for i1, i2, j1, j2 in regions[1:]:
+        prev_j2 = out[-1][3]
+        gap = after_paras[prev_j2:j1]
+        gap_len = sum(len(p) + 2 for p in gap)
+        if len(gap) <= gap_paras and gap_len <= gap_chars:
+            out[-1][1] = i2  # extend before-span across the gap
+            out[-1][3] = j2  # extend after-span across the gap
+        else:
+            out.append([i1, i2, j1, j2])
+    return [tuple(r) for r in out]  # type: ignore[misc]
+
+
 def diff_chunks(
-    before: str, after: str, *, heading_context: bool = False
+    before: str,
+    after: str,
+    *,
+    heading_context: bool = False,
+    coalesce_gap_paras: int = 0,
+    coalesce_gap_chars: int = 0,
+    max_chars: int | None = None,
 ) -> list[tuple[str, str, str]]:
     """Return (before_chunk, after_chunk, context) triples per changed region.
 
@@ -106,6 +148,15 @@ def diff_chunks(
     which is desirable: rewriting two adjacent paragraphs is usually one
     intent, not two independent edits.
 
+    `coalesce_gap_paras` / `coalesce_gap_chars` extend that coalescing across
+    *short unchanged runs*, so an edit spanning several paragraphs with a
+    left-alone paragraph in the middle stays ONE pair instead of fragmenting.
+    Both default to 0 (legacy behaviour: only contiguous regions merge). A
+    merged region exceeding `max_chars` falls back to its uncoalesced parts
+    rather than being dropped. Untouched text is never appended to the *ends*
+    of a pair — only bridged between two changed regions (see
+    `_coalesce_regions` for why).
+
     When `heading_context` is True, each triple's `context` is the nearest
     preceding section heading among the AFTER paragraphs (the kept text),
     resolved from the changed region's after-start index `j1`. Preamble
@@ -118,18 +169,42 @@ def diff_chunks(
     matcher = difflib.SequenceMatcher(
         None, before_paras, after_paras, autojunk=False
     )
-    triples: list[tuple[str, str, str]] = []
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal":
-            continue
+    raw = [
+        (i1, i2, j1, j2)
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes()
+        if tag != "equal"
+    ]
+    regions = _coalesce_regions(
+        raw, after_paras, gap_paras=coalesce_gap_paras, gap_chars=coalesce_gap_chars
+    )
+
+    def _emit(span: tuple[int, int, int, int]) -> tuple[str, str, str] | None:
+        i1, i2, j1, j2 = span
         before_chunk = "\n\n".join(before_paras[i1:i2])
         after_chunk = "\n\n".join(after_paras[j1:j2])
         if not before_chunk.strip() or not after_chunk.strip():
             # Pure insert (no before content) or pure delete (no after
             # content) — nothing to learn the transformation from.
-            continue
+            return None
         context = _nearest_heading(after_paras, j1) if heading_context else ""
-        triples.append((before_chunk, after_chunk, context))
+        return (before_chunk, after_chunk, context)
+
+    triples: list[tuple[str, str, str]] = []
+    for span in regions:
+        emitted = _emit(span)
+        if emitted is not None and (
+            max_chars is None or max(len(emitted[0]), len(emitted[1])) <= max_chars
+        ):
+            triples.append(emitted)
+            continue
+        # Oversized (or empty) after coalescing — fall back to the uncoalesced
+        # regions inside this span, so a long merge degrades to the legacy cut
+        # instead of silently dropping a real edit.
+        for part in raw:
+            if part[2] >= span[2] and part[3] <= span[3]:
+                emitted = _emit(part)
+                if emitted is not None:
+                    triples.append(emitted)
     return triples
 
 
@@ -244,6 +319,9 @@ def capture_pairs(
     whole: bool = False,
     extra_meta: dict | None = None,
     heading_context: bool = True,
+    coalesce_gap_paras: int = 0,
+    coalesce_gap_chars: int = 0,
+    max_chars: int | None = None,
 ) -> list[dict]:
     """Strip frontmatter, diff, and append one or more pair records.
 
@@ -254,6 +332,10 @@ def capture_pairs(
     prefixed with the nearest preceding section heading (from the after body)
     as fixed context. `whole` mode spans many headings, so it never carries
     context regardless of this flag.
+
+    `coalesce_gap_paras` / `coalesce_gap_chars` / `max_chars` pass through to
+    `diff_chunks`, bridging short unchanged runs so one multi-paragraph edit
+    stays one pair. Defaults are the legacy no-bridging behaviour.
 
     The full before/after texts are also archived beside the corpus
     (`<pairs_dir>/captures/<capture_id>.json`) — the chunk records are a
@@ -271,7 +353,12 @@ def capture_pairs(
         chunk_pairs: list[tuple[str, str, str]] = [(before_body, after_body, "")]
     else:
         chunk_pairs = diff_chunks(
-            before_body, after_body, heading_context=heading_context
+            before_body,
+            after_body,
+            heading_context=heading_context,
+            coalesce_gap_paras=coalesce_gap_paras,
+            coalesce_gap_chars=coalesce_gap_chars,
+            max_chars=max_chars,
         )
 
     if not chunk_pairs:
@@ -317,3 +404,101 @@ def capture_pairs(
         append_pair(pairs_path, record)
         written.append(record)
     return written
+
+
+# ---- Re-cutting the archive ----
+
+
+def iter_archives(pairs_path: Path):
+    """Yield each capture archive dict beside `pairs_path`, oldest first.
+
+    Archives are `<pairs_dir>/captures/<capture_id>.json` as written by
+    `capture_pairs`. Sorted by `snapped_at` so a re-cut is deterministic.
+    """
+    cap_dir = pairs_path.parent / "captures"
+    if not cap_dir.is_dir():
+        return
+    archives = []
+    for path in cap_dir.glob("*.json"):
+        try:
+            archives.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            continue
+    archives.sort(key=lambda d: (d.get("snapped_at") or "", d.get("capture_id") or ""))
+    yield from archives
+
+
+def recut_archives(
+    pairs_path: Path,
+    *,
+    coalesce_gap_paras: int,
+    coalesce_gap_chars: int,
+    max_chars: int | None = None,
+    heading_context: bool = True,
+    min_chars: int = 0,
+    dry_run: bool = False,
+) -> list[dict]:
+    """Re-derive real pairs from the capture archives at a new cut policy.
+
+    The archive holds the full before/after texts, so the corpus can be re-cut
+    without recapturing — that is the whole reason it exists. Emitted records
+    carry `meta.recut` (the gap policy) and reuse the archive's own
+    `capture_id`, so a re-cut is IDEMPOTENT: re-running it with the same policy
+    replaces the previous re-cut for that capture rather than stacking
+    duplicates.
+
+    Pairs from the *original* (uncoalesced) cut of the same capture are also
+    dropped, since they are a strictly lossier view of the same edit. Captures
+    with no archive (pre-2026-07-22) are untouched at their native scale —
+    there is nothing to re-cut them from.
+
+    Returns the records written (or that *would* be written, under `dry_run`).
+    """
+    policy = {"gap_paras": coalesce_gap_paras, "gap_chars": coalesce_gap_chars}
+    records: list[dict] = []
+    recut_ids: set[str] = set()
+
+    for arch in iter_archives(pairs_path):
+        cap_id = arch.get("capture_id")
+        if not cap_id or arch.get("whole"):
+            continue  # whole-file captures are already unchunked
+        _, before_body = split_frontmatter(arch.get("before_text") or "")
+        _, after_body = split_frontmatter(arch.get("after_text") or "")
+        triples = diff_chunks(
+            before_body,
+            after_body,
+            heading_context=heading_context,
+            coalesce_gap_paras=coalesce_gap_paras,
+            coalesce_gap_chars=coalesce_gap_chars,
+            max_chars=max_chars,
+        )
+        triples = [t for t in triples if len(t[1].strip()) >= min_chars]
+        if not triples:
+            continue
+        recut_ids.add(cap_id)
+        for i, (b, a, context) in enumerate(triples):
+            records.append(
+                build_pair_record(
+                    before_body=b,
+                    after_body=a,
+                    source=arch.get("source"),
+                    snapped_at=arch.get("snapped_at"),
+                    before_frontmatter=None,
+                    after_frontmatter=None,
+                    capture_id=cap_id,
+                    chunk_index=i,
+                    chunk_total=len(triples),
+                    context=context,
+                    extra_meta={"recut": policy},
+                )
+            )
+
+    if not dry_run and records:
+        kept = [
+            rec
+            for rec in read_jsonl(pairs_path)
+            if (rec.get("meta", {}) if isinstance(rec, dict) else {}).get("capture_id")
+            not in recut_ids
+        ]
+        write_pairs_atomic(pairs_path, kept + records)
+    return records

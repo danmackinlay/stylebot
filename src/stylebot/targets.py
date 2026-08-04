@@ -66,6 +66,15 @@ class Target:
     # 4500-char diets together and needs the facet to compare them
     # (`_plans/v2-longer-rewrites.md`; same lesson as the generator facet).
     merge_max_chars: int | None = None
+    # How the chunk was cut: None/"section" = packed within one section (a chunk
+    # never crosses a heading, and the heading rides along as `context`);
+    # "cross-heading" = heading lines are packed INTO the text as content, so a
+    # chunk spans sections and carries no separate context. Stamped into pair
+    # meta beside `merge_max_chars` — the two together are the chunk-scale
+    # facet, and mode matters more than budget: Dan's sections are median ~550
+    # chars, so section-bounded packing hits the section wall long before the
+    # budget (`_plans/v2-longer-rewrites.md`).
+    chunk_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +96,10 @@ class ChunkPolicy:
     merge_max_chars: int = MERGE_MAX_CHUNK_CHARS
     stop_at_headers: Sequence[str] = ()
     heading_context: str = "none"
+    # Pack across section boundaries, with heading lines as chunk CONTENT.
+    # Only meaningful with `merge`; forces `heading_context` off, since an
+    # inline heading is text the styler rewrites rather than fixed context.
+    cross_heading: bool = False
 
 
 _HEADER_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)\s*$")
@@ -254,43 +267,63 @@ def _post_targets(path: Path, source: str, policy: ChunkPolicy) -> list[Target]:
     # splitting, so they never become targets and chunk boundaries match what
     # the blog's own edit pipeline sees.
     text = editable_prose(body) if policy.prose_only else body
-    want_context = policy.heading_context == "immediate"
+    cross = policy.cross_heading and policy.merge
+    # An inline heading is content the styler rewrites, so it cannot also be
+    # fixed context — cross-heading mode wins over heading_context.
+    want_context = policy.heading_context == "immediate" and not cross
     gate_kw = dict(
         ignore_markers=policy.ignore_markers,
         drop_link_dumps=policy.drop_link_dumps,
         drop_list_items=policy.drop_list_items,
     )
+    # Junk gate applied per-paragraph BEFORE packing (no min/max floor — short
+    # prose survives to be rescued by its neighbours; tables/lists/link dumps
+    # are dropped so they never pollute a packed block).
+    prepack_kw = dict(min_chars=1, max_chars=None, **gate_kw)
 
-    # Both modes iterate header-delimited sections (so the section heading is
-    # available as context, and so a passage never packs across a header). The
-    # heading is attached to each emitted chunk when heading_context is on.
     chunks: list[tuple[str, str]] = []  # (text, context)
-    for heading, section in _split_sections(text):
-        ctx = heading if want_context else ""
-        if not policy.merge:
-            for c in split_paragraphs(section):
-                if _keep_chunk(c, min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw):
-                    chunks.append((c, ctx))
-        else:
-            # Keep prose paragraphs (no min/max floor yet — short prose survives
-            # to be rescued; junk dropped pre-pack), greedily pack to the budget,
-            # then gate the packed block on min/max/link-list.
-            paras = [
-                p
-                for p in split_paragraphs(section)
-                if _keep_chunk(p, min_chars=1, max_chars=None, **gate_kw)
-            ]
-            for block in _pack_paragraphs(paras, merge_max_chars=policy.merge_max_chars):
-                if _keep_chunk(
-                    block, min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw
-                ):
-                    chunks.append((block, ctx))
+    if cross:
+        # Flatten the whole document into one ordered unit stream — each
+        # heading line followed by its surviving paragraphs — and pack across
+        # section boundaries. Headings are kept unconditionally (a heading is
+        # short and would never clear the junk gate on its own, but as the
+        # first line of a packed block it is exactly the structure we want the
+        # styler to learn to carry).
+        units: list[str] = []
+        for heading, section in _split_sections(text):
+            if heading:
+                units.append(heading)
+            units.extend(p for p in split_paragraphs(section) if _keep_chunk(p, **prepack_kw))
+        for block in _pack_paragraphs(units, merge_max_chars=policy.merge_max_chars):
+            if _keep_chunk(
+                block, min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw
+            ):
+                chunks.append((block, ""))
+    else:
+        # Section-bounded: iterate header-delimited sections so a passage never
+        # packs across a header, and the heading is available as context.
+        for heading, section in _split_sections(text):
+            ctx = heading if want_context else ""
+            if not policy.merge:
+                for c in split_paragraphs(section):
+                    if _keep_chunk(
+                        c, min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw
+                    ):
+                        chunks.append((c, ctx))
+            else:
+                paras = [p for p in split_paragraphs(section) if _keep_chunk(p, **prepack_kw)]
+                for block in _pack_paragraphs(paras, merge_max_chars=policy.merge_max_chars):
+                    if _keep_chunk(
+                        block, min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw
+                    ):
+                        chunks.append((block, ctx))
 
     total = len(chunks)
     scale = policy.merge_max_chars if policy.merge else None
+    mode = "cross-heading" if cross else None
     return [
         Target(text=t, source=source, chunk_index=i, chunk_total=total, context=c,
-               merge_max_chars=scale)
+               merge_max_chars=scale, chunk_mode=mode)
         for i, (t, c) in enumerate(chunks)
     ]
 
@@ -320,6 +353,7 @@ def iter_targets(
     merge_max_chars: int = MERGE_MAX_CHUNK_CHARS,
     stop_at_headers: Sequence[str] = (),
     heading_context: str = "none",
+    cross_heading: bool = False,
     sort_key: Callable[[Target], object] | None = None,
 ) -> list[Target]:
     """Collect prose chunks to use as synthesis targets.
@@ -363,6 +397,15 @@ def iter_targets(
       populate ``Target.context`` with the section heading each chunk sits under,
       so `synthesize_pairs` can prepend it verbatim to both sides of the pair.
       ``"none"`` (default) leaves context empty (unchanged behaviour).
+    - `cross_heading` (requires `merge`): pack across section boundaries with
+      heading lines as chunk **content**, so a passage spans sections. This is
+      the knob that actually buys length: section-bounded packing hits the
+      section wall long before `merge_max_chars` (Dan's sections are median
+      ~550 chars, and only ~14% exceed 1500), so raising the budget alone
+      barely moves the distribution. Forces `heading_context` off — an inline
+      heading is text the styler rewrites, not fixed context — and stamps
+      ``Target.chunk_mode = "cross-heading"``. See
+      `_plans/v2-longer-rewrites.md`.
 
     `sort_key` orders the resulting chunks. Returns a flat list of `Target`s.
     """
@@ -382,6 +425,7 @@ def iter_targets(
         drop_list_items=drop_list_items,
         merge=merge,
         merge_max_chars=merge_max_chars,
+        cross_heading=cross_heading,
         stop_at_headers=stop_at_headers,
         heading_context=heading_context,
     )

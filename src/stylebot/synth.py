@@ -266,6 +266,10 @@ def _build_record(
         # be ablated by scale with a one-line selector, like the generator
         # facet. Pre-2026-07-22 records lack the key — all were 1500.
         "merge_max_chars": target.merge_max_chars,
+        # How the chunk was cut ("cross-heading" = headings packed in as
+        # content; None = section-bounded). Mode matters more than budget for
+        # scale, so the ablation needs both facets, not just the budget.
+        "chunk_mode": target.chunk_mode,
         "synthetic": True,
         "generator": generator_name,
         "slop_strategy": strategy,

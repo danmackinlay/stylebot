@@ -60,7 +60,7 @@ def sort_key(name: str):
 CHUNK_PARAM_NAMES = (
     "min_chars", "max_chars", "prose_only", "ignore_markers", "stop_at_headers",
     "drop_link_dumps", "drop_list_items", "merge", "merge_max_chars",
-    "heading_context", "sort_name",
+    "heading_context", "cross_heading", "sort_name",
 )
 
 
@@ -90,6 +90,7 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "merge": (("--merge/--no-merge",), dict(default=False, show_default=True, help="Pack consecutive prose paragraphs within a section into multi-paragraph passages.")),
     "merge_max_chars": (("--merge-max-chars",), dict(default=synth.MERGE_MAX_CHUNK_CHARS, show_default=True, type=int, help="Soft char budget per packed passage (merge mode).")),
     "heading_context": (("--heading-context",), dict(type=click.Choice(["none", "immediate"]), default="none", show_default=True, help="Prepend the section heading (verbatim) to both sides of each pair as fixed context.")),
+    "cross_heading": (("--cross-heading/--no-cross-heading",), dict(default=False, show_default=True, help="Pack across section boundaries with headings as chunk content (needs --merge; overrides --heading-context). This, not --merge-max-chars, is what buys chunk length.")),
     "context_dropout": (("--context-dropout",), dict(default=0.0, show_default=True, type=float, help="Fraction of pairs to keep heading-less (deterministic) so the styler doesn't require a heading.")),
     "sort_name": (("--sort", "sort_name"), dict(type=click.Choice(["none", "length", "source"]), default="none", show_default=True)),
     # -- read-only inspection (handled inside run_synth, exit before generation) --

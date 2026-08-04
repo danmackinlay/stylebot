@@ -52,7 +52,18 @@ logger = logging.getLogger(__name__)
 STYLE_CHARS_PER_CHUNK = 1_500
 
 DEFAULT_TEMPERATURE = 0.3
+# Output budget per chunk. Must clear the chunk budget with room to spare — a
+# ~4500-char cross-heading chunk is ~1200 tokens, and truncation mid-rewrite is
+# worse than no rewrite. `rewrite_text` scales this with max_chunk_chars.
 DEFAULT_MAX_TOKENS = 2_000
+# Tokens allowed per character of input chunk (chars/4 for the rewrite, plus
+# generous headroom since the styler may legitimately expand a terse passage).
+_TOKENS_PER_CHAR = 0.75
+
+
+def max_tokens_for(max_chunk_chars: int) -> int:
+    """Output-token budget matching a chunk budget (never below the default)."""
+    return max(DEFAULT_MAX_TOKENS, int(max_chunk_chars * _TOKENS_PER_CHAR))
 
 # A styler: (messages, num_samples) -> candidate assistant texts.
 Styler = Callable[..., list[str]]
@@ -138,7 +149,9 @@ def chunk_body(body: str, *, max_chars: int = STYLE_CHARS_PER_CHUNK) -> tuple[li
 _HEADING_RE = re.compile(r"^#{1,6}\s")
 
 
-def _segment(body: str, *, max_chars: int) -> tuple[list[tuple[str, str]], list[str]]:
+def _segment(
+    body: str, *, max_chars: int, inline_headings: bool = False
+) -> tuple[list[tuple[str, str]], list[str]]:
     """Segment the body the way TRAINING saw data.
 
     Returns `(items, seps)` where each item is `(kind, text)`, kind in
@@ -146,6 +159,14 @@ def _segment(body: str, *, max_chars: int) -> tuple[list[tuple[str, str]], list[
     seps reproduces the body exactly. Headings and code fences are protected
     (training pairs never contain them as content — headings ride along as
     `meta.context`); adjacent prose blocks are grouped to <= max_chars.
+
+    `inline_headings` matches the v2 cross-heading diet: headings become
+    groupable content, so a chunk spans sections exactly as the training pairs
+    do. Code fences stay protected either way — they are excluded from the
+    corpus in both modes, so the styler has never been trained to reproduce
+    one. Grouped heading items are relabelled "prose" (they are chunk content
+    now); a heading that ends up alone keeps kind "heading" so callers can
+    still skip a bare trailing header rather than ask for a one-line rewrite.
     """
     blocks, seps = _blocks_with_separators(body)
     items: list[tuple[str, str]] = []
@@ -169,7 +190,11 @@ def _segment(body: str, *, max_chars: int) -> tuple[list[tuple[str, str]], list[
             items.append(("fence", block))
         else:
             items.append(("prose", block))
-    # Group ADJACENT prose items within the budget (never across a protected item).
+    # Group ADJACENT groupable items within the budget (never across a
+    # protected item). Under inline_headings, headings are groupable too, so a
+    # chunk spans sections the way a cross-heading training pair does.
+    groupable = {"prose", "heading"} if inline_headings else {"prose"}
+
     out_items: list[tuple[str, str]] = []
     out_seps: list[str] = []
     for i, item in enumerate(items):
@@ -177,10 +202,11 @@ def _segment(body: str, *, max_chars: int) -> tuple[list[tuple[str, str]], list[
         if (
             sep is not None
             and out_items
-            and item[0] == "prose"
-            and out_items[-1][0] == "prose"
+            and item[0] in groupable
+            and out_items[-1][0] in groupable
             and len(out_items[-1][1]) + len(sep) + len(item[1]) <= max_chars
         ):
+            # A group containing anything is chunk content, hence "prose".
             out_items[-1] = ("prose", out_items[-1][1] + sep + item[1])
         else:
             if sep is not None:
@@ -254,6 +280,7 @@ def rewrite_candidates(
     best_of: int = 4,
     scorer: Callable[[str], float] | None = None,
     max_chunk_chars: int = STYLE_CHARS_PER_CHUNK,
+    inline_headings: bool = False,
 ) -> dict:
     """All candidates for ONE prose chunk, none auto-chosen — the editor seam.
 
@@ -267,6 +294,13 @@ def rewrite_candidates(
     frontmatter, headings, or fences in the selection, or prose over
     `max_chunk_chars` (which `_segment` would split), raise ValueError with a
     message fit to surface in an editor.
+
+    Under `inline_headings` (the v2 cross-heading diet) a selection MAY span
+    headings — that is the editor's "rewrite section" mode, and it is exactly
+    what the adapter was trained on. Fences still raise: they are absent from
+    the corpus in both diets, so the styler has never learned to reproduce one
+    and would be free to mangle it. The size limit still applies, since a
+    selection `_segment` would split into several chunks is not one rewrite.
 
     Returns `{"input_score": float|None, "n_sampled": int,
               "candidates": [{"text", "score", "anchors_lost", "identity"},
@@ -284,10 +318,12 @@ def rewrite_candidates(
     frontmatter, body = split_frontmatter(text)
     if frontmatter:
         raise ValueError("selection includes YAML frontmatter — select prose only")
-    items, _seps = _segment(body, max_chars=max_chunk_chars)
+    items, _seps = _segment(body, max_chars=max_chunk_chars, inline_headings=inline_headings)
     kinds = [kind for kind, chunk in items if chunk.strip()]
-    if any(k != "prose" for k in kinds):
-        bad = next(k for k in kinds if k != "prose")
+    # Headings are content under the cross-heading diet; fences never are.
+    allowed = {"prose", "heading"} if inline_headings else {"prose"}
+    if any(k not in allowed for k in kinds):
+        bad = next(k for k in kinds if k not in allowed)
         raise ValueError(f"selection contains a {bad} — select prose only")
     if len(kinds) != 1:
         raise ValueError(
@@ -327,6 +363,7 @@ def rewrite_text(
     best_of: int = 1,
     scorer: Callable[[str], float] | None = None,
     on_decision: Callable[..., None] | None = None,
+    inline_headings: bool = False,
 ) -> RewriteResult:
     """Rewrite prose chunk-by-chunk through the styler, mirroring training.
 
@@ -337,6 +374,11 @@ def rewrite_text(
     (`pair_body`) before reassembly. Original whitespace is reassembled
     verbatim; an empty/blank styler answer falls back to the input chunk
     (never destroy prose on a bad sample).
+
+    `inline_headings` selects the v2 cross-heading diet: headings become chunk
+    content (rewritable, and no longer emitted as `context`), so chunks span
+    sections. Set it to match the promoted adapter's training diet — the
+    manifest records that under `data.chunk_scale`.
 
     With a `scorer` (lower = better, e.g. `detector_scorer`), the INPUT chunk
     competes with the candidates — the do-no-harm guard: a chunk is only
@@ -355,7 +397,7 @@ def rewrite_text(
     from stylebot.pairs import build_pair_content
 
     frontmatter, body = split_frontmatter(text)
-    items, seps = _segment(body, max_chars=max_chunk_chars)
+    items, seps = _segment(body, max_chars=max_chunk_chars, inline_headings=inline_headings)
     result = RewriteResult(text="")
     out_chunks: list[str] = []
     context: str | None = None

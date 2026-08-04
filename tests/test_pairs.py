@@ -112,6 +112,20 @@ def test_absent_context_unconstrained():
     assert validate_pair_record(_good_record()) == []
 
 
+def test_cross_heading_record_validates_with_inline_headings():
+    """A cross-heading pair carries headings INSIDE both sides and no
+    meta.context, so the verbatim-prefix invariant does not apply. Pins that
+    the v2 chunk mode is representable in the corpus contract as-is."""
+    rec = _good_record()
+    passage = "## A Section\n\nSome prose.\n\n### Another\n\nMore prose."
+    rec["messages"][1]["content"] = passage.replace("Some prose.", "It is worth noting the tapestry.")
+    rec["messages"][2]["content"] = passage
+    rec["meta"]["merge_max_chars"] = 4500
+    rec["meta"]["chunk_mode"] = "cross-heading"
+    assert "context" not in rec["meta"]
+    assert validate_pair_record(rec) == []
+
+
 def test_gen_facet_keys_are_a_subset_of_recorded_keys():
     # Every key eval facets by must be one synth actually records — a rename
     # on either side fails here instead of silently emptying facet columns.

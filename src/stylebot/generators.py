@@ -27,8 +27,10 @@ from typing import NamedTuple
 # structure, return only the passage). Identical across strategies so the only
 # thing that varies between them is the *flavour* of slop requested.
 _SLOP_PRESERVE = (
-    "Preserve all markdown structure (code fences, math, links, headings, "
+    "Preserve all markdown structure (code fences, math, links, "
     "list markers, blank lines) verbatim. "
+    "Section headings may be rewritten in your own style, but keep each "
+    "heading's level and meaning. "
     "Preserve any 〈MASKED_*〉 tokens verbatim if present. "
     "Return only the rewritten passage, nothing else."
 )

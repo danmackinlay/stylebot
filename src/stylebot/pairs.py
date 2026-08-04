@@ -22,6 +22,16 @@ from stylebot.jsonl import iter_jsonl
 # meta keys every well-formed pair record carries (chunk 0 additionally may
 # carry before_frontmatter/after_frontmatter; tags/synthetic/generator are
 # optional provenance). These are the load-bearing ones downstream relies on.
+#
+# Chunk-scale facets (optional, synthetic pairs): `merge_max_chars` is the pack
+# budget, `chunk_mode` is how the chunk was cut — None/"section" for
+# section-bounded (heading excluded from the text, carried as `context`) or
+# "cross-heading" for headings packed in as CONTENT. Both are needed to ablate
+# a mixed-scale corpus, and mode dominates: section-bounded packing hits the
+# section wall long before the budget, so records differing only in
+# `merge_max_chars` are near-identical diets. Cross-heading records carry no
+# `context` (an inline heading is rewritable text, not fixed context), so the
+# verbatim-prefix invariant below simply does not apply to them.
 REQUIRED_META_KEYS = (
     "source",
     "captured_at",

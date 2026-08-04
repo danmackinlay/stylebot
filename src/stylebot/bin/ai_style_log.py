@@ -914,6 +914,55 @@ def tidy_pairs(ctx: click.Context, source: str | None, dry_run: bool):
     _remind_open_sessions(ctx)
 
 
+@main.command(name="recut")
+@click.option("--gap-paras", default=2, show_default=True, type=int,
+              help="Bridge unchanged runs of at most this many paragraphs.")
+@click.option("--gap-chars", default=800, show_default=True, type=int,
+              help="Bridge unchanged runs of at most this many characters.")
+@click.option("--max-chars", default=8000, show_default=True, type=int,
+              help="Coalesced pairs over this size fall back to the uncoalesced cut (0 disables).")
+@click.option("--min-chars", default=80, show_default=True, type=int,
+              help="Drop re-cut pairs whose after-side is shorter than this.")
+@click.option("--dry-run", is_flag=True, help="Report the new cut without modifying pairs.jsonl.")
+@click.pass_context
+def recut_pairs(ctx, gap_paras, gap_chars, max_chars, min_chars, dry_run):
+    """Re-cut real pairs from the capture archives at a new gap policy.
+
+    The archives under `captures/` hold the full before/after texts, so the
+    corpus can be re-derived at a different cut without recapturing. Bridging
+    short unchanged runs keeps a multi-paragraph rewrite as ONE pair instead of
+    fragmenting it — the edits that are *about* cross-paragraph consistency are
+    exactly the ones the default cut chops up.
+
+    Idempotent: re-cut records reuse their archive's capture_id, so every pair
+    from a re-cut capture (original or previous re-cut) is replaced, not
+    stacked. Captures with no archive keep their native cut.
+    """
+    before = len(_iter_pairs())
+    records = capture.recut_archives(
+        PAIRS_PATH,
+        coalesce_gap_paras=gap_paras,
+        coalesce_gap_chars=gap_chars,
+        max_chars=max_chars or None,
+        min_chars=min_chars,
+        dry_run=dry_run,
+    )
+    if not records:
+        click.echo("no archives to re-cut (captures/ is empty or holds only --whole captures)")
+        return
+    lens = sorted(len(r["messages"][2]["content"]) for r in records)
+    med = lens[len(lens) // 2]
+    caps = len({r["meta"]["capture_id"] for r in records})
+    verb = "would write" if dry_run else "wrote"
+    click.echo(
+        f"{verb} {len(records)} pair(s) from {caps} capture(s) "
+        f"[median {med} chars, p90 {lens[int(0.9 * (len(lens) - 1))]}, max {lens[-1]}]"
+    )
+    if not dry_run:
+        click.echo(f"pairs.jsonl: {before} -> {len(_iter_pairs())}")
+    _remind_open_sessions(ctx)
+
+
 def _read_source(spec: str) -> str:
     """Read text from a path or '-' for stdin."""
     if spec == "-":

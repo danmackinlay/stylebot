@@ -163,3 +163,70 @@ def test_drop_list_items_both_modes(tmp_path):
     # Non-merge: the bullet survives by default, dropped with drop_list_items.
     assert len(synth.iter_targets(blog_root=root)) == 2
     assert len(synth.iter_targets(blog_root=root, drop_list_items=True)) == 1
+
+
+# --- cross-heading mode (v2 longer rewrites) ------------------------------
+
+
+def test_cross_heading_packs_across_sections_with_headings_inline(tmp_path):
+    root = tmp_path / "blog"
+    body = f"---\ntitle: t\nautomation: 0\n---\n\n{P1}\n\n## Section Two\n\n{P2}\n\n### Section Three\n\n{P3}\n"
+    _write(root, "post/x.qmd", body)
+    blocks = synth.iter_targets(
+        blog_root=root, min_chars=50, merge=True, merge_max_chars=5000, cross_heading=True
+    )
+    assert len(blocks) == 1  # the whole document packed into one passage
+    text = blocks[0].text
+    # Headings are CONTENT now, in document order, interleaved with their prose.
+    assert "## Section Two" in text and "### Section Three" in text
+    assert text.index(P1) < text.index("## Section Two") < text.index(P2)
+    assert text.index(P2) < text.index("### Section Three") < text.index(P3)
+    assert blocks[0].chunk_mode == "cross-heading"
+
+
+def test_cross_heading_forces_context_off(tmp_path):
+    """An inline heading is text the styler rewrites, so it cannot also be
+    fixed context — otherwise the heading would appear twice in the pair and
+    the verbatim-prefix invariant in stylebot.pairs would be a lie."""
+    root = tmp_path / "blog"
+    body = f"---\ntitle: t\nautomation: 0\n---\n\n## A Section\n\n{P1}\n"
+    _write(root, "post/y.qmd", body)
+    blocks = synth.iter_targets(
+        blog_root=root, min_chars=50, merge=True, merge_max_chars=5000,
+        cross_heading=True, heading_context="immediate",
+    )
+    assert all(t.context == "" for t in blocks)
+    assert "## A Section" in blocks[0].text
+
+
+def test_cross_heading_requires_merge(tmp_path):
+    """Without --merge there is no packing to do, so the flag is inert and the
+    section-bounded contract (headings excluded, context available) holds."""
+    root = tmp_path / "blog"
+    body = f"---\ntitle: t\nautomation: 0\n---\n\n## A Section\n\n{P1}\n"
+    _write(root, "post/z.qmd", body)
+    blocks = synth.iter_targets(
+        blog_root=root, min_chars=50, cross_heading=True, heading_context="immediate"
+    )
+    assert all(t.chunk_mode is None for t in blocks)
+    assert all("##" not in t.text for t in blocks)
+    assert blocks[0].context == "## A Section"
+
+
+def test_cross_heading_is_what_buys_length_not_the_budget(tmp_path):
+    """The load-bearing finding behind v2: section-bounded packing hits the
+    SECTION wall, not the budget, so raising merge_max_chars alone barely moves
+    the distribution. Modelled here as many short sections."""
+    root = tmp_path / "blog"
+    sections = "\n\n".join(f"## S{i}\n\n{P1}" for i in range(8))
+    _write(root, "post/w.qmd", f"---\ntitle: t\nautomation: 0\n---\n\n{sections}\n")
+    kw = dict(blog_root=root, min_chars=50, merge=True)
+    # Section-bounded: tripling the budget changes nothing — every section is
+    # already under it, and no block may cross a header.
+    small = synth.iter_targets(**kw, merge_max_chars=1500)
+    big = synth.iter_targets(**kw, merge_max_chars=4500)
+    assert len(small) == len(big) == 8
+    # Cross-heading: the same budget now actually binds.
+    crossed = synth.iter_targets(**kw, merge_max_chars=4500, cross_heading=True)
+    assert len(crossed) < len(small)
+    assert max(len(t.text) for t in crossed) > max(len(t.text) for t in small)

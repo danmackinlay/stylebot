@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from stylebot import infer
 from stylebot.ai_core import STYLE_SYSTEM
 
@@ -365,3 +367,65 @@ def test_rewrite_candidates_enforces_the_single_prose_chunk_contract():
         infer.rewrite_candidates("```py\nx\n```", _identity_styler)
     with pytest.raises(ValueError, match="chunk budget"):
         infer.rewrite_candidates("one two\n\nthree four", _identity_styler, max_chunk_chars=5)
+
+
+# --- inline headings (v2 cross-heading diet) ------------------------------
+
+_DOC = "First para of prose here.\n\n## A Section\n\nSecond para under it.\n\n### Deeper\n\nThird para.\n"
+
+
+def test_segment_default_protects_headings():
+    items, seps = infer._segment(_DOC, max_chars=5000)
+    kinds = [k for k, _ in items]
+    assert kinds.count("heading") == 2  # headings break prose grouping
+    assert "".join(t + (seps[i] if i < len(seps) else "") for i, (_, t) in enumerate(items)) == _DOC
+
+
+def test_segment_inline_headings_groups_across_sections():
+    items, _seps = infer._segment(_DOC, max_chars=5000, inline_headings=True)
+    assert len(items) == 1
+    kind, text = items[0]
+    assert kind == "prose"  # a group is chunk content, whatever it contains
+    assert "## A Section" in text and "### Deeper" in text
+
+
+def test_segment_inline_headings_is_lossless():
+    items, seps = infer._segment(_DOC, max_chars=60, inline_headings=True)
+    rebuilt = "".join(t + (seps[i] if i < len(seps) else "") for i, (_, t) in enumerate(items))
+    assert rebuilt == _DOC  # budget forces splits, bytes still reproduce exactly
+
+
+def test_segment_inline_headings_still_protects_fences():
+    doc = "Prose here.\n\n```python\nx = 1\n```\n\n## H\n\nMore prose.\n"
+    items, _ = infer._segment(doc, max_chars=5000, inline_headings=True)
+    kinds = [k for k, _ in items]
+    assert "fence" in kinds  # never groupable — absent from the corpus either way
+
+
+def test_rewrite_candidates_rejects_heading_by_default():
+    styler = lambda messages, num_samples=1: ["x"] * num_samples  # noqa: E731
+    with pytest.raises(ValueError, match="heading"):
+        infer.rewrite_candidates("## H\n\nSome prose.", styler, max_chunk_chars=5000)
+
+
+def test_rewrite_candidates_accepts_section_under_inline_headings():
+    """The editor's 'rewrite section' mode: a multi-section selection is one
+    rewrite when that is what the adapter was trained on."""
+    styler = lambda messages, num_samples=1: ["## H\n\nDan prose."] * num_samples  # noqa: E731
+    out = infer.rewrite_candidates(
+        "## H\n\nSome prose.", styler, max_chunk_chars=5000, inline_headings=True
+    )
+    assert out["candidates"] and out["candidates"][0]["text"] == "## H\n\nDan prose."
+
+
+def test_rewrite_candidates_still_rejects_fences_under_inline_headings():
+    styler = lambda messages, num_samples=1: ["x"] * num_samples  # noqa: E731
+    with pytest.raises(ValueError, match="fence"):
+        infer.rewrite_candidates(
+            "Prose.\n\n```py\nx=1\n```", styler, max_chunk_chars=5000, inline_headings=True
+        )
+
+
+def test_max_tokens_scales_with_chunk_budget():
+    assert infer.max_tokens_for(1500) == infer.DEFAULT_MAX_TOKENS  # floor holds
+    assert infer.max_tokens_for(4500) > infer.DEFAULT_MAX_TOKENS   # 4.5k chunk needs room

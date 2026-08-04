@@ -115,6 +115,36 @@ class TrainCorpus:
     def n_synthetic(self) -> int:
         return self._count(True)
 
+    @property
+    def chunk_scale(self) -> dict:
+        """What chunk diet this run was actually trained on.
+
+        Serving must chunk at the scale the adapter saw: at out-of-distribution
+        lengths the styler falls back to copying the input verbatim (observed
+        2026-07-22, a 5.4KB chunk returned byte-identical), so a hard-coded
+        inference budget silently rots the moment the corpus moves. Recording
+        it here lets `default_chunk_chars` read the promoted manifest instead
+        of guessing.
+
+        `budgets` maps each `meta.merge_max_chars` present to its pair count
+        ("null" = unmerged / pre-facet records); `modes` does the same for
+        `meta.chunk_mode`. `max_target_chars` is the longest assistant side —
+        the honest ceiling on what the adapter has ever been asked to emit.
+        """
+        budgets: dict[str, int] = {}
+        modes: dict[str, int] = {}
+        longest = 0
+        for rec in [*self.train, *self.val]:
+            meta = rec.get("meta") or {}
+            budgets[str(meta.get("merge_max_chars"))] = (
+                budgets.get(str(meta.get("merge_max_chars")), 0) + 1
+            )
+            modes[str(meta.get("chunk_mode"))] = modes.get(str(meta.get("chunk_mode")), 0) + 1
+            msgs = rec.get("messages") or []
+            if len(msgs) == 3:
+                longest = max(longest, len(msgs[2].get("content") or ""))
+        return {"budgets": budgets, "modes": modes, "max_target_chars": longest}
+
 
 def file_sha256(path: str | Path) -> str:
     """16-hex content hash of a file (the `source_sha256` convention of
@@ -293,6 +323,9 @@ def build_manifest(
             "n_train_posts": len(corpus.train_posts),
             "val_posts": corpus.val_posts,
             "filters": filters or {"selector": None, "per_target": None},
+            # The chunk diet, so serving can follow it instead of hard-coding a
+            # budget that goes stale the next time the corpus is re-cut.
+            "chunk_scale": corpus.chunk_scale,
         },
         "hyperparameters": {
             "base_model": base_model,
