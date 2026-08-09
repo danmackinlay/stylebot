@@ -7,10 +7,12 @@ exercised through the `runner` seam with a fake.
 
 from __future__ import annotations
 
+import inspect
 import json
 
 import pytest
 
+from stylebot import provenance
 from stylebot import splits as sp
 from stylebot import train as tr
 from stylebot.ai_core import STYLE_SYSTEM
@@ -161,11 +163,33 @@ def test_run_training_records_result_via_runner_seam(tmp_path):
     )
     assert seen["n_train"] == result.corpus.n_train
     assert seen["cfg"]["base_model"] == tr.DEFAULT_BASE_MODEL
+    assert seen["cfg"]["seed"] == 1  # the seed the epoch shuffle is built from
     manifest = json.loads(manifest_out.read_text())
     assert manifest["result"]["tinker_run_id"] == "run-123"
     assert "adapter_dir" not in manifest["result"]  # local path, not reproducibility
     assert result.adapter_dir == tmp_path / "work" / "peft_adapter"
     assert manifest["dry_run"] is False
+
+
+def test_file_sha256_still_reachable_as_train_attribute(tmp_path):
+    """`file_sha256` moved to `stylebot.provenance` but stays a `train` name."""
+    path = tmp_path / "x.jsonl"
+    path.write_text("hello\n", encoding="utf-8")
+    digest = tr.file_sha256(path)
+    assert len(digest) == 16 and digest == provenance.file_sha256(path)
+
+
+def test_presplit_builder_seed_has_no_silent_default():
+    """`--seed` must reach the epoch shuffle, not just the val split.
+
+    The builder body needs the trainer extra, so this pins the seam instead:
+    `shuffle_seed` is a REQUIRED keyword. It was hardcoded to 0 at the
+    construction site until 2026-08-09, which made two runs differing only in
+    `--seed` shuffle identically while the manifest claimed otherwise.
+    """
+    param = inspect.signature(tr._make_presplit_builder).parameters["shuffle_seed"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert param.default is inspect.Parameter.empty
 
 
 def test_estimate_tokens_scales_with_text():
