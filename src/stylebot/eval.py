@@ -427,20 +427,71 @@ _CARRIED_META = ("source", "synthetic", "generator", "slop_strategy", "chunk_ind
 _CARRIED_GEN = GEN_FACET_KEYS
 
 
+def _recut_digest(recut: object) -> str:
+    """A short, stable digest of one re-cut's gap policy (`meta.recut`).
+
+    Canonical JSON (sorted keys, no whitespace) so the digest keys off the
+    policy's VALUES, not off dict insertion order — and so any key a future
+    `recut_archives` adds to the stamp participates automatically. Eight hex
+    chars: this discriminates a handful of hand-chosen cut policies, not a
+    corpus, so collision pressure is nil and the id stays readable.
+    """
+    try:
+        canon = json.dumps(recut, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    except TypeError:  # a stamp JSON can't encode — degrade to repr, never raise
+        canon = repr(recut)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:8]
+
+
 def record_id(record: dict) -> str:
     """A stable join key linking a pair's score back to the corpus.
 
     Prefers `meta.synth_key` (synthetic pairs); else `capture_id:chunk_index`
     (real captures group by `capture_id`); else a hash of `source` + chunk index.
+
+    **Re-cut records additionally carry the cut policy in the key.**
+    `capture.recut_archives` deliberately REUSES the archive's `capture_id` and
+    renumbers `chunk_index` from 0 — that is exactly what makes a re-cut
+    idempotent *in `pairs.jsonl`* (the re-cut replaces the old cut for that
+    capture instead of stacking duplicates). The cost is that
+    `capture_id:chunk_index` alone is NOT stable across a re-cut: after
+    coalescing, `<cap>:0` names a merged multi-paragraph pair where it used to
+    name a single paragraph. That is a correctness bug downstream, not
+    cosmetics — everything that joins or resumes on this key would silently
+    mismatch:
+
+    - `score_pairs_file` resumes by skipping ids already in `scores.jsonl`, so
+      a re-cut pair reads as "already scored" and STALE scores stay attached to
+      materially changed prose;
+    - `report.render_scores_report` joins `pairs_by_id`, so the pair browser
+      renders new text under old judge/detector numbers;
+    - `infer.rewrite_pairs_file` skips it on resume for the same reason.
+
+    So fold `meta.recut` — the gap policy `recut_archives` stamps on every
+    record it emits, and the only discriminator available — into the key. A
+    re-cut id then differs from the original cut's and from another policy's,
+    while staying byte-identical when the SAME policy is re-run: a re-cut has
+    to remain idempotent end to end, not just inside `pairs.jsonl`.
+
+    Records with no `meta.recut` keep their key byte-for-byte. That is
+    load-bearing: a committed `scores.jsonl` lives blog-side and must keep
+    joining for the never-re-cut captures that are most of the corpus.
     """
     meta = record.get("meta") or {}
     if meta.get("synth_key"):
         return str(meta["synth_key"])
+    recut = meta.get("recut")
+    # Empty for the overwhelmingly common non-re-cut record — which is what
+    # preserves the historical id shape exactly.
+    policy = f":r{_recut_digest(recut)}" if recut else ""
     capture_id = meta.get("capture_id")
     chunk_index = meta.get("chunk_index")
     if capture_id is not None:
-        return f"{capture_id}:{chunk_index}"
-    h = hashlib.sha256(f"{meta.get('source')}\x00{chunk_index}".encode("utf-8"))
+        return f"{capture_id}{policy}:{chunk_index}"
+    # No capture_id (hand-built / pre-capture_id records). Same reasoning, so
+    # the policy joins the hashed material rather than the visible key; with no
+    # re-cut stamp the hashed string is unchanged and so is the digest.
+    h = hashlib.sha256(f"{meta.get('source')}\x00{chunk_index}{policy}".encode("utf-8"))
     return h.hexdigest()[:16]
 
 

@@ -299,3 +299,65 @@ def test_hand_edited_archive_changes_what_recut_emits(tmp_path):
     )
     targets = [r["messages"][2]["content"] for r in capture.read_jsonl(pairs_path)]
     assert any("We dig in, properly." in t for t in targets)
+
+
+# --- a re-cut must not reuse the previous cut's join keys ------------------
+
+
+def _ids_to_text(pairs_path) -> dict[str, str]:
+    """`{record_id: target text}` for the corpus as it stands on disk."""
+    from stylebot.eval import record_id
+
+    return {record_id(r): r["messages"][2]["content"] for r in capture.read_jsonl(pairs_path)}
+
+
+def test_recut_does_not_reuse_the_previous_cuts_record_ids(tmp_path):
+    """REGRESSION. A re-cut reuses `capture_id` and renumbers `chunk_index` from
+    0, so `<capture_id>:<chunk_index>` alone named DIFFERENT prose before and
+    after: `<cap>:0` went from one paragraph to the coalesced multi-paragraph
+    pair. Everything that joins or resumes on that key then mismatches —
+    `eval.score_pairs_file` skips the pair as "already scored" and leaves stale
+    judge/detector numbers pinned to changed text, and
+    `report.render_scores_report` renders the new text under the old scores.
+
+    Folding `meta.recut` into the id fixes it: the re-cut keys are disjoint from
+    the original cut's, so a stale score can no longer be mistaken for a
+    current one.
+    """
+    pairs_path = tmp_path / "pairs.jsonl"
+    _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")
+    original = _ids_to_text(pairs_path)
+    assert len(original) == 2  # the default cut fragments into two pairs
+
+    capture.recut_archives(
+        pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0
+    )
+    recut = _ids_to_text(pairs_path)
+    assert len(recut) == 1  # …bridged into one
+
+    # The text genuinely moved (this is what makes reuse a correctness bug and
+    # not a cosmetic one) …
+    assert _KEPT not in "".join(original.values())
+    assert _KEPT in next(iter(recut.values()))
+    # … and no id survives the move, so no stale score can join to it.
+    assert not (set(original) & set(recut))
+
+
+def test_recut_ids_are_stable_across_reruns_at_the_same_policy(tmp_path):
+    """The other half of the contract: idempotence must survive the id change.
+    Re-running the SAME re-cut has to reproduce the same keys, or every re-run
+    would re-score the whole corpus from scratch."""
+    pairs_path = tmp_path / "pairs.jsonl"
+    _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")
+    kw = dict(coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0)
+
+    capture.recut_archives(pairs_path, **kw)
+    first = _ids_to_text(pairs_path)
+    capture.recut_archives(pairs_path, **kw)
+    assert _ids_to_text(pairs_path) == first
+
+    # A DIFFERENT policy is a different cut, so it must key differently.
+    capture.recut_archives(
+        pairs_path, coalesce_gap_paras=99, coalesce_gap_chars=99999, min_chars=0
+    )
+    assert not (set(_ids_to_text(pairs_path)) & set(first))
