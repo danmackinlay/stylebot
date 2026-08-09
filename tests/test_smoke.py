@@ -21,13 +21,11 @@ def test_cli_help_runs():
 
 def test_pair_writes_contract_schema(tmp_path, monkeypatch):
     """`pair` must emit the shared chat-completion schema downstream relies on."""
+    # The logger resolves its corpus per command through `config`, so the env
+    # override lands without reimporting anything. `_LOADED` is forced so
+    # `load()` can't pull a developer's real `.env` in behind it.
+    monkeypatch.setattr(config, "_LOADED", True)
     monkeypatch.setenv("STYLEBOT_DATA_DIR", str(tmp_path))
-    # Re-import module-level paths so the env override takes effect.
-    import importlib
-
-    from stylebot.bin import ai_style_log
-
-    importlib.reload(ai_style_log)
 
     before = tmp_path / "b.txt"
     after = tmp_path / "a.txt"
@@ -35,7 +33,7 @@ def test_pair_writes_contract_schema(tmp_path, monkeypatch):
     after.write_text("We dig into it.\n")
 
     result = CliRunner().invoke(
-        ai_style_log.main,
+        main,
         ["pair", "--before", str(before), "--after", str(after), "--source", "t"],
     )
     assert result.exit_code == 0, result.output
@@ -47,9 +45,6 @@ def test_pair_writes_contract_schema(tmp_path, monkeypatch):
     assert roles == ["system", "user", "assistant"]
     assert rec["messages"][0]["content"] == STYLE_SYSTEM
     assert rec["meta"]["source"] == "t"
-
-    # restore default module state for other tests
-    importlib.reload(ai_style_log)
 
 
 def test_diff_chunks_skips_pure_insert():
