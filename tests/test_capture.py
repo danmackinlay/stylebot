@@ -49,12 +49,20 @@ def test_capture_pairs_archives_full_texts_for_rechunking(tmp_path):
         snapped_at="2026-07-07T00:00:00+00:00",
     )
     cap_id = written[0]["meta"]["capture_id"]
-    archive = json.loads((tmp_path / "captures" / f"{cap_id}.json").read_text())
-    # Byte-exact full texts — the unchanged paragraphs the chunk view lost.
-    assert archive["before_text"] == before
-    assert archive["after_text"] == after
-    assert archive["source"] == "post/foo.qmd"
-    assert archive["whole"] is False
+    archive_dir = tmp_path / "captures" / cap_id
+    # The documents are ORDINARY FILES, openable and hand-editable. That is the
+    # whole reason for the directory layout: a borked capture can be repaired.
+    assert (archive_dir / "before.md").read_text(encoding="utf-8") == before
+    assert (archive_dir / "after.md").read_text(encoding="utf-8") == after
+    meta = json.loads((archive_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["source"] == "post/foo.qmd"
+    assert meta["whole"] is False
+    assert meta["capture_id"] == cap_id
+    # .md, never .qmd — a .qmd here would be reformatted by the blog's
+    # pre-commit hook and indexed by qmd search as if Dan had written it.
+    assert not list(archive_dir.glob("*.qmd"))
+    # And the flat reader still hands back the shape recut_archives expects.
+    assert capture.read_archive(archive_dir)["before_text"] == before
 
 
 def test_capture_pairs_raises_when_nothing_changed(tmp_path):
@@ -215,3 +223,63 @@ def test_recut_output_validates(tmp_path):
         pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0
     )
     assert validate_pairs_file(pairs_path) == []
+
+
+def test_archive_write_is_atomic(tmp_path):
+    """Three files means a partial write is now possible where the old single
+    write_text could only truncate. A half-built archive must never be visible
+    to iter_archives, which skips unreadable ones SILENTLY."""
+    cap_dir = tmp_path / "captures"
+    cap_dir.mkdir()
+    # Simulate a crashed write: a leftover .tmp staging dir with partial content.
+    stale = cap_dir / "abcd1234.tmp"
+    stale.mkdir()
+    (stale / "before.md").write_text("half-written", encoding="utf-8")
+
+    assert list(capture.iter_archives(tmp_path / "pairs.jsonl")) == []  # invisible
+
+    # A fresh write over the same id clears the stale staging dir and lands whole.
+    capture.write_archive(
+        cap_dir / "abcd1234", capture_id="abcd1234", source="post/a.qmd",
+        snapped_at="2026-08-04T00:00:00+00:00", whole=False,
+        before_text="B", after_text="A",
+    )
+    assert not stale.exists()
+    got = list(capture.iter_archives(tmp_path / "pairs.jsonl"))
+    assert len(got) == 1 and got[0]["before_text"] == "B"
+
+
+def test_iter_archives_still_reads_legacy_json(tmp_path, caplog):
+    """An unmigrated blob must not vanish silently — a silent skip looks exactly
+    like 'that capture had no changed regions'."""
+    cap_dir = tmp_path / "captures"
+    cap_dir.mkdir()
+    (cap_dir / "deadbeef.json").write_text(json.dumps({
+        "capture_id": "deadbeef", "source": "post/legacy.qmd",
+        "snapped_at": "2026-07-01T00:00:00+00:00", "whole": False,
+        "before_text": "It is worth noting the tapestry.", "after_text": "We dig in.",
+    }), encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        got = list(capture.iter_archives(tmp_path / "pairs.jsonl"))
+    assert len(got) == 1 and got[0]["after_text"] == "We dig in."
+    assert "legacy JSON capture archive" in caplog.text
+
+
+def test_hand_edited_archive_changes_what_recut_emits(tmp_path):
+    """The capability this whole layout exists for: open the archive, fix a
+    borked capture by hand, re-cut, and the corpus follows."""
+    pairs_path = tmp_path / "pairs.jsonl"
+    written = _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")
+    cap_id = written[0]["meta"]["capture_id"]
+
+    after_md = tmp_path / "captures" / cap_id / "after.md"
+    after_md.write_text(
+        after_md.read_text(encoding="utf-8").replace("We dig in.", "We dig in, properly."),
+        encoding="utf-8",
+    )
+    capture.recut_archives(
+        pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0
+    )
+    targets = [r["messages"][2]["content"] for r in capture.read_jsonl(pairs_path)]
+    assert any("We dig in, properly." in t for t in targets)

@@ -75,13 +75,30 @@ places:
    on success. The 109 pre-2026-07-22 captures are chunk-scale forever.
 
 **Groundwork shipped 2026-07-22 — capture archive:** `capture_pairs` now
-writes the full before/after texts to
-`_training_pairs/captures/<capture_id>.json` beside the corpus. The chunk
-records become a lossy *view*; the archive is the re-cuttable raw. Any
-future chunking policy (3–4 merged paragraphs, whole sections, pairs with
-preceding-paragraph context) can be applied retroactively to everything
-captured from now on, without recapturing. Cost: ~one blog post of text
-per capture. Commit them like `pairs.jsonl`.
+writes the full before/after texts to `_training_pairs/captures/<capture_id>/`
+beside the corpus. The chunk records become a lossy *view*; the archive is
+the re-cuttable raw. Any future chunking policy (3–4 merged paragraphs,
+whole sections, pairs with preceding-paragraph context) can be applied
+retroactively to everything captured from now on, without recapturing.
+Cost: ~one blog post of text per capture. Commit them like `pairs.jsonl`.
+
+**Re-shaped 2026-08-04 — the archive is files, not a blob.** It was one
+JSON file per capture with the documents as escaped strings, which made it
+unreadable, unopenable and undiffable — perverse, given the before→after
+diff *is* the training signal, and it meant a botched capture could not be
+repaired. Now a directory of `before.md` / `after.md` / `meta.json`, so
+`diff` works and a capture can be hand-corrected before the next `recut`.
+Session snapshots got the same treatment
+(`snapshots{,-closed}/<source>/{content.md, meta.json}`).
+
+`.md` and not `.qmd` is load-bearing, since the archive lives inside the
+blog repo: `*.qmd` there is reformatted by the pre-commit hook (which would
+destroy the verbatim record the archive exists to keep), indexed by `qmd`
+search, and sampled by `iter_targets` as a synthesis target — and a
+verbatim frontmatter copy passes every selector gate, so captured slop
+would be trained on as human prose. `iter_archives` still reads legacy
+blobs, warning each time; `scripts/migrate_capture_archives.py` converts
+them (verified byte-identical `recut` output across the migration).
 
 **Groundwork shipped same day — preference records:** editor decisions
 (voice-marker ≥0.0.4) now log `offsets` plus `para_before`/`para_after`

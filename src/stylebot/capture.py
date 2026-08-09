@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import difflib
 import json
+import logging
+import os
 import re
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +27,8 @@ from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.jsonl import read_jsonl
 from stylebot.lib import read_w_frontmatter_text, split_paragraphs
 from stylebot.pairs import build_pair_content
+
+logger = logging.getLogger(__name__)
 
 
 def now_iso() -> str:
@@ -368,22 +373,14 @@ def capture_pairs(
         )
 
     cap_id = new_capture_id()
-    archive_path = pairs_path.parent / "captures" / f"{cap_id}.json"
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
-    archive_path.write_text(
-        json.dumps(
-            {
-                "capture_id": cap_id,
-                "source": source,
-                "snapped_at": snapped_at,
-                "whole": whole,
-                "before_text": before_text,
-                "after_text": after_text,
-            },
-            ensure_ascii=False,
-        )
-        + "\n",
-        encoding="utf-8",
+    write_archive(
+        pairs_path.parent / "captures" / cap_id,
+        capture_id=cap_id,
+        source=source,
+        snapped_at=snapped_at,
+        whole=whole,
+        before_text=before_text,
+        after_text=after_text,
     )
     total = len(chunk_pairs)
     written: list[dict] = []
@@ -406,24 +403,127 @@ def capture_pairs(
     return written
 
 
+# ---- The capture archive ----
+#
+# An archive is a DIRECTORY of ordinary files, not a JSON blob:
+#
+#     captures/<capture_id>/before.md
+#     captures/<capture_id>/after.md
+#     captures/<capture_id>/meta.json   {capture_id, source, snapped_at, whole}
+#
+# The two documents are the point. They used to be JSON-escaped strings on one
+# line, which made the archive unreadable, unopenable and undiffable — perverse,
+# since the before->after diff IS the training signal. As plain files they can be
+# read, `diff`ed, and hand-corrected when a capture comes out wrong; `recut`
+# picks the correction up on its next run.
+#
+# `.md` and not `.qmd` deliberately. Every tool in the blog repo keys on
+# `*.qmd` — the pre-commit hook would reformat these files (destroying the
+# verbatim record it is their whole job to keep), `qmd` search would index the
+# captured slop as if Dan wrote it, and `iter_targets` would sample it as a
+# synthesis target. `.md` is invisible to all of them, and matches the existing
+# `_drafts/` convention for markdown that is not a post.
+
+ARCHIVE_BEFORE = "before.md"
+ARCHIVE_AFTER = "after.md"
+ARCHIVE_META = "meta.json"
+
+
+def write_archive(
+    archive_dir: Path,
+    *,
+    capture_id: str,
+    source: str | None,
+    snapped_at: str | None,
+    whole: bool,
+    before_text: str,
+    after_text: str,
+) -> Path:
+    """Write one capture archive directory, atomically.
+
+    Three files means a partial write is now possible where the old single
+    `write_text` could only truncate, so build in a sibling temp directory and
+    `os.replace` it into place — an archive is either wholly there or absent,
+    never half-populated (which `iter_archives` would silently skip).
+    """
+    archive_dir.parent.mkdir(parents=True, exist_ok=True)
+    tmp = archive_dir.with_name(archive_dir.name + ".tmp")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
+    (tmp / ARCHIVE_BEFORE).write_text(before_text, encoding="utf-8")
+    (tmp / ARCHIVE_AFTER).write_text(after_text, encoding="utf-8")
+    (tmp / ARCHIVE_META).write_text(
+        json.dumps(
+            {
+                "capture_id": capture_id,
+                "source": source,
+                "snapped_at": snapped_at,
+                "whole": whole,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if archive_dir.exists():
+        shutil.rmtree(archive_dir)
+    os.replace(tmp, archive_dir)
+    return archive_dir
+
+
+def read_archive(archive_dir: Path) -> dict | None:
+    """Load one archive directory into the flat dict the rest of the module uses.
+
+    Returns None (rather than raising) for an unreadable or incomplete archive,
+    matching `iter_archives`' skip-and-continue contract.
+    """
+    try:
+        meta = json.loads((archive_dir / ARCHIVE_META).read_text(encoding="utf-8"))
+        return {
+            **meta,
+            "before_text": (archive_dir / ARCHIVE_BEFORE).read_text(encoding="utf-8"),
+            "after_text": (archive_dir / ARCHIVE_AFTER).read_text(encoding="utf-8"),
+        }
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+
+
 # ---- Re-cutting the archive ----
 
 
 def iter_archives(pairs_path: Path):
     """Yield each capture archive dict beside `pairs_path`, oldest first.
 
-    Archives are `<pairs_dir>/captures/<capture_id>.json` as written by
-    `capture_pairs`. Sorted by `snapped_at` so a re-cut is deterministic.
+    Sorted by `snapped_at` so a re-cut is deterministic. Yields the flat shape
+    (`before_text`/`after_text` alongside the meta keys) that `recut_archives`
+    consumes, whichever on-disk layout it came from.
+
+    Legacy `captures/<capture_id>.json` blobs are still read, and warned about.
+    The warning is the point: a silent skip here would look exactly like "that
+    capture had no changed regions", and the caller would never learn that an
+    unmigrated archive had dropped out of the corpus.
     """
     cap_dir = pairs_path.parent / "captures"
     if not cap_dir.is_dir():
         return
     archives = []
-    for path in cap_dir.glob("*.json"):
-        try:
-            archives.append(json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, json.JSONDecodeError):
-            continue
+    for path in sorted(cap_dir.iterdir()):
+        if path.is_dir() and not path.name.endswith(".tmp"):
+            arch = read_archive(path)
+            if arch is not None:
+                archives.append(arch)
+        elif path.suffix == ".json":
+            logger.warning(
+                "legacy JSON capture archive %s — migrate with "
+                "scripts/migrate_capture_archives.py",
+                path,
+            )
+            try:
+                archives.append(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError):
+                continue
     archives.sort(key=lambda d: (d.get("snapped_at") or "", d.get("capture_id") or ""))
     yield from archives
 

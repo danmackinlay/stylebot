@@ -8,7 +8,6 @@ pairs (gated through the shared `validate_pair_record`), the
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -281,9 +280,10 @@ def test_save_archives_snapshot_instead_of_deleting(session_repo):
     assert not log._snapshot_path(Path("post/foo.qmd")).exists()
     archived = log._closed_snapshot_path(Path("post/foo.qmd"))
     assert archived.exists()
-    # The archive holds the ORIGINAL base, not the saved state.
-    payload = json.loads(archived.read_text(encoding="utf-8"))
-    assert "rich tapestry" in payload["content"]
+    # The archive holds the ORIGINAL base, not the saved state -- and holds it
+    # as an ordinary readable file, not a JSON-escaped string.
+    assert "rich tapestry" in (archived / "content.md").read_text(encoding="utf-8")
+    assert log._read_snapshot(archived)["source"] == "post/foo.qmd"
 
 
 def test_redo_replaces_prior_pair_against_same_base(session_repo):
@@ -308,9 +308,7 @@ def test_redo_replaces_prior_pair_against_same_base(session_repo):
     # ...because the session timestamp was preserved across the reopen.
     assert after[0][1] == first[0][1]
     # And the redo's own close re-archived the same base for a further redo.
-    payload = json.loads(
-        log._closed_snapshot_path(Path("post/foo.qmd")).read_text(encoding="utf-8")
-    )
+    payload = log._read_snapshot(log._closed_snapshot_path(Path("post/foo.qmd")))
     assert "rich tapestry" in payload["content"]
 
 
@@ -403,9 +401,7 @@ def test_drop_is_recoverable_via_reopen(session_repo):
     _run("open", "post/foo.qmd")
     _run("drop", "post/foo.qmd")
     _run("reopen", "post/foo.qmd")
-    payload = json.loads(
-        log._snapshot_path(Path("post/foo.qmd")).read_text(encoding="utf-8")
-    )
+    payload = log._read_snapshot(log._snapshot_path(Path("post/foo.qmd")))
     assert "rich tapestry" in payload["content"]
 
 

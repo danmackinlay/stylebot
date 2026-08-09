@@ -264,6 +264,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -303,13 +304,27 @@ _split_frontmatter = capture.split_frontmatter
 _build_pair_record = capture.build_pair_record
 
 
+# A snapshot is a DIRECTORY mirroring the source path, holding the base text as
+# an ordinary file plus a small sidecar:
+#
+#     snapshots/post/foo.qmd/content.md
+#     snapshots/post/foo.qmd/meta.json   {source, snapped_at}
+#
+# Same reasoning as the capture archive (see stylebot.capture): the document is
+# readable and editable on disk instead of being a JSON-escaped string, and it
+# is `.md` so the blog's `*.qmd` tooling — the reformatting pre-commit hook, qmd
+# search, the synthesis target walk — cannot see it.
+SNAPSHOT_CONTENT = "content.md"
+SNAPSHOT_META = "meta.json"
+
+
 def _snapshot_path(source: Path) -> Path:
     """Where the snapshot for `source` lives.
 
-    Mirrors the source path under SNAPSHOTS_DIR, suffixed with .json. So
-    `post/foo.qmd` -> `_training_pairs/snapshots/post/foo.qmd.json`.
+    Mirrors the source path under SNAPSHOTS_DIR as a directory. So
+    `post/foo.qmd` -> `_training_pairs/snapshots/post/foo.qmd/`.
     """
-    return SNAPSHOTS_DIR / f"{source}.json"
+    return SNAPSHOTS_DIR / str(source)
 
 
 def _closed_snapshot_path(source: Path) -> Path:
@@ -319,7 +334,32 @@ def _closed_snapshot_path(source: Path) -> Path:
     archive per source, overwritten each time a session closes — the redo
     workflow only ever wants the most recent base.
     """
-    return CLOSED_SNAPSHOTS_DIR / f"{source}.json"
+    return CLOSED_SNAPSHOTS_DIR / str(source)
+
+
+def _write_snapshot(snap: Path, *, source: str, snapped_at: str, content: str) -> None:
+    """Write a snapshot directory (base text + sidecar)."""
+    snap.mkdir(parents=True, exist_ok=True)
+    (snap / SNAPSHOT_CONTENT).write_text(content, encoding="utf-8")
+    (snap / SNAPSHOT_META).write_text(
+        json.dumps({"source": source, "snapped_at": snapped_at}, ensure_ascii=False, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _read_snapshot(snap: Path) -> dict:
+    """Load a snapshot directory into the flat payload shape callers expect."""
+    meta = json.loads((snap / SNAPSHOT_META).read_text(encoding="utf-8"))
+    return {**meta, "content": (snap / SNAPSHOT_CONTENT).read_text(encoding="utf-8")}
+
+
+def _move_snapshot(src: Path, dst: Path) -> None:
+    """Move a snapshot directory, replacing any existing one at `dst`."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.move(str(src), str(dst))
 
 
 def _close_snapshot(snap: Path, source: Path) -> None:
@@ -332,10 +372,7 @@ def _close_snapshot(snap: Path, source: Path) -> None:
     disposition REPLACES the earlier pairs instead of stacking a near-duplicate
     onto the corpus.
     """
-    closed = _closed_snapshot_path(source)
-    closed.parent.mkdir(parents=True, exist_ok=True)
-    closed.write_text(snap.read_text(encoding="utf-8"), encoding="utf-8")
-    snap.unlink()
+    _move_snapshot(snap, _closed_snapshot_path(source))
 
 
 def _read_text(path: Path) -> str:
@@ -436,14 +473,14 @@ def _remind_open_sessions(ctx: click.Context) -> None:
         return
     if not SNAPSHOTS_DIR.exists():
         return
-    snaps = sorted(SNAPSHOTS_DIR.rglob("*.json"))
+    snaps = sorted(p.parent for p in SNAPSHOTS_DIR.rglob(SNAPSHOT_META))
     if not snaps:
         return
 
     entries: list[tuple[str, str]] = []
     for snap in snaps:
         try:
-            payload = json.loads(snap.read_text(encoding="utf-8"))
+            payload = _read_snapshot(snap)
             source = payload.get("source", str(snap))
             age = _humanize_age(payload.get("snapped_at", ""))
             entries.append((source, age))
@@ -497,7 +534,8 @@ def open_session(ctx: click.Context, file: Path):
         "snapped_at": _now_iso(),
         "content": _read_text(file),
     }
-    snap.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    _write_snapshot(snap, source=payload["source"], snapped_at=payload["snapped_at"],
+                    content=payload["content"])
     click.echo(f"opened session for {file} ({len(payload['content'])} chars) -> {snap}")
     _remind_open_sessions(ctx)
 
@@ -512,11 +550,10 @@ def _restore_snapshot(file: Path) -> dict:
     closed = _closed_snapshot_path(file)
     if not closed.exists():
         raise FileNotFoundError(closed)
-    payload = json.loads(closed.read_text(encoding="utf-8"))
+    payload = _read_snapshot(closed)
     snap = _snapshot_path(file)
     snap.parent.mkdir(parents=True, exist_ok=True)
-    snap.write_text(closed.read_text(encoding="utf-8"), encoding="utf-8")
-    closed.unlink()
+    _move_snapshot(closed, snap)
     return payload
 
 
@@ -660,7 +697,7 @@ def save_session(
         click.echo(f"no open session for {file}; {hint}", err=True)
         sys.exit(1)
 
-    payload = json.loads(snap.read_text(encoding="utf-8"))
+    payload = _read_snapshot(snap)
     before_text = payload["content"]
     after_text = _read_text(file)
 
@@ -797,7 +834,8 @@ def drop_session(ctx: click.Context, file: Path):
 @main.command(name="list")
 def list_state():
     """List open sessions, saved pairs (grouped by source), and totals."""
-    snaps = sorted(SNAPSHOTS_DIR.rglob("*.json")) if SNAPSHOTS_DIR.exists() else []
+    snaps = (sorted(p.parent for p in SNAPSHOTS_DIR.rglob(SNAPSHOT_META))
+             if SNAPSHOTS_DIR.exists() else [])
     records = _iter_pairs()
     pair_count = len(records)
 
@@ -821,7 +859,7 @@ def list_state():
     click.echo(f"{len(snaps)} open session(s)")
     for snap in snaps:
         try:
-            payload = json.loads(snap.read_text(encoding="utf-8"))
+            payload = _read_snapshot(snap)
             click.echo(
                 f"  {payload.get('source', snap)} "
                 f"(opened {payload.get('snapped_at', '?')}, "
@@ -831,13 +869,15 @@ def list_state():
             click.echo(f"  {snap} [unreadable: {exc}]")
 
     closed = (
-        sorted(CLOSED_SNAPSHOTS_DIR.rglob("*.json")) if CLOSED_SNAPSHOTS_DIR.exists() else []
+        sorted(p.parent for p in CLOSED_SNAPSHOTS_DIR.rglob(SNAPSHOT_META))
+        if CLOSED_SNAPSHOTS_DIR.exists()
+        else []
     )
     if closed:
         click.echo(f"{len(closed)} closed session(s), redoable via `reopen` / `save --redo`")
         for snap in closed:
             try:
-                payload = json.loads(snap.read_text(encoding="utf-8"))
+                payload = _read_snapshot(snap)
                 click.echo(
                     f"  {payload.get('source', snap)} "
                     f"(opened {_humanize_age(payload.get('snapped_at', ''))}, "
