@@ -216,12 +216,20 @@ pairs for a given `--source` first.
 State on disk
 ------------------------------------------------------------------------
 
-    $STYLEBOT_DATA_DIR/snapshots/<rel-path>.json   # open sessions (gitignored)
+    $STYLEBOT_DATA_DIR/snapshots/<rel-path>/       # open sessions (gitignored)
+    $STYLEBOT_DATA_DIR/snapshots-closed/<rel-path>/  # closed, redoable sessions
     $STYLEBOT_DATA_DIR/pairs.jsonl                 # saved pairs (gitignored)
 
-`STYLEBOT_DATA_DIR` defaults to `_training_pairs` relative to cwd. The whole
-directory is gitignored: the corpus is private and lives outside the public
-code repo, backed up out-of-band.
+The data dir is resolved per command through `stylebot.config.resolve_data_dir`
+— the shared ladder `--flag` > `$STYLEBOT_DATA_DIR` (environment *or* `.env`) >
+the cwd-relative default `_training_pairs`. `log` passes no flag: it is the
+convenience command, where a mistake is cheap and a default is right (the
+expensive, stateful commands like `train` / `split` demand an explicit
+`--data-dir` instead). Every write command echoes the resolved absolute
+pairs.jsonl path, so a save landing somewhere unexpected is visible at once.
+
+The whole directory is gitignored: the corpus is private and lives outside the
+public code repo, backed up out-of-band.
 
 The on-disk directory for open sessions is still called `snapshots/`
 because the file *is* a snapshot of the source's initial state — that
@@ -263,7 +271,6 @@ then re-save, the old pairs will not be replaced automatically. Use
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -271,33 +278,58 @@ from pathlib import Path
 
 import click
 
-from stylebot import capture
+from stylebot import capture, config
 from stylebot.capture import diff_chunks  # noqa: F401 — callers/tests reach it as log.diff_chunks
 from stylebot.jsonl import read_jsonl
 
-# Root for all logged state (the corpus). Resolved from $STYLEBOT_DATA_DIR if
-# set, else cwd-relative `_training_pairs` (the historical default, preserved
-# so the logger keeps working unchanged inside the prose working tree).
+
+# Root for all logged state (the corpus), resolved through `stylebot.config` —
+# the one home of the `--flag` > `$STYLEBOT_DATA_DIR` > cwd-relative
+# `_training_pairs` ladder. `ai-style log` passes no flag: it is the
+# convenience command where a mistake is cheap, so it takes the env/default.
 #
 # Why configurable: the corpus is the project's valuable, *private* asset. The
 # stylebot code repo is public, so the corpus must live outside it. The logger
 # runs in the blog repo and writes there; downstream phases (synthesis,
 # training) run in this repo and point STYLEBOT_DATA_DIR at the same corpus.
 # Both default and override are gitignored. See `_training_pairs/README.md`.
-TRAINING_PAIRS_DIR = Path(os.environ.get("STYLEBOT_DATA_DIR", "_training_pairs"))
-SNAPSHOTS_DIR = TRAINING_PAIRS_DIR / "snapshots"
-# Closed sessions' snapshots, retained so `reopen` / `save --redo` can diff a
-# corrected rewrite against the SAME base. A sibling directory rather than a
-# suffix inside SNAPSHOTS_DIR, because the open-session listings rglob
-# `*.json` there and would otherwise report closed sessions as open.
-CLOSED_SNAPSHOTS_DIR = TRAINING_PAIRS_DIR / "snapshots-closed"
-PAIRS_PATH = TRAINING_PAIRS_DIR / "pairs.jsonl"
+#
+# Resolved lazily (per use, when a command runs) rather than baked into module
+# constants at import time. An import-time `os.environ` read happens before
+# anything has loaded `.env`, so until 2026-08 `log` was the one subcommand
+# that could not see a `.env`-supplied corpus location and quietly wrote to a
+# cwd-relative `_training_pairs/` instead. `config.resolve_data_dir()` loads
+# `.env` first, and `config.load()` memoises, so per-use resolution is cheap.
+def _data_dir() -> Path:
+    """The corpus root for this invocation."""
+    return config.resolve_data_dir()
+
+
+def _snapshots_dir() -> Path:
+    """Where open sessions' snapshots live."""
+    return _data_dir() / "snapshots"
+
+
+def _closed_snapshots_dir() -> Path:
+    """Where closed sessions' snapshots are retained.
+
+    Retained so `reopen` / `save --redo` can diff a corrected rewrite against
+    the SAME base. A sibling directory rather than a suffix inside the
+    snapshots dir, because the open-session listings rglob there and would
+    otherwise report closed sessions as open.
+    """
+    return _data_dir() / "snapshots-closed"
+
+
+def _pairs_path() -> Path:
+    """The corpus file itself — what every downstream phase reads."""
+    return _data_dir() / "pairs.jsonl"
 
 
 # The capture mechanism lives in stylebot.capture; this CLI keeps the path
-# policy (the $STYLEBOT_DATA_DIR-derived globals above) and the session
-# workflow. Wrappers below inject the module's PAIRS_PATH at call time so the
-# test fixture's monkeypatching of these globals keeps working.
+# policy (the resolvers above) and the session workflow. The wrappers below
+# call `_pairs_path()` at call time, so a test (or a `.env`) that repoints
+# $STYLEBOT_DATA_DIR takes effect without reimporting this module.
 _now_iso = capture.now_iso
 _capture_id = capture.new_capture_id
 _split_frontmatter = capture.split_frontmatter
@@ -321,20 +353,20 @@ SNAPSHOT_META = "meta.json"
 def _snapshot_path(source: Path) -> Path:
     """Where the snapshot for `source` lives.
 
-    Mirrors the source path under SNAPSHOTS_DIR as a directory. So
+    Mirrors the source path under the snapshots dir as a directory. So
     `post/foo.qmd` -> `_training_pairs/snapshots/post/foo.qmd/`.
     """
-    return SNAPSHOTS_DIR / str(source)
+    return _snapshots_dir() / str(source)
 
 
 def _closed_snapshot_path(source: Path) -> Path:
     """Where the retained snapshot of `source`'s last closed session lives.
 
-    Same mirrored layout as `_snapshot_path`, under CLOSED_SNAPSHOTS_DIR. One
-    archive per source, overwritten each time a session closes — the redo
+    Same mirrored layout as `_snapshot_path`, under the closed-snapshots dir.
+    One archive per source, overwritten each time a session closes — the redo
     workflow only ever wants the most recent base.
     """
-    return CLOSED_SNAPSHOTS_DIR / str(source)
+    return _closed_snapshots_dir() / str(source)
 
 
 def _write_snapshot(snap: Path, *, source: str, snapped_at: str, content: str) -> None:
@@ -380,7 +412,7 @@ def _read_text(path: Path) -> str:
 
 
 def _append_pair(record: dict) -> None:
-    capture.append_pair(PAIRS_PATH, record)
+    capture.append_pair(_pairs_path(), record)
 
 
 def _iter_pairs() -> list[dict]:
@@ -389,7 +421,7 @@ def _iter_pairs() -> list[dict]:
     Unparseable lines come back as ``{"_raw": line}`` so the rewrite path
     (`_write_pairs_atomic`) round-trips them instead of silently dropping.
     """
-    return read_jsonl(PAIRS_PATH, keep_undecodable=True)
+    return read_jsonl(_pairs_path(), keep_undecodable=True)
 
 
 def _corpus_confirmation() -> str:
@@ -402,17 +434,20 @@ def _corpus_confirmation() -> str:
     """
     pairs = _iter_pairs()
     with_ctx = sum(1 for r in pairs if (r.get("meta", {}).get("context") or "").strip())
-    return f"corpus now: {len(pairs)} pair(s) ({with_ctx} with heading context) -> {PAIRS_PATH.resolve()}"
+    return (
+        f"corpus now: {len(pairs)} pair(s) ({with_ctx} with heading context) "
+        f"-> {_pairs_path().resolve()}"
+    )
 
 
 def _write_pairs_atomic(records: list[dict]) -> None:
     """Atomic rewrite of pairs.jsonl from the given record list."""
-    capture.write_pairs_atomic(PAIRS_PATH, records)
+    capture.write_pairs_atomic(_pairs_path(), records)
 
 
 def _remove_pairs_for_source(source: str) -> int:
     """Drop every record whose meta.source matches. Returns count removed."""
-    return capture.remove_pairs_for_source(PAIRS_PATH, source)
+    return capture.remove_pairs_for_source(_pairs_path(), source)
 
 
 def _capture_and_append(
@@ -429,7 +464,7 @@ def _capture_and_append(
     return capture.capture_pairs(
         before_text,
         after_text,
-        pairs_path=PAIRS_PATH,
+        pairs_path=_pairs_path(),
         source=source,
         snapped_at=snapped_at,
         whole=whole,
@@ -471,9 +506,10 @@ def _remind_open_sessions(ctx: click.Context) -> None:
     """
     if ctx.obj and ctx.obj.get("quiet"):
         return
-    if not SNAPSHOTS_DIR.exists():
+    snapshots_dir = _snapshots_dir()
+    if not snapshots_dir.exists():
         return
-    snaps = sorted(p.parent for p in SNAPSHOTS_DIR.rglob(SNAPSHOT_META))
+    snaps = sorted(p.parent for p in snapshots_dir.rglob(SNAPSHOT_META))
     if not snaps:
         return
 
@@ -834,8 +870,9 @@ def drop_session(ctx: click.Context, file: Path):
 @main.command(name="list")
 def list_state():
     """List open sessions, saved pairs (grouped by source), and totals."""
-    snaps = (sorted(p.parent for p in SNAPSHOTS_DIR.rglob(SNAPSHOT_META))
-             if SNAPSHOTS_DIR.exists() else [])
+    snapshots_dir = _snapshots_dir()
+    snaps = (sorted(p.parent for p in snapshots_dir.rglob(SNAPSHOT_META))
+             if snapshots_dir.exists() else [])
     records = _iter_pairs()
     pair_count = len(records)
 
@@ -846,7 +883,7 @@ def list_state():
         src = meta.get("source") or "(no source)"
         by_source.setdefault(src, []).append(rec)
 
-    click.echo(f"{pair_count} pair(s) across {len(by_source)} source(s) in {PAIRS_PATH}")
+    click.echo(f"{pair_count} pair(s) across {len(by_source)} source(s) in {_pairs_path()}")
     for src, recs in sorted(by_source.items()):
         capture_ids = {
             r.get("meta", {}).get("capture_id")
@@ -868,9 +905,10 @@ def list_state():
         except Exception as exc:
             click.echo(f"  {snap} [unreadable: {exc}]")
 
+    closed_dir = _closed_snapshots_dir()
     closed = (
-        sorted(p.parent for p in CLOSED_SNAPSHOTS_DIR.rglob(SNAPSHOT_META))
-        if CLOSED_SNAPSHOTS_DIR.exists()
+        sorted(p.parent for p in closed_dir.rglob(SNAPSHOT_META))
+        if closed_dir.exists()
         else []
     )
     if closed:
@@ -980,7 +1018,7 @@ def recut_pairs(ctx, gap_paras, gap_chars, max_chars, min_chars, dry_run):
     """
     before = len(_iter_pairs())
     records = capture.recut_archives(
-        PAIRS_PATH,
+        _pairs_path(),
         coalesce_gap_paras=gap_paras,
         coalesce_gap_chars=gap_chars,
         max_chars=max_chars or None,

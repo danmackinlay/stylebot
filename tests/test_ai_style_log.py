@@ -12,24 +12,25 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from dotenv import load_dotenv as real_load_dotenv
 
+from stylebot import config
 from stylebot.bin import ai_style_log as log
 from stylebot.pairs import build_pair_content, validate_pair_record
 
 
 @pytest.fixture
 def temp_corpus(tmp_path, monkeypatch):
-    """Point the module's on-disk pairs.jsonl at a temp file.
+    """Point the logger's on-disk state at a temp dir.
 
-    `PAIRS_PATH` (and friends) are resolved at import time from
-    $STYLEBOT_DATA_DIR, so we patch the module globals directly to isolate
-    each test's writes.
+    The logger resolves its paths per command through
+    `config.resolve_data_dir()`, so setting the env var is all it takes — no
+    module globals to patch, no reimport. `_LOADED` is forced so `load()`
+    can't pull a developer's real `.env` into the test.
     """
     data_dir = tmp_path / "corpus"
-    monkeypatch.setattr(log, "TRAINING_PAIRS_DIR", data_dir)
-    monkeypatch.setattr(log, "SNAPSHOTS_DIR", data_dir / "snapshots")
-    monkeypatch.setattr(log, "CLOSED_SNAPSHOTS_DIR", data_dir / "snapshots-closed")
-    monkeypatch.setattr(log, "PAIRS_PATH", data_dir / "pairs.jsonl")
+    monkeypatch.setattr(config, "_LOADED", True)
+    monkeypatch.setenv("STYLEBOT_DATA_DIR", str(data_dir))
     return data_dir
 
 
@@ -443,3 +444,42 @@ def test_save_reports_sessionless_prior_pairs_without_crashing(session_repo):
     assert "1 earlier session(s)" in out
     assert "1 logged outside a session" in out
     assert len(_sources_and_stamps()) == 3
+
+
+# ---- corpus location comes from the shared config ladder ------------------
+
+
+def test_dotenv_supplied_data_dir_is_honoured(tmp_path, monkeypatch):
+    """Regression: `log` resolves its corpus through `stylebot.config`.
+
+    It used to read `os.environ` at import time, before anything had loaded
+    `.env` — the one subcommand that could not see a `.env`-supplied
+    STYLEBOT_DATA_DIR, so a save silently landed in a cwd-relative
+    `_training_pairs/` instead of the real corpus.
+    """
+    data_dir = tmp_path / "dotenv-corpus"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"STYLEBOT_DATA_DIR={data_dir}\n", encoding="utf-8")
+
+    # Nothing in the environment: the location must arrive via `.env` alone.
+    monkeypatch.delenv("STYLEBOT_DATA_DIR", raising=False)
+    # `load()` memoises on `_LOADED`, and its `.env` discovery walks up from the
+    # source tree — so reset the flag explicitly rather than relying on import
+    # order, and pin the file we wrote rather than the developer's own `.env`.
+    monkeypatch.setattr(config, "_LOADED", False)
+    monkeypatch.setattr(config, "load_dotenv", lambda: real_load_dotenv(env_file))
+
+    repo = tmp_path / "repo"
+    (repo / "post").mkdir(parents=True)
+    monkeypatch.chdir(repo)
+    f = repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nIt is worth noting the rich tapestry.\n", encoding="utf-8")
+    _run("open", "post/foo.qmd")
+    f.write_text("## S\n\nWe dig in.\n", encoding="utf-8")
+    out = _run("save", "post/foo.qmd")
+
+    assert (data_dir / "pairs.jsonl").exists()
+    assert (data_dir / "snapshots-closed" / "post" / "foo.qmd").exists()
+    # Not in the cwd-relative default, and the confirmation names where it went.
+    assert not (repo / "_training_pairs").exists()
+    assert str((data_dir / "pairs.jsonl").resolve()) in out
