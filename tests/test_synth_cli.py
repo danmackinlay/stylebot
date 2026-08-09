@@ -4,9 +4,22 @@ The kit exists so `ai-style synth` and downstream blog wrappers share one
 option surface and one command body instead of copy-pasting them. These pin
 the override/exclude machinery and the drift-prone body behaviors (dry-run
 stubs, the non-zero exit on generation errors).
+
+The "-- the drift guard --" block below is the structural half: `synth` is a
+54-option command whose surface used to be restated in three hand-maintained
+lists (the spec table, `CHUNK_PARAM_NAMES`, and `run_synth`'s 42-keyword
+signature). Those tests fail if a flag ever stops reaching a consumer, or if a
+default drifts between the flag and the library entry point — the latter
+silently re-generates corpus, because `synth_key` resume is keyed on what the
+generators were configured with.
 """
 
 from __future__ import annotations
+
+import ast
+import inspect as inspect_mod
+from dataclasses import fields
+from pathlib import Path
 
 import click
 import pytest
@@ -58,6 +71,148 @@ def test_pop_chunk_kwargs_shapes_iter_targets_args():
     assert chunk["max_chars"] is None  # 0 -> uncapped
     assert callable(chunk["sort_key"]) and "sort_name" not in chunk
     assert kw == {"dry_run": True}  # generation params stay for run_synth
+
+
+# -- the drift guard: the spec table is the single source of the surface --
+
+
+def _spec_default(name: str):
+    """The default a click option actually gets from its spec entry — click's
+    own implicit defaults included, so the comparison below is honest."""
+    kw = synth_cli._OPTION_SPECS[name][1]
+    if "default" in kw:
+        return kw["default"]
+    if kw.get("multiple"):
+        return ()
+    if kw.get("is_flag"):
+        return False
+    return None
+
+
+def test_every_option_spec_reaches_a_bundle():
+    # THE regression guard. Every flag in the spec table must be a field of
+    # exactly one option bundle, because that is how run_synth routes it to a
+    # consumer. Add a flag and forget the bundle and this fails here (the
+    # module also refuses to import), instead of the flag silently doing
+    # nothing on a paid run.
+    owners = {}
+    for bundle in synth_cli._BUNDLES:
+        for f in fields(bundle):
+            assert f.name not in owners, f"{f.name} claimed by two bundles"
+            owners[f.name] = bundle
+    orphans = sorted(set(synth_cli._OPTION_SPECS) - set(owners))
+    assert not orphans, (
+        f"synth flags with no consumer: {orphans} — add each to the bundle whose "
+        "consumer should read it (synth_cli._BUNDLES)"
+    )
+    # And the chunk tuple is derived, not restated.
+    assert synth_cli.CHUNK_PARAM_NAMES == tuple(f.name for f in fields(synth_cli.ChunkOpts))
+
+
+def test_bundle_defaults_match_flag_defaults():
+    # run_synth is a public library entry point reachable without click, so a
+    # bundle default that drifts from its flag makes the two paths generate
+    # different corpora from the same nominal config.
+    for bundle in synth_cli._BUNDLES:
+        instance = bundle()
+        for f in fields(bundle):
+            if f.name not in synth_cli._OPTION_SPECS:
+                continue  # library-only field (report_title, session_budgets)
+            assert getattr(instance, f.name) == _spec_default(f.name), (
+                f"{bundle.__name__}.{f.name} default disagrees with its flag"
+            )
+
+
+def test_every_bundle_field_has_a_consumer():
+    # Membership in a bundle is necessary but not sufficient: the field must
+    # actually be READ. Every non-chunk field is read as `<bundle>.<field>` in
+    # the kit; scan the AST for exactly that rather than trusting a grep.
+    src = Path(synth_cli.__file__).read_text(encoding="utf-8")
+    holders = {"gen", "session", "substrate", "inspection", "corpus", "opts"}
+    read = {
+        node.attr
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in holders
+    }
+    chunk_fields = {f.name for f in fields(synth_cli.ChunkOpts)}
+    for bundle in synth_cli._BUNDLES:
+        for f in fields(bundle):
+            if f.name in chunk_fields:
+                continue  # splatted wholesale into iter_targets — checked below
+            assert f.name in read, f"{bundle.__name__}.{f.name} is never read"
+
+    # The chunk bundle's consumer proof: every key it produces is a real
+    # iter_targets parameter, checked against the live signature.
+    accepted = set(inspect_mod.signature(synth.iter_targets).parameters)
+    produced = set(synth_cli.ChunkOpts().iter_targets_kwargs())
+    assert produced <= accepted, f"not iter_targets params: {sorted(produced - accepted)}"
+    assert len(produced) == len(chunk_fields)  # sort_name -> sort_key, 1:1
+
+
+def test_chunk_opts_agree_with_chunk_policy():
+    # ChunkOpts is the CLI-side twin of targets.ChunkPolicy; where they share a
+    # knob they must share its default, or --min-chars et al. mean one thing on
+    # the CLI and another to a library caller building a policy directly.
+    from stylebot.targets import ChunkPolicy
+
+    policy, opts = ChunkPolicy(), synth_cli.ChunkOpts()
+    shared = {f.name for f in fields(ChunkPolicy)} & {f.name for f in fields(synth_cli.ChunkOpts)}
+    assert len(shared) == len(fields(ChunkPolicy)), "a ChunkPolicy knob has no flag"
+    for name in shared:
+        assert getattr(policy, name) == getattr(opts, name), f"{name} default differs"
+
+
+# The keyword names `run_synth` accepted before the bundles landed. An external
+# wrapper (livingthing's `dan-style synth`) splats a click callback's **kw in
+# and passes overrides by name, so every one of these must keep working —
+# frozen here deliberately: this list is the compatibility contract, not a
+# derived value, and shrinking it is a breaking change to be made on purpose.
+_LEGACY_RUN_SYNTH_KEYWORDS = {
+    "data_dir": None, "generator_names": (), "openrouter_models": (),
+    "provider_sort": "throughput", "sticky_provider": True, "prompt_cache": True,
+    "slop_strategies": (synth.DEFAULT_STRATEGY,), "slop_system_file": None,
+    "gpt_model": "gpt-4o", "local_model": "", "max_tokens": synth.DEFAULT_SLOP_MAX_TOKENS,
+    "timeout": synth.DEFAULT_GEN_TIMEOUT, "capture_reasoning": False,
+    "reasoning_efforts": (synth.DEFAULT_REASONING_EFFORT,), "temperature": None,
+    "top_p": None, "per_generator": False, "assign_seed": "", "context_dropout": 0.0,
+    "max_workers": 0, "session_turns": 1,
+    "session_max_tokens": synth.DEFAULT_SESSION_MAX_TOKENS, "replicate": "",
+    "skip_covered": False, "max_transform_sim": None, "max_length_ratio": None,
+    "context_window": None, "session_budgets": None, "splits_path": None,
+    "role": None, "sample_frac": None, "sample_salt": "", "limit": None,
+    "dry_run": False, "sample_n": None, "report_path": None, "report_max_rows": 2000,
+    "report_title": None, "count_note": "", "extra_tags": (), "generators": None,
+}
+
+
+def test_run_synth_still_accepts_every_legacy_keyword():
+    # No targets: run_synth echoes the count and returns before it needs a
+    # data-dir or a generator, so this exercises pure keyword routing.
+    assert synth_cli.run_synth([], **_LEGACY_RUN_SYNTH_KEYWORDS) is None
+    # ...and one at a time, so a single dropped name is named in the failure.
+    for name, value in _LEGACY_RUN_SYNTH_KEYWORDS.items():
+        synth_cli.run_synth([], **{"data_dir": None, name: value})
+
+
+def test_run_synth_rejects_unknown_keywords():
+    # The failure mode the bundles exist to prevent: a name that reaches no
+    # consumer must be loud, not swallowed by a **kw catch-all.
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        synth_cli.run_synth([], data_dir=None, no_such_knob=1)
+    # Chunk params belong to iter_targets and must not be silently ignored here.
+    with pytest.raises(TypeError, match="selection-side"):
+        synth_cli.run_synth([], data_dir=None, min_chars=10)
+
+
+def test_synth_command_surface_is_exactly_the_spec_table_plus_its_own():
+    # Pins the 54: the shared surface is _OPTION_SPECS and nothing else, and
+    # `synth` adds only its own selection/provenance flags.
+    params = [p for p in ai_style_main.commands["synth"].params if isinstance(p, click.Option)]
+    own = {"blog_root", "data_dir", "field", "max_level", "select_all", "glob", "tags"}
+    assert len(params) == 54
+    assert {p.name for p in params} - own == set(synth_cli._OPTION_SPECS)
 
 
 # -- the rotation: Arm / iter_arms / build_generators --
@@ -206,15 +361,26 @@ def test_timeout_reaches_generator_factories(tmp_path, monkeypatch, make_blog):
     assert captured["provider_sort"] is None
 
 
-def test_run_synth_defers_data_dir_for_inspection(tmp_path, make_blog):
-    # A callable data_dir must not be invoked in --sample mode.
+def test_run_synth_needs_no_data_dir_for_inspection(tmp_path, make_blog):
+    # --sample/--report write nothing, so data_dir=None is legal there: the
+    # caller (synth_cmd) checks for inspection *before* resolving, which is why
+    # run_synth's data_dir is a plain path rather than a deferred callable.
     targets = synth.iter_targets(blog_root=make_blog(ai=False))
+    assert synth_cli.run_synth(targets, data_dir=None, sample_n=1) is None
 
-    def _explode() -> None:
-        raise AssertionError("data_dir resolved during inspection")
+    # But a generating run without one is refused, not silently defaulted.
+    with pytest.raises(click.UsageError, match="data-dir is required"):
+        synth_cli.run_synth(
+            targets, data_dir=None,
+            generators=[synth.Generator("fake", generate=lambda t: "s")],
+        )
 
-    result = synth_cli.run_synth(targets, data_dir=_explode, sample_n=1)
-    assert result is None
+    # The removed callable shape fails with a migration message, not a mystery.
+    with pytest.raises(TypeError, match="no longer takes a callable"):
+        synth_cli.run_synth(
+            targets, data_dir=lambda: tmp_path,
+            generators=[synth.Generator("fake", generate=lambda t: "s")],
+        )
 
 
 # -- parallelism + sessions through the shared surface --

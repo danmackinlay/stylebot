@@ -95,21 +95,29 @@ def synth_cmd(
         **synth_cli.pop_chunk_kwargs(kw),
     )
 
-    def _data_dir() -> Path:
+    # The read-only inspection modes (--sample/--report) exit before generation:
+    # they write nothing, so they need no corpus location. Deciding that HERE —
+    # above the resolution — is what keeps `run_synth`'s data_dir a plain path
+    # while this command keeps its own tailored refusal message.
+    inspecting = kw.get("sample_n") is not None or kw.get("report_path") is not None
+
+    def _data_dir(*, required: bool) -> Path | None:
         # Resolve the corpus location: explicit flag > $STYLEBOT_DATA_DIR. Refuse the
         # bare cwd default — synth costs money and grows the corpus; be explicit.
-        # Deferred (callable) so the inspection modes need no data-dir at all.
         if data_dir is None and not config.get_key("STYLEBOT_DATA_DIR"):
+            if not required:
+                return None  # inspection: nothing to write, nothing to resolve
             raise click.UsageError(
                 "no --data-dir and $STYLEBOT_DATA_DIR unset; pass --data-dir explicitly "
                 "(synth appends to the corpus and costs API spend — never the silent default)"
             )
         return config.resolve_data_dir(data_dir)
 
-    # Resolve eagerly when the flag was given (inspection hints then name the real
-    # pairs path); defer only to keep flag-less inspection runs guard-free.
-    resolved = config.resolve_data_dir(data_dir) if data_dir is not None else _data_dir
-    synth_cli.run_synth(targets, data_dir=resolved, extra_tags=tags, **kw)
+    # Still resolved for inspection runs when it IS available, so the inspection
+    # hints can name the real pairs path.
+    synth_cli.run_synth(
+        targets, data_dir=_data_dir(required=not inspecting), extra_tags=tags, **kw
+    )
 
 
 @main.command("eval")
