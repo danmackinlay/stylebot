@@ -17,7 +17,6 @@ containing markup can't inject anything.
 from __future__ import annotations
 
 import html
-import json
 import random
 import statistics
 from collections.abc import Sequence
@@ -239,13 +238,6 @@ def render_targets_report(
         note = f"showing all {n:,} targets"
     path.write_text(_page(title=title, stats=stats, svg=svg, rows_html=rows_html, note=note), encoding="utf-8")
     return path
-
-
-# `json` is imported for callers who want a machine-readable dump alongside the
-# HTML; kept here so a future `--report-json` can reuse `_summary_stats`.
-def stats_json(targets: Sequence[Target]) -> str:
-    """Return summary stats as a JSON string (for scripting / CI checks)."""
-    return json.dumps(_summary_stats(targets), indent=2)
 
 
 # ---------------------------------------------------------------------------

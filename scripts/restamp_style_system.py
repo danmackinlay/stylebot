@@ -26,12 +26,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 from stylebot.ai_core import STYLE_SYSTEM
+from stylebot.capture import write_pairs_atomic
 
 
 def restamp(path: Path, *, dry_run: bool = False) -> tuple[int, int]:
@@ -58,15 +57,10 @@ def restamp(path: Path, *, dry_run: bool = False) -> tuple[int, int]:
             records.append(rec)
 
     if not dry_run and changed:
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as out:
-                for rec in records:
-                    out.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            os.replace(tmp, path)
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
+        # The loop above `sys.exit`s on any unparseable line, so `records` is
+        # always fully-decoded dicts — the writer's `_raw` passthrough branch is
+        # unreachable from here.
+        write_pairs_atomic(path, records)
     return len(records), changed
 
 

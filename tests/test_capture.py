@@ -225,6 +225,22 @@ def test_recut_output_validates(tmp_path):
     assert validate_pairs_file(pairs_path) == []
 
 
+def test_recut_preserves_a_corrupt_line(tmp_path):
+    """`recut` rewrites the whole corpus, so it must round-trip unparseable
+    lines like every other rewrite path — the file is an audit trail, and a
+    half-written record is evidence, not garbage to silently delete."""
+    pairs_path = tmp_path / "pairs.jsonl"
+    _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")
+    corrupt = '{"messages": [{"role": "system"'  # truncated mid-write
+    with pairs_path.open("a", encoding="utf-8") as fp:
+        fp.write(corrupt + "\n")
+
+    capture.recut_archives(
+        pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0
+    )
+    assert corrupt in pairs_path.read_text(encoding="utf-8").splitlines()
+
+
 def test_archive_write_is_atomic(tmp_path):
     """Three files means a partial write is now possible where the old single
     write_text could only truncate. A half-built archive must never be visible
