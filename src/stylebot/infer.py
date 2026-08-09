@@ -32,6 +32,7 @@ Small N is Goodhart-gentle (KL ~ log N; see eval-harness.md "Eval vs reward").
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Callable
@@ -52,9 +53,12 @@ logger = logging.getLogger(__name__)
 STYLE_CHARS_PER_CHUNK = 1_500
 
 DEFAULT_TEMPERATURE = 0.3
-# Output budget per chunk. Must clear the chunk budget with room to spare — a
-# ~4500-char cross-heading chunk is ~1200 tokens, and truncation mid-rewrite is
-# worse than no rewrite. `rewrite_text` scales this with max_chunk_chars.
+# Output budget per chunk — a FLOOR, not the whole story. It must clear the
+# chunk budget with room to spare: a ~4500-char cross-heading chunk is ~1200
+# tokens, and truncation mid-rewrite is worse than no rewrite. The backends take
+# max_tokens fixed at construction, so it is the CLI (`ai-style run` / `serve`)
+# that scales it off --max-chunk-chars through `max_tokens_for` whenever
+# --max-tokens is not given explicitly.
 DEFAULT_MAX_TOKENS = 2_000
 # Tokens allowed per character of input chunk (chars/4 for the rewrite, plus
 # generous headroom since the styler may legitimately expand a terse passage).
@@ -123,27 +127,6 @@ def _blocks_with_separators(body: str) -> tuple[list[str], list[str]]:
     # (block + sep + block + ...) reproduces the body byte-for-byte.
     seps = ["\n" + "\n".join(lines) + "\n" for is_sep, lines in runs if is_sep]
     return blocks, seps
-
-
-def chunk_body(body: str, *, max_chars: int = STYLE_CHARS_PER_CHUNK) -> tuple[list[str], list[str]]:
-    """Group paragraph blocks into chunks of <= max_chars (single oversize
-    blocks pass through whole). Returns `(chunks, seps)`; joining
-    `chunks[0] + seps[0] + chunks[1] + ...` reproduces the body exactly."""
-    blocks, seps = _blocks_with_separators(body)
-    if not blocks:
-        return [], []
-    chunks: list[str] = []
-    out_seps: list[str] = []
-    cur = blocks[0]
-    for sep, block in zip(seps, blocks[1:]):
-        if len(cur) + len(sep) + len(block) <= max_chars:
-            cur = cur + sep + block
-        else:
-            chunks.append(cur)
-            out_seps.append(sep)
-            cur = block
-    chunks.append(cur)
-    return chunks, out_seps
 
 
 _HEADING_RE = re.compile(r"^#{1,6}\s")
@@ -523,8 +506,6 @@ def rewrite_pairs_file(
         todo.append(rec)
         if limit is not None and len(todo) >= limit:
             break
-
-    import json
 
     written = 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
