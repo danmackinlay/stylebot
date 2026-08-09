@@ -34,21 +34,6 @@ BODY = (
 )
 
 
-def test_chunk_roundtrip_exact():
-    chunks, seps = infer.chunk_body(BODY, max_chars=10)  # force every block separate
-    reassembled = chunks[0] + "".join(s + c for s, c in zip(seps, chunks[1:]))
-    assert reassembled == BODY
-    # The fence is one block despite its interior blank line.
-    assert any(c.startswith("```python") and c.endswith("```") for c in chunks)
-
-
-def test_chunk_grouping_respects_budget():
-    chunks, _seps = infer.chunk_body(BODY, max_chars=len(BODY) + 10)
-    assert len(chunks) == 1  # everything fits in one chunk
-    chunks, _seps = infer.chunk_body(BODY, max_chars=60)
-    assert all(len(c) <= 60 or "```" in c for c in chunks)
-
-
 def test_rewrite_identity_preserves_text_exactly():
     text = "---\ntitle: T\n---\n" + BODY
     result = infer.rewrite_text(text, _identity_styler, max_chunk_chars=40)

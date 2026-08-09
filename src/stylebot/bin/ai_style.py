@@ -1,11 +1,12 @@
 """ai-style: the one-entry-point CLI (subcommands), thin over the libraries.
 
-Per OVERVIEW "Interfaces": one command, subcommands `synth | split | train |
-eval | serve` — not a scatter of loose scripts. Each subcommand is a thin
-`click` wrapper that parses flags and calls a typed library function. `synth`
-(Phase 2), `eval` (the offline scorer, `stylebot.eval`) and `serve` (the NDJSON
-scoring sidecar, `stylebot.serve`) are built; `split` / `train` land with their
-phases.
+Per OVERVIEW "Interfaces": one command, subcommands — not a scatter of loose
+scripts. Each subcommand is a thin `click` wrapper that parses flags and calls a
+typed library function: `log` (Phase 1 capture), `synth` (Phase 2), `make-splits`
+(the shared by-post splits contract), `train-clf` (the voice classifier),
+`train` (Phase 3 LoRA SFT), `run` (Phase 4 inference), `eval` (the offline
+scorer, `stylebot.eval`), `export-table` (scores -> tidy CSV) and `serve` (the
+NDJSON editor sidecar, `stylebot.serve`).
 
 Phase 1's capture logger is `ai-style log` — a subcommand like every other, not
 a separate console script. It shipped as a standalone `ai-style-log` until
@@ -14,9 +15,10 @@ a separate console script. It shipped as a standalone `ai-style-log` until
 
 from __future__ import annotations
 
+import datetime
 import json
 import sys
-from functools import partial
+from functools import cache, partial
 from pathlib import Path
 
 import click
@@ -156,8 +158,6 @@ def eval_cmd(
     reasoning), faceted and sortable. A Phase-4 styler run scores the same way
     once it emits an output-bearing JSONL (add an "output" field then).
     """
-    import json
-
     from stylebot import eval as ev
 
     out = out_path or (pairs_path.parent / "scores.jsonl")
@@ -285,8 +285,8 @@ def export_table_cmd(scores_path: Path, out_path: Path, note: str | None, config
 @click.option("--model", default=None, help="[openai] Served model name.")
 @click.option("--api-key-env", default=None, help="[openai] Env var holding the endpoint key; omit for keyless local servers.")
 @click.option("--temperature", default=0.7, show_default=True, type=float, help="Hotter than run/eval's 0.3 on purpose: interactive best-of wants DISTINCT candidates; at 0.3 the sampler mode-collapses to near-identical draws.")
-@click.option("--max-tokens", default=2000, show_default=True, type=int)
-@click.option("--max-chunk-chars", default=None, type=int, help="Rewrite-op chunk budget; MUST match the adapter's training chunk scale.")
+@click.option("--max-tokens", default=None, type=int, help="Output-token budget per rewrite. [default: scaled off --max-chunk-chars, floor 2000]")
+@click.option("--max-chunk-chars", default=None, type=int, help="Rewrite-op chunk budget; MUST match the adapter's training chunk scale. [default: 1500]")
 @click.option("--preferences", "preferences_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Arm the 'prefer' op: append client decisions (plus a UTC ts) to this JSONL.")
 def serve_cmd(
     detector_model: Path,
@@ -298,7 +298,7 @@ def serve_cmd(
     model: str | None,
     api_key_env: str | None,
     temperature: float,
-    max_tokens: int,
+    max_tokens: int | None,
     max_chunk_chars: int | None,
     preferences_path: Path | None,
 ) -> None:
@@ -325,52 +325,55 @@ def serve_cmd(
     except ValueError as exc:
         raise click.ClickException(str(exc))
 
+    chunk_chars = max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK
+    tokens = max_tokens if max_tokens is not None else infer.max_tokens_for(chunk_chars)
+
     rewriter = None
     if backend is not None:
         # Build the styler LAZILY: the tinker client dials out at construction,
         # and a flaky network at editor start must not take scoring down with it.
-        styler_box: list = []
-
+        # `cache` is what makes it lazy-once — the first rewrite op pays, later
+        # ones reuse the client.
+        @cache
         def make_styler():
             if backend == "tinker":
                 if not sampler_path or not base_model:
                     raise ValueError("--backend tinker needs --sampler-path and --base-model")
                 return infer.tinker_backend(
                     sampler_path, base_model, renderer_name=renderer_name,
-                    temperature=temperature, max_tokens=max_tokens,
+                    temperature=temperature, max_tokens=tokens,
                 )
             if not base_url or not model:
                 raise ValueError("--backend openai needs --base-url and --model")
             api_key = config.get_key(api_key_env) if api_key_env else None
             return infer.openai_backend(
                 base_url, model, api_key=api_key,
-                temperature=temperature, max_tokens=max_tokens,
+                temperature=temperature, max_tokens=tokens,
             )
 
         scorer = infer.detector_scorer(detector)
 
-        def rewriter(text, *, context=None, best_of=4):
-            if not styler_box:
-                styler_box.append(make_styler())
+        def rewrite_op(text, *, context=None, best_of=4):
             return infer.rewrite_candidates(
-                text, styler_box[0], context=context, best_of=best_of,
-                scorer=scorer,
-                max_chunk_chars=max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK,
+                text, make_styler(), context=context, best_of=best_of,
+                scorer=scorer, max_chunk_chars=chunk_chars,
             )
+
+        rewriter = rewrite_op
 
     prefer = None
     if preferences_path is not None:
-        import datetime
-        import json as _json
 
-        def prefer(decision: dict) -> None:
+        def prefer_op(decision: dict) -> None:
             record = {
                 "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 **decision,
             }
             preferences_path.parent.mkdir(parents=True, exist_ok=True)
             with preferences_path.open("a", encoding="utf-8") as fp:
-                fp.write(_json.dumps(record, ensure_ascii=False) + "\n")
+                fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        prefer = prefer_op
 
     serve.serve_loop(detector, sys.stdin, sys.stdout, meta=meta, rewriter=rewriter, prefer=prefer)
 
@@ -507,8 +510,6 @@ def train_clf_cmd(
     (`classify_train.train(extra_positives=…)`) — callers with a corpus policy
     wrap this, as livingthing's train-voice-clf does.
     """
-    import json as _json
-
     from stylebot import classify_train as ct
 
     if splits_path is not None and (holdout_frac or holdout_posts is not None):
@@ -567,7 +568,7 @@ def train_clf_cmd(
 
     # The artifact is the source of truth for what shipped: surface its own
     # record of the chosen C and any danger warnings.
-    meta = _json.loads((out / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
     head_c = meta.get("head_C") or {}
     if head_c:
         chosen = head_c.get("value")
@@ -709,8 +710,8 @@ def train_cmd(
 @click.option("--model", default=None, help="[openai] Served model name.")
 @click.option("--api-key-env", default=None, help="[openai] Env var holding the endpoint key (e.g. FIREWORKS_API_KEY); omit for keyless local servers.")
 @click.option("--temperature", default=0.3, show_default=True, type=float)
-@click.option("--max-tokens", default=2000, show_default=True, type=int)
-@click.option("--max-chunk-chars", default=None, type=int, help="Inference chunk budget. [default: 8000]")
+@click.option("--max-tokens", default=None, type=int, help="Output-token budget per chunk. [default: scaled off --max-chunk-chars, floor 2000]")
+@click.option("--max-chunk-chars", default=None, type=int, help="Inference chunk budget. [default: 1500]")
 @click.option("--best-of", default=1, show_default=True, type=int, help="Sample N candidates per chunk and keep the most Dan-scored (needs --detector-model).")
 @click.option("--detector-model", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None, help="Voice-classifier artifact dir for --best-of reranking.")
 @click.option("--write", "write_in_place", is_flag=True, help="Rewrite FILE in place (a .bak backup is left beside it). Default prints to stdout.")
@@ -724,7 +725,7 @@ def run_cmd(
     model: str | None,
     api_key_env: str | None,
     temperature: float,
-    max_tokens: int,
+    max_tokens: int | None,
     max_chunk_chars: int | None,
     best_of: int,
     detector_model: Path | None,
@@ -740,6 +741,10 @@ def run_cmd(
     from stylebot import infer
 
     config.load()
+    # max_tokens is fixed at backend construction, so scale it off the chunk
+    # budget here (a big --max-chunk-chars would otherwise truncate mid-rewrite).
+    chunk_chars = max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK
+    tokens = max_tokens if max_tokens is not None else infer.max_tokens_for(chunk_chars)
     if backend == "tinker":
         if not sampler_path or not base_model:
             raise click.UsageError("--backend tinker needs --sampler-path and --base-model (see the training manifest)")
@@ -748,7 +753,7 @@ def run_cmd(
         try:
             styler = infer.tinker_backend(
                 sampler_path, base_model, renderer_name=renderer_name,
-                temperature=temperature, max_tokens=max_tokens,
+                temperature=temperature, max_tokens=tokens,
             )
         except ImportError as exc:
             raise click.ClickException(str(exc))
@@ -760,7 +765,7 @@ def run_cmd(
             raise click.ClickException(f"{api_key_env} is not set")
         styler = infer.openai_backend(
             base_url, model, api_key=api_key,
-            temperature=temperature, max_tokens=max_tokens,
+            temperature=temperature, max_tokens=tokens,
         )
 
     scorer = None
@@ -773,9 +778,7 @@ def run_cmd(
 
     text = file.read_text(encoding="utf-8") if file else click.get_text_stream("stdin").read()
     result = infer.rewrite_text(
-        text, styler,
-        max_chunk_chars=max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK,
-        best_of=best_of, scorer=scorer,
+        text, styler, max_chunk_chars=chunk_chars, best_of=best_of, scorer=scorer,
     )
     if scorer is not None:
         for line in result.decisions:
