@@ -26,6 +26,7 @@ from stylebot.lib import (
     read_w_frontmatter_text,
     split_paragraphs,
 )
+from stylebot.splits import role_of, unit_from_digest
 
 logger = logging.getLogger(__name__)
 
@@ -453,10 +454,13 @@ def hash_unit(*parts: object, salt: str = "") -> float:
 
     Pure function of the identifiers — no RNG state, no ordering, no corpus
     size. That is the whole point: it is what lets a subsample stay put while
-    the thing it is sampled from grows underneath it.
+    the thing it is sampled from grows underneath it. Same growth-stability
+    property the splits hash rule runs on, and the same digest → [0, 1)
+    conversion (`splits.unit_from_digest`); the hashed *input* differs and stays
+    that way, since each side's byte format is pinned by data already on disk.
     """
     blob = "\x00".join([str(salt), *(str(p) for p in parts)]).encode("utf-8")
-    return int.from_bytes(hashlib.sha256(blob).digest()[:8], "big") / 2**64
+    return unit_from_digest(hashlib.sha256(blob).digest())
 
 
 def select_targets(
@@ -499,9 +503,7 @@ def select_targets(
     if role is not None:
         if splits is None:
             raise ValueError("select_targets: role= requires splits=")
-        from stylebot import splits as splits_mod
-
-        out = [t for t in out if splits_mod.role_of(t.source, splits) == role]
+        out = [t for t in out if role_of(t.source, splits) == role]
     if sample_frac is not None:
         if not 0.0 < sample_frac <= 1.0:
             raise ValueError(f"select_targets: sample_frac must be in (0, 1], got {sample_frac}")

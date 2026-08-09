@@ -87,19 +87,49 @@ def make_splits(
     }
 
 
+def unit_from_digest(digest: bytes) -> float:
+    """A sha256 digest → a uniform coordinate in [0, 1). The shared half of the rule.
+
+    `targets.hash_unit` draws its subsamples through this same conversion. Only
+    the *conversion* is shared: what goes into the hash stays each caller's
+    business, because the byte-level input here is a frozen contract (the
+    committed `splits.json` pins every post's role through `f"{salt}:{source}"`)
+    and `hash_unit`'s `"\\x00"`-joined form is not the same string.
+    """
+    return int.from_bytes(digest[:8], "big") / 2**64
+
+
+# `role_of` runs per-pair (`summarize_roles`, `assemble_training_corpus`) and
+# per-chunk (`select_targets`) over a ~4k-pair corpus, so rebuilding
+# `set(eval_posts)` inside it was O(n·m) for no reason. One-entry memo: the hot
+# loops all hammer a single splits doc. Keyed on the pinned list's identity *and*
+# length, so a second doc — or a list appended to in place — rebuilds.
+_EVAL_SET_CACHE: tuple[list, int, frozenset[str]] | None = None
+
+
+def _eval_set(splits: dict) -> frozenset[str]:
+    global _EVAL_SET_CACHE
+    posts = splits["eval_posts"]
+    cached = _EVAL_SET_CACHE
+    if cached is not None and cached[0] is posts and cached[1] == len(posts):
+        return cached[2]
+    members = frozenset(posts)
+    _EVAL_SET_CACHE = (posts, len(posts), members)
+    return members
+
+
 def role_of(source: str, splits: dict) -> str:
     """The single role-assignment function: eval if pinned, else the hash rule.
 
     Deterministic and open-world: any post, including ones that did not exist
     when the file was created, gets a stable role.
     """
-    if source in set(splits["eval_posts"]):
+    if source in _eval_set(splits):
         return "eval"
     rule = splits["rest_rule"]
     if rule["kind"] != "hash":  # future-proof the schema
         raise ValueError(f"unknown rest_rule kind: {rule['kind']!r}")
-    digest = hashlib.sha256(f"{rule['salt']}:{source}".encode()).digest()
-    u = int.from_bytes(digest[:8], "big") / 2**64  # uniform [0,1)
+    u = unit_from_digest(hashlib.sha256(f"{rule['salt']}:{source}".encode()).digest())
     return "detector" if u < rule["detector_frac"] else "styler"
 
 

@@ -32,10 +32,16 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
 - **Library-first, CLI second.** Each phase is a module with a typed function
   over explicit paths/params; the `click` CLI is a thin wrapper. The blog build
   imports the function directly.
-- **One entry point, subcommands** (`ai-style log|synth|split|train|eval`). Not
-  a scatter of loose scripts — and no exceptions: Phase 1's logger shipped as a
-  standalone `ai-style-log` script until 2026-07-20, and was folded in. One
-  console script, one `--help` tree.
+- **One entry point, subcommands** (`ai-style
+  eval|export-table|log|make-splits|run|serve|synth|train|train-clf`). Not a
+  scatter of loose scripts: Phase 1's logger shipped as a standalone
+  `ai-style-log` script until 2026-07-20, and was folded in. One console script,
+  one `--help` tree. **One carve-out: one-off data migrations** — currently
+  `scripts/migrate_capture_archives.py` and `scripts/restamp_style_system.py`.
+  They rewrite data already on disk to a new schema, are typed once per schema
+  change (the code that needs them names them in its warning), and would only
+  clutter the `--help` tree of a tool nobody should be migrating with twice.
+  Anything a user runs as part of the pipeline is a subcommand, no exceptions.
 - **Explicit paths, precedence `--flag` > `$STYLEBOT_DATA_DIR` > default**,
   resolved in `stylebot.config`. Two distinct inputs, never collapsed:
   `--blog-root` (read source) vs `--data-dir` (read/write state).
