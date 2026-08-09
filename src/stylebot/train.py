@@ -33,17 +33,16 @@ Needs the ``trainer`` extra for the paid path —
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import random
-import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from stylebot.pairs import iter_pairs, validate_pairs_file
+from stylebot.provenance import file_sha256, git_sha  # file_sha256 re-exported: public here since Phase 3
 
 logger = logging.getLogger(__name__)
 
@@ -144,12 +143,6 @@ class TrainCorpus:
             if len(msgs) == 3:
                 longest = max(longest, len(msgs[2].get("content") or ""))
         return {"budgets": budgets, "modes": modes, "max_target_chars": longest}
-
-
-def file_sha256(path: str | Path) -> str:
-    """16-hex content hash of a file (the `source_sha256` convention of
-    `eval.write_covariate_table`) — the corpus pin in the manifest."""
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
 
 
 def _target_body(rec: dict) -> str:
@@ -266,17 +259,6 @@ def estimate_tokens(records: Sequence[dict]) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _git_sha(repo: str | Path | None) -> str | None:
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(repo or "."), "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, check=True,
-        )
-        return out.stdout.strip() or None
-    except (OSError, subprocess.CalledProcessError):
-        return None
-
-
 def build_manifest(
     *,
     run_id: str,
@@ -307,8 +289,8 @@ def build_manifest(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dry_run": dry_run,
         "git_sha": {
-            "cwd": _git_sha("."),
-            "stylebot": _git_sha(Path(__file__).resolve().parent),
+            "cwd": git_sha("."),
+            "stylebot": git_sha(Path(__file__).resolve().parent),
         },
         "data": {
             "pairs_path": str(pairs_path),
@@ -480,13 +462,20 @@ def _write_conversations(records: Sequence[dict], path: Path) -> Path:
     return path
 
 
-def _make_presplit_builder(train_file: Path, val_file: Path | None, *, common_config):
+def _make_presplit_builder(
+    train_file: Path, val_file: Path | None, *, common_config, shuffle_seed: int
+):
     """A ChatDatasetBuilder over OUR by-POST pre-split files.
 
     The cookbook's `FromConversationFileBuilder` row-shuffles one file into
     train/test — that would leak val posts' sibling chunks into training. This
     builder takes the two files the assembly stage already split by POST.
     Defined lazily: `chz` classes need the trainer extra.
+
+    `shuffle_seed` is required, not defaulted: it used to be hardcoded to 0 at
+    the construction site, so `--seed` reached the val split but never the epoch
+    shuffle and two "different" seeds trained on the same order (fixed
+    2026-08-09). A missing argument must fail loudly, not silently re-pin 0.
     """
     import chz
     import datasets as hf_datasets
@@ -532,7 +521,7 @@ def _make_presplit_builder(train_file: Path, val_file: Path | None, *, common_co
     return PreSplitConversationFilesBuilder(
         train_file=str(train_file),
         val_file=str(val_file) if val_file else None,
-        shuffle_seed=0,
+        shuffle_seed=shuffle_seed,
         common_config=common_config,
     )
 
@@ -607,7 +596,6 @@ def _tinker_runner(corpus: TrainCorpus, manifest: dict, work_dir: Path, **cfg) -
     base_model = cfg["base_model"]
     renderer_name = cfg["renderer_name"] or model_info.get_recommended_renderer_name(base_model)
     learning_rate = cfg["learning_rate"] or hyperparam_utils.get_lr(base_model)
-    seed = cfg["seed"]
 
     data_dir = work_dir / "data"
     train_file = _write_conversations(corpus.train, data_dir / "train.jsonl")
@@ -619,7 +607,9 @@ def _tinker_runner(corpus: TrainCorpus, manifest: dict, work_dir: Path, **cfg) -
         max_length=cfg["max_length"],
         batch_size=cfg["batch_size"],
     )
-    builder = _make_presplit_builder(train_file, val_file, common_config=common)
+    builder = _make_presplit_builder(
+        train_file, val_file, common_config=common, shuffle_seed=cfg["seed"]
+    )
 
     log_path = work_dir / "tinker"
     config = sft.Config(

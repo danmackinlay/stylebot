@@ -52,7 +52,6 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -61,6 +60,7 @@ from pathlib import Path
 from stylebot import classify
 from stylebot.eval import extract_slop, extract_target
 from stylebot.pairs import iter_pairs
+from stylebot.provenance import git_sha
 
 logger = logging.getLogger(__name__)
 
@@ -628,17 +628,6 @@ def fit_head(X, ds: Dataset, *, C: float = DEFAULT_C, rows: list[int] | None = N
 # ---------------------------------------------------------------------------
 
 
-def _git_sha(repo: str | Path | None) -> str | None:
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(repo or "."), "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, check=True,
-        )
-        return out.stdout.strip() or None
-    except (OSError, subprocess.CalledProcessError):
-        return None
-
-
 def write_artifact(
     out_dir: str | Path,
     *,
@@ -683,7 +672,7 @@ def write_artifact(
         "label_polarity": "p_slop",
         "threshold": threshold,
         "trained_at": datetime.now(timezone.utc).isoformat(),
-        "git_sha": _git_sha(git_repo),
+        "git_sha": git_sha(git_repo),
         "n_pairs": ds.n_pairs,
         "n_pairs_real": ds.n_pairs_real,
         "n_pairs_synthetic": ds.n_pairs_synthetic,
