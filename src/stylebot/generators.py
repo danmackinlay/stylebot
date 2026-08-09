@@ -588,8 +588,8 @@ def openrouter_generator(
     (Qwen3, Nemotron, …) reason by default, which on a paraphrase burns the token
     budget (≈14× completion tokens) and truncates the output; `_reasoning_extra_body`
     maps the requested effort to OpenRouter's `reasoning` field per model family.
-    Default is HIGH (real AI prose is often produced at high reasoning); sweep down
-    for experiments.
+    Default is `DEFAULT_REASONING_EFFORT` (`off`) — see that constant for why the
+    cheap end won; sweep it up with `--reasoning-effort` for experiments.
     """
     from stylebot import config
 

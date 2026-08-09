@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 # Load-bearing re-exports, not courtesy: tests monkeypatch the factories ON
 # THIS MODULE (the CLI kit calls synth.<factory> by attribute lookup), and
 # livingthing + the CLI kit import the registry and defaults via stylebot.synth.
-from stylebot.generators import (  # noqa: F401
+from stylebot.generators import (  # noqa: E402, F401
     DEFAULT_GEN_TIMEOUT,
     DEFAULT_REASONING_EFFORT,
     DEFAULT_SLOP_MAX_TOKENS,
@@ -69,6 +69,7 @@ from stylebot.generators import (  # noqa: F401
     SLOP_SYSTEM_ENGAGING,
     SLOP_SYSTEM_LINKEDIN,
     SLOP_SYSTEM_MEASURED,
+    SLOP_SYSTEM_VERBOSE,
     STRATEGIES,
     GenOutput,
     Generator,

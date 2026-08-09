@@ -55,6 +55,71 @@ def test_role_of_covers_and_is_growth_stable():
     assert {p: sp.role_of(p, splits) for p in posts} == roles
 
 
+def test_role_of_is_a_frozen_contract():
+    """Golden values: `role_of` may never change what it says about a post.
+
+    There is a committed `splits.json` in the blog repo and every post's role
+    (which stratum scores it, which model trains on it) is pinned by it. Any
+    edit to the hash rule — the salting format, the digest slice, the [0,1)
+    conversion — would silently reassign the whole corpus, so it fails here
+    first. Values computed 2026-08-09 against the shipped rule.
+    """
+    splits = {
+        "schema_version": 1,
+        "eval_posts": ["post/pinned_a.qmd", "post/pinned_b.qmd"],
+        "rest_rule": {"kind": "hash", "detector_frac": 0.4, "salt": "0"},
+    }
+    assert {s: sp.role_of(s, splits) for s in (
+        "post/pinned_a.qmd",
+        "post/pinned_b.qmd",
+        "notebook/alpha.qmd",
+        "notebook/beta.qmd",
+        "notebook/gamma.qmd",
+        "post/delta.qmd",
+        "post/epsilon.qmd",
+        "notebook/zeta.qmd",
+    )} == {
+        "post/pinned_a.qmd": "eval",
+        "post/pinned_b.qmd": "eval",
+        "notebook/alpha.qmd": "styler",
+        "notebook/beta.qmd": "styler",
+        "notebook/gamma.qmd": "styler",
+        "post/delta.qmd": "detector",
+        "post/epsilon.qmd": "detector",
+        "notebook/zeta.qmd": "detector",
+    }
+    # The salt is part of the hashed input, not a seed passed elsewhere: the same
+    # sources under salt "7" cut a different (also pinned) partition.
+    salt7 = {**splits, "eval_posts": [], "rest_rule": {**splits["rest_rule"], "salt": "7"}}
+    assert [sp.role_of(s, salt7) for s in ("notebook/gamma.qmd", "post/delta.qmd")] == [
+        "detector",
+        "styler",
+    ]
+    # Pin the digest -> uniform [0,1) conversion itself to ~1e-5 by bracketing
+    # one post's coordinate (u("0:notebook/gamma.qmd") = 0.46915…) with the
+    # threshold it is compared against.
+    def _with_frac(frac):
+        return {**splits, "rest_rule": {**splits["rest_rule"], "detector_frac": frac}}
+
+    assert sp.role_of("notebook/gamma.qmd", _with_frac(0.46916)) == "detector"
+    assert sp.role_of("notebook/gamma.qmd", _with_frac(0.46914)) == "styler"
+
+
+def test_role_of_memo_does_not_leak_between_splits_docs():
+    """The pinned-list memo must never answer for the wrong splits doc."""
+    rule = {"kind": "hash", "detector_frac": 0.4, "salt": "0"}
+    a = {"schema_version": 1, "eval_posts": ["post/only_in_a.qmd"], "rest_rule": rule}
+    b = {"schema_version": 1, "eval_posts": ["post/only_in_b.qmd"], "rest_rule": rule}
+    for _ in range(3):  # alternate so a cached set has to be invalidated each time
+        assert sp.role_of("post/only_in_a.qmd", a) == "eval"
+        assert sp.role_of("post/only_in_a.qmd", b) != "eval"
+        assert sp.role_of("post/only_in_b.qmd", b) == "eval"
+        assert sp.role_of("post/only_in_b.qmd", a) != "eval"
+    # In-place growth of the pinned list is picked up too.
+    a["eval_posts"].append("post/late_pin.qmd")
+    assert sp.role_of("post/late_pin.qmd", a) == "eval"
+
+
 def test_save_load_roundtrip_and_validation(tmp_path):
     splits = sp.make_splits(["post/a.qmd", "post/b.qmd", "post/c.qmd"], eval_frac=0.34, seed=1)
     path = sp.save_splits(splits, tmp_path / "splits.json")
