@@ -190,6 +190,71 @@ def test_record_id_precedence():
     assert len(rid) == 16
 
 
+# --- re-cut ids (the `meta.recut` discriminator) ---------------------------
+#
+# `capture.recut_archives` reuses the archive's `capture_id` and renumbers
+# `chunk_index` from 0, so `capture_id:chunk_index` alone can name materially
+# different prose before and after a re-cut. `record_id` folds `meta.recut`
+# (the gap policy) into the key for re-cut records ONLY. The end-to-end
+# capture->recut regression lives in test_capture.py; these pin the id algebra.
+
+_RECUT_A = {"gap_paras": 2, "gap_chars": 800}
+_RECUT_B = {"gap_paras": 4, "gap_chars": 1600}
+
+
+def test_record_id_golden_shapes_for_non_recut_records():
+    """GOLDEN. Pairs with no `meta.recut` keep their id byte-for-byte.
+
+    Load-bearing, not decorative: a committed `scores.jsonl` lives in the blog
+    repo and joins on these strings. Changing either shape orphans every score
+    for the never-re-cut captures that are most of the corpus, so the literals
+    are pinned rather than merely round-tripped.
+    """
+    assert ev.record_id({"meta": {"capture_id": "13860ebc", "chunk_index": 0}}) == "13860ebc:0"
+    # The no-capture_id fallback: sha256("post/x.qmd\x001").hexdigest()[:16].
+    assert ev.record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}}) == "abfe53300435fc98"
+
+
+def test_record_id_recut_differs_from_the_original_cut():
+    """A re-cut record must not reuse the original cut's id at the same
+    capture_id:chunk_index — that collision is the whole bug."""
+    base = {"meta": {"capture_id": "13860ebc", "chunk_index": 0}}
+    recut = {"meta": {"capture_id": "13860ebc", "chunk_index": 0, "recut": _RECUT_A}}
+    assert ev.record_id(recut) != ev.record_id(base)
+    # …but it is still recognisably the same capture and chunk, so the id stays
+    # greppable and `capture_id` remains the leading grouping key.
+    assert ev.record_id(recut).startswith("13860ebc:r")
+    assert ev.record_id(recut).endswith(":0")
+
+
+def test_record_id_is_stable_for_the_same_recut_policy():
+    """Re-cutting twice at the SAME policy yields the SAME id — a re-cut has to
+    stay idempotent end to end, not just inside pairs.jsonl. Key order in the
+    stamp must not matter either (the digest is over canonical JSON)."""
+    first = ev.record_id({"meta": {"capture_id": "cap", "chunk_index": 1, "recut": _RECUT_A}})
+    again = ev.record_id({"meta": {"capture_id": "cap", "chunk_index": 1, "recut": dict(_RECUT_A)}})
+    reordered = ev.record_id({
+        "meta": {"capture_id": "cap", "chunk_index": 1,
+                 "recut": {"gap_chars": 800, "gap_paras": 2}},
+    })
+    assert first == again == reordered
+
+
+def test_record_id_differs_across_recut_policies():
+    """A different gap policy cuts different prose, so it must key differently
+    — otherwise re-cutting at a new policy silently inherits the old scores."""
+    a = ev.record_id({"meta": {"capture_id": "cap", "chunk_index": 0, "recut": _RECUT_A}})
+    b = ev.record_id({"meta": {"capture_id": "cap", "chunk_index": 0, "recut": _RECUT_B}})
+    assert a != b
+
+
+def test_record_id_synthetic_pairs_ignore_recut():
+    """Synthetic pairs key off `synth_key` and return before the re-cut branch:
+    they are generated, never re-cut, and their committed scores must not move."""
+    meta = {"synth_key": "abc", "capture_id": "cap", "chunk_index": 2, "recut": _RECUT_A}
+    assert ev.record_id({"meta": meta}) == "abc"
+
+
 def test_score_pairs_file_resumable(tmp_path):
     pairs = _make_pairs(tmp_path / "c", [
         ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
