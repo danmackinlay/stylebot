@@ -402,10 +402,6 @@ def extract_target(record: dict) -> str:
     return pair_body(record["messages"][2]["content"], (record.get("meta") or {}).get("context"))
 
 
-# Backwards-compatible aliases (pre-2026-07 private names).
-_extract_slop = extract_slop
-_extract_target = extract_target
-
 def extract_output(record: dict) -> str:
     """The styler-output body (top-level `"output"` of a Phase-4 rewrite
     JSONL — `stylebot.infer.rewrite_pairs_file` — heading-context stripped)."""

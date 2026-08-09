@@ -596,7 +596,7 @@ def recut_archives(
     if not dry_run and records:
         kept = [
             rec
-            for rec in read_jsonl(pairs_path)
+            for rec in read_jsonl(pairs_path, keep_undecodable=True)
             if (rec.get("meta", {}) if isinstance(rec, dict) else {}).get("capture_id")
             not in recut_ids
         ]

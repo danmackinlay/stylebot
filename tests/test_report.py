@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from stylebot import eval as ev
 from stylebot import report, synth
 from stylebot.synth import Target
@@ -41,12 +39,11 @@ def test_report_max_rows_caps_table_not_stats(tmp_path):
     h = p.read_text()
     assert h.count("<tr data-") == 10  # table capped
     assert "of 50" in h  # banner notes the full count
-    stats = json.loads(report.stats_json(_targets(50)))
-    assert stats["count"] == 50  # stats cover all
+    assert report._summary_stats(_targets(50))["count"] == 50  # stats cover all
 
 
 def test_summary_stats():
-    stats = json.loads(report.stats_json(_targets(5)))
+    stats = report._summary_stats(_targets(5))
     assert stats["count"] == 5
     assert stats["n_sources"] == 3
     assert stats["max"] >= stats["median"]
