@@ -15,7 +15,8 @@ assistant texts. Two bundled backends:
   `mlx_lm.server`, Osaurus, vLLM). NB the served model's chat template must
   match training's `qwen3_5_disable_thinking` rendering — verify parity by
   scoring the same inputs through both backends before trusting a new endpoint
-  (see phase-4 plan, MLX slice).
+  (the MLX exit did exactly that: `_plans/findings.md` "MLX local-serving
+  parity" for the numbers and gates, `_plans/decisions.md` D8 for the caveats).
 
 `rewrite_text` chunks at inference the way training saw data: blank-line
 paragraph regions, grouped to ~STYLE_CHARS_PER_CHUNK chars, with chunk
@@ -38,6 +39,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from stylebot import markdown
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.jsonl import dumps_line
 
@@ -126,9 +128,6 @@ def _blocks_with_separators(body: str) -> tuple[list[str], list[str]]:
     return blocks, seps
 
 
-_HEADING_RE = re.compile(r"^#{1,6}\s")
-
-
 def _segment(
     body: str, *, max_chars: int, inline_headings: bool = False
 ) -> tuple[list[tuple[str, str]], list[str]]:
@@ -155,7 +154,7 @@ def _segment(
             iseps.append(seps[idx - 1])
         lines = block.split("\n")
         n_head = 0
-        while n_head < len(lines) and _HEADING_RE.match(lines[n_head]):
+        while n_head < len(lines) and markdown.is_heading_line(lines[n_head]):
             n_head += 1
         if n_head and n_head < len(lines):
             # A heading glued to prose with no blank line: split it off.

@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 
 from stylebot.lib import segment_for_edit, split_paragraphs
+from stylebot.markdown import is_heading_line
 
 FIXTURE = Path(__file__).parent / "fixtures" / "segmentation.qmd"
 EXPECTED = Path(__file__).parent / "fixtures" / "expected_segments.json"
@@ -42,8 +43,8 @@ def _strip_frontmatter(content: str) -> str:
 
 
 def _is_heading(paragraph: str) -> bool:
-    stripped = paragraph.lstrip(" \t")
-    return stripped.startswith("#") and stripped.lstrip("#").startswith((" ", "\t"))
+    """Mirror of segment.ts's heading drop — the paragraph's FIRST line decides."""
+    return is_heading_line(paragraph.split("\n", 1)[0])
 
 
 def marker_paragraphs(content: str) -> list[str]:

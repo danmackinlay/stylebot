@@ -117,7 +117,10 @@ export function protectedSpans(content: string): Span[] {
   return merged;
 }
 
-const HEADING_RE = /^[ \t]{0,3}#{1,6}[ \t]/;
+// Port of stylebot.markdown.ATX_HEADING_RE, tested against a paragraph's FIRST
+// line: up to 3 *spaces* of indent (a tab indents by 4, so it cannot open a
+// heading), 1-6 hashes, then end-of-line or a space/tab and the title.
+const HEADING_RE = /^ {0,3}#{1,6}(?:[ \t].*?)?[ \t]*$/;
 
 /**
  * The scoreable prose paragraphs of a markdown document, with offsets.
@@ -185,7 +188,7 @@ function pushParagraph(
     end -= 1;
   }
   const text = content.slice(start, end);
-  if (text.length === 0 || HEADING_RE.test(text)) {
+  if (text.length === 0 || HEADING_RE.test(text.split("\n", 1)[0])) {
     return;
   }
   if (text.length < minChars) {

@@ -408,6 +408,22 @@ def test_segment_inline_headings_is_lossless():
     assert rebuilt == _DOC  # budget forces splits, bytes still reproduce exactly
 
 
+def test_segment_sees_an_indented_heading():
+    # Defect A3: `infer` used to anchor headings at column 0 while `targets` and
+    # `capture` allowed up to 3 spaces, so a legal CommonMark `  ## X` was
+    # rewritable prose at inference and a section boundary in training.
+    doc = "Prose here.\n\n  ## Indented\n\nMore prose.\n"
+    items, _ = infer._segment(doc, max_chars=5000)
+    assert [k for k, _ in items] == ["prose", "heading", "prose"]
+
+
+def test_segment_rejects_a_tab_indented_heading():
+    # A tab indents by 4 under CommonMark, so it cannot open a heading.
+    doc = "Prose here.\n\n\t## Tabbed\n\nMore prose.\n"
+    items, _ = infer._segment(doc, max_chars=5000)
+    assert "heading" not in [k for k, _ in items]
+
+
 def test_segment_inline_headings_still_protects_fences():
     doc = "Prose here.\n\n```python\nx = 1\n```\n\n## H\n\nMore prose.\n"
     items, _ = infer._segment(doc, max_chars=5000, inline_headings=True)

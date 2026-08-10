@@ -25,6 +25,7 @@ from stylebot.lib import (
     read_w_frontmatter_text,
     split_paragraphs,
 )
+from stylebot.markdown import heading_title, is_heading_line
 from stylebot.splits import role_of, unit_from_digest
 
 logger = logging.getLogger(__name__)
@@ -92,9 +93,6 @@ class ChunkPolicy:
     cross_heading: bool = False
 
 
-_HEADER_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)\s*$")
-
-
 def _norm_header(text: str) -> str:
     """Normalise a header title for matching: drop ``#``s, trailing ``{...}`` attrs, case."""
     text = text.lstrip("#").strip()
@@ -113,8 +111,8 @@ def _truncate_at_headers(body: str, headers: Sequence[str]) -> str:
     wanted = {_norm_header(h) for h in headers}
     out: list[str] = []
     for line in body.splitlines(keepends=True):
-        m = _HEADER_RE.match(line)
-        if m and _norm_header(m.group(1)) in wanted:
+        title = heading_title(line)
+        if title is not None and _norm_header(title) in wanted:
             break
         out.append(line)
     return "".join(out)
@@ -208,7 +206,7 @@ def _split_sections(text: str) -> list[tuple[str, str]]:
     heading = ""
     cur: list[str] = []
     for line in text.splitlines(keepends=True):
-        if _HEADER_RE.match(line):
+        if is_heading_line(line):
             if cur:
                 sections.append((heading, "".join(cur)))
                 cur = []
