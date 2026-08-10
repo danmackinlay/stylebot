@@ -565,7 +565,7 @@ def evaluate_holdout(X, ds: Dataset, holdout: set, *, C: float | None = None) ->
 
 
 def fit_head(X, ds: Dataset, *, C: float = DEFAULT_C, rows: list[int] | None = None):
-    """Fit the final logreg (optionally on a row subset) and return `(clf, coef, intercept)`.
+    """Fit the final logreg (optionally on a row subset) and return `(coef, intercept)`.
 
     `coef`/`intercept` are extracted for the P(slop) class so the pure-Python
     `stylebot.classify._logreg_p_slop` reproduces `clf.predict_proba[:, slop]`
@@ -585,7 +585,7 @@ def fit_head(X, ds: Dataset, *, C: float = DEFAULT_C, rows: list[int] | None = N
     # class (classes_[1]); index defensively in case the row count ever differs.
     coef_row = clf.coef_[slop_col] if clf.coef_.shape[0] > 1 else clf.coef_[0]
     intercept = clf.intercept_[slop_col] if clf.intercept_.shape[0] > 1 else clf.intercept_[0]
-    return clf, [float(c) for c in coef_row], float(intercept)
+    return [float(c) for c in coef_row], float(intercept)
 
 
 # ---------------------------------------------------------------------------
@@ -596,7 +596,6 @@ def fit_head(X, ds: Dataset, *, C: float = DEFAULT_C, rows: list[int] | None = N
 def write_artifact(
     out_dir: str | Path,
     *,
-    clf,
     coef: list[float],
     intercept: float,
     ds: Dataset,
@@ -605,17 +604,16 @@ def write_artifact(
     normalize: bool = NORMALIZE,
     threshold: float = 0.5,
     git_repo: str | Path | None = None,
-    save_joblib: bool = False,
     split: dict | None = None,
     head_C: dict | None = None,
 ) -> Path:
-    """Write `head.json` (the runtime contract) + `meta.json` [+ optional `model.joblib`].
+    """Write `head.json` (the runtime contract) + `meta.json`.
 
     `head.json` is the plain-JSON linear head `stylebot.classify` serves with no
-    ML deps; `meta.json` pins the embedder + records the held-out metrics. Those
-    two are the committable artifact. `model.joblib` (the full sklearn
-    estimator) is OFF by default: a redundant, sklearn-version-fragile pickle of
-    the same weights that no code path loads.
+    ML deps; `meta.json` pins the embedder + records the held-out metrics. The
+    fitted sklearn estimator itself is not persisted: the weights it carries are
+    exactly `head.json`, and a pickle of it would only add a version-fragile
+    binary that the dependency-free runtime cannot load anyway.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -647,11 +645,6 @@ def write_artifact(
         "metrics": metrics,
     }
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-
-    if save_joblib:
-        import joblib
-
-        joblib.dump(clf, out_dir / "model.joblib")
     return out_dir
 
 
@@ -669,13 +662,13 @@ def _ship_head(
     """Fit the final head (optionally on a row subset) and write the artifact.
 
     The shared tail of every train mode; `ship_kw` carries the artifact
-    plumbing (out_dir, embed_model, normalize, git_repo, save_joblib) that
-    `train` resolves once. C resolution stays with the mode (the rows it
-    selects over differ, and the splits mode reuses head_C mid-flight).
+    plumbing (out_dir, embed_model, normalize, git_repo) that `train` resolves
+    once. C resolution stays with the mode (the rows it selects over differ,
+    and the splits mode reuses head_C mid-flight).
     """
-    clf, coef, intercept = fit_head(X, ds, C=head_C, rows=rows)
+    coef, intercept = fit_head(X, ds, C=head_C, rows=rows)
     out = write_artifact(
-        clf=clf, coef=coef, intercept=intercept, ds=ds, metrics=metrics,
+        coef=coef, intercept=intercept, ds=ds, metrics=metrics,
         split=split, head_C=head_C_info, **ship_kw,
     )
     return out, metrics
@@ -780,7 +773,6 @@ def train(
     normalize: bool = NORMALIZE,
     batch_size: int = 32,
     git_repo: str | Path | None = None,
-    save_joblib: bool = False,
     holdout_frac: float = 0.0,
     holdout_seed: int = 0,
     holdout_posts=None,
@@ -810,8 +802,7 @@ def train(
         raise ValueError(f"no content-matched pairs found in {pairs_path}")
 
     ship_kw = dict(
-        out_dir=out_dir, embed_model=embed_model, normalize=normalize,
-        git_repo=git_repo, save_joblib=save_joblib,
+        out_dir=out_dir, embed_model=embed_model, normalize=normalize, git_repo=git_repo,
     )
 
     if splits_path is not None:

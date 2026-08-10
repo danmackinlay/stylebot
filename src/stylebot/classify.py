@@ -165,8 +165,8 @@ def sklearn_detector(artifact_dir: str | Path, *, embed_fn: EmbedFn | None = Non
     Reads ``<artifact_dir>/meta.json`` + ``head.json``; if no `embed_fn` is
     injected, rebuilds the pinned embedder from ``meta.embed_model`` /
     ``meta.normalize`` via sentence-transformers. Named for the sklearn-trained
-    head it serves; it loads the plain-JSON `head.json` (version-independent),
-    never `model.joblib`.
+    head it serves, though it needs no sklearn to serve it: the weights arrive
+    as the plain-JSON `head.json`, so no estimator pickle has to load here.
     """
     artifact_dir = Path(artifact_dir)
     meta = load_artifact_meta(artifact_dir)

@@ -505,7 +505,6 @@ def make_splits_cmd(
 @click.option("--holdout-frac", default=0.0, show_default=True, type=float, help="Ad-hoc: hold out this fraction of POSTs and ship the head fit on the rest. Prefer --splits for the shared contract.")
 @click.option("--holdout-seed", default=0, show_default=True, type=int, help="Seed for the deterministic by-POST holdout split.")
 @click.option("--holdout-posts", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="Ad-hoc: file of POST source ids (one per line) to hold out. Prefer --splits.")
-@click.option("--save-joblib/--no-save-joblib", default=False, show_default=True, help="Also dump the fitted sklearn estimator (redundant binary pickle; no code path reads it).")
 @click.option("--dry-run", is_flag=True, help="Report data assembly (n_pairs, n_posts, class balance) without embedding or writing.")
 def train_clf_cmd(
     pairs_path: Path,
@@ -518,7 +517,6 @@ def train_clf_cmd(
     holdout_frac: float,
     holdout_seed: int,
     holdout_posts: Path | None,
-    save_joblib: bool,
     dry_run: bool,
 ) -> None:
     """Train a voice classifier (linear head over a style embedding).
@@ -575,7 +573,7 @@ def train_clf_cmd(
     try:
         out, metrics = ct.train(
             pairs_path, out_dir, test_size=test_size, n_splits=n_splits, C=C,
-            embed_model=model_id, save_joblib=save_joblib,
+            embed_model=model_id,
             holdout_frac=holdout_frac, holdout_seed=holdout_seed, holdout_posts=holdout_list,
             splits_path=splits_path,
         )
@@ -598,8 +596,7 @@ def train_clf_cmd(
         click.echo(f"shipped head C: {chosen} ({head_c.get('mode')})")
     for warning in (meta.get("split") or {}).get("warnings") or []:
         click.secho(f"WARNING: {warning}", fg="yellow", err=True)
-    files = "head.json, meta.json" + (", model.joblib" if save_joblib else "")
-    click.echo(f"wrote artifact -> {out}/ ({files})")
+    click.echo(f"wrote artifact -> {out}/ (head.json, meta.json)")
 
 
 @main.command("train")
