@@ -32,6 +32,11 @@ integration remains a later slice on top of the same library.
   `--backend tinker|openai`, `--best-of N` reranked by the voice classifier
   (`detector_reranker`, lowest P(slop) wins; small N is Goodhart-gentle —
   keep judge+eyeball as the orthogonal guard, see eval-harness.md).
+  `--max-chunk-chars` + `--inline-headings` (also on `ai-style serve`) are the
+  adapter's training *diet*, recorded in the manifest under `data.chunk_scale`;
+  serving off-diet is out-of-distribution and the styler falls back to copying
+  its input (observed 2026-07-22). `dan-style run` reads them off the manifest
+  (`style_file.chunk_diet`); stylebot's own CLI takes them as flags.
 - **`dan-style run`** (livingthing `bin/style_file.py`): checkpoint/base
   model/renderer read from the NEWEST completed manifest in
   `_training_pairs/runs/` — the committed record drives serving, no flag

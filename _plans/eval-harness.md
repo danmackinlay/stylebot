@@ -168,6 +168,13 @@ it consumes the `meta.gen` covariates Phase-2 now records. See
   …}}`. The id is the join key back to the corpus — so scores feed Phase-3
   filtering/weighting and Phase-4 best-of-N without re-deriving anything. The run
   is **idempotent/resumable** (scored ids skipped), like `synth`.
+  It is also **orphan-free**: append-only + join-by-id means a re-cut or a
+  regenerated corpus would strand the superseded row forever, and no consumer
+  checks the join — orphans inflate `summarize_scores` counts/means and emit
+  phantom rows into the committed covariate CSV. So `score_pairs_file` prunes
+  records whose pair is gone before it scores (atomic rewrite; count in
+  `ScoreResult.pruned_orphans`, reported loudly by the CLI). `--no-prune-orphans`
+  is the escape hatch for `--out` belonging to a *different* corpus.
 - **A summary** (`summarize_scores`, `schema_version: 2`) aggregating per field
   across rows (fields-across-rows = the movement view: slop vs target vs output),
   optionally faceted `by` a meta key — `by="slop_strategy"` turns "is `casual`
@@ -205,7 +212,8 @@ it consumes the `meta.gen` covariates Phase-2 now records. See
   `openrouter_judge` (factory) / `Judge` / `JUDGE_SYSTEM` / `parse_judge_reply`,
   `Detector` protocol / `null_detector`, `score_candidate`; **batched layer**
   `score_pairs_file` (corpus → id-keyed `scores.jsonl`, concurrent + resumable) /
-  `summarize_scores(by=…)` / `record_id` / `pair_body` / `FIELD_EXTRACTORS`. The
+  `summarize_scores(by=…)` / `record_id` / `live_record_ids` /
+  `prune_orphan_scores` / `pair_body` / `FIELD_EXTRACTORS`. The
   shared reader is `stylebot.pairs.iter_pairs`. (The legacy in-memory
   conveniences `evaluate_groups` / `read_prose_files` were removed — the batched
   JSONL path is the one way to score.)

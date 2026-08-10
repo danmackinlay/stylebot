@@ -414,3 +414,44 @@ def test_rewrite_candidates_still_rejects_fences_under_inline_headings():
 def test_max_tokens_scales_with_chunk_budget():
     assert infer.max_tokens_for(1500) == infer.DEFAULT_MAX_TOKENS  # floor holds
     assert infer.max_tokens_for(4500) > infer.DEFAULT_MAX_TOKENS   # 4.5k chunk needs room
+
+
+# --- the `run` / `serve` CLI seam ------------------------------------------
+#
+# `infer` has supported both heading diets since the v2 corpus, but the CLI
+# passed neither — leaving stylebot's own entry points stuck on v1 and strictly
+# less capable than the library. Serving at the wrong diet is out-of-
+# distribution and makes the styler copy its input verbatim (observed
+# 2026-07-22), so the flag has to actually reach the library.
+
+
+def _spy_rewrite_text(monkeypatch):
+    """Capture the kwargs `run` hands to `infer.rewrite_text`. No model."""
+    seen: dict = {}
+
+    def fake(text, styler, **kw):
+        seen.update(kw)
+        return infer.RewriteResult(text="rewritten")
+
+    monkeypatch.setattr(infer, "openai_backend", lambda *a, **k: _identity_styler)
+    monkeypatch.setattr(infer, "rewrite_text", fake)
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("flag", "expected"),
+    [("--inline-headings", True), ("--no-inline-headings", False), (None, False)],
+)
+def test_run_cli_threads_inline_headings_into_rewrite_text(tmp_path, monkeypatch, flag, expected):
+    from click.testing import CliRunner
+
+    from stylebot.bin.ai_style import main
+
+    seen = _spy_rewrite_text(monkeypatch)
+    doc = tmp_path / "d.qmd"
+    doc.write_text("## H\n\nSome prose.\n", encoding="utf-8")
+
+    args = ["run", str(doc), "--backend", "openai", "--base-url", "http://x/v1", "--model", "m"]
+    result = CliRunner().invoke(main, args + ([flag] if flag else []))
+    assert result.exit_code == 0, result.output
+    assert seen["inline_headings"] is expected

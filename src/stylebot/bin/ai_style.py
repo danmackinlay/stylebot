@@ -132,6 +132,7 @@ def synth_cmd(
 @click.option("--summary", "summary_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Also write the aggregate summary JSON here.")
 @click.option("--by", "by", default=None, help="Facet the summary by a meta key, e.g. slop_strategy or generator.")
 @click.option("--limit", type=int, default=None, help="Cap pairs scored (smoke / cost control).")
+@click.option("--prune-orphans/--no-prune-orphans", default=True, show_default=True, help="Drop score records whose pair is no longer in --pairs (re-cut or regenerated), so every summary and exported table counts live pairs only. Turn OFF only when --out belongs to a DIFFERENT corpus, where every record reads as orphaned.")
 @click.option("--report", "report_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Write a self-contained HTML scores report — the pair browser: slop↔Dan side by side, judge/detector/Vale chips, generation covariates, facet dropdowns. Works keyless (judge badges show — without --judge).")
 @click.option("--report-max-rows", default=2000, show_default=True, type=int, help="Cap rows in the HTML report (0 = all).")
 @click.option("--facet-by", "facet_by", default="slop_strategy", show_default=True, help="Group the HTML report headline by this meta covariate (e.g. reasoning_effort, prompt_id, generator).")
@@ -148,6 +149,7 @@ def eval_cmd(
     summary_path: Path | None,
     by: str | None,
     limit: int | None,
+    prune_orphans: bool,
     report_path: Path | None,
     report_max_rows: int,
     facet_by: str,
@@ -203,8 +205,17 @@ def eval_cmd(
         vale_config=vale_config,
         max_workers=max_workers,
         limit=limit,
+        prune_orphans=prune_orphans,
         on_progress=_progress,
     )
+    # Loud, never silent: the prune REWROTE a file the operator may have
+    # committed, and a big count usually means --out belongs to another corpus.
+    if result.pruned_orphans:
+        click.echo(
+            f"pruned {result.pruned_orphans} orphan score record(s) from {out} "
+            f"— their pair is no longer in {pairs_path}",
+            err=True,
+        )
     click.echo(
         f"scored {result.written} pair(s) "
         f"({result.skipped_existing} already scored, skipped) -> {out}"
@@ -295,6 +306,7 @@ def export_table_cmd(scores_path: Path, out_path: Path, note: str | None, config
 @click.option("--temperature", default=0.7, show_default=True, type=float, help="Hotter than run/eval's 0.3 on purpose: interactive best-of wants DISTINCT candidates; at 0.3 the sampler mode-collapses to near-identical draws.")
 @click.option("--max-tokens", default=None, type=int, help="Output-token budget per rewrite. [default: scaled off --max-chunk-chars, floor 2000]")
 @click.option("--max-chunk-chars", default=None, type=int, help="Rewrite-op chunk budget; MUST match the adapter's training chunk scale. [default: 1500]")
+@click.option("--inline-headings/--no-inline-headings", default=False, show_default=True, help="The other half of the adapter's training diet (the manifest records both under data.chunk_scale). On = v2 cross-heading: headings are rewritable chunk content and chunks span sections. Off = v1, headings stay protected context. Serving at the wrong diet is out-of-distribution and makes the styler fall back to copying its input.")
 @click.option("--preferences", "preferences_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Arm the 'prefer' op: append client decisions (plus a UTC ts) to this JSONL.")
 def serve_cmd(
     detector_model: Path,
@@ -308,6 +320,7 @@ def serve_cmd(
     temperature: float,
     max_tokens: int | None,
     max_chunk_chars: int | None,
+    inline_headings: bool,
     preferences_path: Path | None,
 ) -> None:
     """Score texts over stdin/stdout NDJSON (long-lived editor sidecar).
@@ -364,6 +377,7 @@ def serve_cmd(
             return infer.rewrite_candidates(
                 text, make_styler(), context=context, best_of=best_of,
                 scorer=scorer, max_chunk_chars=chunk_chars,
+                inline_headings=inline_headings,
             )
 
         rewriter = rewrite_op
@@ -719,6 +733,7 @@ def train_cmd(
 @click.option("--temperature", default=0.3, show_default=True, type=float)
 @click.option("--max-tokens", default=None, type=int, help="Output-token budget per chunk. [default: scaled off --max-chunk-chars, floor 2000]")
 @click.option("--max-chunk-chars", default=None, type=int, help="Inference chunk budget. [default: 1500]")
+@click.option("--inline-headings/--no-inline-headings", default=False, show_default=True, help="Match the chunk diet the adapter was TRAINED on (the training manifest records it under data.chunk_scale). On = the v2 cross-heading diet: headings are chunk content the styler may rewrite, and chunks span sections. Off = v1, headings pass through verbatim as context. Serving at the wrong diet is out-of-distribution and makes the styler fall back to copying its input.")
 @click.option("--best-of", default=1, show_default=True, type=int, help="Sample N candidates per chunk and keep the most Dan-scored (needs --detector-model).")
 @click.option("--detector-model", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None, help="Voice-classifier artifact dir for --best-of reranking.")
 @click.option("--write", "write_in_place", is_flag=True, help="Rewrite FILE in place (a .bak backup is left beside it). Default prints to stdout.")
@@ -734,6 +749,7 @@ def run_cmd(
     temperature: float,
     max_tokens: int | None,
     max_chunk_chars: int | None,
+    inline_headings: bool,
     best_of: int,
     detector_model: Path | None,
     write_in_place: bool,
@@ -785,6 +801,7 @@ def run_cmd(
     text = file.read_text(encoding="utf-8") if file else click.get_text_stream("stdin").read()
     result = infer.rewrite_text(
         text, styler, max_chunk_chars=chunk_chars, best_of=best_of, scorer=scorer,
+        inline_headings=inline_headings,
     )
     if scorer is not None:
         for line in result.decisions:

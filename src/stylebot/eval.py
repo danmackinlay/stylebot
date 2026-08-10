@@ -52,6 +52,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Protocol
 
+from stylebot.capture import write_pairs_atomic
 from stylebot.jsonl import iter_jsonl, read_jsonl
 from stylebot.pairs import GEN_FACET_KEYS, iter_pairs
 
@@ -500,12 +501,50 @@ def existing_scored_ids(out_path: str | Path) -> set[str]:
     return {str(rec["id"]) for rec in iter_jsonl(out_path) if rec.get("id")}
 
 
+def live_record_ids(pairs_path: str | Path) -> set[str]:
+    """Every join key the corpus currently carries — one `record_id` per pair."""
+    return {record_id(rec) for rec in iter_pairs(pairs_path)}
+
+
+def prune_orphan_scores(pairs_path: str | Path, out_path: str | Path) -> int:
+    """Drop score records whose pair is gone from the corpus; return the count.
+
+    `scores.jsonl` is append-only and joins to `pairs.jsonl` on `record_id`, so
+    re-cutting a capture or regenerating the corpus strands the superseded row
+    there forever. Nothing downstream checks the join, and orphans are counted
+    as pairs: measured on a 3-record scores file against a 1-pair corpus,
+    `summarize_scores` reported n=3 / mean 2.33 where the truth was n=1 /
+    mean 5.0, and `covariate_table` emitted a phantom row per superseded id —
+    into a CSV that gets committed next to a write-up. Pruning at the source
+    keeps every consumer consistent for free, which is cheaper than teaching
+    each of them the join.
+
+    Undecodable lines are round-tripped verbatim rather than dropped (see
+    `capture.write_pairs_atomic`); a decodable record with no `id` has no join
+    key and is pruned. Rewrites `out_path` atomically, and ONLY when something
+    is actually dropped — an already-clean file is left untouched.
+    """
+    records = read_jsonl(out_path, keep_undecodable=True)
+    if not records:
+        return 0
+    live = live_record_ids(pairs_path)
+    kept = [
+        rec for rec in records
+        if (set(rec) == {"_raw"}) or (rec.get("id") is not None and str(rec["id"]) in live)
+    ]
+    pruned = len(records) - len(kept)
+    if pruned:
+        write_pairs_atomic(Path(out_path), kept)
+    return pruned
+
+
 @dataclass
 class ScoreResult:
     """Outcome of a `score_pairs_file` run."""
 
     written: int = 0
     skipped_existing: int = 0
+    pruned_orphans: int = 0
     errors: list[tuple[str, str]] = field(default_factory=list)  # (id, message)
 
 
@@ -543,6 +582,7 @@ def score_pairs_file(
     vale_config: str | Path | None = None,
     max_workers: int = 8,
     limit: int | None = None,
+    prune_orphans: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> ScoreResult:
     """Score a `pairs.jsonl` corpus -> an id-keyed `scores.jsonl` (batched).
@@ -557,6 +597,14 @@ def score_pairs_file(
     complete and flushes per line (crash-safe). A field/judge error on one record
     is captured in `ScoreResult.errors` and never aborts the run. Pass
     `judge=None` to run keyless (Vale + null detector only).
+
+    On entry, `out_path` is pruned of records whose pair no longer exists
+    (`prune_orphan_scores`; count in `ScoreResult.pruned_orphans` — surface it,
+    this rewrites a file the caller may have committed). `limit` does not
+    narrow that: the live id set is the WHOLE corpus regardless of how many
+    pairs this run scores. Set `prune_orphans=False` for the one case where the
+    prune is wrong — `out_path` belonging to a *different* corpus, where every
+    record reads as orphaned.
     """
     pairs_path = Path(pairs_path)
     out_path = Path(out_path)
@@ -564,6 +612,10 @@ def score_pairs_file(
     unknown = [f for f in fields if f not in FIELD_EXTRACTORS]
     if unknown:
         raise ValueError(f"unknown field(s) {unknown}; known: {sorted(FIELD_EXTRACTORS)}")
+
+    # Prune before reading `seen`: an orphan id would otherwise both survive in
+    # the file and count as already-scored.
+    pruned = prune_orphan_scores(pairs_path, out_path) if prune_orphans else 0
 
     seen = existing_scored_ids(out_path)
     todo: list[dict] = []
@@ -576,7 +628,7 @@ def score_pairs_file(
         if limit is not None and len(todo) >= limit:
             break
 
-    result = ScoreResult(skipped_existing=skipped)
+    result = ScoreResult(skipped_existing=skipped, pruned_orphans=pruned)
     if not todo:
         return result
 

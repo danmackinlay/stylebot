@@ -293,6 +293,102 @@ def test_score_pairs_file_concurrency_same_ids(tmp_path):
     assert ids1 == ids8 and len(ids1) == 6  # order-free: same ids regardless of worker count
 
 
+# --- orphan score records --------------------------------------------------
+#
+# `scores.jsonl` is append-only and joined on `record_id`; a re-cut or a
+# regenerated corpus strands the superseded row there. No consumer checks the
+# join, so orphans inflate every count and mean and leak phantom rows into the
+# committed covariate CSV. `score_pairs_file` prunes at the source.
+
+
+def _read_scores(path):
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def test_score_pairs_file_prunes_orphans_and_reports_the_count(tmp_path):
+    pairs = _make_pairs(tmp_path / "c", [
+        ("A first paragraph of prose, long enough to be scored as a candidate.", None, "polish"),
+        ("A second paragraph, also comfortably long enough to be a candidate.", None, "polish"),
+    ])
+    out = tmp_path / "scores.jsonl"
+    ev.score_pairs_file(pairs, out, judge=fake_judge)
+    survivor, doomed = _read_scores(out)
+
+    # The corpus loses a pair (stand-in for a re-cut / regeneration).
+    lines = [ln for ln in pairs.read_text().splitlines() if ln.strip()]
+    keep = next(ln for ln in lines if json.loads(ln)["meta"]["synth_key"] == survivor["id"])
+    pairs.write_text(keep + "\n", encoding="utf-8")
+
+    res = ev.score_pairs_file(pairs, out, judge=fake_judge)
+    assert res.pruned_orphans == 1
+    remaining = _read_scores(out)
+    # The orphan is gone and the live record survived byte-for-byte — pruning
+    # must not rescore or reshape anything it keeps.
+    assert remaining == [survivor]
+    assert doomed["id"] not in {r["id"] for r in remaining}
+    # …and every consumer now counts live pairs only, for free.
+    assert ev.summarize_scores(out)["fields"]["slop"]["n"] == 1
+    assert len(ev.covariate_table(out)[0]) == 1
+
+
+def test_score_pairs_file_leaves_an_orphan_free_file_alone(tmp_path, monkeypatch):
+    """A clean file is not rewritten at all — the prune must not churn a
+    committed artifact (or its mtime) on every re-run."""
+    pairs = _make_pairs(tmp_path / "c", [
+        ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
+    ])
+    out = tmp_path / "scores.jsonl"
+    ev.score_pairs_file(pairs, out, judge=fake_judge)
+
+    rewrites: list[object] = []
+    monkeypatch.setattr(ev, "write_pairs_atomic", lambda p, r: rewrites.append(p))
+    res = ev.score_pairs_file(pairs, out, judge=fake_judge)
+    assert res.pruned_orphans == 0
+    assert rewrites == []
+
+
+def test_score_pairs_file_prune_orphans_off_is_the_wrong_corpus_escape_hatch(tmp_path):
+    """`--out` pointed at ANOTHER corpus's scores would read as 100% orphaned;
+    the flag is the valve, and there is deliberately no threshold heuristic."""
+    pairs = _make_pairs(tmp_path / "c", [
+        ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
+    ])
+    other = _make_pairs(tmp_path / "d", [
+        ("A wholly different paragraph, long enough to be a candidate too.", None, "polish"),
+    ])
+    out = tmp_path / "scores.jsonl"
+    ev.score_pairs_file(other, out, judge=fake_judge)
+    before = _read_scores(out)
+
+    res = ev.score_pairs_file(pairs, out, judge=fake_judge, prune_orphans=False)
+    assert res.pruned_orphans == 0
+    assert _read_scores(out)[: len(before)] == before  # the foreign records stayed
+
+
+def test_prune_orphan_scores_round_trips_undecodable_lines(tmp_path):
+    """A corrupt line has no join key but must never be silently dropped by a
+    rewrite (same rule as `capture.write_pairs_atomic`)."""
+    pairs = _make_pairs(tmp_path / "c", [
+        ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
+    ])
+    out = tmp_path / "scores.jsonl"
+    ev.score_pairs_file(pairs, out, judge=fake_judge)
+    out.write_text(out.read_text() + '{"id": "ghost", "scores": {}}\n' + "not json at all\n", encoding="utf-8")
+
+    assert ev.prune_orphan_scores(pairs, out) == 1
+    assert "not json at all" in out.read_text()
+    assert "ghost" not in out.read_text()
+
+
+def test_prune_orphan_scores_on_a_missing_scores_file_is_a_noop(tmp_path):
+    pairs = _make_pairs(tmp_path / "c", [
+        ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
+    ])
+    missing = tmp_path / "nope.jsonl"
+    assert ev.prune_orphan_scores(pairs, missing) == 0
+    assert not missing.exists()
+
+
 def _score_rec(strategy, slop_score, target_score):
     none_vale = {"available": False}
     none_det = {"score": None}
