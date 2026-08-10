@@ -240,21 +240,49 @@ _ANCHOR_RES = (
     re.compile(r"@[A-Za-z][A-Za-z0-9_:-]*"),  # Quarto/pandoc citation key
 )
 
+# Inline markup the styler must carry through verbatim: a code span or a piece
+# of inline math is not prose and has no voice, but unlike a fenced block it
+# lives INSIDE a chunk, so segmentation cannot protect it and only the anchor
+# guard can. Both are single-line by construction: with DOTALL the code pattern
+# happily swallows a whole fenced block.
+#
+# The math pattern is deliberately tight. The obvious `\$([^$\n]+?)\$` matches
+# "it costs $5 and $10" and calls "5 and " an anchor, so every price in a
+# paragraph becomes a false positive; requiring non-space at both ends kills it.
+# Double-backtick spans are left unmatched on purpose — conservative, since a
+# missed anchor costs nothing while a false one rejects a good rewrite.
+_INLINE_ANCHOR_RES = (
+    re.compile(r"(?<!`)(`+)(?P<anchor>[^`\n]+?)\1(?!`)"),  # inline code span
+    re.compile(r"(?<![\\$\w])\$(?![\s$])(?P<anchor>[^$\n]*?[^\s$])\$(?!\$)"),  # inline math
+)
 
-def content_anchors(text: str) -> dict[str, int]:
-    """Multiset of link targets / URLs / citation keys in `text`."""
+
+def content_anchors(text: str, *, inline: bool = False) -> dict[str, int]:
+    """Multiset of link targets / URLs / citation keys in `text`.
+
+    With `inline`, code spans and inline math count too. That is a much stricter
+    guard — measured over the 4624-pair corpus it takes the share of pairs where
+    a real Dan rewrite would be disqualified from 6.4% to 19.1% — so it is
+    opt-in for `rewrite_text` (which decides) and always on for
+    `rewrite_candidates` (which only flags, and a human decides).
+    """
     counts: dict[str, int] = {}
-    for pattern in _ANCHOR_RES:
+    patterns = _ANCHOR_RES + _INLINE_ANCHOR_RES if inline else _ANCHOR_RES
+    for pattern in patterns:
         for m in pattern.finditer(text):
-            key = m.group(1) if m.groups() else m.group(0)
+            if "anchor" in pattern.groupindex:
+                key = m.group("anchor")
+            else:
+                key = m.group(1) if m.groups() else m.group(0)
             counts[key] = counts.get(key, 0) + 1
     return counts
 
 
-def missing_anchors(source: str, candidate: str) -> list[str]:
+def missing_anchors(source: str, candidate: str, *, inline: bool = False) -> list[str]:
     """Anchors present in `source` that `candidate` lost (count decreased)."""
-    have = content_anchors(candidate)
-    return [key for key, n in content_anchors(source).items() if have.get(key, 0) < n]
+    have = content_anchors(candidate, inline=inline)
+    want = content_anchors(source, inline=inline)
+    return [key for key, n in want.items() if have.get(key, 0) < n]
 
 
 def detector_scorer(detector: Callable[[str], dict]) -> Callable[[str], float]:
@@ -335,7 +363,9 @@ def rewrite_candidates(
         {
             "text": c,
             "score": scorer(c) if scorer is not None else None,
-            "anchors_lost": missing_anchors(chunk, c),
+            # Always inline here: this seam only FLAGS, and a human picks. It is
+            # precisely where a strict mask-preservation check earns its keep.
+            "anchors_lost": missing_anchors(chunk, c, inline=True),
             "identity": c == chunk,
         }
         for c in deduped
@@ -356,6 +386,7 @@ def rewrite_text(
     scorer: Callable[[str], float] | None = None,
     on_decision: Callable[..., None] | None = None,
     inline_headings: bool = False,
+    inline_anchors: bool = False,
 ) -> RewriteResult:
     """Rewrite prose chunk-by-chunk through the styler, mirroring training.
 
@@ -373,6 +404,12 @@ def rewrite_text(
     content (rewritable, and no longer emitted as `context`), so chunks span
     sections. Set it to match the promoted adapter's training diet — the
     manifest records that under `data.chunk_scale`.
+
+    `inline_anchors` widens the anchor-integrity guard to inline code spans and
+    inline math. Default off: measured across the 4624-pair corpus it triples
+    the share of pairs where a genuine Dan rewrite is disqualified (6.4% ->
+    19.1%), and a disqualified chunk is kept verbatim, so enabling it by default
+    would trade a rare corruption for a common no-op.
 
     With a `scorer` (lower = better, e.g. `detector_scorer`), the INPUT chunk
     competes with the candidates — the do-no-harm guard: a chunk is only
@@ -394,7 +431,14 @@ def rewrite_text(
     context: str | None = None
     for kind, chunk in items:
         if kind == "heading":
-            context = chunk.split("\n")[-1]
+            # Under the cross-heading diet a heading is chunk CONTENT, and those
+            # pairs record no `meta.context` at all — so setting `context` here
+            # would prepend a prefix to every following chunk that training
+            # never saw. Defect A4: prospective today (the corpus has zero
+            # cross-heading pairs) and live the moment the blog's
+            # CROSS_HEADING policy produces its first batch.
+            if not inline_headings:
+                context = chunk.split("\n")[-1]
             out_chunks.append(chunk)
             continue
         # A protected block passes through and — deliberately — does NOT reset
@@ -421,7 +465,7 @@ def rewrite_text(
         keep = []
         keep_idx: list[int] = []  # positions of `keep` entries within `raw`
         for i, c in enumerate(raw):
-            gone = missing_anchors(chunk, c)
+            gone = missing_anchors(chunk, c, inline=inline_anchors)
             if gone:
                 lost.extend(gone)
                 result.n_anchor_rejected += 1

@@ -307,6 +307,47 @@ def test_on_decision_receives_heading_context_and_fires_per_prose_chunk():
     assert all(c[4] == 0 and c[5] is False for c in calls)
 
 
+def test_inline_headings_records_no_context():
+    # Defect A4: `rewrite_text` set `context` from any heading item, so under
+    # --inline-headings the heading was prepended to every following chunk —
+    # while cross-heading training pairs record no `meta.context` at all.
+    # (A heading too big to group stays a standalone "heading" item and is
+    # passed through, hence two decisions rather than three.)
+    calls = []
+    text = "Intro paragraph.\n\n## The Heading\n\nUnder the heading."
+    infer.rewrite_text(
+        text,
+        _upper_styler,
+        max_chunk_chars=10,
+        inline_headings=True,
+        on_decision=lambda *args: calls.append(args),
+    )
+    assert [c[1] for c in calls] == [None, None]
+    # The same document without the flag DOES carry the heading as context.
+    calls.clear()
+    infer.rewrite_text(
+        text,
+        _upper_styler,
+        max_chunk_chars=10,
+        on_decision=lambda *args: calls.append(args),
+    )
+    assert [c[1] for c in calls] == [None, "## The Heading"]
+
+
+def test_protected_block_does_not_reset_heading_context():
+    # `_split_sections` runs AFTER `editable_prose`, so a protected block is
+    # invisible to it and never breaks a section. The heading must survive one.
+    calls = []
+    text = "## The Heading\n\nFirst para.\n\n> A quote in between.\n\nSecond para."
+    infer.rewrite_text(
+        text,
+        _upper_styler,
+        max_chunk_chars=10,
+        on_decision=lambda *args: calls.append(args),
+    )
+    assert [c[1] for c in calls] == ["## The Heading", "## The Heading"]
+
+
 def test_content_anchors_counting():
     text = "A [link](./a.qmd), a bare https://b.org/c url, and [@Cite2020] twice: [@Cite2020]."
     anchors = infer.content_anchors(text)
@@ -314,6 +355,66 @@ def test_content_anchors_counting():
     assert anchors["https://b.org/c"] == 1
     assert anchors["@Cite2020"] == 2
     assert infer.missing_anchors(text, text.replace(" [@Cite2020].", ".")) == ["@Cite2020"]
+
+
+# --- inline anchors (code spans + inline math), off by default -------------
+
+
+def test_inline_anchors_are_off_by_default():
+    text = "Set `PATH` and note $x_i$ carefully."
+    assert infer.content_anchors(text) == {}
+    assert set(infer.content_anchors(text, inline=True)) == {"PATH", "x_i"}
+
+
+def test_inline_math_ignores_dollar_amounts():
+    # The loose `\$([^$\n]+?)\$` calls "5 and " an anchor here, so every price
+    # in a paragraph becomes a false positive. Requiring non-space at both ends
+    # of the span is what kills it.
+    assert infer.content_anchors("it costs $5 and $10", inline=True) == {}
+
+
+def test_inline_math_and_code_spans_do_not_confuse_each_other():
+    got = infer.content_anchors("`$PATH` and $x_i$", inline=True)
+    # `$PATH` is a code span, not maths: the math pattern must not pair its
+    # dollar with the one opening $x_i$.
+    assert got == {"$PATH": 1, "x_i": 1}
+
+
+def test_inline_code_anchor_does_not_swallow_a_fenced_block():
+    # Single-line by construction — with DOTALL this pattern eats whole fences.
+    text = "```\na\n```\ntext `x` more"
+    assert infer.content_anchors(text, inline=True) == {"x": 1}
+
+
+def test_inline_anchors_skip_escaped_dollars_and_display_math():
+    assert infer.content_anchors(r"a \$5 fee and $y$", inline=True) == {"y": 1}
+    assert infer.content_anchors("$$x$$", inline=True) == {}
+
+
+def test_inline_anchors_skip_double_backtick_spans():
+    # Deliberately conservative: a missed anchor costs nothing, a false one
+    # rejects a good rewrite.
+    assert infer.content_anchors("``a ` b`` and `c`", inline=True) == {"c": 1}
+
+
+def test_rewrite_text_inline_anchors_disqualify_a_lost_code_span():
+    text = "Run `make check` before pushing anything at all."
+    dropped = "Run make check before pushing anything at all."
+    styler = lambda messages, num_samples=1: [dropped] * num_samples  # noqa: E731
+
+    loose = infer.rewrite_text(text, styler)
+    assert loose.text == dropped  # today's guard lets it through
+
+    strict = infer.rewrite_text(text, styler, inline_anchors=True)
+    assert strict.text == text
+    assert strict.n_anchor_rejected == 1
+
+
+def test_rewrite_candidates_always_flags_inline_anchors():
+    chunk = "Run `make check` first, honestly."
+    styler = lambda messages, num_samples=1: ["Run make check first."]  # noqa: E731
+    out = infer.rewrite_candidates(chunk, styler, best_of=1)
+    assert out["candidates"][0]["anchors_lost"] == ["make check"]
 
 
 # ---------------------------------------------------------------------------
