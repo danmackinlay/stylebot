@@ -45,20 +45,14 @@ from typing import Protocol
 
 from stylebot.jsonl import dumps_line, iter_jsonl, read_jsonl, write_jsonl_atomic
 
-# The pair-text extractors and the score join key live in `stylebot.pairs`. The
-# ones this module does not itself use are imported anyway and re-exported:
-# callers outside this repo reach that surface through `stylebot.eval`.
-from stylebot.pairs import (
-    FIELD_EXTRACTORS,
-    GEN_FACET_KEYS,
-    _recut_digest,  # noqa: F401
-    extract_output,  # noqa: F401
-    extract_slop,  # noqa: F401
-    extract_target,  # noqa: F401
-    iter_pairs,
-    pair_body,  # noqa: F401
-    record_id,
-)
+# The pair-text extractors and the score join key live in `stylebot.pairs`; this
+# module imports the four it uses and nothing else. It used to re-export
+# `pair_body` / `extract_slop` / `extract_target` / `extract_output` and the
+# private `_recut_digest` on the stated grounds that "callers outside this repo
+# reach that surface through `stylebot.eval`" — untrue when written and untrue
+# since: every consumer (`infer`, `train`, `classify_train`, the scripts, the
+# tests, livingthing) imports them from `stylebot.pairs` directly.
+from stylebot.pairs import FIELD_EXTRACTORS, GEN_FACET_KEYS, iter_pairs, record_id
 from stylebot.provenance import file_sha256
 
 SCHEMA_VERSION = 2
