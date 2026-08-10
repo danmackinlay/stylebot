@@ -81,13 +81,15 @@ worked example, and its whole synthesis layer is two small files:
    over your frontmatter conventions. Every stylebot phase accepts `selector=`;
    the predicate is never hardcoded in the mechanism.
 2. **A CLI mirror** (~90 lines; example `livingthing/bin/train_targets.py`),
-   composed from `stylebot.bin.synth_cli`:
+   composed from `stylebot.synth_cli`:
    `@synth_options(exclude=…, **your_defaults)` re-declares nothing — it applies
    the shared option surface with your defaults swapped in and your pinned
    options removed — and the command body is just
    `iter_targets(selector=…)` → `run_synth(…)`. Inspection modes, generator
-   wiring, progress, resume and error handling all come from stylebot, so the
-   wrapper can't drift.
+   wiring, progress and resume all come from stylebot, so the wrapper can't
+   drift. `run_synth` raises `SynthConfigError` / `SynthRunError` /
+   `SynthGenerationError` rather than exiting — mirror `ai-style`'s
+   `_synth_errors` boundary to map them onto exit 2 / exit 1.
 
 **Naming convention:** mirror the `ai-style` subcommands under your own prefix.
 On Dan's blog, `dan-style synth|train-clf|eval` are the policy versions of

@@ -18,14 +18,14 @@ from __future__ import annotations
 import datetime
 import json
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import cache, partial
 from pathlib import Path
 
 import click
 
-from stylebot import config, synth
-from stylebot.bin import synth_cli
+from stylebot import config, synth, synth_cli
 from stylebot.bin.ai_style_log import main as _log
 from stylebot.cli_options import SectionedCommand, bundle_options, bundles_from_kwargs, opt
 from stylebot.jsonl import append_jsonl
@@ -49,7 +49,7 @@ main.add_command(_log, name="log")
 # styler from the SAME flags — the sidecar's rewrite op is `run` held open. The
 # declarations lived twice, drifted in wording, and the tinker/openai
 # construction was written twice; both are here now, in the `cli_options`
-# bundle idiom that `bin/synth_cli.py` already uses.
+# bundle idiom that `stylebot/synth_cli.py` already uses.
 #
 # The per-command differences below are deliberate and stay per-command:
 # `run` defaults --backend to tinker (serve omits it for score-only serving),
@@ -210,6 +210,29 @@ def build_styler(opts: BackendOpts):
     )
 
 
+@contextmanager
+def _synth_errors():
+    """Translate `stylebot.synth_cli`'s domain errors into click's.
+
+    The synth kit is a library — it raises the `SynthError` family and never
+    exits — so this is the one place the process consequences are decided, and
+    they are the repo's usual idiom: a configuration the user must fix exits 2,
+    a fine invocation against an unready world exits 1. A run whose generations
+    failed also exits 1, silently: `run_synth` has already printed every error
+    and the summary, so re-rendering the exception would only add noise.
+    """
+    try:
+        yield
+    except synth_cli.SynthConfigError as exc:
+        if exc.param_hint:
+            raise click.BadParameter(str(exc), param_hint=exc.param_hint) from exc
+        raise click.UsageError(str(exc)) from exc
+    except synth_cli.SynthGenerationError as exc:
+        raise SystemExit(1) from exc
+    except synth_cli.SynthRunError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 @main.command("synth", cls=synth_cli.SectionedCommand)
 @click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option(
@@ -278,20 +301,6 @@ def synth_cmd(
 
     # The shared surface arrives as **kw; fold it back into its option bundles.
     opts = synth_cli.pop_bundles(kw)
-    targets = synth.iter_targets(
-        files=list(files) or None,
-        blog_root=blog_root,
-        selector=selector,
-        glob=glob,
-        **opts.pop("chunk").iter_targets_kwargs(),
-    )
-
-    # The read-only inspection modes (--sample/--report) exit before generation:
-    # they write nothing, so they need no corpus location. Deciding that HERE —
-    # above the resolution — is what keeps `run_synth`'s data_dir a plain path
-    # while this command keeps its own tailored refusal message.
-    inspection = opts["inspection"]
-    inspecting = inspection.sample_n is not None or inspection.report_path is not None
 
     def _data_dir(*, required: bool) -> Path | None:
         # Resolve the corpus location: explicit flag > $STYLEBOT_DATA_DIR. Refuse the
@@ -305,11 +314,27 @@ def synth_cmd(
             )
         return config.resolve_data_dir(data_dir)
 
-    # Still resolved for inspection runs when it IS available, so the inspection
-    # hints can name the real pairs path.
-    synth_cli.run_synth(
-        targets, data_dir=_data_dir(required=not inspecting), extra_tags=tags, **opts
-    )
+    with _synth_errors():
+        targets = synth.iter_targets(
+            files=list(files) or None,
+            blog_root=blog_root,
+            selector=selector,
+            glob=glob,
+            **opts.pop("chunk").iter_targets_kwargs(),
+        )
+
+        # The read-only inspection modes (--sample/--report) exit before generation:
+        # they write nothing, so they need no corpus location. Deciding that HERE —
+        # above the resolution — is what keeps `run_synth`'s data_dir a plain path
+        # while this command keeps its own tailored refusal message.
+        inspection = opts["inspection"]
+        inspecting = inspection.sample_n is not None or inspection.report_path is not None
+
+        # Still resolved for inspection runs when it IS available, so the inspection
+        # hints can name the real pairs path.
+        synth_cli.run_synth(
+            targets, data_dir=_data_dir(required=not inspecting), extra_tags=tags, **opts
+        )
 
 
 @main.command("eval")
