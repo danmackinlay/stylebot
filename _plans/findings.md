@@ -39,7 +39,10 @@ the merge budget alone does almost nothing.
 | 4500 | 1727 chunks, median 578 | 615 chunks, median 3224 |
 
 Tripling the budget moves the section-bounded median *down*. Cross-heading
-packing at the existing 1500 budget already doubles effective scale.
+packing at the existing 1500 budget already doubles effective scale. So
+`chunk_mode` dominates `merge_max_chars` — section-bounded packing hits the
+section wall long before the byte budget, and two runs differing only in
+`merge_max_chars` produce near-identical diets.
 
 **Corpus composition over time.** 254 records (2026-06-27, all real) → 331 real
 / 3,231 synthetic (2026-07-21) → 4,169 of 4,500 pairs synthetic (2026-07-22) →
@@ -47,6 +50,12 @@ packing at the existing 1500 budget already doubles effective scale.
 
 **Real captured pairs are unbounded but few** (2026-07-22): observed median 693
 chars, p90 1866, max 4143 — across only 331 records.
+
+**Real rewrites compress** (no sample size recorded): Dan's own edits compress
+~**1.5×** commonly, **2×** sometimes, **3×** rarely. So the real corpus supplies
+no *inflated* slop, and inflation has to be asked for deliberately — the reason
+a `verbose` slop strategy exists. The `--max-length-ratio 3.0` hygiene gate sits
+at the top of that observed range.
 
 **What has actually varied across the synthetic corpus** (2026-08-10, over the
 4169 synthetic pairs):
@@ -73,7 +82,8 @@ chars, p90 1866, max 4143 — across only 331 records.
 **Reasoning-effort sweep** (2026-07-20). **1241 pairs, six models**, `off` vs
 `medium`. The detector gap was **flat — 0.088 vs 0.092** — for roughly **3× the
 wall clock**. The cheap end won: the default flipped to `off`, and effort is now
-swept *up* on suspicion rather than defaulted high.
+swept *up* on suspicion rather than defaulted high. Caveat: the sweep measured
+`off` vs `medium` only — **`high`, the then-default, was never measured**.
 
 **A provider ignored `effort=off`** (2026-07-20): qwen3-32b emitted ~700
 reasoning tokens anyway. The *requested* effort is recorded regardless of what
@@ -145,7 +155,9 @@ in total. `SequenceMatcher` folds reflowed paragraphs into `replace`.
 archives). Coalescing short unchanged runs: **87 pairs, median 1191 chars, p90
 4230** (against 130 pairs / 845 / 1938 uncoalesced). A fixed-width window would
 have had changed-fraction **0.41** at 4500 chars, against **0.96** (p10 0.86,
-none below 0.5) under coalescing.
+none below 0.5) under coalescing. The bridging tolerance was calibrated at
+**2 paragraphs / 800 chars** — the widest bridge at which changed-fraction still
+holds near 1.0.
 
 ---
 
