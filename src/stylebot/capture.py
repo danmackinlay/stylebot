@@ -1,14 +1,10 @@
 """Phase-1 capture mechanism: paragraph diffing + pair-record I/O, as a library.
 
-The `ai-style log` CLI (`stylebot.bin.ai_style_log`) is a thin wrapper over
-this module; it keeps the *path policy* (its ``$STYLEBOT_DATA_DIR``-derived
-defaults) and the interactive session-snapshot workflow. Everything here takes
-explicit paths and strings, so a non-CLI producer (an editor integration, a
-batch import) can capture pairs without touching the logger's globals.
-
-The captured record shape is the shared `pairs.jsonl` contract
-(`stylebot.pairs.validate_pair_record`); heading context follows
-`_plans/heading-context.md` via `stylebot.pairs.build_pair_content`.
+The `ai-style log` CLI is a thin wrapper keeping the path policy and the
+interactive session-snapshot workflow. Everything here takes explicit paths and
+strings, so a non-CLI producer can capture pairs without the logger's globals.
+Records follow the shared `pairs.jsonl` contract
+(`stylebot.pairs.validate_pair_record`); see `_plans/heading-context.md`.
 """
 
 from __future__ import annotations
@@ -39,7 +35,7 @@ def new_capture_id() -> str:
 def split_frontmatter_meta(text: str) -> tuple[dict, str]:
     """Best-effort split into (parsed YAML frontmatter, body).
 
-    Returns ``({}, text)`` for non-.qmd or plain prose. The `_meta` suffix is
+    ``({}, text)`` for non-.qmd or plain prose. The `_meta` suffix is
     load-bearing: `stylebot.infer.split_frontmatter` splits the same text into
     ``(raw frontmatter string, body)``, and the two are not interchangeable.
     """
@@ -61,11 +57,9 @@ _ATX_HEADER_RE = re.compile(r"^\s{0,3}#{1,6}\s")
 def _is_heading_paragraph(para: str) -> bool:
     """True if `para` is a standalone ATX header paragraph.
 
-    A "heading" is a paragraph whose first line is a markdown ATX header
-    (`# ...` through `###### ...`). Only the first line is inspected; a header
-    glued to body text in the same paragraph (no blank line between, e.g.
-    `## H\\ntext`) is NOT treated as a heading here — the heading is already
-    inside that chunk, so we must not double-add it as context.
+    Only the first line is inspected. A header glued to body text in the same
+    paragraph (no blank line between, e.g. `## H\\ntext`) is NOT a heading here:
+    it is already inside that chunk, so adding it as context would duplicate it.
     """
     if not para:
         return False
@@ -76,12 +70,9 @@ def _is_heading_paragraph(para: str) -> bool:
 def _nearest_heading(paras: list[str], idx: int) -> str:
     """Return the nearest preceding heading paragraph's text (immediate depth).
 
-    Scans backwards from `idx - 1` through `paras` for the most recent
-    standalone header paragraph and returns its text, stripped. If none
-    precedes `idx` (the region is in the preamble before any heading),
-    returns "" — a heading-less region, which is valid.
-
-    Depth is IMMEDIATE: only the single nearest heading, never a breadcrumb.
+    Scans backwards from `idx - 1`, returning the heading stripped, or "" when
+    the region is in the preamble before any heading (valid, not an error).
+    Depth is IMMEDIATE: the single nearest heading, never a breadcrumb.
     """
     for k in range(idx - 1, -1, -1):
         if _is_heading_paragraph(paras[k]):
@@ -102,13 +93,10 @@ def _coalesce_regions(
     regions merge when the untouched paragraphs between them are within BOTH
     tolerances, absorbing that gap into the merged pair.
 
-    Why this and not a fixed-width window: a document's untouched prose is text
-    Dan did not get to, not text he endorsed. A capture's before-side is
-    slop-bearing, so padding pairs out with their untouched neighbours would
-    teach the styler to leave slop alone. Bridging only *short* gaps keeps the
-    pair essentially all-changed (measured changed-fraction stays ~1.00 at
-    2 paragraphs / 800 chars) while letting one multi-paragraph intent stay one
-    pair. See `_plans/v2-longer-rewrites.md`.
+    Bridging rather than a fixed-width window, because untouched prose is text
+    the author did not get to, not text they endorsed: a capture's before-side is
+    slop-bearing, so padding pairs out with untouched neighbours would teach the
+    styler to leave slop alone. See `_plans/v2-longer-rewrites.md`.
     """
     if not regions or (gap_paras <= 0 and gap_chars <= 0):
         return regions
@@ -136,31 +124,20 @@ def diff_chunks(
 ) -> list[tuple[str, str, str]]:
     """Return (before_chunk, after_chunk, context) triples per changed region.
 
-    Algorithm: split both texts on blank lines (`stylebot.lib.split_paragraphs`
-    — the same chunk shape Phase 2 samples, so real and synthetic pairs are
-    mixable), run SequenceMatcher on the paragraph lists, emit a pair for every
-    `replace` opcode (a contiguous changed region). Skip `equal` opcodes
-    (untouched paragraphs) and pure `insert` / `delete` opcodes (no
-    transformation signal to learn from).
+    Split both texts on blank lines (the same chunk shape Phase 2 samples, so
+    real and synthetic pairs are mixable), run SequenceMatcher on the paragraph
+    lists, and emit a pair per contiguous changed region. `equal` opcodes are
+    skipped, and so are pure `insert` / `delete` ones — nothing to learn from.
 
-    Contiguous changed paragraphs end up coalesced into a single pair,
-    which is desirable: rewriting two adjacent paragraphs is usually one
-    intent, not two independent edits.
+    `coalesce_gap_paras` / `coalesce_gap_chars` extend coalescing across *short
+    unchanged runs*, so an edit spanning several paragraphs with a left-alone
+    paragraph in the middle stays ONE pair; both default to 0. A merged region
+    exceeding `max_chars` falls back to its uncoalesced parts rather than being
+    dropped. Untouched text is never appended to a pair's *ends*, only bridged
+    between two changed regions (see `_coalesce_regions`).
 
-    `coalesce_gap_paras` / `coalesce_gap_chars` extend that coalescing across
-    *short unchanged runs*, so an edit spanning several paragraphs with a
-    left-alone paragraph in the middle stays ONE pair instead of fragmenting.
-    Both default to 0 (legacy behaviour: only contiguous regions merge). A
-    merged region exceeding `max_chars` falls back to its uncoalesced parts
-    rather than being dropped. Untouched text is never appended to the *ends*
-    of a pair — only bridged between two changed regions (see
-    `_coalesce_regions` for why).
-
-    When `heading_context` is True, each triple's `context` is the nearest
-    preceding section heading among the AFTER paragraphs (the kept text),
-    resolved from the changed region's after-start index `j1`. Preamble
-    regions (no heading precedes them) get `context == ""`. When
-    `heading_context` is False, `context` is always "" (legacy behaviour).
+    With `heading_context`, each `context` is the nearest preceding heading among
+    the AFTER paragraphs; preamble regions get `""`.
     """
     before_paras = split_paragraphs(before)
     after_paras = split_paragraphs(after)
@@ -182,8 +159,7 @@ def diff_chunks(
         before_chunk = "\n\n".join(before_paras[i1:i2])
         after_chunk = "\n\n".join(after_paras[j1:j2])
         if not before_chunk.strip() or not after_chunk.strip():
-            # Pure insert (no before content) or pure delete (no after
-            # content) — nothing to learn the transformation from.
+            # Pure insert or pure delete — no transformation to learn from.
             return None
         context = _nearest_heading(after_paras, j1) if heading_context else ""
         return (before_chunk, after_chunk, context)
@@ -197,7 +173,7 @@ def diff_chunks(
             triples.append(emitted)
             continue
         # Oversized (or empty) after coalescing — fall back to the uncoalesced
-        # regions inside this span, so a long merge degrades to the legacy cut
+        # regions inside this span, so a long merge degrades to the finer cut
         # instead of silently dropping a real edit.
         for part in raw:
             if part[2] >= span[2] and part[3] <= span[3]:
@@ -226,12 +202,9 @@ def build_pair_record(
 ) -> dict:
     """Build a chat-completion JSONL record from pre-stripped body strings.
 
-    When `context` is non-empty (a section heading), it is prepended
-    *verbatim and identically* to both message bodies via
-    `stylebot.pairs.build_pair_content` and recorded under `meta.context`
-    (with `meta.context_mode = "immediate"`). `before_chars`/`after_chars`
-    keep counting the BODY only (excluding the prepended heading), so the
-    transform-region size is unchanged by adding context.
+    A non-empty `context` is prepended *verbatim and identically* to both message
+    bodies. `before_chars`/`after_chars` still count the BODY only, so adding
+    context does not change the recorded transform-region size.
     """
     meta: dict = {
         "source": source,
@@ -273,8 +246,8 @@ def append_pair(pairs_path: Path, record: dict) -> None:
 
 
 # The atomic rewrite is a JSONL-level operation, not a pair-level one, so it
-# lives in `stylebot.jsonl`. The old name stays bound for callers that reach it
-# through this module (`stylebot.bin.ai_style_log`).
+# lives in `stylebot.jsonl`; this alias serves callers that reach it through
+# this module (`stylebot.bin.ai_style_log`).
 write_pairs_atomic = write_jsonl_atomic
 
 
@@ -310,31 +283,21 @@ def capture_pairs(
 ) -> list[dict]:
     """Strip frontmatter, diff, and append one or more pair records.
 
-    Returns the list of records written (each describes one chunk-pair).
-    Raises ValueError if nothing changed worth capturing.
-
-    When `heading_context` is True (the default), each per-region pair is
-    prefixed with the nearest preceding section heading (from the after body)
-    as fixed context. `whole` mode spans many headings, so it never carries
-    context regardless of this flag.
-
-    `coalesce_gap_paras` / `coalesce_gap_chars` / `max_chars` pass through to
-    `diff_chunks`, bridging short unchanged runs so one multi-paragraph edit
-    stays one pair. Defaults are the legacy no-bridging behaviour.
+    Returns the records written, one per chunk-pair. Raises ValueError if nothing
+    changed worth capturing. `whole` mode spans many headings, so it never
+    carries context regardless of `heading_context`; the gap/`max_chars` args
+    pass through to `diff_chunks`.
 
     The full before/after texts are also archived beside the corpus
-    (`<pairs_dir>/captures/<capture_id>.json`) — the chunk records are a
-    lossy VIEW (changed regions only, no document offsets), and the archive
-    is what lets the corpus be re-cut at other chunk scales later (longer
-    multi-paragraph pairs, discourse context) without re-capturing. Captures
-    saved before 2026-07-22 predate the archive and are chunk-scale forever.
+    (`<pairs_dir>/captures/<capture_id>/`). The chunk records are a lossy VIEW —
+    changed regions only, no document offsets — so the archive is what lets the
+    corpus be re-cut at other chunk scales later without re-capturing.
     """
     before_meta, before_body = split_frontmatter_meta(before_text)
     after_meta, after_body = split_frontmatter_meta(after_text)
 
     if whole:
-        # A whole-file pair spans many headings — no single heading applies,
-        # so it carries no context regardless of `heading_context`.
+        # A whole-file pair spans many headings, so no single one applies.
         chunk_pairs: list[tuple[str, str, str]] = [(before_body, after_body, "")]
     else:
         chunk_pairs = diff_chunks(
@@ -391,18 +354,15 @@ def capture_pairs(
 #     captures/<capture_id>/after.md
 #     captures/<capture_id>/meta.json   {capture_id, source, snapped_at, whole}
 #
-# The two documents are the point. They used to be JSON-escaped strings on one
-# line, which made the archive unreadable, unopenable and undiffable — perverse,
-# since the before->after diff IS the training signal. As plain files they can be
-# read, `diff`ed, and hand-corrected when a capture comes out wrong; `recut`
-# picks the correction up on its next run.
+# Plain files rather than JSON-escaped strings, so they can be read, `diff`ed and
+# hand-corrected when a capture comes out wrong (`recut` picks the correction up
+# next run). The before->after diff IS the training signal; it must stay legible.
 #
-# `.md` and not `.qmd` deliberately. Every tool in the blog repo keys on
-# `*.qmd` — the pre-commit hook would reformat these files (destroying the
-# verbatim record it is their whole job to keep), `qmd` search would index the
-# captured slop as if Dan wrote it, and `iter_targets` would sample it as a
-# synthesis target. `.md` is invisible to all of them, and matches the existing
-# `_drafts/` convention for markdown that is not a post.
+# `.md` and not `.qmd` deliberately. Every tool in the blog repo keys on `*.qmd`
+# — the pre-commit hook would reformat these files (destroying the verbatim
+# record it is their whole job to keep), search would index the captured slop as
+# if the author wrote it, and `iter_targets` would sample it as a synthesis
+# target. `.md` is invisible to all of them.
 
 ARCHIVE_BEFORE = "before.md"
 ARCHIVE_AFTER = "after.md"
@@ -421,10 +381,9 @@ def write_archive(
 ) -> Path:
     """Write one capture archive directory, atomically.
 
-    Three files means a partial write is now possible where the old single
-    `write_text` could only truncate, so build in a sibling temp directory and
-    `os.replace` it into place — an archive is either wholly there or absent,
-    never half-populated (which `iter_archives` would silently skip).
+    Three separate files make a partial write possible, so build in a sibling
+    temp directory and `os.replace` it into place: an archive is either wholly
+    there or absent, never half-populated (which `iter_archives` would skip).
     """
     archive_dir.parent.mkdir(parents=True, exist_ok=True)
     tmp = archive_dir.with_name(archive_dir.name + ".tmp")
@@ -456,8 +415,8 @@ def write_archive(
 def read_archive(archive_dir: Path) -> dict | None:
     """Load one archive directory into the flat dict the rest of the module uses.
 
-    Returns None (rather than raising) for an unreadable or incomplete archive,
-    matching `iter_archives`' skip-and-continue contract.
+    None (rather than raising) for an unreadable or incomplete archive, matching
+    `iter_archives`' skip-and-continue contract.
     """
     try:
         meta = json.loads((archive_dir / ARCHIVE_META).read_text(encoding="utf-8"))
@@ -476,14 +435,12 @@ def read_archive(archive_dir: Path) -> dict | None:
 def iter_archives(pairs_path: Path):
     """Yield each capture archive dict beside `pairs_path`, oldest first.
 
-    Sorted by `snapped_at` so a re-cut is deterministic. Yields the flat shape
-    (`before_text`/`after_text` alongside the meta keys) that `recut_archives`
-    consumes, whichever on-disk layout it came from.
+    Sorted by `snapped_at` so a re-cut is deterministic, and flattened to the
+    shape `recut_archives` consumes whichever on-disk layout it came from.
 
-    Legacy `captures/<capture_id>.json` blobs are still read, and warned about.
-    The warning is the point: a silent skip here would look exactly like "that
-    capture had no changed regions", and the caller would never learn that an
-    unmigrated archive had dropped out of the corpus.
+    Legacy `captures/<capture_id>.json` blobs are still read, and warned about —
+    a silent skip would look exactly like "that capture had no changed regions",
+    so the caller would never learn an archive had dropped out of the corpus.
     """
     cap_dir = pairs_path.parent / "captures"
     if not cap_dir.is_dir():
@@ -520,17 +477,11 @@ def recut_archives(
 ) -> list[dict]:
     """Re-derive real pairs from the capture archives at a new cut policy.
 
-    The archive holds the full before/after texts, so the corpus can be re-cut
-    without recapturing — that is the whole reason it exists. Emitted records
-    carry `meta.recut` (the gap policy) and reuse the archive's own
-    `capture_id`, so a re-cut is IDEMPOTENT: re-running it with the same policy
-    replaces the previous re-cut for that capture rather than stacking
-    duplicates.
-
-    Pairs from the *original* (uncoalesced) cut of the same capture are also
-    dropped, since they are a strictly lossier view of the same edit. Captures
-    with no archive (pre-2026-07-22) are untouched at their native scale —
-    there is nothing to re-cut them from.
+    Emitted records carry `meta.recut` (the gap policy) and reuse the archive's
+    own `capture_id`, making a re-cut IDEMPOTENT: re-running with the same policy
+    replaces the previous re-cut rather than stacking duplicates. Pairs from the
+    original uncoalesced cut are dropped too, being a strictly lossier view of
+    the same edit; captures with no archive are left untouched.
 
     Returns the records written (or that *would* be written, under `dry_run`).
     """

@@ -1,36 +1,17 @@
 """Phase 2 — synthetic pair generation.
 
 Library-first: `synthesize_pairs` is a typed function over explicit paths/params;
-`ai-style synth` (`stylebot.bin.ai_style`) is a thin CLI wrapper. The blog build
-can import `synthesize_pairs` directly.
+`ai-style synth` (`stylebot.bin.ai_style`) is a thin CLI wrapper.
 
-Method (see `_plans/phase-2-synthetic-pairs.md`): take Dan's own human-authored
-prose as the **target** (`messages[2]`, the assistant turn), ask an LLM to
-paraphrase it into clearer/"more polished" prose — the **slop source**
-(`messages[1]`, the user turn). The styler later learns to undo that transform.
-
-Output is the **same** `pairs.jsonl` schema as Phase 1
-(`stylebot.pairs.validate_pairs_file`), chunked the same way
-(`stylebot.lib.split_paragraphs`), so real and synthetic pairs are mixable. Each
-synthetic record additionally carries `meta.synthetic: true`,
-`meta.generator: "<model>"`, `meta.slop_strategy: "<which slop prompt>"`,
-`meta.synth_key` (for idempotent resume), and `meta.tags` provenance.
-
-Selection is a user-supplied policy (OVERVIEW "Selection is a user-supplied
-policy"): `iter_targets` takes a `selector` defaulting to
-`stylebot.lib.is_human_authored` plus an optional `sort_key`; callers pass their
-own, or hand in a pre-selected file list and skip the walk entirely.
-
-The generators are injected, not hardcoded: tests pass plain callables; the
-`openai_generator` / `openrouter_generator` factories build
-real provider-backed ones (multi-source by design — rotate ≥2 so the styler
-learns to undo AI writing broadly, not one model's tics; OpenRouter reaches many
-upstream models off a single key, so hosted models like Claude/GPT go through it).
-
-The slop *prompt* is itself a knob: `STRATEGIES` maps a label → a system prompt
-flavour, recorded as `meta.slop_strategy` and folded into `synth_key`, so you can
-generate, eyeball, and ablate different flavours of slop without them colliding
-on resume or blurring together in the corpus.
+Method (see `_plans/phase-2-synthetic-pairs.md`): human-authored prose is the
+**target** (`messages[2]`); an LLM paraphrases it into "more polished" prose, the
+**slop source** (`messages[1]`), and the styler learns to undo that transform.
+Output is the Phase-1 `pairs.jsonl` schema chunked the same way, so real and
+synthetic pairs are mixable; synthetic records add `meta.synthetic`,
+`meta.generator`, `meta.slop_strategy`, `meta.synth_key` and `meta.tags`.
+Generators and slop prompts are injected knobs, both folded into `synth_key`;
+rotate ≥2 generators so the styler undoes AI writing broadly, not one model's
+tics.
 """
 
 from __future__ import annotations
@@ -51,13 +32,9 @@ from stylebot.provenance import now_iso
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Strategies + generators — implemented in stylebot.generators; re-exported here
-# ---------------------------------------------------------------------------
-
-# Load-bearing re-exports, not courtesy: tests monkeypatch the factories ON
-# THIS MODULE (the CLI kit calls synth.<factory> by attribute lookup), and
-# livingthing + the CLI kit import the registry and defaults via stylebot.synth.
+# Load-bearing re-exports: tests monkeypatch the factories ON THIS MODULE (the
+# CLI kit resolves synth.<factory> by attribute lookup), and external callers
+# import the registry and defaults via stylebot.synth.
 from stylebot.generators import (  # noqa: E402, F401
     DEFAULT_GEN_TIMEOUT,
     DEFAULT_REASONING_EFFORT,
@@ -85,15 +62,10 @@ from stylebot.generators import (  # noqa: E402, F401
 def transform_similarity(a: str, b: str) -> float:
     """Character-level copying ratio between two prose bodies, in [0, 1].
 
-    `difflib.SequenceMatcher` over whitespace-normalized text: 1.0 = verbatim
-    copy, ~0 = no shared runs. Deliberately a *copying* measure, not a style
-    measure — sentence reordering counts as a transform. Cheap, deterministic,
-    stdlib-only, so it is baked into every synthetic pair as the frozen
-    `meta.transform_sim` covariate; the *living* style-shift measure is the
-    detector-score gap at eval time. Consumers filter by policy (e.g. the
-    voice-classifier trainer drops near-identity pairs, which would be label
-    noise). `autojunk=False`: on prose the default popularity heuristic junks
-    the space character, which makes ratios erratic.
+    1.0 = verbatim copy, ~0 = no shared runs. A *copying* measure, not a style
+    measure — sentence reordering counts as a transform. `autojunk=False`: on
+    prose the default popularity heuristic junks the space character, which
+    makes ratios erratic.
     """
     na = " ".join(a.split())
     nb = " ".join(b.split())
@@ -103,21 +75,15 @@ def transform_similarity(a: str, b: str) -> float:
 
 
 # Multi-turn sessions never push the prompt past this fraction of the model's
-# context window — end-of-window behaviour (truncation, degraded attention) is
-# a failure mode, not a covariate we want to sample.
+# context window: end-of-window truncation and degraded attention are failure
+# modes, not covariates worth sampling.
 SESSION_WINDOW_FILL_CAP = 0.8
-# Global default per-session prompt-token budget (absolute, same for every
-# model — cost grows ~quadratically with it). Per-model overrides go on
-# Generator.session_budget.
+# Default per-session prompt-token budget, same for every model (cost grows
+# ~quadratically with it). Per-model overrides go on Generator.session_budget.
 DEFAULT_SESSION_MAX_TOKENS = 32_000
 
 
-# ---------------------------------------------------------------------------
-# Targets — implemented in stylebot.targets; re-exported here
-# ---------------------------------------------------------------------------
-
-# Re-exports are load-bearing, not courtesy: livingthing and the CLI kit
-# import Target/iter_targets/the chunk constants via `stylebot.synth`.
+# Load-bearing re-exports, as above.
 from stylebot.targets import (  # noqa: E402, F401
     MAX_CHUNK_CHARS,
     MERGE_MAX_CHUNK_CHARS,
@@ -143,24 +109,11 @@ def _synth_key(
 ) -> str:
     """Stable id for one synthetic pair — the resume/dedup cell identity.
 
-    **Key on content, record circumstance.** The key spans every experimental
-    axis whose variants we want to *coexist* rather than shadow each other on
-    resume: generator, slop strategy, reasoning effort, prompt id (content hash
-    of the system prompt), heading context, and the target text. Sampling params
-    (temperature/top_p) are deliberately NOT in the key — they're recorded
-    covariates, not dedup axes (continuous; would explode the key space).
-
-    Nothing *positional* is ever folded in. Session membership in particular is
-    a runtime outcome (token budgets bind where reasoning burn happens to land,
-    and leftovers reflow into fresh sessions), so keying on it made resume
-    incoherent and multi-turn runs regenerate wholesale under any target-list
-    drift — see the 2026-07-21 post-mortem. Window position is recorded in
-    `meta.gen` (`prompt_tokens`/`window_fill`), never keyed.
-
-    `replicate` is the deliberate-resample axis: a user-chosen label (e.g.
-    "deep128k", "draw2") that mints a fresh set of cells for the same substrate
-    without colliding with the base corpus. Empty (the default) leaves keys
-    identical to unlabelled runs.
+    **Key on content, record circumstance.** Keyed: generator, strategy,
+    reasoning effort, prompt id, heading context, target text, and the optional
+    `replicate` label. NOT keyed: sampling params (continuous — they would
+    explode the key space) and anything positional, session membership above all,
+    being a runtime outcome that would make resume incoherent under drift.
     """
     h = hashlib.sha256()
     for part in (generator_name, strategy, reasoning_effort, prompt_id, context, target_text):
@@ -173,11 +126,10 @@ def _synth_key(
 
 
 def _effective_context(target: Target, context_dropout: float) -> str:
-    """The context to actually use for a target, applying deterministic dropout.
+    """The context to use for a target, applying deterministic dropout.
 
-    Dropping a deterministic fraction (keyed on the body hash, so resume is
-    stable) keeps some pairs heading-less, so the styler doesn't *require* a
-    heading at inference.
+    Keyed on the body hash, so resume is stable. Leaving some pairs heading-less
+    stops the styler *requiring* a heading at inference.
     """
     if not target.context or context_dropout <= 0:
         return target.context
@@ -194,13 +146,9 @@ def _capture_id(source: str, generator_name: str, strategy: str = DEFAULT_STRATE
 def covered_target_bodies(pairs_path: Path | str) -> set[str]:
     """The target BODIES that already have >=1 pair in a corpus, any config.
 
-    Coverage is target-level and context-agnostic: the assistant side of every
-    record is `build_pair_content(meta.context, body)` (the shared Phase-1/2
-    contract), so the body is recovered by stripping the recorded context
-    prefix. Used by `skip_covered` — the corpus-building mode where the goal is
-    one pair per passage, not the config cross product: without it, every
-    re-key epoch (an effort default flip, a key-recipe change) doubles the
-    already-covered half of the corpus and skews per-target weighting.
+    Context-agnostic: the assistant side of every record is
+    `build_pair_content(meta.context, body)`, so the body is recovered by
+    stripping the recorded prefix. Backs `skip_covered`.
     """
     bodies: set[str] = set()
     for rec in iter_pairs(pairs_path):
@@ -222,9 +170,7 @@ def covered_target_bodies(pairs_path: Path | str) -> set[str]:
 def existing_synth_keys(pairs_path: Path | str) -> set[str]:
     """Read the `meta.synth_key`s already present in a `pairs.jsonl`.
 
-    Uses the shared tolerant reader `stylebot.pairs.iter_pairs` (UTF-8, blank /
-    undecodable lines skipped, missing file → empty), so resume and the schema
-    contract stay on one JSONL reader.
+    Tolerant: blank/undecodable lines are skipped, a missing file reads as empty.
     """
     return {
         key
@@ -252,18 +198,10 @@ def _build_record(
         "chunk_total": target.chunk_total,
         "before_chars": len(slop),  # body lengths (the transform), excluding the heading prefix
         "after_chars": len(target.text),
-        # Copying ratio slop<->target (1.0 = verbatim no-op). Frozen hygiene
-        # covariate: near-identity pairs are label noise for the detector and
-        # teach the styler to copy; consumers filter by threshold.
         "transform_sim": transform_similarity(slop, target.text),
-        # Chunk-scale facet: the merge budget the target was packed under
-        # (None = unmerged). Lets a mixed-scale corpus (v2 longer rewrites)
-        # be ablated by scale with a one-line selector, like the generator
-        # facet. Pre-2026-07-22 records lack the key — all were 1500.
+        # Chunk-scale facet: the merge budget the target was packed under (None =
+        # unmerged) and how it was cut (None = section-bounded).
         "merge_max_chars": target.merge_max_chars,
-        # How the chunk was cut ("cross-heading" = headings packed in as
-        # content; None = section-bounded). Mode matters more than budget for
-        # scale, so the ablation needs both facets, not just the budget.
         "chunk_mode": target.chunk_mode,
         "synthetic": True,
         "generator": generator_name,
@@ -272,16 +210,12 @@ def _build_record(
         "tags": ["synthetic", "paraphrase", *extra_tags],
     }
     if context:
-        # Shared contract: identical heading prefix on both sides (see
-        # stylebot.pairs.build_pair_content); the styler restyles the body
+        # Identical heading prefix on both sides: the styler restyles the body
         # conditioned on, but never rewriting, the heading.
         meta["context"] = context
         meta["context_mode"] = "immediate"
     if gen_meta:
-        # The per-call generation covariates (model, reasoning_effort, sampling,
-        # token usage, prompt id/version). Synthetic-only; Phase-1 real pairs have
-        # no `gen` (see _plans plan: real pairs are the falsy-`synthetic` stratum).
-        meta["gen"] = gen_meta
+        meta["gen"] = gen_meta  # synthetic-only; real pairs have no `gen`
     return {
         "messages": [
             {"role": "system", "content": STYLE_SYSTEM},
@@ -299,29 +233,21 @@ class SynthResult:
     written: int = 0
     skipped_existing: int = 0
     skipped_covered: int = 0  # targets dropped by skip_covered (any-config coverage)
-    # Degenerate-output gates: generations that failed a hygiene covariate are
-    # counted here and NOT written (paid for, loudly reported). Two failure
-    # modes from the 2026-07 corpus QA, each with its own gate + counter:
-    # identity (transform_sim > max_transform_sim — the model returned the
-    # input; 386 qwen3-8b@off pairs walked in silently) and inflation
-    # (slop/target length ratio > max_length_ratio — qwen3-32b emitted 4-7x
-    # the target). NB a dropped cell stays un-keyed in the corpus, so a re-run
-    # retries it; a consistently failing model burns spend each run until it
-    # leaves the roster — the loud count is the signal.
-    skipped_degenerate: int = 0
-    skipped_inflated: int = 0
+    # Hygiene-gate drops: paid for, never written. A dropped cell stays un-keyed,
+    # so a re-run retries it and a consistently failing model burns spend every
+    # run until it leaves the roster — these counts are the signal to act on.
+    skipped_degenerate: int = 0  # identity: transform_sim > max_transform_sim
+    skipped_inflated: int = 0  # inflation: length ratio > max_length_ratio
     planned: int = 0  # (target, generator) assignments before dedup
     planned_sessions: int = 0  # sessions holding >=1 not-yet-generated turn
     errors: list[tuple[str, str]] = field(default_factory=list)  # (synth_key, message)
     per_generator: dict[str, int] = field(default_factory=dict)
-    # Reflow accounting (the 2026-07-21 post-mortem's silent-drop fix): turns a
-    # session couldn't run are respun into fresh sessions, never discarded.
+    # Reflow accounting: turns a session couldn't run are respun, never discarded.
     budget_bound_sessions: int = 0  # sessions ended by the token budget
     reflow_sessions: int = 0  # fresh sessions spawned to carry leftovers
     reflowed_turns: int = 0  # leftover turns respun (a turn respun twice counts twice)
-    # Per-model run economics, folded live from each pair's meta.gen (cost is
-    # OpenRouter's billed credits via usage.include — ground truth, not an
-    # estimate; zeros for generators that report no usage). Keyed by gen.name.
+    # Per-model economics keyed by gen.name. Cost is billed credits, not an
+    # estimate; zeros for generators that report no usage.
     model_stats: dict[str, dict] = field(default_factory=dict)
 
     def add_gen_stats(self, name: str, gen_meta: Mapping) -> None:
@@ -359,14 +285,9 @@ class _Session:
 def _arm_identity(gen: Generator) -> str:
     """The identity assignment hashes on — the ARM, not the model.
 
-    `Generator.name` is only the model id, and the rotation is models ×
-    strategies × efforts: 6 models under 6 slop strategies is 36 arms sharing 6
-    distinct `.name` values. Keying on `name` alone would give every same-name
-    arm an identical score, so one would win every target and its siblings would
-    never be assigned any work at all. This is the same tuple `_synth_key` folds
-    in, so assignment identity and cell identity stay consistent — and it means
-    adding a *strategy* or an *effort* churns ~1/n of the corpus rather than all
-    of it, exactly like adding a model.
+    The rotation is models × strategies × efforts, so many arms share one
+    `Generator.name`; keying on `name` would score them identically and let one
+    win every target while its siblings got no work at all.
     """
     return f"{gen.name}\x00{gen.strategy}\x00{gen.reasoning_effort}\x00{gen.prompt_id}"
 
@@ -382,47 +303,14 @@ def _assign(
     """Pair targets with generators → ``(target, generator, effective_context)``.
 
     Default (rotate, `per_generator=False`): **rendezvous (highest-random-weight)
-    assignment** — score every arm as ``sha256(salt, arm_identity, text)`` and
-    take the argmax. Three properties, in the order we came to need them:
-
-    *Content-hashed, not positional.* Statistically this makes the arm
-    exchangeable with respect to document position (a round-robin cycle can
-    phase-lock with chunk structure, aliasing arm with position-in-post and
-    confounding any arm contrast); operationally it keeps each target's arm
-    independent of the rest of the target set, so corpus resume stays stable as
-    the blog grows.
-
-    *Roster-stable* (2026-08-10, replacing ``hash(salt, text) % n``): with
-    modulo, `n` was a length and the index a *position*, so any change to the
-    roster's size or order reshuffled the whole corpus. Rendezvous moves only
-    the departing/arriving arm's own share, and list order stops mattering
-    entirely. Measured over 20k synthetic targets, 6 arms — fraction of targets
-    that change arm:
-
-    | roster change      | modulo | rendezvous | theoretical min |
-    | ------------------ | -----: | ---------: | --------------: |
-    | drop 1 (6→5)       |  83.2% |      16.7% |           16.7% |
-    | add 1 (6→7)        |  85.8% |      14.4% |           14.3% |
-    | swap 1 (6→6)       |  16.9% |      28.7% |            ~33% |
-    | reorder only (6→6) | 100.0% |       0.0% |              0% |
-
-    Balance is comparable (modulo spread 5.8%, rendezvous 4.3%). Switching cost
-    a one-time reassignment of everything, deliberately taken while it was free:
-    the roster had already drifted far enough (3 models with pairs no longer in
-    `SLOP_MODELS`) that `dan-style synth --dry-run --limit 500` reported "0
-    already present" — resume overlap was zero either way. `--skip-covered`
-    remains the guard that stops already-covered passages regenerating.
-
-    *Deterministic under collision.* Ties break on the arm-identity string, so
-    even a hash collision can't make the result depend on list order.
-
-    Balance across arms is multinomial, not exact (~√n wobble) — experiments
-    wanting exact within-target crossing use `per_generator=True` (every target
-    × every generator, n× the pairs/cost). `assign_seed` salts the score and so
-    still re-randomizes the whole design (a fresh replicate; NOTE it changes
-    which arm generated each target, so changed assignments regenerate on
-    resume). `context` is the effective heading context after dropout. Keys are
-    computed in `_plan_sessions`.
+    assignment** — score every arm as ``sha256(salt, arm_identity, text)``, take
+    the argmax, break ties on arm identity. Scoring on *content* rather than
+    position keeps the arm exchangeable with document position and each target's
+    arm independent of the rest of the set, so adding posts or editing the roster
+    does not re-key the corpus wholesale. Balance is multinomial, not exact;
+    `per_generator=True` crosses every target × every generator instead, at n×
+    the pairs and cost. `assign_seed` re-randomizes the whole design — NOTE that
+    changes which arm generated each target, so those assignments regenerate.
     """
     if not generators:
         return []
@@ -432,8 +320,8 @@ def _assign(
             for gen in generators:
                 out.append((t, gen, _effective_context(t, context_dropout)))
     else:
-        # Identities are hoisted: they don't vary per target, and the inner loop
-        # is len(targets) × len(generators) sha256s.
+        # Hoisted: identities don't vary per target, and the inner loop runs
+        # len(targets) × len(generators) sha256s.
         arms = [(_arm_identity(gen), gen) for gen in generators]
         for t in targets:
             best_score = b""
@@ -443,10 +331,8 @@ def _assign(
                 score = hashlib.sha256(
                     f"{assign_seed}\x00{ident}\x00{t.text}".encode("utf-8")
                 ).digest()
-                # (score, identity) ordering: the identity tiebreak is what keeps
-                # a collision from resolving on list position. Two arms with the
-                # SAME identity are indistinguishable here — but they also key
-                # identically in `_synth_key`, so they were already one cell.
+                # Tiebreak on identity, so a collision can't resolve on list
+                # position. Arms sharing an identity are already one cell.
                 if (score, ident) > (best_score, best_ident):
                     best_score, best_ident, best_gen = score, ident, gen
             out.append((t, best_gen, _effective_context(t, context_dropout)))
@@ -456,9 +342,7 @@ def _assign(
 def _session_id(gen: Generator, items: Sequence[tuple[Target, str]]) -> str:
     """Grouping label for one session's actual composition — a covariate, NOT a key.
 
-    Strategy/prompt distinguish sessions of the same model across the rotation.
-    Recomputed at reflow time from the reflowed composition, so the label always
-    names what the session actually contained.
+    Recomputed at reflow time, so it always names what the session contained.
     """
     sid_h = hashlib.sha256(
         f"{gen.name}\x00{gen.strategy}\x00{gen.prompt_id}".encode("utf-8")
@@ -478,20 +362,13 @@ def _plan_sessions(
     """Chunk each generator's (target, ctx, key) work items into sessions.
 
     Takes only *missing* cells — the caller filters against the corpus first —
-    so a session never contains already-generated turns and no replay machinery
-    is needed. Assignment order is preserved: with the default walk order a
-    session works through one post, then the next, like a real editing pass.
-
-    Sessions do not touch keys. `synth_key` is content-only, so the same cell
-    keys identically whether it lands in a session, reflows into a fresh one,
-    or runs stateless; session membership and turn index are recorded in
-    `meta.gen` as covariates. `session_turns` is a per-session turn *backstop*
-    — the operative depth control is the token budget, and turns left when it
-    binds reflow into new sessions rather than being dropped.
+    so a session never contains already-generated turns; assignment order is
+    preserved. Sessions do not touch keys, so a cell keys identically whether it
+    lands in a session, reflows into a fresh one, or runs stateless.
+    `session_turns` is only a backstop; the token budget is the depth control.
     """
-    # Group by generator IDENTITY, not name: a rotation may carry the same
-    # model under several slop strategies (same .name, different .strategy),
-    # and name-keying would silently merge them.
+    # Group by generator IDENTITY, not name: a rotation may carry the same model
+    # under several strategies, and name-keying would silently merge them.
     per_gen: dict[int, tuple[Generator, list[tuple[Target, str, str]]]] = {}
     for target, gen, ctx, key in assignments:
         per_gen.setdefault(id(gen), (gen, []))[1].append((target, ctx, key))
@@ -516,8 +393,8 @@ def _plan_sessions(
 def _respin_session(gen: Generator, leftover: Sequence[_Turn]) -> _Session:
     """A fresh session holding the turns an earlier one couldn't run.
 
-    Fresh history (window position restarts — recorded, not keyed), fresh
-    session_id from the actual composition, turn indices renumbered from 1.
+    Fresh history (window position restarts), fresh session_id from the actual
+    composition, turn indices renumbered from 1.
     """
     sid = _session_id(gen, [(t.target, t.context) for t in leftover])
     turns = [
@@ -530,10 +407,9 @@ def _respin_session(gen: Generator, leftover: Sequence[_Turn]) -> _Session:
 def _record_prompts(data_dir: Path, generators: Sequence[Generator]) -> None:
     """Archive each run's system prompts to `<data-dir>/prompts.jsonl` (id-deduped).
 
-    `meta.gen.prompt_id` is a content hash — opaque on its own. This sidecar
-    keeps the exact prompt text next to the corpus it produced, so
-    "what did prompt dc0f6c5c5de6 actually say?" is a grep, including for
-    custom `--slop-system-file` prompts and superseded registry versions.
+    `prompt_id` is a content hash, opaque on its own; this sidecar keeps the
+    prompt text next to the corpus it produced, so resolving an id is a grep —
+    including for custom `--slop-system-file` prompts and superseded versions.
     """
     path = data_dir / "prompts.jsonl"
     seen = {rec.get("prompt_id", "") for rec in iter_jsonl(path)}
@@ -562,9 +438,8 @@ def _exchange(user_text: str, assistant_text: str) -> list[dict]:
 class _RunState:
     """Shared mutable state for one `synthesize_pairs` run.
 
-    Explicit where it used to be closure cells: `_run_session` coroutines for
-    every session share this one object. Single-threaded asyncio — mutations
-    interleave only between awaits, so no locks.
+    Every session's coroutine shares this object. Single-threaded asyncio —
+    mutations interleave only between awaits, so no locks.
     """
 
     result: SynthResult
@@ -591,12 +466,9 @@ def _session_token_cap(gen: Generator, window: int | None, session_max_tokens: i
 
 
 def _estimate_next_prompt(history: Sequence[dict], last_prompt: int, last_visible: int, next_text: str) -> int:
-    """Estimate the next turn's prompt tokens.
-
-    Last measured prompt + what the last reply added + the next passage
-    (~4 chars/token) — or a pure char estimate before any live turn has
-    reported usage (e.g. resume replayed history without generating yet).
-    """
+    """Estimate the next turn's prompt tokens: last measured prompt + what the
+    last reply added + the next passage (~4 chars/token), falling back to a pure
+    char estimate before any live turn has reported usage."""
     if last_prompt:
         return last_prompt + last_visible + len(next_text) // 4
     return (sum(len(m["content"]) for m in history) + len(next_text)) // 4
@@ -606,8 +478,7 @@ def _pop_reasoning_to_sidecar(data_dir: Path, turn: _Turn, gen: Generator, gen_m
     """Route a reasoning trace to the `reasoning.jsonl` sidecar (keyed to the pair).
 
     Traces are diagnostics, not corpus: `reasoning_text` is POPPED from
-    `gen_meta` so it never enters `pairs.jsonl`. No-op when the generator
-    captured none.
+    `gen_meta`, so it never enters `pairs.jsonl`.
     """
     reasoning_text = gen_meta.pop("reasoning_text", None)
     if reasoning_text is None:
@@ -626,22 +497,18 @@ def _pop_reasoning_to_sidecar(data_dir: Path, turn: _Turn, gen: Generator, gen_m
 async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
     """Run one session's turns in order, appending records as they complete.
 
-    Returns the turns this session could NOT run, for the caller to reflow into
-    a fresh session — never silently dropped (the 2026-07-21 post-mortem):
-
-    - the token budget binds → every remaining turn is returned;
-    - a turn errors (after the one re-pin retry) → the turns AFTER it are
-      returned; the failed turn itself is dropped for this run and retries next
-      run under the same content key.
+    Returns the turns this session could NOT run, for the caller to reflow into a
+    fresh session — never silently dropped. A binding token budget returns every
+    remaining turn; a turn erroring (after the one re-pin retry) returns the
+    turns AFTER it, while the failed turn retries next run under the same key.
 
     Termination: the budget check is skipped while history is empty, so a fresh
-    session always attempts its first turn — every reflow either writes a pair
-    or sheds an errored turn, strictly shrinking the leftover list.
+    session always attempts its first turn — every reflow either writes a pair or
+    sheds an errored turn, strictly shrinking the leftover list.
     """
     gen = sess.generator
-    # Multi-turn sessions get a per-session callable when the generator
-    # offers one (sticky provider routing state); stateless stays on the
-    # plain path.
+    # Multi-turn sessions get a per-session callable when the generator offers
+    # one (sticky provider routing state); stateless stays on the plain path.
     call = gen.begin_session() if (len(sess.turns) > 1 and gen.begin_session is not None) else gen
     window = st.windows.get(gen.name)
     cap = _session_token_cap(gen, window, st.session_max_tokens)
@@ -655,9 +522,8 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
                 st.result.budget_bound_sessions += 1
                 return list(sess.turns[pos:])
 
-        # A failed pair is never written, so its synth_key resolves to
-        # nothing — the recorded error must carry the config that produced
-        # it or the failure is unattributable.
+        # A failed pair is never written, so its synth_key resolves to nothing —
+        # the recorded error must carry its config or be unattributable.
         who = f"{gen.name} strategy={gen.strategy} effort={gen.reasoning_effort}"
         if sess.session_id:
             who += f" turn={turn.index}"
@@ -683,14 +549,11 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             raise
         except Exception as exc:
             # Sticky routing pins a session to whoever served turn 1, and some
-            # upstreams cannot serve the rest of it at all: OpenRouter replays
-            # assistant turns with a `reasoning_content` some providers reject,
-            # and others answer a valid request with empty content. Ending the
-            # session on the first such error does not merely lose turns, it
-            # loses the LATE ones — which silently truncates every session that
-            # lands on a bad provider and biases any window-position analysis
-            # toward low context fill. Re-pin onto a fresh provider once before
-            # giving up; single-turn sessions have nothing to salvage.
+            # upstreams cannot serve the rest of it: OpenRouter replays assistant
+            # turns with a `reasoning_content` some providers reject, and others
+            # answer a valid request with empty content. Giving up here would
+            # lose the LATE turns, biasing window-position analysis toward low
+            # context fill — so re-pin onto a fresh provider once first.
             if sess.session_id and gen.begin_session is not None:
                 try:
                     call = gen.begin_session()
@@ -734,8 +597,7 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             and sim is not None
             and sim > st.max_transform_sim
         ):
-            # Identity output: the model returned (nearly) the input — a pair
-            # that teaches the styler to copy.
+            # Identity output: the model returned (nearly) the input.
             st.result.skipped_degenerate += 1
             drop = f"transform_sim={sim:.3f} > {st.max_transform_sim}"
         elif (
@@ -743,13 +605,13 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             and ratio is not None
             and ratio > st.max_length_ratio
         ):
-            # Inflated output: slop several times the target length — a pair
-            # that teaches manic deletion.
+            # Inflated output: slop several times the target length, which would
+            # teach manic deletion.
             st.result.skipped_inflated += 1
             drop = f"length_ratio={ratio:.2f} > {st.max_length_ratio}"
         if drop is not None:
-            # Count loudly, record the spend, write nothing. (The cell stays
-            # missing, so a re-run retries it.)
+            # Count loudly, record the spend, write nothing — the cell stays
+            # missing, so a re-run retries it.
             st.result.add_gen_stats(gen.name, gen_meta)
             logger.warning("degenerate output dropped: %s %s (%s)", gen.name, drop, turn.key)
         else:
@@ -774,8 +636,8 @@ async def _run_sessions(sessions: Sequence[_Session], pairs_path: Path, st: _Run
     """Run sessions concurrently, `max_workers` at a time, on one append handle.
 
     Leftover turns (budget bind, error) reflow into fresh sessions inside the
-    same worker slot until the work list is empty — the run finishes with every
-    planned turn either written or individually errored, never dropped.
+    same worker slot until the work list is empty, so the run finishes with every
+    planned turn either written or individually errored.
     """
     sem = asyncio.Semaphore(max(1, max_workers))
 
@@ -815,54 +677,38 @@ def synthesize_pairs(
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
-    Idempotent and resumable: each pair carries a content-only `meta.synth_key`
-    (`hash(generator, strategy, reasoning_effort, prompt_id, context, target
-    [, replicate])`); assignments whose key is already in the file are skipped,
-    so re-running never duplicates and a crashed run resumes where it stopped
-    (records are appended one-per-line, flushed as they go). Session membership
-    is never keyed — resume is a set difference over cells, and missing cells
-    are freshly packed into sessions each run. `replicate` labels a deliberate
-    resample: the same substrate under a new label mints new cells (recorded as
-    `meta.gen.replicate`).
+    Idempotent and resumable: assignments whose content-only `meta.synth_key` is
+    already in the file are skipped, so re-running never duplicates and a crashed
+    run resumes where it stopped (records are appended one-per-line, flushed as
+    they go). Missing cells are freshly packed into sessions each run.
 
-    **Concurrency**: sessions run concurrently on an asyncio event loop,
-    `max_workers` at a time (single-threaded — writes and callbacks interleave
-    only between awaits, so no locks). Generator callables may be sync or async.
+    **Concurrency**: sessions run on an asyncio event loop, `max_workers` at a
+    time (single-threaded — writes and callbacks interleave only between awaits,
+    so no locks). Generator callables may be sync or async.
 
-    **Sessions** (`session_turns > 1`): each generator's missing cells are
-    chunked into live multi-turn sessions — every turn sees the real prior
-    (passage → slop) exchanges, so the window-position covariate is honest
-    self-conditioned context. Fill is *measured*, not engineered: the recorded
-    `prompt_tokens` (each model's own tokenizer) plus `context_window` /
-    `window_fill` in `meta.gen` are the analysis covariates. **The token budget
-    is the depth control**: a session ends at `min(session_budget or
-    session_max_tokens, SESSION_WINDOW_FILL_CAP × window)` estimated prompt
-    tokens — `session_turns` is only the per-session backstop — and the turns
-    it couldn't run REFLOW into fresh sessions rather than being dropped
-    (`SynthResult.budget_bound_sessions` / `reflow_sessions` / `reflowed_turns`
-    account for it). A turn error sheds only that turn (it retries next run
-    under the same key); the rest of its session reflows too.
+    **Sessions** (`session_turns > 1`): missing cells are chunked into live
+    multi-turn sessions, so every turn sees the real prior (passage → slop)
+    exchanges and the window-position covariate is honest self-conditioned
+    context. Fill is *measured*, not engineered — `prompt_tokens`,
+    `context_window` and `window_fill` in `meta.gen` are the analysis covariates.
+    **The token budget is the depth control**: a session ends at
+    `min(session_budget or session_max_tokens, SESSION_WINDOW_FILL_CAP × window)`
+    estimated prompt tokens, and turns it couldn't run REFLOW into fresh sessions
+    rather than being dropped.
 
-    When targets carry heading `context` (`iter_targets(heading_context=...)`),
-    the heading is prepended verbatim to both sides of the pair via
-    `stylebot.pairs.build_pair_content`, and the slop is generated from the body
-    only (so the heading is never paraphrased). `context_dropout` keeps a
-    deterministic fraction heading-less.
-
-    `dry_run` plans the assignment and reports counts without calling any
-    generator or writing — use it to vet selection against the real blog with
-    no API spend (generators may be name-only `Generator(name, generate=None)`
-    stubs in that case).
+    Heading `context` is prepended verbatim to both sides of the pair while slop
+    is generated from the body only, so the heading is never paraphrased;
+    `context_dropout` keeps a deterministic fraction heading-less. `dry_run`
+    plans and counts without calling any generator or writing, so generators may
+    be name-only `Generator(name, generate=None)` stubs.
     """
     data_dir = Path(data_dir)
     pairs_path = data_dir / "pairs.jsonl"
 
     skipped_covered = 0
     if skip_covered:
-        # Coverage mode: a target with ANY existing pair (any model/strategy/
-        # effort/epoch) is done. Cell-level dedup below still governs the rest —
-        # this is the coarser corpus-building filter, cutting cross-epoch
-        # target doubling off before assignment.
+        # Coverage mode: a target with ANY existing pair is done. Applied before
+        # assignment; cell-level dedup below still governs the rest.
         covered = covered_target_bodies(pairs_path)
         kept = [t for t in targets if t.text not in covered]
         skipped_covered = len(targets) - len(kept)
@@ -874,11 +720,8 @@ def synthesize_pairs(
     )
     result = SynthResult(planned=len(assignments), skipped_covered=skipped_covered)
 
-    # Resume is a set difference over content-keyed cells: key everything,
-    # drop what the corpus already has (plus in-run duplicates — identical
-    # (config, context, text) cells key identically), and plan sessions over
-    # only the missing cells. No replay machinery: sessions never contain
-    # already-generated turns.
+    # Key everything, drop what the corpus already has plus in-run duplicates,
+    # then plan sessions over only the missing cells.
     seen = existing_synth_keys(pairs_path)
     missing: list[tuple[Target, Generator, str, str]] = []
     for target, gen, ctx in assignments:
