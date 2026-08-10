@@ -22,6 +22,13 @@ The full workflow — chunking rules, the `snapped_at` disposition of prior
 pairs, the `--replace`/`--append`/`--keep-open`/`--redo` flags, editing
 cadence, the one-shot `pair` entry point, and the on-disk layout — is
 documented for users in `_training_pairs/README.md`.
+
+Errors follow the one `ai-style` idiom: `click.UsageError` when the flags
+themselves are wrong (contradictory or missing a companion — click exits 2),
+`click.ClickException` when the flags are fine but the world is not (no open
+session, nothing changed — exit 1). Never a bare `sys.exit` after an
+`echo(err=True)`: raising leaves the exit code and the "Error:" prefix to
+click, which is what makes the two classes distinguishable to a caller.
 """
 
 from __future__ import annotations
@@ -84,11 +91,9 @@ def _pairs_path() -> Path:
 
 
 # The capture mechanism lives in stylebot.capture; this CLI keeps the path
-# policy (the resolvers above) and the session workflow. These aliases are the
-# pieces of that mechanism the workflow below and its tests reach through this
-# module.
-_now_iso = capture.now_iso
-_build_pair_record = capture.build_pair_record
+# policy (the resolvers above) and the session workflow. Call `capture.X`
+# directly — the `_now_iso` / `_build_pair_record` aliases here were only ever
+# reached through this module by tests, which now import them from their home.
 
 
 # A snapshot is a DIRECTORY mirroring the source path, holding the base text as
@@ -162,15 +167,11 @@ def _close_snapshot(snap: Path, source: Path) -> None:
     _move_snapshot(snap, _closed_snapshot_path(source))
 
 
-def _read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
-
-
 def _iter_pairs() -> list[dict]:
     """Read pairs.jsonl into memory. Returns [] if file is missing.
 
     Unparseable lines come back as ``{"_raw": line}`` so the rewrite path
-    (`_write_pairs_atomic`) round-trips them instead of silently dropping.
+    (`capture.write_pairs_atomic`) round-trips them instead of silently dropping.
     """
     return read_jsonl(_pairs_path(), keep_undecodable=True)
 
@@ -189,16 +190,6 @@ def _corpus_confirmation() -> str:
         f"corpus now: {len(pairs)} pair(s) ({with_ctx} with heading context) "
         f"-> {_pairs_path().resolve()}"
     )
-
-
-def _write_pairs_atomic(records: list[dict]) -> None:
-    """Atomic rewrite of pairs.jsonl from the given record list."""
-    capture.write_pairs_atomic(_pairs_path(), records)
-
-
-def _remove_pairs_for_source(source: str) -> int:
-    """Drop every record whose meta.source matches. Returns count removed."""
-    return capture.remove_pairs_for_source(_pairs_path(), source)
 
 
 def _capture_and_append(
@@ -311,17 +302,14 @@ def open_session(ctx: click.Context, file: Path):
     """
     snap = _snapshot_path(file)
     if snap.exists():
-        click.echo(
-            f"session already open for {file}; "
-            "`drop` it, or `save` without --keep-open to close it",
-            err=True,
+        raise click.ClickException(
+            f"session already open for {file}; `drop` it, or `save` without --keep-open to close it"
         )
-        sys.exit(1)
     snap.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "source": str(file),
-        "snapped_at": _now_iso(),
-        "content": _read_text(file),
+        "snapped_at": capture.now_iso(),
+        "content": file.read_text(encoding="utf-8"),
     }
     _write_snapshot(
         snap, source=payload["source"], snapped_at=payload["snapped_at"], content=payload["content"]
@@ -362,20 +350,16 @@ def reopen_session(ctx: click.Context, file: Path):
     """
     snap = _snapshot_path(file)
     if snap.exists():
-        click.echo(
+        raise click.ClickException(
             f"session already open for {file}; nothing to reopen "
-            "(`save` against it, or `drop` it first)",
-            err=True,
+            "(`save` against it, or `drop` it first)"
         )
-        sys.exit(1)
     try:
         payload = _restore_snapshot(file)
-    except FileNotFoundError:
-        click.echo(
-            f"no closed session for {file}; run `open` to start a fresh one",
-            err=True,
-        )
-        sys.exit(1)
+    except FileNotFoundError as exc:
+        raise click.ClickException(
+            f"no closed session for {file}; run `open` to start a fresh one"
+        ) from exc
     # Surface the age: resurrecting a weeks-old base against a much-changed
     # file produces a huge, unrepresentative diff, and that should be visible.
     age = _humanize_age(payload.get("snapped_at", ""))
@@ -463,19 +447,16 @@ def save_session(
     interim pairs from the current session).
     """
     if force_replace and force_append:
-        click.echo("--replace and --append are mutually exclusive", err=True)
-        sys.exit(2)
+        raise click.UsageError("--replace and --append are mutually exclusive")
 
     snap = _snapshot_path(file)
     if redo and not snap.exists():
         try:
             restored = _restore_snapshot(file)
-        except FileNotFoundError:
-            click.echo(
-                f"--redo: no closed session for {file} to reopen; run `open` first",
-                err=True,
-            )
-            sys.exit(1)
+        except FileNotFoundError as exc:
+            raise click.ClickException(
+                f"--redo: no closed session for {file} to reopen; run `open` first"
+            ) from exc
         click.echo(
             f"reopened session for {file} "
             f"(originally opened {_humanize_age(restored.get('snapped_at', ''))})"
@@ -484,19 +465,14 @@ def save_session(
         hint = "run `open` first"
         if _closed_snapshot_path(file).exists():
             hint += ", or `save --redo` to reopen the last closed session"
-        click.echo(f"no open session for {file}; {hint}", err=True)
-        sys.exit(1)
+        raise click.ClickException(f"no open session for {file}; {hint}")
 
     payload = _read_snapshot(snap)
     before_text = payload["content"]
-    after_text = _read_text(file)
+    after_text = file.read_text(encoding="utf-8")
 
     if before_text == after_text:
-        click.echo(
-            f"no changes since session opened on {file}; nothing to save",
-            err=True,
-        )
-        sys.exit(1)
+        raise click.ClickException(f"no changes since session opened on {file}; nothing to save")
 
     extra: dict = {}
     if tags:
@@ -532,7 +508,7 @@ def save_session(
         disposition = "smart"
 
     if len(records_to_keep) != len(all_records):
-        _write_pairs_atomic(records_to_keep)
+        capture.write_pairs_atomic(_pairs_path(), records_to_keep)
 
     # Report disposition before the save line
     if disposition == "smart" and same_session:
@@ -558,8 +534,7 @@ def save_session(
             heading_context=heading_context,
         )
     except ValueError as exc:
-        click.echo(str(exc), err=True)
-        sys.exit(1)
+        raise click.ClickException(str(exc)) from exc
 
     if not keep_open:
         _close_snapshot(snap, file)
@@ -614,8 +589,7 @@ def drop_session(ctx: click.Context, file: Path):
     """Drop the open session for FILE without saving any pair."""
     snap = _snapshot_path(file)
     if not snap.exists():
-        click.echo(f"no open session for {file}", err=True)
-        sys.exit(1)
+        raise click.ClickException(f"no open session for {file}")
     _close_snapshot(snap, file)
     click.echo(f"dropped session for {file} (`reopen` restores it if that was a mistake)")
     _remind_open_sessions(ctx)
@@ -739,7 +713,7 @@ def tidy_pairs(ctx: click.Context, source: str | None, dry_run: bool):
 
     click.echo(f"{'would remove' if dry_run else 'removed'} {removed} pair(s), keeping {len(kept)}")
     if not dry_run:
-        _write_pairs_atomic(kept)
+        capture.write_pairs_atomic(_pairs_path(), kept)
     _remind_open_sessions(ctx)
 
 
@@ -879,20 +853,17 @@ def pair(
     drop prior pairs for that source first.
     """
     if before_spec == "-" and after_spec == "-":
-        click.echo("only one of --before/--after may be '-'", err=True)
-        sys.exit(2)
+        raise click.UsageError("only one of --before/--after may be '-'")
     before_text = _read_source(before_spec)
     after_text = _read_source(after_spec)
 
     if before_text == after_text:
-        click.echo("before and after are identical; refusing to log", err=True)
-        sys.exit(1)
+        raise click.ClickException("before and after are identical; refusing to log")
 
     if replace:
         if source is None:
-            click.echo("--replace requires --source", err=True)
-            sys.exit(2)
-        removed = _remove_pairs_for_source(source)
+            raise click.UsageError("--replace requires --source")
+        removed = capture.remove_pairs_for_source(_pairs_path(), source)
         if removed:
             click.echo(f"replaced {removed} prior pair(s) for {source}")
 
@@ -908,8 +879,7 @@ def pair(
             heading_context=heading_context,
         )
     except ValueError as exc:
-        click.echo(str(exc), err=True)
-        sys.exit(1)
+        raise click.ClickException(str(exc)) from exc
 
     total_before = sum(rec["meta"]["before_chars"] for rec in written)
     total_after = sum(rec["meta"]["after_chars"] for rec in written)
