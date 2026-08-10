@@ -1,271 +1,27 @@
 """
-ai-style log: capture (slop -> Dan rewrite) training pairs for the future
-ai-style fine-tune.
+ai-style log: capture (slop -> Dan rewrite) training pairs for the fine-tune.
 
-Phase 1 of the plan at `_plans/ai-style-fine-tune.md`. This module is a
-manual logger: every time Dan rewrites an AI draft, we want to capture
-the (before, after) so it can later go into the fine-tune corpus. It is
-deliberately invoked by hand — no automation, no git hook, no surprise
-side effects.
+Phase 1 of the plan at `_plans/ai-style-fine-tune.md`. Every time Dan rewrites
+an AI draft, we want the (before, after) so it can go into the corpus. The
+capture is deliberately manual — invoked by hand, no automation, no git hook,
+no surprise side effects.
 
-The canonical use is the open/save cycle. Each rewrite of a file is a
-**session**: opened explicitly, saved when finished, optionally banked
-mid-stream and superseded later.
+The cycle is one rewrite of one file per session:
 
-    uv run ai-style log open <file>         # begin a rewrite session
+    uv run ai-style log open <file>    # record the current text as "before"
     # ... user edits the file by hand, across one or more sittings ...
-    uv run ai-style log save <file>         # write pair(s) for what changed, close session
+    uv run ai-style log save <file>    # write pair(s) for what changed, close session
 
-Every command (except `list`) ends by printing a short reminder of
-currently-open sessions to stderr, with their relative age, so stale
-sessions become visible. Pass `-q` / `--quiet` at the group level to
-suppress the reminder for one invocation:
+`save` diffs at paragraph granularity and emits one pair per changed region,
+not one pair per file. Pairs land in `$STYLEBOT_DATA_DIR/pairs.jsonl` in the
+shared chat-completion contract that Phase 2 synthesis also writes and Phase 3
+training reads (`stylebot.pairs` validates it; `stylebot.capture` implements
+the mechanism, while this module holds the path policy and session workflow).
 
-    uv run ai-style log -q save <file>      # no reminder appended
-
-The session is **sticky** — `open` refuses to overwrite an existing one,
-so the original ("worst") state of the file survives across editing
-sittings. Just open once at the start of a rewrite project and save when
-you are happy. No need to be in one sitting.
-
-------------------------------------------------------------------------
-Chunk-level save (the default)
-------------------------------------------------------------------------
-
-`save` does NOT emit a single whole-file pair by default. It diffs the
-session's recorded "before" state against the current file at paragraph
-granularity and emits one pair *per changed region*, skipping untouched
-paragraphs entirely.
-
-Why: a real rewrite typically touches a few paragraphs out of many. A
-whole-file pair would force the model to learn "preserve everything
-except these spans, which get rewritten" — that is not the lesson we
-want. Per-chunk pairs isolate the actual transformation. They also
-match the chunk size Phase 2 will use for synthetic pairs, so training
-data from both sources is shape-compatible.
-
-The diff is paragraph-level (split on blank lines) + difflib
-SequenceMatcher opcodes. **Contiguous changed paragraphs coalesce into
-one pair**, regardless of N → M paragraph counts on either side — the
-`replace` opcode pairs spans, not paragraphs. The pair only breaks
-when an *untouched* paragraph sits between two changed regions.
-
-Examples:
-
-    rewrote whole document       -> 1 pair (entire body -> entire body)
-    rewrote paras 2..4 of 5      -> 1 pair (paras 2+3+4 -> the rewrite)
-    rewrote paras 2 and 4 of 5   -> 2 pairs (gap at para 3 breaks them)
-    rewrote 3 paras into 2       -> 1 pair (3 joined -> 2 joined)
-    rewrote 1 para into 5        -> 1 pair (1 -> 5 joined)
-    moved a paragraph            -> 0 pairs (pure delete + pure insert)
-
-Pure inserts (paragraphs Dan added with no source) and pure deletes
-(slop removed entirely) are skipped — no transformation to learn.
-
-Use `--whole` when the diff would be actively misleading: heavy
-structural rearrangement, paragraphs moved around, or sentence-level
-edits scattered across every paragraph (where the chunk algorithm
-would emit one giant `replace` covering most of the file anyway).
-
-------------------------------------------------------------------------
-Worst -> best signal: smart default disposition of prior pairs
-------------------------------------------------------------------------
-
-A real rewrite often happens across multiple sittings, sometimes spread
-across days, sometimes with `--keep-open` to bank interim progress
-mid-session. The training corpus has different requirements for these
-two situations:
-
-- **Same-session interim saves** (typically from `--keep-open`): the
-  *latest* interim save should win; earlier ones are scaffolding and
-  should not pollute training data.
-- **Cross-session saves** (you finished a session, did unrelated work,
-  later opened a fresh session): both sets of pairs are legitimate
-  training data and should both survive in the corpus.
-
-`save` distinguishes these automatically by keying on each pair's
-`meta.snapped_at` (the timestamp of the session that produced it,
-recorded when `open` ran). On every save:
-
-- Prior pairs whose `meta.snapped_at` matches the current session's
-  snapshot timestamp are **replaced** (same-session interim).
-- Prior pairs whose `meta.snapped_at` differs are **kept** (cross-session).
-
-You never need a flag in the common cases. Just `open`, edit, `save`,
-optionally `--keep-open` for banking. The tool figures out the
-disposition.
-
-Explicit override flags for the rare cases:
-
-    --replace        force-drop every prior pair for this source,
-                     including cross-session pairs. Use when you
-                     genuinely want to abandon earlier sessions.
-    --append         force-keep every prior pair for this source,
-                     including interim pairs from the current session.
-                     Use only if you want multiple interim states
-                     preserved (very rare).
-    --keep-open      orthogonal to the above: leaves the snapshot in
-                     place after saving for further `save` calls
-                     against the same starting state.
-    --redo           reopen the last closed session for this file, then
-                     save. For the after-the-fact do-over (see below).
-
-Typical interim-progress loop (no flags beyond --keep-open needed):
-
-    open foo.qmd                                   # session 1, T0 recorded
-    save --keep-open foo.qmd                       # interim pairs from session 1
-    # ... more editing ...
-    save --keep-open foo.qmd                       # smart: replaces session 1's interim, keeps nothing
-    # ... finished ...
-    save foo.qmd                                   # final, replaces interim, closes session 1
-
-Multiple de-slop sessions on the same file, separated by unrelated
-substantive edits — no flag needed; smart default keeps both:
-
-    open foo.qmd                                   # session 1
-    # ... de-slop, T0 -> T1 ...
-    save foo.qmd                                   # session 1 pairs written, session closed
-    # ... unrelated edits OUTSIDE any session, T1 -> T2 ...
-    open foo.qmd                                   # session 2 (different snapped_at)
-    # ... de-slop, T2 -> T3 ...
-    save foo.qmd                                   # session 2 pairs ADDED; session 1 pairs kept
-                                                   # output: "kept 1 pair(s) from 1 earlier session(s)"
-
-The do-over: you saved, then noticed a typo in your own rewrite. Closing
-a session ARCHIVES its snapshot (to `snapshots-closed/`) rather than
-deleting it, so the base text survives and the pair can be recaptured
-against it:
-
-    open foo.qmd                                   # session 1, T0 recorded
-    save foo.qmd                                   # pairs written, session closed
-    # ... fix the typo, T1 -> T1' ...
-    save --redo foo.qmd                            # reopens session 1, re-diffs T0 -> T1'
-                                                   # smart disposition REPLACES the first
-                                                   # save's pairs (same snapped_at)
-
-`reopen foo.qmd` is the same restore as a separate step, for when you
-want to look before you save. Because the archive preserves the original
-`snapped_at`, the re-save lands in the same session — which is what makes
-it a correction rather than a near-duplicate pair in the corpus. The
-archive is also the recovery path for an accidental `drop`. One archive
-per source, overwritten each close; there is no deeper undo history.
-
-Critical: close session 1 before doing unrelated edits. If you used
-`save --keep-open` between sessions, session 2's diff would be against
-T0 (session 1's snapshot) — folding structural edits into the pair.
-The clean close in step 3 is what protects training data from being
-polluted with non-style work.
-
-If you ever force-replaced when you didn't mean to (and the prior
-session's pairs were not yet backed up), the data is gone.
-Conservative practice: back up `$STYLEBOT_DATA_DIR/pairs.jsonl` after each
-substantial save. The corpus is gitignored in the public code repo, so its
-recovery backstop is the out-of-band private backup, not this repo's git
-history (see `_training_pairs/README.md`).
-
-`tidy [source]` is the retroactive cleanup if you used `--append`
-recklessly and want to keep only the latest save per source.
-
-------------------------------------------------------------------------
-Recommended editing cadence
-------------------------------------------------------------------------
-
-The natural unit of capture is "this file, as a rewrite project" —
-not "this editing sitting". A typical cycle:
-
-1. `open` once at the start of the rewrite project (typically when
-   the file is `automation: 2`). The session is sticky; this marks
-   "begin work", not "start a sitting".
-2. Edit at your own pace. One sitting, one week — doesn't matter.
-3. `save` when you've reached a satisfying state. Default behaviour
-   emits per-region pairs, replaces any prior pairs for this file,
-   and closes the session.
-4. To bank interim progress without closing the session, use
-   `save --keep-open`. Subsequent saves replace the interim pairs
-   by default.
-5. Avoid `open` on files you're writing from scratch (no slop input
-   to learn from), tiny mechanical fixes (no transformation signal),
-   or per-paragraph (`save` already isolates changed paragraphs).
-   Cap simultaneous open sessions at ~3–4 to keep the bookkeeping
-   manageable — `list` shows everything pending.
-6. Use `--tag` to label saves by provenance (`from-claude-chat`,
-   `dan-voice-draft`, `heavy-edit`) for downstream filtering.
-
-The longer-form discussion of cadence lives in
-`_training_pairs/README.md`.
-
-------------------------------------------------------------------------
-One-shot entry (no session dance)
-------------------------------------------------------------------------
-
-For ad-hoc pairs (clipboard paste, ephemeral content, scripted pipelines)
-use `pair` with explicit before/after:
-
-    uv run ai-style log pair --before before.txt --after after.txt
-    uv run ai-style log pair --before - --after after.txt   # stdin
-    pbpaste | uv run ai-style log pair --before - --after rewritten.txt \\
-        --source clipboard --tag hand-typed
-
-`pair` chunks by default (same paragraph diff as `save`); pass `--whole`
-to keep the whole input as a single pair. `pair` defaults to append (not
-replace) since the typical use is logging one-off pairs that should add
-to the corpus, not bank-with-supersede; pass `--replace` to remove prior
-pairs for a given `--source` first.
-
-------------------------------------------------------------------------
-State on disk
-------------------------------------------------------------------------
-
-    $STYLEBOT_DATA_DIR/snapshots/<rel-path>/       # open sessions (gitignored)
-    $STYLEBOT_DATA_DIR/snapshots-closed/<rel-path>/  # closed, redoable sessions
-    $STYLEBOT_DATA_DIR/pairs.jsonl                 # saved pairs (gitignored)
-
-The data dir is resolved per command through `stylebot.config.resolve_data_dir`
-— the shared ladder `--flag` > `$STYLEBOT_DATA_DIR` (from the environment) >
-the cwd-relative default `_training_pairs`. `log` passes no flag: it is the
-convenience command, where a mistake is cheap and a default is right (the
-expensive, stateful commands like `train` / `split` demand an explicit
-`--data-dir` instead). Every write command echoes the resolved absolute
-pairs.jsonl path, so a save landing somewhere unexpected is visible at once.
-
-The whole directory is gitignored: the corpus is private and lives outside the
-public code repo, backed up out-of-band.
-
-The on-disk directory for open sessions is still called `snapshots/`
-because the file *is* a snapshot of the source's initial state — that
-matches the file's role at the storage layer. The CLI verb is `open`
-because that names the user's *action* (opening a session) rather than
-the file format.
-
-Pairs are written in Together / OpenAI chat-completion JSONL:
-
-    {"messages": [{"role": "system", "content": STYLE_SYSTEM},
-                  {"role": "user", "content": <slop chunk>},
-                  {"role": "assistant", "content": <Dan-voice chunk>}],
-     "meta": {"source": "post/foo.qmd",
-              "captured_at": "...", "snapped_at": "...",
-              "capture_id": "<short id>",      # groups chunks from one save
-              "chunk_index": 2, "chunk_total": 5,
-              "before_chars": ..., "after_chars": ...,
-              "before_frontmatter": {...},     # only on chunk 0
-              "after_frontmatter": {...},      # only on chunk 0
-              "tags": [...]}}
-
-Rewrites to `pairs.jsonl` (default `save`, `pair --replace`, `tidy`) go
-through an atomic `.jsonl.tmp` + rename so an interrupted run cannot
-corrupt the audit trail. Unparseable lines are preserved as opaque
-`_raw` records during rewrites.
-
-------------------------------------------------------------------------
-What survives a rename or repo move
-------------------------------------------------------------------------
-
-`meta.source` is the relative path at save time. Renaming the source
-file later does not invalidate the pair (the text content is what
-matters for training), but `save`'s default replace and `tidy` use the
-source string to identify "the same file" — so if you rename a file and
-then re-save, the old pairs will not be replaced automatically. Use
-`tidy <old-path>` to clean those up by hand, or hand-edit the JSONL.
+The full workflow — chunking rules, the `snapped_at` disposition of prior
+pairs, the `--replace`/`--append`/`--keep-open`/`--redo` flags, editing
+cadence, the one-shot `pair` entry point, and the on-disk layout — is
+documented for users in `_training_pairs/README.md`.
 """
 
 from __future__ import annotations
@@ -328,13 +84,10 @@ def _pairs_path() -> Path:
 
 
 # The capture mechanism lives in stylebot.capture; this CLI keeps the path
-# policy (the resolvers above) and the session workflow. The wrappers below
-# call `_pairs_path()` at call time, so anything that repoints
-# $STYLEBOT_DATA_DIR — a test, a direnv `.envrc`, a shell export — takes effect
-# without reimporting this module.
+# policy (the resolvers above) and the session workflow. These aliases are the
+# pieces of that mechanism the workflow below and its tests reach through this
+# module.
 _now_iso = capture.now_iso
-_capture_id = capture.new_capture_id
-_split_frontmatter = capture.split_frontmatter
 _build_pair_record = capture.build_pair_record
 
 
@@ -411,10 +164,6 @@ def _close_snapshot(snap: Path, source: Path) -> None:
 
 def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
-
-
-def _append_pair(record: dict) -> None:
-    capture.append_pair(_pairs_path(), record)
 
 
 def _iter_pairs() -> list[dict]:
