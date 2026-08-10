@@ -32,7 +32,6 @@ Small N is Goodhart-gentle (KL ~ log N; see eval-harness.md "Eval vs reward").
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from collections.abc import Callable
@@ -40,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from stylebot.ai_core import STYLE_SYSTEM
+from stylebot.jsonl import dumps_line
 
 logger = logging.getLogger(__name__)
 
@@ -295,8 +295,7 @@ def rewrite_candidates(
     `identity: true` — the styler declining to change already-Dan prose is a
     do-no-harm answer, not a candidate worth presenting as new.
     """
-    from stylebot.eval import pair_body
-    from stylebot.pairs import build_pair_content
+    from stylebot.pairs import build_pair_content, pair_body
 
     frontmatter, body = split_frontmatter(text)
     if frontmatter:
@@ -376,8 +375,7 @@ def rewrite_text(
     `scores` aligns with it (None for unscored/anchor-rejected samples), and
     `chosen_index` indexes `candidates` (None when the input was kept).
     """
-    from stylebot.eval import pair_body
-    from stylebot.pairs import build_pair_content
+    from stylebot.pairs import build_pair_content, pair_body
 
     frontmatter, body = split_frontmatter(text)
     items, seps = _segment(body, max_chars=max_chunk_chars, inline_headings=inline_headings)
@@ -492,8 +490,7 @@ def rewrite_pairs_file(
     the eval extractor strips it like every other field). Resumable: records
     whose id is already in `out_path` are skipped. Returns the number written.
     """
-    from stylebot.eval import record_id
-    from stylebot.pairs import iter_pairs
+    from stylebot.pairs import iter_pairs, record_id
 
     out_path = Path(out_path)
     done = {rec.get("id") or record_id(rec) for rec in iter_pairs(out_path)}
@@ -520,7 +517,7 @@ def rewrite_pairs_file(
                 output = keep[0]
             else:
                 output = min(keep, key=scorer)
-            fp.write(json.dumps({**rec, "output": output}, ensure_ascii=False) + "\n")
+            fp.write(dumps_line({**rec, "output": output}) + "\n")
             fp.flush()
             written += 1
             if on_progress is not None:
@@ -558,9 +555,9 @@ def tinker_backend(
             "tinker_backend needs the 'trainer' extra: uv add 'stylebot[trainer]'"
         ) from exc
 
-    from stylebot.train import _patch_pyqwest_tls_trust
+    from stylebot.tinker_tls import patch_pyqwest_tls_trust
 
-    _patch_pyqwest_tls_trust()
+    patch_pyqwest_tls_trust()
     tokenizer = get_tokenizer(base_model)
     renderer = renderers.get_renderer(
         renderer_name or model_info.get_recommended_renderer_name(base_model), tokenizer

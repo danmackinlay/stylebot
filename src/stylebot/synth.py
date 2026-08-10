@@ -39,16 +39,15 @@ import asyncio
 import difflib
 import hashlib
 import inspect
-import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 
 from stylebot.ai_core import STYLE_SYSTEM
-from stylebot.jsonl import iter_jsonl
+from stylebot.jsonl import append_jsonl, dumps_line, iter_jsonl
 from stylebot.pairs import build_pair_content, iter_pairs
+from stylebot.provenance import now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -131,10 +130,6 @@ from stylebot.targets import (  # noqa: E402, F401
 # ---------------------------------------------------------------------------
 # Synthesis — assign generators to targets, generate, append schema-valid pairs
 # ---------------------------------------------------------------------------
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _synth_key(
@@ -251,7 +246,7 @@ def _build_record(
 ) -> dict:
     meta = {
         "source": target.source,
-        "captured_at": _now_iso(),
+        "captured_at": now_iso(),
         "capture_id": _capture_id(target.source, generator_name, strategy),
         "chunk_index": target.chunk_index,
         "chunk_total": target.chunk_total,
@@ -551,7 +546,7 @@ def _record_prompts(data_dir: Path, generators: Sequence[Generator]) -> None:
                     "version": g.prompt_version,
                     "system": g.prompt_system,
                 }
-                fp.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                fp.write(dumps_line(entry) + "\n")
                 seen.add(g.prompt_id)
 
 
@@ -617,16 +612,15 @@ def _pop_reasoning_to_sidecar(data_dir: Path, turn: _Turn, gen: Generator, gen_m
     reasoning_text = gen_meta.pop("reasoning_text", None)
     if reasoning_text is None:
         return
-    with (data_dir / "reasoning.jsonl").open("a", encoding="utf-8") as rf:
-        rf.write(json.dumps({
-            "synth_key": turn.key,
-            "generator": gen.name,
-            "slop_strategy": gen.strategy,
-            "reasoning_effort": gen.reasoning_effort,
-            "session_turn": turn.index if in_session else None,
-            "reasoning_tokens": gen_meta.get("reasoning_tokens"),
-            "reasoning": reasoning_text,
-        }, ensure_ascii=False) + "\n")
+    append_jsonl(data_dir / "reasoning.jsonl", {
+        "synth_key": turn.key,
+        "generator": gen.name,
+        "slop_strategy": gen.strategy,
+        "reasoning_effort": gen.reasoning_effort,
+        "session_turn": turn.index if in_session else None,
+        "reasoning_tokens": gen_meta.get("reasoning_tokens"),
+        "reasoning": reasoning_text,
+    })
 
 
 async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
@@ -759,7 +753,7 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             st.result.add_gen_stats(gen.name, gen_meta)
             logger.warning("degenerate output dropped: %s %s (%s)", gen.name, drop, turn.key)
         else:
-            fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+            fp.write(dumps_line(record) + "\n")
             fp.flush()
             st.result.written += 1
             st.result.per_generator[gen.name] = st.result.per_generator.get(gen.name, 0) + 1
