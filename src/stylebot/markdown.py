@@ -63,7 +63,19 @@ FENCE_OPEN_RE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})")
 # Protected-block patterns. `CODE_FENCE_RE` requires a closer, so an unclosed
 # fence yields NO span — consumers that must swallow a runaway fence keep their
 # own state machine (see `infer._blocks_with_separators`).
-CODE_FENCE_RE = re.compile(r"^[ \t]*```.*?$.*?^[ \t]*```[ \t]*$(?:\n|\Z)", re.MULTILINE | re.DOTALL)
+#
+# The opener/closer alternate independently rather than back-referencing one
+# another. A backreference form (``(```+|~~~+)…\1``) is NOT equivalent: it lets
+# a longer outer fence swallow the inner fences of a post that *documents*
+# nested fences (notebook/blogdown.qmd), which measurably moves the corpus:
+# 7 section-bounded and 19 cross-heading target bodies change. Mixing ``` and
+# ~~~ across a
+# block is malformed markdown either way; matching it loosely is the safer
+# failure, since over-protection only costs a target.
+CODE_FENCE_RE = re.compile(
+    r"^[ \t]*(?:```|~~~).*?$.*?^[ \t]*(?:```|~~~)[ \t]*$(?:\n|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
 MATH_BLOCK_RE = re.compile(r"\$\$.*?\$\$[ \t]*(?:\{[^}\n]*\})?", re.DOTALL)
 BLOCKQUOTE_RE = re.compile(r"^(?:[ \t]{0,3}>[^\n]*\n?)+", re.MULTILINE)
 
