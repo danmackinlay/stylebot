@@ -193,7 +193,7 @@ class GenOpts:
     """Rotation / generation — which arms exist and how each request is made.
 
     Feeds `iter_arms` (the models x strategies x efforts cross product, whose
-    *enumeration order* decides which arm owns which target) and
+    *membership* — not its order — decides which arm owns which target) and
     `build_generators` (per-request knobs). `dry_run` lives here because it is
     a generator-construction switch: stubs instead of API clients. It is read
     downstream too (concurrency, windows, reporting).
@@ -357,7 +357,7 @@ def pop_chunk_kwargs(kw: dict) -> dict:
 class Arm:
     """One rotation arm: a (model, slop strategy, reasoning effort) combination.
 
-    Reifies the unit the round-robin assignment spreads targets across
+    Reifies the unit rendezvous assignment spreads targets across
     (previously "arm" existed only in comments). ``name`` is the single
     computation of the generator name that feeds ``synth_key`` — dry-run stubs
     and real factory generators both take it from here, so the two paths
@@ -381,12 +381,12 @@ def iter_arms(
     efforts: Sequence[str],
     openrouter_models: Sequence[str],
 ) -> list[Arm]:
-    """The rotation cross product, in corpus-affecting enumeration order.
+    """The rotation cross product: strategies (outer) × efforts × OpenRouter
+    models in flag order.
 
-    Strategies (outer) × efforts × OpenRouter models in flag order.
-    `synth._assign` picks ``generators[digest % n]``, so this enumeration order
-    decides which arm owns which target — reordering it reassigns the corpus on
-    resume.
+    `synth._assign` scores arms by rendezvous hashing on arm identity, so this
+    enumeration order does not affect assignment — reordering it reassigns
+    nothing. Adding or dropping an arm moves only that arm's own share.
     """
     return [
         Arm(model=model, strategy=rs, effort=effort)
@@ -693,9 +693,9 @@ def run_synth(
         from stylebot.targets import select_targets
 
         before = len(targets)
-        loaded = splits_mod.load_splits(substrate.splits_path) if substrate.role is not None else None
         if substrate.role is not None and substrate.splits_path is None:
             raise click.UsageError("--role requires --splits")
+        loaded = splits_mod.load_splits(substrate.splits_path) if substrate.role is not None else None
         targets = select_targets(
             targets, splits=loaded, role=substrate.role,
             sample_frac=substrate.sample_frac, sample_salt=substrate.sample_salt,
@@ -759,7 +759,7 @@ def run_synth(
         efforts = list(dict.fromkeys(gen.reasoning_efforts)) or [synth.DEFAULT_REASONING_EFFORT]
 
         # The rotation is the models x strategies x efforts cross product:
-        # round-robin assignment then spreads targets across every combination,
+        # rendezvous assignment then spreads targets across every combination,
         # so one run diversifies prompts and reasoning depth the same way it
         # diversifies models (same cost — still one generation per target, just
         # a finer rotation).
@@ -806,11 +806,6 @@ def run_synth(
     # inspection modes returned above, which is why the caller is free to hand
     # in None for them (and to keep its own "no silent default" policy message
     # where it belongs — see `synth_cmd`).
-    if callable(data_dir):  # transitional: the old deferred-resolution shape
-        raise TypeError(
-            "run_synth(data_dir=...) no longer takes a callable — resolve the path "
-            "eagerly, and pass None only for --sample/--report inspection runs."
-        )
     if data_dir is None:
         raise click.UsageError("a data-dir is required to write pairs.jsonl")
     resolved_dir = data_dir

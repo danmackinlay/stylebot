@@ -381,12 +381,13 @@ def test_run_synth_needs_no_data_dir_for_inspection(tmp_path, make_blog):
             generators=[synth.Generator("fake", generate=lambda t: "s")],
         )
 
-    # The removed callable shape fails with a migration message, not a mystery.
-    with pytest.raises(TypeError, match="no longer takes a callable"):
-        synth_cli.run_synth(
-            targets, data_dir=lambda: tmp_path,
-            generators=[synth.Generator("fake", generate=lambda t: "s")],
-        )
+
+def test_role_without_splits_is_a_usage_error(make_blog):
+    # The guard must run BEFORE load_splits, or --role alone dies inside
+    # os.fspath(None) with a TypeError nobody can act on.
+    targets = synth.iter_targets(blog_root=make_blog(ai=False))
+    with pytest.raises(click.UsageError, match="--role requires --splits"):
+        synth_cli.run_synth(targets, data_dir=None, role="styler")
 
 
 # -- parallelism + sessions through the shared surface --
