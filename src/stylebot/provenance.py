@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -23,7 +23,7 @@ def now_iso() -> str:
     snapshot on ``snapped_at``, and at second resolution two adjacent `open`
     calls are indistinguishable.
     """
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def git_sha(repo: str | Path | None) -> str | None:

@@ -27,9 +27,8 @@ def patch_pyqwest_tls_trust() -> None:
     """
     try:
         import pyqwest
-        from pyqwest.httpx import AsyncPyqwestTransport
-
         import tinker._base_client as bc
+        from pyqwest.httpx import AsyncPyqwestTransport
 
         def _with_system_certs():
             return AsyncPyqwestTransport(

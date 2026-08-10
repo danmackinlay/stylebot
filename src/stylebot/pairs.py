@@ -208,7 +208,7 @@ def record_id(record: dict) -> str:
         return f"{capture_id}{policy}:{chunk_index}"
     # No capture_id (hand-built records): the policy joins the hashed material
     # rather than the visible key, so an unstamped record hashes unchanged.
-    h = hashlib.sha256(f"{meta.get('source')}\x00{chunk_index}{policy}".encode("utf-8"))
+    h = hashlib.sha256(f"{meta.get('source')}\x00{chunk_index}{policy}".encode())
     return h.hexdigest()[:16]
 
 
@@ -257,9 +257,13 @@ def validate_pair_record(rec: object) -> list[str]:
         context = meta.get("context")
         if context and isinstance(msgs, list) and len(msgs) == 3:
             for role_idx, label in ((1, "user"), (2, "assistant")):
-                content = msgs[role_idx].get("content") if isinstance(msgs[role_idx], dict) else None
+                msg = msgs[role_idx]
+                content = msg.get("content") if isinstance(msg, dict) else None
                 if not (isinstance(content, str) and content.startswith(context)):
-                    errors.append(f"{label} content does not start with meta.context (heading must be a verbatim prefix)")
+                    errors.append(
+                        f"{label} content does not start with meta.context "
+                        "(heading must be a verbatim prefix)"
+                    )
 
     return errors
 

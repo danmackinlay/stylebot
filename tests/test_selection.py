@@ -63,4 +63,6 @@ def test_modified_after_missing_or_malformed_excluded():
 
 def test_modified_after_retargetable_field_and_threshold():
     assert is_modified_after({"updated": "2024-01-01"}, field="updated", after="2023-01-01") is True
-    assert is_modified_after({"updated": "2022-01-01"}, field="updated", after="2023-01-01") is False
+    assert (
+        is_modified_after({"updated": "2022-01-01"}, field="updated", after="2023-01-01") is False
+    )

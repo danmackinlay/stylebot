@@ -47,8 +47,8 @@ from stylebot.generators import (  # noqa: E402, F401
     SLOP_SYSTEM_MEASURED,
     SLOP_SYSTEM_VERBOSE,
     STRATEGIES,
-    GenOutput,
     Generator,
+    GenOutput,
     ResolvedStrategy,
     SlopStrategy,
     _normalize_gen_output,
@@ -58,6 +58,7 @@ from stylebot.generators import (  # noqa: E402, F401
     prompt_id_of,
     resolve_strategy,
 )
+
 
 def transform_similarity(a: str, b: str) -> float:
     """Character-level copying ratio between two prose bodies, in [0, 1].
@@ -139,7 +140,7 @@ def _effective_context(target: Target, context_dropout: float) -> str:
 
 def _capture_id(source: str, generator_name: str, strategy: str = DEFAULT_STRATEGY) -> str:
     """Group a post's chunks from one generator+strategy under one capture id."""
-    h = hashlib.sha256(f"{source}\x00{generator_name}\x00{strategy}".encode("utf-8"))
+    h = hashlib.sha256(f"{source}\x00{generator_name}\x00{strategy}".encode())
     return h.hexdigest()[:8]
 
 
@@ -329,7 +330,7 @@ def _assign(
             best_gen = arms[0][1]
             for ident, gen in arms:
                 score = hashlib.sha256(
-                    f"{assign_seed}\x00{ident}\x00{t.text}".encode("utf-8")
+                    f"{assign_seed}\x00{ident}\x00{t.text}".encode()
                 ).digest()
                 # Tiebreak on identity, so a collision can't resolve on list
                 # position. Arms sharing an identity are already one cell.
@@ -345,7 +346,7 @@ def _session_id(gen: Generator, items: Sequence[tuple[Target, str]]) -> str:
     Recomputed at reflow time, so it always names what the session contained.
     """
     sid_h = hashlib.sha256(
-        f"{gen.name}\x00{gen.strategy}\x00{gen.prompt_id}".encode("utf-8")
+        f"{gen.name}\x00{gen.strategy}\x00{gen.prompt_id}".encode()
     )
     for target, ctx in items:
         sid_h.update(b"\x00")
@@ -452,11 +453,13 @@ class _RunState:
     max_length_ratio: float | None = None  # inflation gate (None = off)
     replicate: str = ""  # deliberate-resample label, keyed AND recorded
     done: int = 0
-    on_progress: Callable[[int, int, "SynthResult"], None] | None = None
+    on_progress: Callable[[int, int, SynthResult], None] | None = None
     on_error: Callable[[str, str], None] | None = None
 
 
-def _session_token_cap(gen: Generator, window: int | None, session_max_tokens: int | None) -> int | None:
+def _session_token_cap(
+    gen: Generator, window: int | None, session_max_tokens: int | None
+) -> int | None:
     """One session's prompt-token budget: the generator's own budget (else the
     global default), further capped at `SESSION_WINDOW_FILL_CAP` × window."""
     caps = [gen.session_budget or session_max_tokens]
@@ -465,7 +468,9 @@ def _session_token_cap(gen: Generator, window: int | None, session_max_tokens: i
     return min((c for c in caps if c), default=None)
 
 
-def _estimate_next_prompt(history: Sequence[dict], last_prompt: int, last_visible: int, next_text: str) -> int:
+def _estimate_next_prompt(
+    history: Sequence[dict], last_prompt: int, last_visible: int, next_text: str
+) -> int:
     """Estimate the next turn's prompt tokens: last measured prompt + what the
     last reply added + the next passage (~4 chars/token), falling back to a pure
     char estimate before any live turn has reported usage."""
@@ -474,7 +479,9 @@ def _estimate_next_prompt(history: Sequence[dict], last_prompt: int, last_visibl
     return (sum(len(m["content"]) for m in history) + len(next_text)) // 4
 
 
-def _pop_reasoning_to_sidecar(data_dir: Path, turn: _Turn, gen: Generator, gen_meta: dict, *, in_session: bool) -> None:
+def _pop_reasoning_to_sidecar(
+    data_dir: Path, turn: _Turn, gen: Generator, gen_meta: dict, *, in_session: bool
+) -> None:
     """Route a reasoning trace to the `reasoning.jsonl` sidecar (keyed to the pair).
 
     Traces are diagnostics, not corpus: `reasoning_text` is POPPED from
@@ -517,10 +524,13 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
     last_visible = 0  # ~tokens the last reply added to history
 
     for pos, turn in enumerate(sess.turns):
-        if history and cap is not None:
-            if _estimate_next_prompt(history, last_prompt, last_visible, turn.target.text) > cap:
-                st.result.budget_bound_sessions += 1
-                return list(sess.turns[pos:])
+        if (
+            history
+            and cap is not None
+            and _estimate_next_prompt(history, last_prompt, last_visible, turn.target.text) > cap
+        ):
+            st.result.budget_bound_sessions += 1
+            return list(sess.turns[pos:])
 
         # A failed pair is never written, so its synth_key resolves to nothing —
         # the recorded error must carry its config or be unattributable.
@@ -535,7 +545,9 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
                 st.on_error(_key, msg)
 
         async def _attempt(fn, _turn: _Turn = turn) -> tuple[str, dict]:
-            out = fn(_turn.target.text, history=history or None)
+            # B023: `history` is the live session list, and _attempt is awaited
+            # in this same iteration — late binding is the intent, not a leak.
+            out = fn(_turn.target.text, history=history or None)  # noqa: B023
             if inspect.isawaitable(out):
                 out = await out
             slop, gen_meta = _normalize_gen_output(out)
@@ -578,7 +590,9 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             )
         if st.replicate:
             gen_meta["replicate"] = st.replicate
-        _pop_reasoning_to_sidecar(st.data_dir, turn, gen, gen_meta, in_session=bool(sess.session_id))
+        _pop_reasoning_to_sidecar(
+            st.data_dir, turn, gen, gen_meta, in_session=bool(sess.session_id)
+        )
         record = _build_record(
             slop=slop,
             target=turn.target,
@@ -632,7 +646,9 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
     return []
 
 
-async def _run_sessions(sessions: Sequence[_Session], pairs_path: Path, st: _RunState, max_workers: int) -> None:
+async def _run_sessions(
+    sessions: Sequence[_Session], pairs_path: Path, st: _RunState, max_workers: int
+) -> None:
     """Run sessions concurrently, `max_workers` at a time, on one append handle.
 
     Leftover turns (budget bind, error) reflow into fresh sessions inside the
@@ -663,7 +679,7 @@ def synthesize_pairs(
     dry_run: bool = False,
     extra_tags: Sequence[str] = (),
     context_dropout: float = 0.0,
-    on_progress: Callable[[int, int, "SynthResult"], None] | None = None,
+    on_progress: Callable[[int, int, SynthResult], None] | None = None,
     on_error: Callable[[str, str], None] | None = None,
     max_workers: int = 1,
     session_turns: int = 1,

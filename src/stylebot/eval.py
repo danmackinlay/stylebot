@@ -27,6 +27,7 @@ detector.
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import datetime as _dt
 import json
@@ -101,7 +102,9 @@ def vale_score(text: str, *, config_path: str | Path | None = None) -> dict:
     # always remove it afterwards.
     tmp_path: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as tmp:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, encoding="utf-8"
+        ) as tmp:
             tmp.write(text)
             tmp_path = tmp.name
         proc = subprocess.run(
@@ -114,10 +117,8 @@ def vale_score(text: str, *, config_path: str | Path | None = None) -> dict:
         return {**empty, "reason": f"vale failed to run: {exc}"}
     finally:
         if tmp_path is not None:
-            try:
+            with contextlib.suppress(OSError):  # best-effort cleanup
                 os.unlink(tmp_path)
-            except OSError:  # pragma: no cover - best-effort cleanup
-                pass
 
     out = (proc.stdout or "").strip()
     if not out:
@@ -249,7 +250,9 @@ def openrouter_judge(
 
     from stylebot import config
 
-    resolved_base = base_url or config.get_key("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+    resolved_base = (
+        base_url or config.get_key("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+    )
     client = openai.OpenAI(
         api_key=api_key or config.require_key("OPENROUTER_API_KEY"),
         base_url=resolved_base,
@@ -331,7 +334,9 @@ def _mean_or_none(values: Iterable[float]) -> float | None:
 def _aggregate(records: list[dict]) -> dict:
     """Per-group aggregates over a list of `score_candidate` records."""
     judge_scores = [
-        r["judge"]["score"] for r in records if isinstance(r.get("judge"), dict) and r["judge"].get("score") is not None
+        r["judge"]["score"]
+        for r in records
+        if isinstance(r.get("judge"), dict) and r["judge"].get("score") is not None
     ]
     vale_alerts = [r["vale"]["alerts"] for r in records if r.get("vale", {}).get("available")]
     detector_scores = [
@@ -358,7 +363,9 @@ def _aggregate(records: list[dict]) -> dict:
 
 # meta keys carried onto each score record, so scores group / filter / join
 # downstream without re-reading the corpus.
-_CARRIED_META = ("source", "synthetic", "generator", "slop_strategy", "chunk_index", "transform_sim")
+_CARRIED_META = (
+    "source", "synthetic", "generator", "slop_strategy", "chunk_index", "transform_sim",
+)
 # Generation covariates nested under `meta.gen` (synthetic pairs only), flattened
 # onto each score record so `summarize_scores(by=…)` can facet by them directly.
 # Real pairs lack `meta.gen` and simply omit these (null bucket).
@@ -427,7 +434,9 @@ def _score_record(
     scores: dict[str, dict] = {}
     for name in fields:
         text = FIELD_EXTRACTORS[name](record)
-        scores[name] = score_candidate(text, judge=judge, detector=detector, vale_config=vale_config)
+        scores[name] = score_candidate(
+            text, judge=judge, detector=detector, vale_config=vale_config
+        )
     gen = meta.get("gen") or {}
     carried = {k: meta.get(k) for k in _CARRIED_META if k in meta}
     carried.update({k: gen[k] for k in _CARRIED_GEN if k in gen})
@@ -498,10 +507,18 @@ def score_pairs_file(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     total = len(todo)
     done = 0
-    with out_path.open("a", encoding="utf-8") as fp, ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
+    with (
+        out_path.open("a", encoding="utf-8") as fp,
+        ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool,
+    ):
         futures = {
             pool.submit(
-                _score_record, rec, fields=fields, judge=judge, detector=detector, vale_config=vale_config
+                _score_record,
+                rec,
+                fields=fields,
+                judge=judge,
+                detector=detector,
+                vale_config=vale_config,
             ): rec
             for rec in todo
         }
@@ -540,7 +557,9 @@ def _aggregate_fields(records: list[dict]) -> dict:
             if name not in field_names:
                 field_names.append(name)
     return {
-        name: _aggregate([rec["scores"][name] for rec in records if name in (rec.get("scores") or {})])
+        name: _aggregate(
+            [rec["scores"][name] for rec in records if name in (rec.get("scores") or {})]
+        )
         for name in field_names
     }
 
@@ -664,7 +683,7 @@ def write_covariate_table(
     digest = file_sha256(scores) if Path(scores).exists() else None
     sidecar = {
         "schema_version": SCHEMA_VERSION,
-        "exported_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "exported_at": _dt.datetime.now(_dt.UTC).isoformat(),
         "source": str(scores),
         "source_sha256": digest,
         "rows": len(rows),
@@ -674,4 +693,10 @@ def write_covariate_table(
     }
     sidecar_path = out_path.with_suffix(".meta.json")
     sidecar_path.write_text(json.dumps(sidecar, indent=2, default=str) + "\n", encoding="utf-8")
-    return {"csv": out_path, "sidecar": sidecar_path, "rows": len(rows), "columns": columns, "constants": constants}
+    return {
+        "csv": out_path,
+        "sidecar": sidecar_path,
+        "rows": len(rows),
+        "columns": columns,
+        "constants": constants,
+    }

@@ -45,7 +45,9 @@ def _logreg_p_slop(vec: Sequence[float], coef: Sequence[float], intercept: float
     Pure stdlib — the load-bearing reason stylebot needs no numpy/sklearn to
     *serve* the classifier.
     """
-    z = intercept + math.fsum(v * c for v, c in zip(vec, coef))
+    # strict=False preserves today's truncate-on-mismatch; see B905 note in the
+    # lint sweep — tightening this to strict=True is a behaviour change.
+    z = intercept + math.fsum(v * c for v, c in zip(vec, coef, strict=False))
     return _sigmoid(z)
 
 
@@ -159,7 +161,9 @@ def sentence_transformers_embed_fn(model_id: str, *, normalize: bool = True) -> 
     return embed
 
 
-def sklearn_detector(artifact_dir: str | Path, *, embed_fn: EmbedFn | None = None) -> Callable[[str], dict]:
+def sklearn_detector(
+    artifact_dir: str | Path, *, embed_fn: EmbedFn | None = None
+) -> Callable[[str], dict]:
     """Build a detector from a self-contained artifact directory (LAZY embedder).
 
     Reads ``<artifact_dir>/meta.json`` + ``head.json``; if no `embed_fn` is

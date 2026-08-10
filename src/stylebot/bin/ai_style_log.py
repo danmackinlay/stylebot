@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -232,8 +232,8 @@ def _humanize_age(iso_ts: str) -> str:
     try:
         ts = datetime.fromisoformat(iso_ts)
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        delta = datetime.now(timezone.utc) - ts
+            ts = ts.replace(tzinfo=UTC)
+        delta = datetime.now(UTC) - ts
         seconds = max(0, int(delta.total_seconds()))
         if seconds < 60:
             return f"{seconds}s ago"
@@ -279,7 +279,9 @@ def _remind_open_sessions(ctx: click.Context) -> None:
     click.echo(f"Open sessions ({len(entries)}):", err=True)
     for source, age in entries:
         click.echo(f"  {source:<{width}}  (opened {age})", err=True)
-    click.echo("  use `ai-style log -q ...` to suppress, `ai-style log drop <file>` to abandon", err=True)
+    click.echo(
+        "  use `ai-style log -q ...` to suppress, `ai-style log drop <file>` to abandon", err=True
+    )
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})

@@ -28,6 +28,7 @@ from stylebot.bin import synth_cli
 from stylebot.bin.ai_style import main as ai_style_main
 from stylebot.cli_options import cli_fields, field_owners
 
+
 def test_synth_options_repins_defaults():
     @click.command()
     @synth_cli.synth_options(defaults=[synth_cli.ChunkOpts(merge=True, min_chars=123)])
@@ -376,7 +377,9 @@ def test_max_workers_auto_rule(tmp_path, monkeypatch, make_blog):
     monkeypatch.setattr(synth, "synthesize_pairs", spy)
     monkeypatch.setattr(
         synth, "openrouter_generator",
-        lambda *, model, **kw: synth.Generator(name=f"openrouter/{model}", generate=lambda t, history=None: "s"),
+        lambda *, model, **kw: synth.Generator(
+            name=f"openrouter/{model}", generate=lambda t, history=None: "s"
+        ),
     )
     runner = CliRunner()
     base = ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "c")]
@@ -385,7 +388,8 @@ def test_max_workers_auto_rule(tmp_path, monkeypatch, make_blog):
     assert runner.invoke(ai_style_main, [*base, "--openrouter-model", "x/y"]).exit_code == 0
     assert captured["max_workers"] == 16
     # Explicit always wins.
-    assert runner.invoke(ai_style_main, [*base, "--openrouter-model", "x/y", "--max-workers", "3"]).exit_code == 0
+    res = runner.invoke(ai_style_main, [*base, "--openrouter-model", "x/y", "--max-workers", "3"])
+    assert res.exit_code == 0
     assert captured["max_workers"] == 3
     # Injected generators — a library caller's own endpoint, which we know
     # nothing about — still get sequential. That is all that is left of the
@@ -496,7 +500,7 @@ def test_plan_sessions_separates_same_model_strategies():
     g_cat = synth.Generator(name="openrouter/x", strategy="catalogue")
     assignments = [
         (t, g, "", synth._synth_key(g.name, t.text, strategy=g.strategy))
-        for t, g in zip(targets, [g_polish, g_cat, g_polish, g_cat])
+        for t, g in zip(targets, [g_polish, g_cat, g_polish, g_cat], strict=True)
     ]
     sessions = synth._plan_sessions(assignments, session_turns=2)
     assert len(sessions) == 2
@@ -555,7 +559,8 @@ def test_reasoning_effort_rotation_cross_product(tmp_path, make_blog):
         live = CliRunner().invoke(
             ai_style_main,
             ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
-             "--openrouter-model", "x/y", "--reasoning-effort", "off", "--reasoning-effort", "high"],
+             "--openrouter-model", "x/y",
+             "--reasoning-effort", "off", "--reasoning-effort", "high"],
         )
     assert live.exit_code == 0, live.output
     assert captured == ["off", "high"]  # one generator per effort

@@ -55,9 +55,18 @@ main.add_command(_log, name="log")
     help="Read/write state: where pairs.jsonl is appended. Required (no default) "
     "unless $STYLEBOT_DATA_DIR is set — never silently grow the wrong corpus.",
 )
-@click.option("--field", default="automation", show_default=True, help="Frontmatter field the default selector reads.")
-@click.option("--max-level", default=0, show_default=True, type=int, help="Default selector keeps posts with field <= this.")
-@click.option("--all", "select_all", is_flag=True, help="Disable selection: take every post (ignore the selector).")
+@click.option(
+    "--field", default="automation", show_default=True,
+    help="Frontmatter field the default selector reads.",
+)
+@click.option(
+    "--max-level", default=0, show_default=True, type=int,
+    help="Default selector keeps posts with field <= this.",
+)
+@click.option(
+    "--all", "select_all", is_flag=True,
+    help="Disable selection: take every post (ignore the selector).",
+)
 @click.option("--glob", default="**/*.qmd", show_default=True, help="Glob for the blog-root walk.")
 @synth_cli.synth_options()
 @click.option("--tag", "tags", multiple=True, help="Extra provenance tag(s) added to meta.tags.")
@@ -80,7 +89,9 @@ def synth_cmd(
     and resumable — re-running never duplicates.
     """
     if bool(files) == bool(blog_root):
-        raise click.UsageError("provide either FILES (pre-selected) or --blog-root, not both/neither")
+        raise click.UsageError(
+            "provide either FILES (pre-selected) or --blog-root, not both/neither"
+        )
 
     # Selector: the bundled is_human_authored unless --all disables selection.
     if select_all:
@@ -125,22 +136,77 @@ def synth_cmd(
 
 
 @main.command("eval")
-@click.option("--pairs", "pairs_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path), help="The pairs.jsonl corpus to score (slop + Dan sides of every pair).")
-@click.option("--field", "fields", type=click.Choice(["slop", "target"]), multiple=True, default=(), help="Which side(s) to score (repeatable; default both). slop=messages[1], target=Dan/messages[2].")
-@click.option("--judge/--no-judge", default=False, show_default=True, help="Run the LLM judge (needs $OPENROUTER_API_KEY); off = Vale + null detector, no spend.")
-@click.option("--judge-model", default="anthropic/claude-opus-4-8", show_default=True, help="OpenRouter model id for the judge.")
-@click.option("--detector-model", "detector_model", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None, help="A trained voice-classifier artifact dir (head.json + meta.json) to score detector.score; needs the pinned embedder (sentence-transformers) installed.")
-@click.option("--vale-config", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Vale config (.vale.ini); omitted = Vale's own discovery (or Vale absent -> skipped).")
-@click.option("--max-workers", default=8, show_default=True, type=int, help="Concurrent scoring workers (judge/Vale are IO-bound).")
-@click.option("--out", "out_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="scores.jsonl to append (default: <pairs-dir>/scores.jsonl). Resumable — scored ids are skipped.")
-@click.option("--summary", "summary_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Also write the aggregate summary JSON here.")
-@click.option("--by", "by", default=None, help="Facet the summary by a meta key, e.g. slop_strategy or generator.")
+@click.option(
+    "--pairs", "pairs_path", required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The pairs.jsonl corpus to score (slop + Dan sides of every pair).",
+)
+@click.option(
+    "--field", "fields", type=click.Choice(["slop", "target"]), multiple=True, default=(),
+    help="Which side(s) to score (repeatable; default both). slop=messages[1], "
+    "target=Dan/messages[2].",
+)
+@click.option(
+    "--judge/--no-judge", default=False, show_default=True,
+    help="Run the LLM judge (needs $OPENROUTER_API_KEY); off = Vale + null detector, no spend.",
+)
+@click.option(
+    "--judge-model", default="anthropic/claude-opus-4-8", show_default=True,
+    help="OpenRouter model id for the judge.",
+)
+@click.option(
+    "--detector-model", "detector_model",
+    type=click.Path(exists=True, file_okay=False, path_type=Path), default=None,
+    help="A trained voice-classifier artifact dir (head.json + meta.json) to score "
+    "detector.score; needs the pinned embedder (sentence-transformers) installed.",
+)
+@click.option(
+    "--vale-config", type=click.Path(dir_okay=False, path_type=Path), default=None,
+    help="Vale config (.vale.ini); omitted = Vale's own discovery (or Vale absent -> skipped).",
+)
+@click.option(
+    "--max-workers", default=8, show_default=True, type=int,
+    help="Concurrent scoring workers (judge/Vale are IO-bound).",
+)
+@click.option(
+    "--out", "out_path", type=click.Path(dir_okay=False, path_type=Path), default=None,
+    help="scores.jsonl to append (default: <pairs-dir>/scores.jsonl). Resumable — scored ids are "
+    "skipped.",
+)
+@click.option(
+    "--summary", "summary_path", type=click.Path(dir_okay=False, path_type=Path), default=None,
+    help="Also write the aggregate summary JSON here.",
+)
+@click.option(
+    "--by", "by", default=None,
+    help="Facet the summary by a meta key, e.g. slop_strategy or generator.",
+)
 @click.option("--limit", type=int, default=None, help="Cap pairs scored (smoke / cost control).")
-@click.option("--prune-orphans/--no-prune-orphans", default=True, show_default=True, help="Drop score records whose pair is no longer in --pairs (re-cut or regenerated), so every summary and exported table counts live pairs only. Turn OFF only when --out belongs to a DIFFERENT corpus, where every record reads as orphaned.")
-@click.option("--report", "report_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Write a self-contained HTML scores report — the pair browser: slop↔Dan side by side, judge/detector/Vale chips, generation covariates, facet dropdowns. Works keyless (judge badges show — without --judge).")
-@click.option("--report-max-rows", default=2000, show_default=True, type=int, help="Cap rows in the HTML report (0 = all).")
-@click.option("--facet-by", "facet_by", default="slop_strategy", show_default=True, help="Group the HTML report headline by this meta covariate (e.g. reasoning_effort, prompt_id, generator).")
-@click.option("--sample", "sample_n", type=int, default=None, help="Print N random scored pairs (slop vs Dan + scores) to stdout.")
+@click.option(
+    "--prune-orphans/--no-prune-orphans", default=True, show_default=True,
+    help="Drop score records whose pair is no longer in --pairs (re-cut or regenerated), so "
+    "every summary and exported table counts live pairs only. Turn OFF only when --out belongs "
+    "to a DIFFERENT corpus, where every record reads as orphaned.",
+)
+@click.option(
+    "--report", "report_path", type=click.Path(dir_okay=False, path_type=Path), default=None,
+    help="Write a self-contained HTML scores report — the pair browser: slop↔Dan side by side, "
+    "judge/detector/Vale chips, generation covariates, facet dropdowns. Works keyless (judge "
+    "badges show — without --judge).",
+)
+@click.option(
+    "--report-max-rows", default=2000, show_default=True, type=int,
+    help="Cap rows in the HTML report (0 = all).",
+)
+@click.option(
+    "--facet-by", "facet_by", default="slop_strategy", show_default=True,
+    help="Group the HTML report headline by this meta covariate (e.g. reasoning_effort, "
+    "prompt_id, generator).",
+)
+@click.option(
+    "--sample", "sample_n", type=int, default=None,
+    help="Print N random scored pairs (slop vs Dan + scores) to stdout.",
+)
 def eval_cmd(
     pairs_path: Path,
     fields: tuple[str, ...],
@@ -180,7 +246,7 @@ def eval_cmd(
     try:
         judge_fn = ev.openrouter_judge(model=judge_model) if judge else None
     except RuntimeError as exc:  # missing key, surfaced by config.require_key
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(exc)) from exc
 
     # A trained voice-classifier artifact, if given, supplies a real detector
     # (P(slop)); else the null detector. The embedder is rebuilt lazily from the
@@ -194,7 +260,7 @@ def eval_cmd(
         except ImportError as exc:
             raise click.ClickException(
                 f"--detector-model needs the embedder installed (sentence-transformers): {exc}"
-            )
+            ) from exc
 
     def _progress(i: int, total: int) -> None:
         if i == 1 or i % 25 == 0 or i == total:
@@ -261,11 +327,28 @@ def eval_cmd(
 
 
 @main.command("export-table")
-@click.option("--scores", "scores_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path), help="The scores.jsonl to project.")
-@click.option("--out", "out_path", required=True, type=click.Path(dir_okay=False, path_type=Path), help="CSV to write; a <stem>.meta.json provenance sidecar lands beside it.")
-@click.option("--note", default=None, help="Free-text description of the run, recorded in the sidecar.")
-@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="A JSON experiment config to embed in the sidecar (the pinned arms/substrate that produced these scores).")
-def export_table_cmd(scores_path: Path, out_path: Path, note: str | None, config_path: Path | None) -> None:
+@click.option(
+    "--scores", "scores_path", required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The scores.jsonl to project.",
+)
+@click.option(
+    "--out", "out_path", required=True, type=click.Path(dir_okay=False, path_type=Path),
+    help="CSV to write; a <stem>.meta.json provenance sidecar lands beside it.",
+)
+@click.option(
+    "--note", default=None,
+    help="Free-text description of the run, recorded in the sidecar.",
+)
+@click.option(
+    "--config", "config_path", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="A JSON experiment config to embed in the sidecar (the pinned arms/substrate that "
+    "produced these scores).",
+)
+def export_table_cmd(
+    scores_path: Path, out_path: Path, note: str | None, config_path: Path | None
+) -> None:
     """Project a scores.jsonl to a committable tidy CSV (+ provenance sidecar).
 
     One row per pair, no prose text: small enough to version next to a write-up,
@@ -286,9 +369,15 @@ def export_table_cmd(scores_path: Path, out_path: Path, note: str | None, config
 
     res = write_covariate_table(scores_path, out_path, extra=extra or None)
     size = Path(res["csv"]).stat().st_size
-    click.echo(f"wrote {res['rows']} rows x {len(res['columns'])} cols -> {res['csv']} ({size / 1024:.1f} KB)")
+    click.echo(
+        f"wrote {res['rows']} rows x {len(res['columns'])} cols -> "
+        f"{res['csv']} ({size / 1024:.1f} KB)"
+    )
     if res["constants"]:
-        click.echo(f"hoisted {len(res['constants'])} run-constant column(s) into {res['sidecar'].name}")
+        click.echo(
+            f"hoisted {len(res['constants'])} run-constant column(s) "
+            f"into {res['sidecar'].name}"
+        )
 
 
 @main.command("serve")
@@ -300,18 +389,57 @@ def export_table_cmd(scores_path: Path, out_path: Path, note: str | None, config
     help="A trained voice-classifier artifact dir (head.json + meta.json); needs the "
     "pinned embedder (sentence-transformers) installed.",
 )
-@click.option("--backend", type=click.Choice(["tinker", "openai"]), default=None, help="Arm the 'rewrite' op with a styler backend (same flags as `ai-style run`). Omit for score-only serving.")
-@click.option("--sampler-path", default=None, help="[tinker] tinker:// sampler checkpoint (manifest result.checkpoints.sampler_path).")
-@click.option("--base-model", default=None, help="[tinker] Base model id the adapter was trained on.")
-@click.option("--renderer", "renderer_name", default=None, help="[tinker] Cookbook renderer used at training time.")
-@click.option("--base-url", default=None, help="[openai] Endpoint base URL, e.g. http://localhost:8123/v1.")
+@click.option(
+    "--backend", type=click.Choice(["tinker", "openai"]), default=None,
+    help="Arm the 'rewrite' op with a styler backend (same flags as `ai-style run`). Omit for "
+    "score-only serving.",
+)
+@click.option(
+    "--sampler-path", default=None,
+    help="[tinker] tinker:// sampler checkpoint (manifest result.checkpoints.sampler_path).",
+)
+@click.option(
+    "--base-model", default=None,
+    help="[tinker] Base model id the adapter was trained on.",
+)
+@click.option(
+    "--renderer", "renderer_name", default=None,
+    help="[tinker] Cookbook renderer used at training time.",
+)
+@click.option(
+    "--base-url", default=None,
+    help="[openai] Endpoint base URL, e.g. http://localhost:8123/v1.",
+)
 @click.option("--model", default=None, help="[openai] Served model name.")
-@click.option("--api-key-env", default=None, help="[openai] Env var holding the endpoint key; omit for keyless local servers.")
-@click.option("--temperature", default=0.7, show_default=True, type=float, help="Hotter than run/eval's 0.3 on purpose: interactive best-of wants DISTINCT candidates; at 0.3 the sampler mode-collapses to near-identical draws.")
-@click.option("--max-tokens", default=None, type=int, help="Output-token budget per rewrite. [default: scaled off --max-chunk-chars, floor 2000]")
-@click.option("--max-chunk-chars", default=None, type=int, help="Rewrite-op chunk budget; MUST match the adapter's training chunk scale. [default: 1500]")
-@click.option("--inline-headings/--no-inline-headings", default=False, show_default=True, help="The other half of the adapter's training diet (the manifest records both under data.chunk_scale). On = v2 cross-heading: headings are rewritable chunk content and chunks span sections. Off = v1, headings stay protected context. Serving at the wrong diet is out-of-distribution and makes the styler fall back to copying its input.")
-@click.option("--preferences", "preferences_path", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Arm the 'prefer' op: append client decisions (plus a UTC ts) to this JSONL.")
+@click.option(
+    "--api-key-env", default=None,
+    help="[openai] Env var holding the endpoint key; omit for keyless local servers.",
+)
+@click.option(
+    "--temperature", default=0.7, show_default=True, type=float,
+    help="Hotter than run/eval's 0.3 on purpose: interactive best-of wants DISTINCT candidates; "
+    "at 0.3 the sampler mode-collapses to near-identical draws.",
+)
+@click.option(
+    "--max-tokens", default=None, type=int,
+    help="Output-token budget per rewrite. [default: scaled off --max-chunk-chars, floor 2000]",
+)
+@click.option(
+    "--max-chunk-chars", default=None, type=int,
+    help="Rewrite-op chunk budget; MUST match the adapter's training chunk scale. [default: 1500]",
+)
+@click.option(
+    "--inline-headings/--no-inline-headings", default=False, show_default=True,
+    help="The other half of the adapter's training diet (the manifest records both under "
+    "data.chunk_scale). On = v2 cross-heading: headings are rewritable chunk content and chunks "
+    "span sections. Off = v1, headings stay protected context. Serving at the wrong diet is "
+    "out-of-distribution and makes the styler fall back to copying its input.",
+)
+@click.option(
+    "--preferences", "preferences_path", type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Arm the 'prefer' op: append client decisions (plus a UTC ts) to this JSONL.",
+)
 def serve_cmd(
     detector_model: Path,
     backend: str | None,
@@ -345,9 +473,9 @@ def serve_cmd(
     except ImportError as exc:
         raise click.ClickException(
             f"--detector-model needs the embedder installed (sentence-transformers): {exc}"
-        )
+        ) from exc
     except ValueError as exc:
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(exc)) from exc
 
     chunk_chars = max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK
     tokens = max_tokens if max_tokens is not None else infer.max_tokens_for(chunk_chars)
@@ -391,7 +519,7 @@ def serve_cmd(
 
         def prefer_op(decision: dict) -> None:
             record = {
-                "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "ts": datetime.datetime.now(datetime.UTC).isoformat(),
                 **decision,
             }
             append_jsonl(preferences_path, record)
@@ -415,23 +543,52 @@ def _echo_clf_metrics(metrics: dict, indent: str = "") -> None:
         if c_info.get("mode") == "nested_cv"
         else (f"  [C fixed at {c_info['value']}]" if c_info else "")
     )
-    click.echo(f"{indent}{label}: pairwise_acc={pa['mean']}±{pa['std']}  auc={auc['mean']}±{auc['std']}{c_note}")
+    click.echo(
+        f"{indent}{label}: pairwise_acc={pa['mean']}±{pa['std']}  "
+        f"auc={auc['mean']}±{auc['std']}{c_note}"
+    )
     for name, facet in (metrics.get("by_provenance") or {}).items():
         fpa, fauc = facet["pairwise_accuracy"], facet["auc"]
         click.echo(
-            f"{indent}  {name} ({facet['n_pairs']} pairs): pairwise_acc={fpa['mean']}±{fpa['std']}  "
+            f"{indent}  {name} ({facet['n_pairs']} pairs): "
+            f"pairwise_acc={fpa['mean']}±{fpa['std']}  "
             f"auc={fauc['mean']}±{fauc['std']}"
         )
 
 
 @main.command("make-splits")
-@click.option("--pairs", "pairs_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path), help="The pairs.jsonl corpus whose posts get partitioned.")
-@click.option("--out", "out_path", required=True, type=click.Path(dir_okay=False, path_type=Path), help="Where to write splits.json (commit it next to the corpus).")
-@click.option("--eval-frac", default=None, type=float, help="Fraction of posts pinned as the frozen eval stratum. [default: 0.2]")
-@click.option("--detector-frac", default=None, type=float, help="Hash-rule share of NON-eval posts routed to the detector pool (rest -> styler). [default: 0.4]")
-@click.option("--seed", default=0, show_default=True, type=int, help="Seed for the eval sample + the hash salt.")
-@click.option("--allow-synthetic-eval", is_flag=True, help="Let synth-only posts into the eval stratum (default: eval is sampled from posts with >=1 REAL pair, so the frozen eval never consists of our own paraphrases).")
-@click.option("--force", is_flag=True, help="Overwrite an existing splits file. Re-cutting the partition un-freezes eval — only do this knowingly.")
+@click.option(
+    "--pairs", "pairs_path", required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The pairs.jsonl corpus whose posts get partitioned.",
+)
+@click.option(
+    "--out", "out_path", required=True, type=click.Path(dir_okay=False, path_type=Path),
+    help="Where to write splits.json (commit it next to the corpus).",
+)
+@click.option(
+    "--eval-frac", default=None, type=float,
+    help="Fraction of posts pinned as the frozen eval stratum. [default: 0.2]",
+)
+@click.option(
+    "--detector-frac", default=None, type=float,
+    help="Hash-rule share of NON-eval posts routed to the detector pool (rest -> styler). "
+    "[default: 0.4]",
+)
+@click.option(
+    "--seed", default=0, show_default=True, type=int,
+    help="Seed for the eval sample + the hash salt.",
+)
+@click.option(
+    "--allow-synthetic-eval", is_flag=True,
+    help="Let synth-only posts into the eval stratum (default: eval is sampled from posts with "
+    ">=1 REAL pair, so the frozen eval never consists of our own paraphrases).",
+)
+@click.option(
+    "--force", is_flag=True,
+    help="Overwrite an existing splits file. Re-cutting the partition un-freezes eval — only do "
+    "this knowingly.",
+)
 def make_splits_cmd(
     pairs_path: Path,
     out_path: Path,
@@ -495,17 +652,57 @@ def make_splits_cmd(
 
 
 @main.command("train-clf")
-@click.option("--pairs", "pairs_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path), help="The content-matched pairs.jsonl corpus to train on.")
-@click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path), help="Artifact directory to write (head.json + meta.json).")
-@click.option("--splits", "splits_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="The shared splits.json (make-splits): fit on the detector pool only, never touch the frozen eval posts, report a styler-posts holdout metric. Mutually exclusive with --holdout-*.")
-@click.option("--test-size", default=0.25, show_default=True, type=float, help="Held-out POST fraction per CV split.")
-@click.option("--n-splits", default=8, show_default=True, type=int, help="GroupShuffleSplit folds for the CV metric.")
-@click.option("--C", "C", default=None, type=float, help="FIXED C override. Default (unset) selects C per training side by inner group-CV over C_GRID — do NOT sweep this flag against the printed metric; that is tuning on the test set.")
-@click.option("--embed-model", default=None, help="Style backbone (sentence-transformers id); pinned into meta.json. [default: StyleDistance/styledistance]")
-@click.option("--holdout-frac", default=0.0, show_default=True, type=float, help="Ad-hoc: hold out this fraction of POSTs and ship the head fit on the rest. Prefer --splits for the shared contract.")
-@click.option("--holdout-seed", default=0, show_default=True, type=int, help="Seed for the deterministic by-POST holdout split.")
-@click.option("--holdout-posts", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="Ad-hoc: file of POST source ids (one per line) to hold out. Prefer --splits.")
-@click.option("--dry-run", is_flag=True, help="Report data assembly (n_pairs, n_posts, class balance) without embedding or writing.")
+@click.option(
+    "--pairs", "pairs_path", required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The content-matched pairs.jsonl corpus to train on.",
+)
+@click.option(
+    "--out", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path),
+    help="Artifact directory to write (head.json + meta.json).",
+)
+@click.option(
+    "--splits", "splits_path", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="The shared splits.json (make-splits): fit on the detector pool only, never touch the "
+    "frozen eval posts, report a styler-posts holdout metric. Mutually exclusive with "
+    "--holdout-*.",
+)
+@click.option(
+    "--test-size", default=0.25, show_default=True, type=float,
+    help="Held-out POST fraction per CV split.",
+)
+@click.option(
+    "--n-splits", default=8, show_default=True, type=int,
+    help="GroupShuffleSplit folds for the CV metric.",
+)
+@click.option(
+    "--C", "C", default=None, type=float,
+    help="FIXED C override. Default (unset) selects C per training side by inner group-CV over "
+    "C_GRID — do NOT sweep this flag against the printed metric; that is tuning on the test set.",
+)
+@click.option(
+    "--embed-model", default=None,
+    help="Style backbone (sentence-transformers id); pinned into meta.json. [default: "
+    "StyleDistance/styledistance]",
+)
+@click.option(
+    "--holdout-frac", default=0.0, show_default=True, type=float,
+    help="Ad-hoc: hold out this fraction of POSTs and ship the head fit on the rest. Prefer "
+    "--splits for the shared contract.",
+)
+@click.option(
+    "--holdout-seed", default=0, show_default=True, type=int,
+    help="Seed for the deterministic by-POST holdout split.",
+)
+@click.option(
+    "--holdout-posts", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None,
+    help="Ad-hoc: file of POST source ids (one per line) to hold out. Prefer --splits.",
+)
+@click.option(
+    "--dry-run", is_flag=True,
+    help="Report data assembly (n_pairs, n_posts, class balance) without embedding or writing.",
+)
 def train_clf_cmd(
     pairs_path: Path,
     out_dir: Path,
@@ -578,9 +775,9 @@ def train_clf_cmd(
             splits_path=splits_path,
         )
     except ImportError as exc:
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(exc)) from exc
     except ValueError as exc:
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(exc)) from exc
 
     _echo_clf_metrics(metrics)
     if "styler_holdout" in metrics:
@@ -600,24 +797,77 @@ def train_clf_cmd(
 
 
 @main.command("train")
-@click.option("--data-dir", "data_dir", required=True, type=click.Path(exists=True, file_okay=False, path_type=Path), help="Corpus directory holding pairs.jsonl. Required, no default: the explicit path is the reproducibility record — never silently train on the wrong corpus.")
-@click.option("--manifest-out", required=True, type=click.Path(dir_okay=False, path_type=Path), help="Where to write the run manifest JSON (the ONLY artifact that gets committed).")
-@click.option("--work-dir", required=True, type=click.Path(file_okay=False, path_type=Path), help="Scratch dir for assembled data, tinker logs, and the exported adapter (never committed).")
-@click.option("--splits", "splits_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="The shared splits.json: train on STYLER-role posts only (the contract; see make-splits). Omit only for fixture/experiment corpora.")
+@click.option(
+    "--data-dir", "data_dir", required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Corpus directory holding pairs.jsonl. Required, no default: the explicit path is the "
+    "reproducibility record — never silently train on the wrong corpus.",
+)
+@click.option(
+    "--manifest-out", required=True, type=click.Path(dir_okay=False, path_type=Path),
+    help="Where to write the run manifest JSON (the ONLY artifact that gets committed).",
+)
+@click.option(
+    "--work-dir", required=True, type=click.Path(file_okay=False, path_type=Path),
+    help="Scratch dir for assembled data, tinker logs, and the exported adapter (never "
+    "committed).",
+)
+@click.option(
+    "--splits", "splits_path", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="The shared splits.json: train on STYLER-role posts only (the contract; see "
+    "make-splits). Omit only for fixture/experiment corpora.",
+)
 @click.option("--base-model", default=None, help="Tinker base model id. [default: Qwen/Qwen3.5-9B]")
 @click.option("--lora-rank", default=None, type=int, help="LoRA rank. [default: 32]")
-@click.option("--lr", "learning_rate", default=None, type=float, help="Learning rate. Default: the cookbook's per-model recommendation (hyperparam_utils.get_lr).")
-@click.option("--lr-schedule", default="linear", show_default=True, type=click.Choice(["linear", "cosine", "constant"]))
-@click.option("--epochs", "num_epochs", default=None, type=int, help="Training epochs. [default: 1]")
-@click.option("--batch-size", default=None, type=int, help="Examples per training batch. [default: 64]")
-@click.option("--max-length", default=None, type=int, help="Max sequence length after tokenisation. [default: 8192]")
-@click.option("--renderer", "renderer_name", default=None, help="Cookbook renderer name (chat template). Default: the model's recommended renderer — pass e.g. qwen3_5_disable_thinking to pin no-think.")
-@click.option("--val-frac", default=None, type=float, help="Fraction of POSTs held out for val loss (by-post, deterministic). [default: 0.1]")
-@click.option("--seed", default=0, show_default=True, type=int, help="Seed for the val split and epoch shuffling.")
+@click.option(
+    "--lr", "learning_rate", default=None, type=float,
+    help="Learning rate. Default: the cookbook's per-model recommendation "
+    "(hyperparam_utils.get_lr).",
+)
+@click.option(
+    "--lr-schedule", default="linear", show_default=True,
+    type=click.Choice(["linear", "cosine", "constant"]),
+)
+@click.option(
+    "--epochs", "num_epochs", default=None, type=int,
+    help="Training epochs. [default: 1]",
+)
+@click.option(
+    "--batch-size", default=None, type=int,
+    help="Examples per training batch. [default: 64]",
+)
+@click.option(
+    "--max-length", default=None, type=int,
+    help="Max sequence length after tokenisation. [default: 8192]",
+)
+@click.option(
+    "--renderer", "renderer_name", default=None,
+    help="Cookbook renderer name (chat template). Default: the model's recommended renderer — "
+    "pass e.g. qwen3_5_disable_thinking to pin no-think.",
+)
+@click.option(
+    "--val-frac", default=None, type=float,
+    help="Fraction of POSTs held out for val loss (by-post, deterministic). [default: 0.1]",
+)
+@click.option(
+    "--seed", default=0, show_default=True, type=int,
+    help="Seed for the val split and epoch shuffling.",
+)
 @click.option("--run-id", default=None, help="Run id for the manifest. [default: UTC timestamp]")
-@click.option("--price-per-mtok", "train_price_per_mtok", default=None, type=float, help="Train price $/1M tokens for the cost estimate (see the Tinker models page; deliberately not hardcoded).")
-@click.option("--download-adapter/--no-download-adapter", default=True, show_default=True, help="Export the trained LoRA as a PEFT adapter into work-dir after the run.")
-@click.option("--dry-run", is_flag=True, help="Assemble, write the manifest preview + token/cost estimate, and stop. No key, no spend.")
+@click.option(
+    "--price-per-mtok", "train_price_per_mtok", default=None, type=float,
+    help="Train price $/1M tokens for the cost estimate (see the Tinker models page; "
+    "deliberately not hardcoded).",
+)
+@click.option(
+    "--download-adapter/--no-download-adapter", default=True, show_default=True,
+    help="Export the trained LoRA as a PEFT adapter into work-dir after the run.",
+)
+@click.option(
+    "--dry-run", is_flag=True,
+    help="Assemble, write the manifest preview + token/cost estimate, and stop. No key, no spend.",
+)
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the pre-spend confirmation prompt.")
 def train_cmd(
     data_dir: Path,
@@ -675,7 +925,7 @@ def train_cmd(
     try:
         preview = tr.run_training(pairs_path, work_dir, manifest_out, dry_run=True, **kwargs)
     except ValueError as exc:
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(exc)) from exc
     data = preview.manifest["data"]
     est = preview.manifest["estimate"]
     click.echo(
@@ -704,9 +954,9 @@ def train_cmd(
     try:
         result = tr.run_training(pairs_path, work_dir, manifest_out, dry_run=False, **kwargs)
     except ImportError as exc:
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(exc)) from exc
     except ValueError as exc:
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(exc)) from exc
 
     run_result = result.manifest["result"] or {}
     for key in ("train_mean_nll", "test/nll", "train_tokens"):
@@ -721,21 +971,68 @@ def train_cmd(
 
 
 @main.command("run")
-@click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=False)
-@click.option("--backend", type=click.Choice(["tinker", "openai"]), default="tinker", show_default=True, help="tinker: sample the trained checkpoint (no serving infra; needs TINKER_API_KEY + trainer extra). openai: any OpenAI-compatible endpoint (Fireworks, mlx_lm.server, Osaurus).")
-@click.option("--sampler-path", default=None, help="[tinker] tinker:// sampler checkpoint (from the training manifest result.checkpoints.sampler_path).")
-@click.option("--base-model", default=None, help="[tinker] Base model id the adapter was trained on (manifest hyperparameters.base_model).")
-@click.option("--renderer", "renderer_name", default=None, help="[tinker] Cookbook renderer used at training time (manifest result.renderer_name).")
-@click.option("--base-url", default=None, help="[openai] Endpoint base URL, e.g. http://localhost:8080/v1.")
+@click.argument(
+    "file", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=False,
+)
+@click.option(
+    "--backend", type=click.Choice(["tinker", "openai"]), default="tinker", show_default=True,
+    help="tinker: sample the trained checkpoint (no serving infra; needs TINKER_API_KEY + "
+    "trainer extra). openai: any OpenAI-compatible endpoint (Fireworks, mlx_lm.server, Osaurus).",
+)
+@click.option(
+    "--sampler-path", default=None,
+    help="[tinker] tinker:// sampler checkpoint (from the training manifest "
+    "result.checkpoints.sampler_path).",
+)
+@click.option(
+    "--base-model", default=None,
+    help="[tinker] Base model id the adapter was trained on (manifest "
+    "hyperparameters.base_model).",
+)
+@click.option(
+    "--renderer", "renderer_name", default=None,
+    help="[tinker] Cookbook renderer used at training time (manifest result.renderer_name).",
+)
+@click.option(
+    "--base-url", default=None,
+    help="[openai] Endpoint base URL, e.g. http://localhost:8080/v1.",
+)
 @click.option("--model", default=None, help="[openai] Served model name.")
-@click.option("--api-key-env", default=None, help="[openai] Env var holding the endpoint key (e.g. FIREWORKS_API_KEY); omit for keyless local servers.")
+@click.option(
+    "--api-key-env", default=None,
+    help="[openai] Env var holding the endpoint key (e.g. FIREWORKS_API_KEY); omit for keyless "
+    "local servers.",
+)
 @click.option("--temperature", default=0.3, show_default=True, type=float)
-@click.option("--max-tokens", default=None, type=int, help="Output-token budget per chunk. [default: scaled off --max-chunk-chars, floor 2000]")
-@click.option("--max-chunk-chars", default=None, type=int, help="Inference chunk budget. [default: 1500]")
-@click.option("--inline-headings/--no-inline-headings", default=False, show_default=True, help="Match the chunk diet the adapter was TRAINED on (the training manifest records it under data.chunk_scale). On = the v2 cross-heading diet: headings are chunk content the styler may rewrite, and chunks span sections. Off = v1, headings pass through verbatim as context. Serving at the wrong diet is out-of-distribution and makes the styler fall back to copying its input.")
-@click.option("--best-of", default=1, show_default=True, type=int, help="Sample N candidates per chunk and keep the most Dan-scored (needs --detector-model).")
-@click.option("--detector-model", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None, help="Voice-classifier artifact dir for --best-of reranking.")
-@click.option("--write", "write_in_place", is_flag=True, help="Rewrite FILE in place (a .bak backup is left beside it). Default prints to stdout.")
+@click.option(
+    "--max-tokens", default=None, type=int,
+    help="Output-token budget per chunk. [default: scaled off --max-chunk-chars, floor 2000]",
+)
+@click.option(
+    "--max-chunk-chars", default=None, type=int,
+    help="Inference chunk budget. [default: 1500]",
+)
+@click.option(
+    "--inline-headings/--no-inline-headings", default=False, show_default=True,
+    help="Match the chunk diet the adapter was TRAINED on (the training manifest records it "
+    "under data.chunk_scale). On = the v2 cross-heading diet: headings are chunk content the "
+    "styler may rewrite, and chunks span sections. Off = v1, headings pass through verbatim as "
+    "context. Serving at the wrong diet is out-of-distribution and makes the styler fall back to "
+    "copying its input.",
+)
+@click.option(
+    "--best-of", default=1, show_default=True, type=int,
+    help="Sample N candidates per chunk and keep the most Dan-scored (needs --detector-model).",
+)
+@click.option(
+    "--detector-model", type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Voice-classifier artifact dir for --best-of reranking.",
+)
+@click.option(
+    "--write", "write_in_place", is_flag=True,
+    help="Rewrite FILE in place (a .bak backup is left beside it). Default prints to stdout.",
+)
 def run_cmd(
     file: Path | None,
     backend: str,
@@ -768,7 +1065,10 @@ def run_cmd(
     tokens = max_tokens if max_tokens is not None else infer.max_tokens_for(chunk_chars)
     if backend == "tinker":
         if not sampler_path or not base_model:
-            raise click.UsageError("--backend tinker needs --sampler-path and --base-model (see the training manifest)")
+            raise click.UsageError(
+                "--backend tinker needs --sampler-path and --base-model "
+                "(see the training manifest)"
+            )
         if not config.get_key("TINKER_API_KEY"):
             raise click.ClickException("TINKER_API_KEY is not set")
         try:
@@ -777,7 +1077,7 @@ def run_cmd(
                 temperature=temperature, max_tokens=tokens,
             )
         except ImportError as exc:
-            raise click.ClickException(str(exc))
+            raise click.ClickException(str(exc)) from exc
     else:
         if not base_url or not model:
             raise click.UsageError("--backend openai needs --base-url and --model")
@@ -808,7 +1108,11 @@ def run_cmd(
     click.echo(
         f"[{result.n_chunks} chunk(s), {result.n_candidates} sample(s)"
         + (f", {result.n_kept_input} kept as input" if result.n_kept_input else "")
-        + (f", {result.n_anchor_rejected} sample(s) rejected for anchor loss" if result.n_anchor_rejected else "")
+        + (
+            f", {result.n_anchor_rejected} sample(s) rejected for anchor loss"
+            if result.n_anchor_rejected
+            else ""
+        )
         + "]",
         err=True,
     )

@@ -1,7 +1,8 @@
-from ruamel.yaml import YAML
-from pathlib import Path
-from datetime import date, datetime
 import re
+from datetime import date, datetime
+from pathlib import Path
+
+from ruamel.yaml import YAML
 
 yaml = YAML(typ="rt")
 yaml.preserve_quotes = True
@@ -167,7 +168,7 @@ def is_valid_qmd_file(path: Path) -> bool:
         return False
     if any(part.startswith(".") for part in path.parts):
         return False
-    if "renv" in path.parts or "_site" in path.parts:
+    if "renv" in path.parts or "_site" in path.parts:  # noqa: SIM103 — last of a guard chain
         return False
 
     return True

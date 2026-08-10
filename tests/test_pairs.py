@@ -89,7 +89,9 @@ def test_build_pair_content_empty_context_passthrough():
 
 def _record_with_context(context="## Heading"):
     rec = _good_record()
-    rec["messages"][1]["content"] = build_pair_content(context, "It is worth noting the rich tapestry.")
+    rec["messages"][1]["content"] = build_pair_content(
+        context, "It is worth noting the rich tapestry."
+    )
     rec["messages"][2]["content"] = build_pair_content(context, "We dig in.")
     rec["meta"]["context"] = context
     return rec
@@ -102,7 +104,9 @@ def test_context_pair_validates():
 def test_context_must_prefix_both_sides():
     rec = _record_with_context()
     # Heading paraphrased on the user (slop) side only — the failure we guard.
-    rec["messages"][1]["content"] = "## A Different Heading\n\nIt is worth noting the rich tapestry."
+    rec["messages"][1]["content"] = (
+        "## A Different Heading\n\nIt is worth noting the rich tapestry."
+    )
     errs = validate_pair_record(rec)
     assert any("meta.context" in e for e in errs)
 
@@ -118,7 +122,9 @@ def test_cross_heading_record_validates_with_inline_headings():
     the v2 chunk mode is representable in the corpus contract as-is."""
     rec = _good_record()
     passage = "## A Section\n\nSome prose.\n\n### Another\n\nMore prose."
-    rec["messages"][1]["content"] = passage.replace("Some prose.", "It is worth noting the tapestry.")
+    rec["messages"][1]["content"] = passage.replace(
+        "Some prose.", "It is worth noting the tapestry."
+    )
     rec["messages"][2]["content"] = passage
     rec["meta"]["merge_max_chars"] = 4500
     rec["meta"]["chunk_mode"] = "cross-heading"

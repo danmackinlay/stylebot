@@ -129,7 +129,9 @@ class ChunkOpts:
         help="Prepend the section heading (verbatim) to both sides of each pair as fixed context.")
     cross_heading: bool = opt(
         False, "--cross-heading/--no-cross-heading", show_default=True,
-        help="Pack across section boundaries with headings as chunk content (needs --merge; overrides --heading-context). This, not --merge-max-chars, is what buys chunk length.")
+        help="Pack across section boundaries with headings as chunk content (needs --merge; "
+            "overrides --heading-context). This, not --merge-max-chars, is what buys chunk "
+            "length.")
     sort_name: str = opt(
         "none", "--sort", "sort_name",
         type=click.Choice(["none", "length", "source"]), show_default=True)
@@ -154,7 +156,9 @@ class InspectOpts:
 
     report_path: Path | None = opt(
         None, "--report", "report_path", type=click.Path(dir_okay=False, path_type=Path),
-        help="Write a self-contained HTML report of the selected targets and exit (pre-generation — vets selection, generates nothing; browse generated pairs via ai-style eval --report).")
+        help="Write a self-contained HTML report of the selected targets and exit "
+            "(pre-generation — vets selection, generates nothing; browse generated pairs via "
+            "ai-style eval --report).")
     report_max_rows: int = opt(
         2000, "--report-max-rows", show_default=True, type=int,
         help="Cap table rows in the HTML report (0 = all).")
@@ -179,38 +183,59 @@ class GenOpts:
 
     openrouter_models: Sequence[str] = opt(
         (), "--openrouter-model", "openrouter_models", multiple=True,
-        help="OpenRouter model id to generate slop with (repeatable), e.g. anthropic/claude-opus-4-8. One key ($OPENROUTER_API_KEY) reaches many upstream models — ideal for multi-source rotation.")
+        help="OpenRouter model id to generate slop with (repeatable), e.g. "
+            "anthropic/claude-opus-4-8. One key ($OPENROUTER_API_KEY) reaches many upstream "
+            "models — ideal for multi-source rotation.")
     provider_sort: str = opt(
         "throughput", "--provider-sort",
         type=click.Choice(["throughput", "price", "latency", "none"]), show_default=True,
-        help="OpenRouter provider-routing preference (default load-balancing favours price and can land on ~10 tok/s upstreams; 'none' restores it). OpenRouter models only; recorded in meta.gen next to the served provider.")
+        help="OpenRouter provider-routing preference (default load-balancing favours price and "
+            "can land on ~10 tok/s upstreams; 'none' restores it). OpenRouter models only; "
+            "recorded in meta.gen next to the served provider.")
     sticky_provider: bool = opt(
         True, "--sticky-provider/--no-sticky-provider", show_default=True,
-        help="Pin each live session to the provider that served its first turn — keeps its prefix cache hot AND the serving stack constant, so window-position covariates aren't confounded by provider hops. OpenRouter models only; no effect on stateless runs.")
+        help="Pin each live session to the provider that served its first turn — keeps its "
+            "prefix cache hot AND the serving stack constant, so window-position covariates "
+            "aren't confounded by provider hops. OpenRouter models only; no effect on stateless "
+            "runs.")
     prompt_cache: bool = opt(
         True, "--prompt-cache/--no-prompt-cache", show_default=True,
-        help="Anthropic models: mark session history with a moving cache_control breakpoint (cache reads at 0.1x after a 1.25x write; inert under ~1024-token prefixes and for other model families). Verify via meta.gen cached_tokens/cost.")
+        help="Anthropic models: mark session history with a moving cache_control breakpoint "
+            "(cache reads at 0.1x after a 1.25x write; inert under ~1024-token prefixes and for "
+            "other model families). Verify via meta.gen cached_tokens/cost.")
     slop_strategies: Sequence[str] = opt(
         (synth.DEFAULT_STRATEGY,), "--slop-strategy", "slop_strategies",
         multiple=True, show_default=True,
-        help=f"Slop-prompt flavour ({', '.join(synth.STRATEGIES)}); repeatable — the rotation becomes models x strategies, so one run diversifies prompts like it already diversifies models. Recorded as meta.slop_strategy and folded into synth_key. With --slop-system-file, pass exactly one label for the custom prompt.")
+        help=f"Slop-prompt flavour ({', '.join(synth.STRATEGIES)}); repeatable — the rotation "
+            "becomes models x strategies, so one run diversifies prompts like it already "
+            "diversifies models. Recorded as meta.slop_strategy and folded into synth_key. With "
+            "--slop-system-file, pass exactly one label for the custom prompt.")
     slop_system_file: Path | None = opt(
         None, "--slop-system-file",
         type=click.Path(exists=True, dir_okay=False, path_type=Path),
-        help="Override the slop system prompt with this file's contents (e.g. an author's own slop catalogue), labelled by --slop-strategy. Keeps blog-specific prompts out of stylebot.")
+        help="Override the slop system prompt with this file's contents (e.g. an author's own "
+            "slop catalogue), labelled by --slop-strategy. Keeps blog-specific prompts out of "
+            "stylebot.")
     max_tokens: int = opt(
         synth.DEFAULT_SLOP_MAX_TOKENS, "--max-tokens", show_default=True, type=int,
         help="Max completion tokens per slop generation. Raise if a model truncates.")
     timeout: float | None = opt(
         synth.DEFAULT_GEN_TIMEOUT, "--timeout", show_default=True, type=float,
-        help="Per-request HTTP timeout (seconds) for slop generation. A timed-out pair is reported immediately and recorded as an error; it ends its own session (remaining turns defer to the next run) while other sessions continue.")
+        help="Per-request HTTP timeout (seconds) for slop generation. A timed-out pair is "
+            "reported immediately and recorded as an error; it ends its own session (remaining "
+            "turns defer to the next run) while other sessions continue.")
     reasoning_efforts: Sequence[str] = opt(
         (synth.DEFAULT_REASONING_EFFORT,), "--reasoning-effort", "reasoning_efforts",
         type=click.Choice(["high", "medium", "low", "off"]), multiple=True, show_default=True,
-        help="Reasoning effort for the slop generator ('off' disables reasoning); repeatable — the rotation becomes models x strategies x efforts, so effort joins the sweep (facet eval by reasoning_effort). Recorded in meta.gen and folded into synth_key; the requested effort is recorded regardless of what the provider honors.")
+        help="Reasoning effort for the slop generator ('off' disables reasoning); repeatable — "
+            "the rotation becomes models x strategies x efforts, so effort joins the sweep "
+            "(facet eval by reasoning_effort). Recorded in meta.gen and folded into synth_key; "
+            "the requested effort is recorded regardless of what the provider honors.")
     capture_reasoning: bool = opt(
         False, "--capture-reasoning", is_flag=True,
-        help="Save each pair's reasoning/thinking trace to <data-dir>/reasoning.jsonl (keyed by synth_key; never enters pairs.jsonl). Diagnose reasoning blowouts by READING what the model deliberated about; costs nothing extra (the tokens were already paid for).")
+        help="Save each pair's reasoning/thinking trace to <data-dir>/reasoning.jsonl (keyed by "
+            "synth_key; never enters pairs.jsonl). Diagnose reasoning blowouts by READING what "
+            "the model deliberated about; costs nothing extra (the tokens were already paid for).")
     temperature: float | None = opt(
         None, "--temperature", type=float,
         help="Sampling temperature, sent to the API and recorded (provider default if unset).")
@@ -230,13 +255,21 @@ class SessionOpts:
 
     session_turns: int = opt(
         1, "--session-turns", show_default=True, type=int,
-        help="Session mode switch + backstop: 1 = stateless; >1 groups turns into live sessions (each turn sees the real prior passage->slop exchanges, meta.gen session_turn / window_fill). Depth is controlled by --session-max-tokens, NOT this number — sessions end when the token budget binds and leftover turns reflow into fresh sessions; the value only caps turns per session as a runaway guard.")
+        help="Session mode switch + backstop: 1 = stateless; >1 groups turns into live sessions "
+            "(each turn sees the real prior passage->slop exchanges, meta.gen session_turn / "
+            "window_fill). Depth is controlled by --session-max-tokens, NOT this number — "
+            "sessions end when the token budget binds and leftover turns reflow into fresh "
+            "sessions; the value only caps turns per session as a runaway guard.")
     session_max_tokens: int = opt(
         synth.DEFAULT_SESSION_MAX_TOKENS, "--session-max-tokens", show_default=True, type=int,
-        help="THE session depth control: per-session prompt-token budget (absolute; input cost grows ~quadratically with it). Also capped at 80% of each model's context window. Turns beyond the budget reflow into fresh sessions, never dropped.")
+        help="THE session depth control: per-session prompt-token budget (absolute; input cost "
+            "grows ~quadratically with it). Also capped at 80% of each model's context window. "
+            "Turns beyond the budget reflow into fresh sessions, never dropped.")
     max_workers: int = opt(
         0, "--max-workers", show_default="auto", type=int,
-        help="Concurrent sessions (asyncio). 0 = auto: 16 for the OpenRouter rotation this CLI builds, 1 for a library caller's injected generators (an unknown endpoint may want sequential).")
+        help="Concurrent sessions (asyncio). 0 = auto: 16 for the OpenRouter rotation this CLI "
+            "builds, 1 for a library caller's injected generators (an unknown endpoint may want "
+            "sequential).")
     # Library-only policy hook: a wrapper's per-model budget map (the blog pins
     # one), applied on top of `session_max_tokens`.
     session_budgets: Mapping[str, int] | None = None
@@ -258,16 +291,21 @@ class SubstrateOpts:
         help="splits.json of by-post roles (see ai-style make-splits). Required by --role.")
     role: str | None = opt(
         None, "--role", type=click.Choice(SPLIT_ROLES),
-        help="Keep only chunks whose post holds this role. Measurement runs want 'styler': disjoint from the detector's training pool, so the voice classifier stays an unbiased instrument.")
+        help="Keep only chunks whose post holds this role. Measurement runs want 'styler': "
+            "disjoint from the detector's training pool, so the voice classifier stays an "
+            "unbiased instrument.")
     sample_frac: float | None = opt(
         None, "--sample-frac", type=float,
-        help="Keep this fraction of chunks by content hash. Growth-stable: a later run on a larger corpus is a SUPERSET of this one, so the two stay comparable (--limit is not, its first N shifts as posts are added).")
+        help="Keep this fraction of chunks by content hash. Growth-stable: a later run on a "
+            "larger corpus is a SUPERSET of this one, so the two stay comparable (--limit is "
+            "not, its first N shifts as posts are added).")
     sample_salt: str = opt(
         "", "--sample-salt", show_default=True,
         help="Re-draw an independent subsample of the same size (a fresh replicate of the design).")
     limit: int | None = opt(
         None, "--limit", type=int,
-        help="Cap the number of target chunks (cost control / smoke runs). A cap on the substrate, not a definition of it — see --sample-frac.")
+        help="Cap the number of target chunks (cost control / smoke runs). A cap on the "
+            "substrate, not a definition of it — see --sample-frac.")
 
 
 @dataclass(frozen=True)
@@ -285,25 +323,42 @@ class CorpusOpts:
 
     per_generator: bool = opt(
         False, "--per-generator", is_flag=True,
-        help="Emit a pair from EVERY generator per target (n× cost) — the fully-crossed within-target design for experiments; default assigns each target ONE arm by content hash.")
+        help="Emit a pair from EVERY generator per target (n× cost) — the fully-crossed "
+            "within-target design for experiments; default assigns each target ONE arm by "
+            "content hash.")
     assign_seed: str = opt(
         "", "--assign-seed",
-        help="Salt for the content-hash arm assignment. Change it to re-randomize which (model, strategy, effort) arm each target gets — a fresh replicate of the design (changed assignments regenerate on resume).")
+        help="Salt for the content-hash arm assignment. Change it to re-randomize which (model, "
+            "strategy, effort) arm each target gets — a fresh replicate of the design (changed "
+            "assignments regenerate on resume).")
     context_dropout: float = opt(
         0.0, "--context-dropout", show_default=True, type=float,
-        help="Fraction of pairs to keep heading-less (deterministic) so the styler doesn't require a heading.")
+        help="Fraction of pairs to keep heading-less (deterministic) so the styler doesn't "
+            "require a heading.")
     replicate: str = opt(
         "", "--replicate", show_default=True,
-        help="Deliberate-resample label folded into synth_key: the same substrate under a new label mints new cells without colliding with the base corpus (e.g. 'deep128k' for a deep-window arm, 'draw2' for a second sample). Recorded as meta.gen.replicate. Empty = the base corpus.")
+        help="Deliberate-resample label folded into synth_key: the same substrate under a new "
+            "label mints new cells without colliding with the base corpus (e.g. 'deep128k' for a "
+            "deep-window arm, 'draw2' for a second sample). Recorded as meta.gen.replicate. "
+            "Empty = the base corpus.")
     skip_covered: bool = opt(
         False, "--skip-covered/--no-skip-covered", show_default=True,
-        help="Corpus-building coverage mode: skip any target whose text already has >=1 pair in the data-dir under ANY config or epoch (cell-level dedup still applies to the rest). Use when the goal is one pair per passage — without it, a re-key epoch (e.g. an effort-default change) regenerates already-covered targets and doubles their training weight.")
+        help="Corpus-building coverage mode: skip any target whose text already has >=1 pair in "
+            "the data-dir under ANY config or epoch (cell-level dedup still applies to the "
+            "rest). Use when the goal is one pair per passage — without it, a re-key epoch (e.g. "
+            "an effort-default change) regenerates already-covered targets and doubles their "
+            "training weight.")
     max_transform_sim: float | None = opt(
         None, "--max-transform-sim", type=float,
-        help="Identity gate: drop (don't write) any generated pair whose transform_sim exceeds this — the model returned (nearly) the input, which would teach the styler to copy. Dropped pairs are counted loudly (skipped_degenerate) and their cells retry next run. Unset = record everything (the covariate is always stored).")
+        help="Identity gate: drop (don't write) any generated pair whose transform_sim exceeds "
+            "this — the model returned (nearly) the input, which would teach the styler to copy. "
+            "Dropped pairs are counted loudly (skipped_degenerate) and their cells retry next "
+            "run. Unset = record everything (the covariate is always stored).")
     max_length_ratio: float | None = opt(
         None, "--max-length-ratio", type=float,
-        help="Inflation gate: drop any generated pair whose slop/target length ratio exceeds this — a manically inflating model (qwen3-32b ran 4-7x) teaches manic deletion. Counted as skipped_inflated; cells retry next run. Unset = record everything.")
+        help="Inflation gate: drop any generated pair whose slop/target length ratio exceeds "
+            "this — a manically inflating model (qwen3-32b ran 4-7x) teaches manic deletion. "
+            "Counted as skipped_inflated; cells retry next run. Unset = record everything.")
 
 
 # The shared surface, keyed by the parameter each bundle binds to downstream:
@@ -501,7 +556,7 @@ def _resolve_windows(
         except Exception as exc:
             raise click.ClickException(
                 f"could not fetch OpenRouter context windows for the session sweep: {exc}"
-            )
+            ) from exc
         for n in or_names:
             w = registry.get(n.removeprefix("openrouter/"))
             if w:
@@ -542,7 +597,9 @@ def _report_result(
             f"({result.skipped_existing} already present) to {pairs_path}"
         )
         if result.skipped_covered:
-            click.echo(f"  {result.skipped_covered} target(s) already covered, skipped (--skip-covered)")
+            click.echo(
+                f"  {result.skipped_covered} target(s) already covered, skipped (--skip-covered)"
+            )
         if session_turns > 1:
             click.echo(f"  {result.planned_sessions} live session(s) of <= {session_turns} turn(s)")
         for name, count in sorted(result.per_generator.items()):
@@ -553,7 +610,9 @@ def _report_result(
         f"({result.skipped_existing} already present, skipped) -> {pairs_path}"
     )
     if result.skipped_covered:
-        click.echo(f"  {result.skipped_covered} target(s) already covered, skipped (--skip-covered)")
+        click.echo(
+            f"  {result.skipped_covered} target(s) already covered, skipped (--skip-covered)"
+        )
     if result.skipped_degenerate:
         click.secho(
             f"  {result.skipped_degenerate} identity pair(s) DROPPED "
@@ -642,7 +701,9 @@ def run_synth(
         before = len(targets)
         if substrate.role is not None and substrate.splits_path is None:
             raise click.UsageError("--role requires --splits")
-        loaded = splits_mod.load_splits(substrate.splits_path) if substrate.role is not None else None
+        loaded = (
+            splits_mod.load_splits(substrate.splits_path) if substrate.role is not None else None
+        )
         targets = select_targets(
             targets, splits=loaded, role=substrate.role,
             sample_frac=substrate.sample_frac, sample_salt=substrate.sample_salt,
@@ -692,7 +753,9 @@ def run_synth(
         # (system=None) goes down to the factory so it resolves the registry entry
         # and keeps its version; a custom --slop-system-file overrides the system
         # text and is single-strategy by construction (one file = one prompt).
-        custom_system = gen.slop_system_file.read_text(encoding="utf-8") if gen.slop_system_file else None
+        custom_system = (
+            gen.slop_system_file.read_text(encoding="utf-8") if gen.slop_system_file else None
+        )
         strategy_names = list(dict.fromkeys(gen.slop_strategies)) or [synth.DEFAULT_STRATEGY]
         if custom_system is not None and len(strategy_names) > 1:
             raise click.UsageError(
@@ -702,7 +765,7 @@ def run_synth(
         try:
             resolved_strategies = [synth.resolve_strategy(s, custom_system) for s in strategy_names]
         except ValueError as exc:
-            raise click.BadParameter(str(exc), param_hint="--slop-strategy")
+            raise click.BadParameter(str(exc), param_hint="--slop-strategy") from exc
         efforts = list(dict.fromkeys(gen.reasoning_efforts)) or [synth.DEFAULT_REASONING_EFFORT]
 
         # The rotation is the models x strategies x efforts cross product:
@@ -726,7 +789,7 @@ def run_synth(
                 prompt_cache=gen.prompt_cache,
             )
         except RuntimeError as exc:  # missing key, surfaced by config.require_key
-            raise click.ClickException(str(exc))
+            raise click.ClickException(str(exc)) from exc
 
     # Per-model session budgets (policy hook, e.g. a blog's model->budget map).
     if session.session_budgets:

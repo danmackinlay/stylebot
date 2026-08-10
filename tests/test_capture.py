@@ -117,13 +117,17 @@ def test_diff_chunks_bridges_a_short_gap():
 
 def test_diff_chunks_respects_gap_tolerances():
     """A gap wider than either tolerance leaves the regions separate."""
-    long_gap = "\n\n".join(f"Untouched paragraph number {i}, quite long indeed." * 3 for i in range(4))
+    long_gap = "\n\n".join(
+        f"Untouched paragraph number {i}, quite long indeed." * 3 for i in range(4)
+    )
     before = f"It is worth noting the tapestry.\n\n{long_gap}\n\nMoreover, we delve.\n"
     after = f"We dig in.\n\n{long_gap}\n\nSo we dig further.\n"
     # Blocked by the paragraph count.
-    assert len(capture.diff_chunks(before, after, coalesce_gap_paras=2, coalesce_gap_chars=99999)) == 2
+    chunks = capture.diff_chunks(before, after, coalesce_gap_paras=2, coalesce_gap_chars=99999)
+    assert len(chunks) == 2
     # Blocked by the char budget.
-    assert len(capture.diff_chunks(before, after, coalesce_gap_paras=99, coalesce_gap_chars=50)) == 2
+    chunks = capture.diff_chunks(before, after, coalesce_gap_paras=99, coalesce_gap_chars=50)
+    assert len(chunks) == 2
 
 
 def test_diff_chunks_oversized_merge_falls_back_to_parts():

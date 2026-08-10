@@ -414,7 +414,9 @@ def rewrite_text(
                     f"{', '.join(uniq[:3])}{'…' if len(uniq) > 3 else ''})"
                 )
             else:
-                logger.warning("styler returned nothing for a %d-char chunk; kept input", len(chunk))
+                logger.warning(
+                    "styler returned nothing for a %d-char chunk; kept input", len(chunk)
+                )
                 result.decisions.append(f"chunk {n}: kept input (no usable sample)")
         elif scorer is None:
             out = keep[0]
@@ -423,7 +425,7 @@ def rewrite_text(
         else:
             input_score = scorer(chunk.strip())
             scores = [scorer(c) for c in keep]
-            for i, s in zip(keep_idx, scores):
+            for i, s in zip(keep_idx, scores, strict=True):
                 raw_scores[i] = s
             best = min(range(len(scores)), key=scores.__getitem__)
             if scores[best] < input_score:
@@ -501,10 +503,7 @@ def rewrite_pairs_file(
             if not keep:
                 logger.warning("styler returned nothing for %s; skipped", record_id(rec))
                 continue
-            if len(keep) == 1 or scorer is None:
-                output = keep[0]
-            else:
-                output = min(keep, key=scorer)
+            output = keep[0] if len(keep) == 1 or scorer is None else min(keep, key=scorer)
             fp.write(dumps_line({**rec, "output": output}) + "\n")
             fp.flush()
             written += 1

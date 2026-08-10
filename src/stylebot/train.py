@@ -34,7 +34,7 @@ import logging
 import random
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from stylebot.jsonl import dumps_line
@@ -283,7 +283,7 @@ def build_manifest(
         "schema_version": SCHEMA_VERSION,
         "kind": "styler-lora-sft",
         "run_id": run_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "dry_run": dry_run,
         "git_sha": {
             "cwd": git_sha("."),
@@ -353,7 +353,7 @@ class TrainResult:
 
 
 def _default_run_id() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
 
 
 def run_training(
@@ -488,7 +488,8 @@ def _make_presplit_builder(
 
         def __call__(self):
             def load(path: str) -> hf_datasets.Dataset:
-                rows = [json.loads(ln) for ln in Path(path).read_text(encoding="utf-8").splitlines() if ln.strip()]
+                text = Path(path).read_text(encoding="utf-8")
+                rows = [json.loads(ln) for ln in text.splitlines() if ln.strip()]
                 return hf_datasets.Dataset.from_list(rows)
 
             train_on_what = (
@@ -534,7 +535,9 @@ def _read_final_metrics(log_path: Path) -> dict:
                 continue
             total_tokens += int(row.get("num_tokens") or 0)
             for key, value in row.items():
-                if isinstance(value, (int, float)) and ("nll" in key or "loss" in key or "bpb" in key):
+                if isinstance(value, (int, float)) and (
+                    "nll" in key or "loss" in key or "bpb" in key
+                ):
                     final[key] = value
     final["train_tokens"] = total_tokens
     return final

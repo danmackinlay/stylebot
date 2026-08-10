@@ -10,6 +10,7 @@ nastier than test_segment's.
 from __future__ import annotations
 
 import pytest
+from ruamel.yaml import YAMLError
 
 from stylebot.lib import (
     gather_qmd_files,
@@ -59,7 +60,7 @@ def test_empty_frontmatter_block_gives_empty_meta():
 def test_malformed_frontmatter_raises():
     # Contract: garbage YAML propagates — callers own the guard (see
     # targets._load_meta_body, which treats an unreadable post as unselected).
-    with pytest.raises(Exception):
+    with pytest.raises(YAMLError):
         read_w_frontmatter_text("---\ntitle: x\nno closing delimiter")
 
 

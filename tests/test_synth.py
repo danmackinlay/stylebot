@@ -71,7 +71,10 @@ def test_hash_assignment_is_set_stable_and_position_free():
     tail = {t.text: g.name for t, g, _ in synth._assign(targets[1:], gens, per_generator=False)}
     assert all(tail[text] == full[text] for text in tail)  # set-stable
 
-    salted = {t.text: g.name for t, g, _ in synth._assign(targets, gens, per_generator=False, assign_seed="rep2")}
+    salted = {
+        t.text: g.name
+        for t, g, _ in synth._assign(targets, gens, per_generator=False, assign_seed="rep2")
+    }
     assert salted != full  # a fresh replicate of the design
 
 
@@ -281,7 +284,12 @@ def test_meta_records_slop_strategy(tmp_path):
     import json
 
     data_dir = tmp_path / "corpus"
-    target = synth.Target(text="A paragraph long enough to be a worthwhile target.", source="post/x.qmd", chunk_index=0, chunk_total=1)
+    target = synth.Target(
+        text="A paragraph long enough to be a worthwhile target.",
+        source="post/x.qmd",
+        chunk_index=0,
+        chunk_total=1,
+    )
     gen = synth.Generator(name="m", generate=lambda t: "[slop] " + t, strategy="catalogue")
 
     result = synth.synthesize_pairs([target], data_dir, [gen])
@@ -297,7 +305,12 @@ def test_strategies_coexist_no_collision(tmp_path):
     import json
 
     data_dir = tmp_path / "corpus"
-    target = synth.Target(text="A paragraph long enough to be a worthwhile target.", source="post/x.qmd", chunk_index=0, chunk_total=1)
+    target = synth.Target(
+        text="A paragraph long enough to be a worthwhile target.",
+        source="post/x.qmd",
+        chunk_index=0,
+        chunk_total=1,
+    )
 
     def make(strategy):
         return synth.Generator(name="m", generate=lambda t: f"[{strategy}] " + t, strategy=strategy)
@@ -306,7 +319,8 @@ def test_strategies_coexist_no_collision(tmp_path):
     second = synth.synthesize_pairs([target], data_dir, [make("catalogue")])  # must NOT be skipped
     assert second.written == 1
 
-    recs = [json.loads(ln) for ln in (data_dir / "pairs.jsonl").read_text().splitlines() if ln.strip()]
+    lines = (data_dir / "pairs.jsonl").read_text().splitlines()
+    recs = [json.loads(ln) for ln in lines if ln.strip()]
     assert {r["meta"]["slop_strategy"] for r in recs} == {"polish", "catalogue"}
 
 
@@ -336,7 +350,9 @@ def test_prompt_id_stable_and_distinct():
 def test_openrouter_generator_name_and_strategy():
     # Construction is offline (no request); pass an explicit key so it doesn't
     # require OPENROUTER_API_KEY from the environment.
-    gen = synth.openrouter_generator(model="anthropic/claude-opus-4-8", api_key="x", strategy="casual")
+    gen = synth.openrouter_generator(
+        model="anthropic/claude-opus-4-8", api_key="x", strategy="casual"
+    )
     assert gen.name == "openrouter/anthropic/claude-opus-4-8"
     assert gen.strategy == "casual"
 
@@ -555,11 +571,17 @@ def test_openrouter_reasoning_effort_enum(monkeypatch):
     # land on ~10 tok/s upstreams).
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice("slop out")]))
     out = _run_gen(
-        synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x", reasoning_effort="high"),
+        synth.openrouter_generator(
+            model="anthropic/claude-opus-4.8", api_key="x", reasoning_effort="high"
+        ),
         "rewrite me",
     )
     assert out.text == "slop out"  # GenOutput, not a bare string
-    assert calls["extra_body"] == {"reasoning": {"effort": "high"}, "provider": {"sort": "throughput"}, "usage": {"include": True}}
+    assert calls["extra_body"] == {
+        "reasoning": {"effort": "high"},
+        "provider": {"sort": "throughput"},
+        "usage": {"include": True},
+    }
     assert out.meta["provider_sort"] == "throughput"  # the routing request, recorded
 
 
@@ -582,21 +604,36 @@ def test_gen_meta_keys_match_schema_constants(monkeypatch):
 def test_openrouter_reasoning_budget_family(monkeypatch):
     # Budget-style families (qwen/nvidia/google/…) get a token budget instead.
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
-    _run_gen(synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="medium"), "x")
-    assert calls["extra_body"] == {"reasoning": {"max_tokens": 4000}, "provider": {"sort": "throughput"}, "usage": {"include": True}}
+    _run_gen(
+        synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="medium"),
+        "x",
+    )
+    assert calls["extra_body"] == {
+        "reasoning": {"max_tokens": 4000},
+        "provider": {"sort": "throughput"},
+        "usage": {"include": True},
+    }
 
 
 def test_openrouter_reasoning_off(monkeypatch):
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
-    _run_gen(synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="off"), "x")
-    assert calls["extra_body"] == {"reasoning": {"enabled": False}, "provider": {"sort": "throughput"}, "usage": {"include": True}}
+    _run_gen(
+        synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="off"), "x"
+    )
+    assert calls["extra_body"] == {
+        "reasoning": {"enabled": False},
+        "provider": {"sort": "throughput"},
+        "usage": {"include": True},
+    }
 
 
 def test_openrouter_provider_sort_none_omits_field(monkeypatch):
     # provider_sort=None restores OpenRouter's own load-balancing: no provider
     # field on the wire, no provider_sort covariate recorded.
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
-    out = _run_gen(synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", provider_sort=None), "x")
+    out = _run_gen(
+        synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", provider_sort=None), "x"
+    )
     assert "provider" not in calls["extra_body"]
     assert "provider_sort" not in out.meta
 
@@ -605,7 +642,10 @@ def test_reasoning_effort_recorded_regardless_of_shape(monkeypatch):
     # A budget-family model still RECORDS the requested effort string ("medium"),
     # not the wire budget int — the covariate is the request, not what the API did.
     _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
-    out = _run_gen(synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="medium"), "x")
+    out = _run_gen(
+        synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", reasoning_effort="medium"),
+        "x",
+    )
     assert out.meta["reasoning_effort"] == "medium"
 
 
@@ -618,7 +658,10 @@ def test_max_tokens_threaded(monkeypatch):
 def test_temperature_top_p_passed_and_recorded(monkeypatch):
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()], usage=_FakeUsage(11, 22)))
     out = _run_gen(
-        synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x", temperature=0.3, top_p=0.9), "x"
+        synth.openrouter_generator(
+            model="anthropic/claude-opus-4.8", api_key="x", temperature=0.3, top_p=0.9
+        ),
+        "x",
     )
     assert calls["temperature"] == 0.3 and calls["top_p"] == 0.9
     assert out.meta["temperature"] == 0.3 and out.meta["top_p"] == 0.9
@@ -657,10 +700,17 @@ def test_gen_output_meta_recorded(tmp_path):
     import json
 
     data_dir = tmp_path / "corpus"
-    target = synth.Target(text="A paragraph long enough to be a worthwhile target.", source="post/x.qmd", chunk_index=0, chunk_total=1)
+    target = synth.Target(
+        text="A paragraph long enough to be a worthwhile target.",
+        source="post/x.qmd",
+        chunk_index=0,
+        chunk_total=1,
+    )
     gen = synth.Generator(
         name="m",
-        generate=lambda t: synth.GenOutput("[slop] " + t, {"model": "m", "reasoning_effort": "low", "completion_tokens": 5}),
+        generate=lambda t: synth.GenOutput(
+            "[slop] " + t, {"model": "m", "reasoning_effort": "low", "completion_tokens": 5}
+        ),
     )
     synth.synthesize_pairs([target], data_dir, [gen])
     rec = json.loads((data_dir / "pairs.jsonl").read_text().splitlines()[0])
@@ -673,8 +723,15 @@ def test_bare_string_generator_has_no_gen_meta(tmp_path):
     import json
 
     data_dir = tmp_path / "corpus"
-    target = synth.Target(text="A paragraph long enough to be a worthwhile target.", source="post/x.qmd", chunk_index=0, chunk_total=1)
-    synth.synthesize_pairs([target], data_dir, [synth.Generator(name="m", generate=lambda t: "[slop] " + t)])
+    target = synth.Target(
+        text="A paragraph long enough to be a worthwhile target.",
+        source="post/x.qmd",
+        chunk_index=0,
+        chunk_total=1,
+    )
+    synth.synthesize_pairs(
+        [target], data_dir, [synth.Generator(name="m", generate=lambda t: "[slop] " + t)]
+    )
     rec = json.loads((data_dir / "pairs.jsonl").read_text().splitlines()[0])
     assert "gen" not in rec["meta"]
 
@@ -720,7 +777,9 @@ def test_async_injected_generator_works(tmp_path):
     async def gen(text, history=None):
         return "[async-slop] " + text
 
-    result = synth.synthesize_pairs(_targets(2), tmp_path / "c", [synth.Generator("ag", generate=gen)])
+    result = synth.synthesize_pairs(
+        _targets(2), tmp_path / "c", [synth.Generator("ag", generate=gen)]
+    )
     assert result.written == 2
 
 
@@ -735,7 +794,11 @@ def test_keys_are_content_only_in_all_modes():
     [stateless1, stateless2] = synth._plan_sessions(keyed, session_turns=1)
     [sessioned] = synth._plan_sessions(keyed, session_turns=2)
     assert stateless1.session_id == "" and sessioned.session_id != ""
-    assert [t.key for t in sessioned.turns] == [stateless1.turns[0].key, stateless2.turns[0].key] == [k1, k2]
+    assert (
+        [t.key for t in sessioned.turns]
+        == [stateless1.turns[0].key, stateless2.turns[0].key]
+        == [k1, k2]
+    )
     # Reflow keeps keys, renumbers indices, and re-derives the session label
     # from the actual composition.
     respun = synth._respin_session(g, sessioned.turns[1:])
@@ -909,7 +972,10 @@ def test_turn_error_reflows_remainder(tmp_path):
 
     result = synth.synthesize_pairs(
         targets, tmp_path / "c",
-        [synth.Generator("bad", generate=bad), synth.Generator("good", generate=lambda t, history=None: "[slop] " + t)],
+        [
+            synth.Generator("bad", generate=bad),
+            synth.Generator("good", generate=lambda t, history=None: "[slop] " + t),
+        ],
         session_turns=2,
     )
     assert result.per_generator.get("good") == 2
@@ -1162,7 +1228,8 @@ def test_prompts_sidecar_written_and_deduped(tmp_path):
 
 
 def test_transform_similarity_bounds():
-    assert synth.transform_similarity("same text here", "same text  here") == 1.0  # whitespace-insensitive
+    # whitespace-insensitive
+    assert synth.transform_similarity("same text here", "same text  here") == 1.0
     assert synth.transform_similarity("", "") == 1.0
     long_a = "completely original prose about macroeconomic weather patterns " * 5
     long_b = "utterly different words concerning tidal marmalade physics today " * 5
@@ -1173,9 +1240,19 @@ def test_transform_similarity_bounds():
 def test_transform_sim_recorded_on_pairs(tmp_path):
     import json
 
-    target = synth.Target(text="A paragraph long enough to be a worthwhile target here.", source="p.qmd", chunk_index=0, chunk_total=1)
+    target = synth.Target(
+        text="A paragraph long enough to be a worthwhile target here.",
+        source="p.qmd",
+        chunk_index=0,
+        chunk_total=1,
+    )
     echo = synth.Generator("echo", generate=lambda t: t + " ")  # near-verbatim no-op
-    rewrite = synth.Generator("rw", generate=lambda t: "Entirely different slop with none of the original words at all, padded out somewhat.")
+    rewrite = synth.Generator(
+        "rw",
+        generate=lambda t: (
+            "Entirely different slop with none of the original words at all, padded out somewhat."
+        ),
+    )
     synth.synthesize_pairs([target], tmp_path / "a", [echo])
     synth.synthesize_pairs([target], tmp_path / "b", [rewrite])
     sim_a = json.loads((tmp_path / "a" / "pairs.jsonl").read_text())["meta"]["transform_sim"]
@@ -1202,7 +1279,10 @@ def test_reasoning_text_routed_to_sidecar_not_corpus(tmp_path):
     def gen(text, history=None):
         return synth.GenOutput(
             "[slop] " + text,
-            {"reasoning_tokens": 4321, "reasoning_text": "Hmm, let me deliberate at absurd length..."},
+            {
+                "reasoning_tokens": 4321,
+                "reasoning_text": "Hmm, let me deliberate at absurd length...",
+            },
         )
 
     data_dir = tmp_path / "corpus"
@@ -1257,7 +1337,8 @@ def test_max_transform_sim_gate_drops_identity_outputs(tmp_path):
     result = synth.synthesize_pairs(targets, data_dir, [echo], max_transform_sim=0.95)
     assert result.skipped_degenerate == 6
     assert result.written == 0
-    assert not (data_dir / "pairs.jsonl").exists() or not (data_dir / "pairs.jsonl").read_text().strip()
+    pairs = data_dir / "pairs.jsonl"
+    assert not pairs.exists() or not pairs.read_text().strip()
     # The spend is still accounted even though nothing was written.
     assert result.model_stats["echo-model"]["pairs"] == 6
 

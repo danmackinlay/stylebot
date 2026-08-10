@@ -188,7 +188,7 @@ class GenOutput:
     meta: dict = field(default_factory=dict)
 
 
-def _normalize_gen_output(out: "str | GenOutput") -> tuple[str, dict]:
+def _normalize_gen_output(out: str | GenOutput) -> tuple[str, dict]:
     """Coerce a generator return (``str`` or ``GenOutput``) to ``(text, gen_meta)``."""
     if isinstance(out, GenOutput):
         return out.text, dict(out.meta)
@@ -214,7 +214,7 @@ class Generator:
     """
 
     name: str
-    generate: Callable[..., "str | GenOutput"] | None = None
+    generate: Callable[..., str | GenOutput] | None = None
     strategy: str = DEFAULT_STRATEGY
     reasoning_effort: str = DEFAULT_REASONING_EFFORT
     prompt_id: str = ""
@@ -223,7 +223,7 @@ class Generator:
     # a prompt_id is always resolvable to the prompt that produced the pairs.
     prompt_system: str = ""
     session_budget: int | None = None
-    begin_session: Callable[[], Callable[..., "str | GenOutput"]] | None = None
+    begin_session: Callable[[], Callable[..., str | GenOutput]] | None = None
 
     def __call__(self, target_text: str, history: list[dict] | None = None):
         if self.generate is None:
@@ -289,7 +289,9 @@ def _reasoning_text_of(message) -> str | None:
         return text
     details = getattr(message, "reasoning_details", None)
     if details:
-        parts = [d.get("text") if isinstance(d, dict) else getattr(d, "text", None) for d in details]
+        parts = [
+            d.get("text") if isinstance(d, dict) else getattr(d, "text", None) for d in details
+        ]
         joined = "\n".join(p for p in parts if p)
         return joined or None
     return None
@@ -347,7 +349,11 @@ def openai_generator(
                 # this is inert early in a session.
                 last = dict(messages[-2])
                 last["content"] = [
-                    {"type": "text", "text": last["content"], "cache_control": {"type": "ephemeral"}}
+                    {
+                        "type": "text",
+                        "text": last["content"],
+                        "cache_control": {"type": "ephemeral"},
+                    }
                 ]
                 messages[-2] = last
             kwargs: dict = {"model": model, "max_tokens": max_tokens, "messages": messages}

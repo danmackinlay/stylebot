@@ -26,7 +26,9 @@ def test_split_sections_excludes_headers_and_carries_heading():
     secs = _split_sections(body)  # list of (heading, body)
     bodies = "\n".join(b for _, b in secs)
     assert "## A" not in bodies and "### B" not in bodies  # headers excluded from bodies
-    assert ("", "pre\n") in [(h, b) for h, b in secs] or any(h == "" and "pre" in b for h, b in secs)
+    assert ("", "pre\n") in [(h, b) for h, b in secs] or any(
+        h == "" and "pre" in b for h, b in secs
+    )
     # Each section carries its immediate heading.
     by_heading = {h: b for h, b in secs}
     assert "para a" in by_heading["## A"]
@@ -55,7 +57,10 @@ def test_is_link_list_prose_residual():
     # Pure link list -> dropped.
     assert _is_link_list("[A](http://a) [B](http://b) [C](http://c) [D](http://d)")
     # Link-dense PROSE -> kept (URLs would fool a density metric).
-    prose = "I recommend [The Gradient](https://thegradient.pub) which is genuinely excellent and worth your time and attention."
+    prose = (
+        "I recommend [The Gradient](https://thegradient.pub) which is genuinely "
+        "excellent and worth your time and attention."
+    )
     assert not _is_link_list(prose)
 
 
@@ -64,7 +69,9 @@ def test_is_link_list_prose_residual():
 
 def test_merge_packs_short_paragraphs(tmp_path):
     root = tmp_path / "blog"
-    short = "A short take, under two hundred characters but real prose with voice and intent indeed."
+    short = (
+        "A short take, under two hundred characters but real prose with voice and intent indeed."
+    )
     body = f"---\ntitle: t\nautomation: 0\n---\n\n{short}\n\n{short}\n\n{short}\n"
     _write(root, "post/s.qmd", body)
     # Non-merge with floor 200 drops all three short paras.
@@ -157,7 +164,8 @@ def test_drop_list_items_both_modes(tmp_path):
     body = (
         "---\ntitle: t\nautomation: 0\n---\n\n"
         f"{P1}\n\n"
-        "* a bulleted item that is long enough on its own to clear the eighty character minimum bar\n"
+        "* a bulleted item that is long enough on its own to clear the eighty character "
+        "minimum bar\n"
     )
     _write(root, "post/li.qmd", body)
     # Non-merge: the bullet survives by default, dropped with drop_list_items.
@@ -170,7 +178,10 @@ def test_drop_list_items_both_modes(tmp_path):
 
 def test_cross_heading_packs_across_sections_with_headings_inline(tmp_path):
     root = tmp_path / "blog"
-    body = f"---\ntitle: t\nautomation: 0\n---\n\n{P1}\n\n## Section Two\n\n{P2}\n\n### Section Three\n\n{P3}\n"
+    body = (
+        f"---\ntitle: t\nautomation: 0\n---\n\n{P1}\n\n"
+        f"## Section Two\n\n{P2}\n\n### Section Three\n\n{P3}\n"
+    )
     _write(root, "post/x.qmd", body)
     blocks = synth.iter_targets(
         blog_root=root, min_chars=50, merge=True, merge_max_chars=5000, cross_heading=True

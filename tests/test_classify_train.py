@@ -40,7 +40,11 @@ def _write_fake_corpus(path, n_posts: int = 4, chunks: int = 3, n_synth_posts: i
                 rec = {
                     "messages": [
                         {"role": "system", "content": STYLE_SYSTEM},
-                        {"role": "user", "content": f"It is worth noting that post {p} chunk {c} delves into the tapestry."},
+                        {
+                            "role": "user",
+                            "content": f"It is worth noting that post {p} chunk {c} "
+                            "delves into the tapestry.",
+                        },
                         {"role": "assistant", "content": f"Post {p} chunk {c}: the tight version."},
                     ],
                     "meta": meta,
@@ -85,7 +89,12 @@ def test_assemble_dataset_extra_positives_are_injected_and_flagged(tmp_path):
     corpus = tmp_path / "pairs.jsonl"
     _write_fake_corpus(corpus, n_posts=2, chunks=1)
     extra = [
-        Target(text="A free-standing authored paragraph.", source="post/free1.qmd", chunk_index=0, chunk_total=1),
+        Target(
+            text="A free-standing authored paragraph.",
+            source="post/free1.qmd",
+            chunk_index=0,
+            chunk_total=1,
+        ),
         ("A plain-tuple paragraph.", "post/free2.qmd"),
         ("   ", "post/blank.qmd"),  # blank -> dropped
     ]
@@ -178,7 +187,7 @@ def test_subset_dataset_remaps_pairs_and_aligns_rows():
     assert sub.n_pairs == 6 and sub.n_pairs_synthetic == 3 and sub.n_pairs_real == 3
     # rows are the kept original indices in order -> X[rows] aligns with sub.
     assert [ds.texts[i] for i in rows] == sub.texts
-    for k, (s_row, a_row) in enumerate(sub.pair_rows):
+    for s_row, a_row in sub.pair_rows:
         assert sub.labels[s_row] == ct.LABEL_SLOP and sub.labels[a_row] == ct.LABEL_DAN
         assert sub.groups[s_row] == sub.groups[a_row]
         assert sub.texts[s_row].startswith("slop") and sub.texts[a_row].startswith("author")
@@ -198,7 +207,11 @@ def test_evaluate_facets_by_provenance():
     # The blended headline sits between the facets: the facet is what keeps a
     # synth-heavy corpus from flattering itself.
     overall = metrics["pairwise_accuracy"]["mean"]
-    assert by["synthetic"]["pairwise_accuracy"]["mean"] < overall < by["real"]["pairwise_accuracy"]["mean"]
+    assert (
+        by["synthetic"]["pairwise_accuracy"]["mean"]
+        < overall
+        < by["real"]["pairwise_accuracy"]["mean"]
+    )
 
 
 def test_fit_head_polarity_and_artifact_roundtrip(tmp_path):
@@ -264,7 +277,11 @@ def test_holdout_eval_and_subset_fit_are_leakage_safe():
     coef, intercept = ct.fit_head(X, ds, rows=train_rows)
     from stylebot.classify import _logreg_p_slop
 
-    assert _logreg_p_slop([1.0, 0.0], coef, intercept) > 0.5 > _logreg_p_slop([-1.0, 0.0], coef, intercept)
+    assert (
+        _logreg_p_slop([1.0, 0.0], coef, intercept)
+        > 0.5
+        > _logreg_p_slop([-1.0, 0.0], coef, intercept)
+    )
 
 
 def test_train_with_splits_contract(tmp_path, monkeypatch):
@@ -279,9 +296,13 @@ def test_train_with_splits_contract(tmp_path, monkeypatch):
     ds_all = ct.assemble_dataset(corpus)
     posts = sorted(set(ds_all.groups))
     real_posts = sorted({
-        ds_all.groups[s] for k, (s, _) in enumerate(ds_all.pair_rows) if not ds_all.pair_is_synthetic(k)
+        ds_all.groups[s]
+        for k, (s, _) in enumerate(ds_all.pair_rows)
+        if not ds_all.pair_is_synthetic(k)
     })
-    splits_doc = sp.make_splits(posts, eval_frac=0.25, detector_frac=0.5, seed=0, eval_candidates=real_posts)
+    splits_doc = sp.make_splits(
+        posts, eval_frac=0.25, detector_frac=0.5, seed=0, eval_candidates=real_posts
+    )
     splits_path = sp.save_splits(splits_doc, tmp_path / "splits.json")
     roles = {p: sp.role_of(p, splits_doc) for p in posts}
     assert set(roles.values()) == {"eval", "detector", "styler"}  # precondition
@@ -328,7 +349,11 @@ def test_train_with_splits_contract(tmp_path, monkeypatch):
         return [base + jitter, jitter]
 
     det = classify.sklearn_detector(out, embed_fn=one_embed)
-    assert det("It is worth noting that this delves.")["score"] > 0.5 > det("The tight version.")["score"]
+    assert (
+        det("It is worth noting that this delves.")["score"]
+        > 0.5
+        > det("The tight version.")["score"]
+    )
 
 
 def test_train_splits_mutually_exclusive_with_holdout(tmp_path):

@@ -12,7 +12,7 @@
 # a restyled heading must still be the same heading at the same depth.
 STYLE_SYSTEM = (
     "You rewrite prose into Dan Mackinlay's voice. "
-    "Preserve all markdown structure (code fences, math, links, list markers, blank lines) verbatim. "
+    "Preserve all markdown structure (code fences, math, links, list markers, blank lines) verbatim. "  # noqa: E501 — frozen prompt text, never reflow
     "Section headings may be restyled, but keep each heading's level and meaning. "
     "Preserve any 〈MASKED_*〉 tokens verbatim if present. "
     "Return only the rewritten prose, nothing else."

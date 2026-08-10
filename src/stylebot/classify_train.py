@@ -38,7 +38,7 @@ import json
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from stylebot import classify
@@ -141,7 +141,9 @@ class Dataset:
         self.is_free.append(free)
         return len(self.texts) - 1
 
-    def _add_pair(self, slop: str, author: str, group: str, *, synthetic: bool = False) -> tuple[int, int]:
+    def _add_pair(
+        self, slop: str, author: str, group: str, *, synthetic: bool = False
+    ) -> tuple[int, int]:
         s_row = self._add(slop, LABEL_SLOP, group)
         a_row = self._add(author, LABEL_DAN, group)
         self.pair_rows.append((s_row, a_row))
@@ -340,8 +342,18 @@ def select_C(X, ds: Dataset, rows, *, grid=C_GRID, n_inner: int = 4) -> tuple[fl
         if score is not None and score > best_score:
             best_C, best_score = C, score
     if best_score < 0:  # no fold had scorable twins
-        return DEFAULT_C, {"mode": "fallback", "value": DEFAULT_C, "reason": "no scorable inner folds"}
-    return best_C, {"mode": "nested_cv", "value": best_C, "grid": list(grid), "n_inner": n_folds, "scores": scores}
+        return DEFAULT_C, {
+            "mode": "fallback",
+            "value": DEFAULT_C,
+            "reason": "no scorable inner folds",
+        }
+    return best_C, {
+        "mode": "nested_cv",
+        "value": best_C,
+        "grid": list(grid),
+        "n_inner": n_folds,
+        "scores": scores,
+    }
 
 
 STRATA = ("real", "synthetic")
@@ -450,7 +462,9 @@ def evaluate(
         clf.fit(X[train_idx], y[train_idx])
         p_slop = clf.predict_proba(X)[:, list(clf.classes_).index(LABEL_SLOP)]
 
-        fm = _fold_metrics(p_slop, y, ds, test_idx.tolist(), pair_idx=pair_idx, row_stratum=row_stratum)
+        fm = _fold_metrics(
+            p_slop, y, ds, test_idx.tolist(), pair_idx=pair_idx, row_stratum=row_stratum
+        )
         if (auc := fm["auc"][0]) is not None:
             aucs.append(auc)
         if (pa := fm["pairwise"][0]) is not None:
@@ -629,7 +643,7 @@ def write_artifact(
         "normalize": normalize,
         "label_polarity": "p_slop",
         "threshold": threshold,
-        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "trained_at": datetime.now(UTC).isoformat(),
         "git_sha": git_sha(git_repo),
         "n_pairs": ds.n_pairs,
         "n_pairs_real": ds.n_pairs_real,

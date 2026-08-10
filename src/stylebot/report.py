@@ -38,7 +38,9 @@ def format_sample(targets: Sequence[Target]) -> str:
     for t in targets:
         context = getattr(t, "context", "") or ""
         out.append("─" * 78)
-        out.append(f"{t.source}  ·  {len(t.text)} chars  ·  chunk {t.chunk_index + 1}/{t.chunk_total}")
+        out.append(
+            f"{t.source}  ·  {len(t.text)} chars  ·  chunk {t.chunk_index + 1}/{t.chunk_total}"
+        )
         out.append("")
         if context:
             out.append(f"  ⌜ {context} ⌟")  # the heading the passage sits under
@@ -61,7 +63,14 @@ def _summary_stats(targets: Sequence[Target]) -> dict:
     }
 
 
-def _histogram_svg(lengths: Sequence[int], *, bins: int, width: int = 720, height: int = 160, unit: str = "chars") -> str:
+def _histogram_svg(
+    lengths: Sequence[int],
+    *,
+    bins: int,
+    width: int = 720,
+    height: int = 160,
+    unit: str = "chars",
+) -> str:
     if not lengths:
         return "<svg></svg>"
     hi = max(lengths)
@@ -114,13 +123,15 @@ def _render_rows(targets: Sequence[Target], *, max_rows: int | None) -> str:
 _CSS = """
 :root{--bar:#4c8bf5;--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#e3e3e3}
 *{box-sizing:border-box}
-body{font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px;color:var(--fg);background:var(--bg)}
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  margin:0;padding:24px;color:var(--fg);background:var(--bg)}
 h1{font-size:18px;margin:0 0 4px}
 .stats{display:flex;flex-wrap:wrap;gap:18px;margin:12px 0}
 .stat b{font-size:20px;display:block}
 .stat span{color:var(--muted);font-size:12px}
 .controls{margin:14px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-input,button{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
+input,button{font:inherit;padding:6px 10px;border:1px solid var(--line);
+  border-radius:6px;background:var(--bg);color:var(--fg)}
 button{cursor:pointer}
 table{border-collapse:collapse;width:100%;margin-top:8px}
 th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -155,7 +166,9 @@ function sampleN(){
   const n=+document.getElementById('n').value||20;
   const vis=rows().filter(r=>r.dataset.hit!=='0');
   for(const r of rows()) r.style.display='none';
-  for(let i=vis.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[vis[i],vis[j]]=[vis[j],vis[i]];}
+  for(let i=vis.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));[vis[i],vis[j]]=[vis[j],vis[i]];
+  }
   for(const r of vis.slice(0,n)) r.style.display='';
 }
 function showAll(){for(const r of rows()){r.dataset.hit='1';r.style.display='';}}
@@ -205,7 +218,8 @@ def _page(*, title: str, stats: dict, svg: str, rows_html: str, note: str) -> st
   <button onclick="showAll()">show all</button>
 </div>
 <p class=note>{html.escape(note)}</p>
-<table><thead><tr><th onclick="sortBy('src')">source</th><th onclick="sortBy('len')">len</th><th>text</th></tr></thead>
+<table><thead><tr><th onclick="sortBy('src')">source</th>
+<th onclick="sortBy('len')">len</th><th>text</th></tr></thead>
 <tbody>
 {rows_html}
 </tbody></table>"""
@@ -232,10 +246,14 @@ def render_targets_report(
     rows_html = _render_rows(targets, max_rows=max_rows)
     n = stats["count"]
     if max_rows is not None and n > max_rows:
-        note = f"showing {max_rows:,} of {n:,} rows in the table (stats + histogram cover all {n:,})"
+        note = (
+            f"showing {max_rows:,} of {n:,} rows in the table "
+            f"(stats + histogram cover all {n:,})"
+        )
     else:
         note = f"showing all {n:,} targets"
-    path.write_text(_page(title=title, stats=stats, svg=svg, rows_html=rows_html, note=note), encoding="utf-8")
+    page = _page(title=title, stats=stats, svg=svg, rows_html=rows_html, note=note)
+    path.write_text(page, encoding="utf-8")
     return path
 
 
@@ -290,7 +308,9 @@ def _mean(values: Sequence[float | None]) -> float | None:
     return round(sum(vals) / len(vals), 2) if vals else None
 
 
-def _scores_rows_data(records: Sequence[dict], pairs_by_id: dict[str, dict], fields: Sequence[str]) -> list[dict]:
+def _scores_rows_data(
+    records: Sequence[dict], pairs_by_id: dict[str, dict], fields: Sequence[str]
+) -> list[dict]:
     """Join score records to pairs and flatten to per-row render data."""
     rows = []
     for rec in records:
@@ -368,7 +388,9 @@ def _scores_summary_stats(rows: Sequence[dict], fields: Sequence[str]) -> dict:
     }
 
 
-def _scores_headline_rows(records: Sequence[dict], fields: Sequence[str], *, by: str = "slop_strategy") -> list[dict]:
+def _scores_headline_rows(
+    records: Sequence[dict], fields: Sequence[str], *, by: str = "slop_strategy"
+) -> list[dict]:
     """Per-facet means via summarize_scores(by=…) — the compare-flavours headline."""
     buckets = summarize_scores(records, by=by).get("by", {})
     out = []
@@ -376,7 +398,13 @@ def _scores_headline_rows(records: Sequence[dict], fields: Sequence[str], *, by:
         sm = (byfields.get(fields[0]) or {}).get("mean_judge_score")
         dm = (byfields.get(fields[-1]) or {}).get("mean_judge_score")
         delta = round(dm - sm, 2) if (sm is not None and dm is not None) else None
-        out.append({"strategy": facet, "n": (byfields.get(fields[0]) or {}).get("n", 0), "slop": sm, "dan": dm, "delta": delta})
+        out.append({
+            "strategy": facet,
+            "n": (byfields.get(fields[0]) or {}).get("n", 0),
+            "slop": sm,
+            "dan": dm,
+            "delta": delta,
+        })
     return out
 
 
@@ -393,7 +421,8 @@ _SCORES_CSS = """
 .fh{display:flex;align-items:center;gap:8px;margin-bottom:4px}
 .fl{font-weight:600;font-size:12px;color:var(--muted)}
 .badge{font-size:11px;font-weight:600;padding:1px 7px;border-radius:6px}
-.s-slop{background:#fcebeb;color:#791f1f}.s-dan{background:#eaf3de;color:#27500a}.s-mid{background:#e6f1fb;color:#0c447c}.s-na{background:#f1efe8;color:#5f5e5a}
+.s-slop{background:#fcebeb;color:#791f1f}.s-dan{background:#eaf3de;color:#27500a}
+.s-mid{background:#e6f1fb;color:#0c447c}.s-na{background:#f1efe8;color:#5f5e5a}
 .s-det{background:#eef0fb;color:#34406a;font-variant-numeric:tabular-nums}
 .s-vale{background:#f6efe0;color:#6b5416;font-variant-numeric:tabular-nums}
 .ft{font-size:13px;line-height:1.45}
@@ -418,7 +447,10 @@ function applyFilter(){
 }
 function sortBy(k,numeric){
   const rs=rows();
-  rs.sort((a,b)=>{const x=val(a,k),y=val(b,k);return numeric?(y-x):String(x).localeCompare(String(y));});
+  rs.sort((a,b)=>{
+    const x=val(a,k),y=val(b,k);
+    return numeric?(y-x):String(x).localeCompare(String(y));
+  });
   for(const r of rs) tbody.appendChild(r);
 }
 document.getElementById('q').addEventListener('input',applyFilter);
@@ -428,7 +460,11 @@ sortBy('delta',true);
 
 
 def _badge(field: str, fields: Sequence[str], score: int | None) -> str:
-    cls = "s-na" if score is None else ("s-slop" if field == fields[0] else "s-dan" if field == fields[-1] else "s-mid")
+    cls = (
+        "s-na"
+        if score is None
+        else ("s-slop" if field == fields[0] else "s-dan" if field == fields[-1] else "s-mid")
+    )
     txt = "—" if score is None else f"{score}/5"
     return f'<span class="badge {cls}">{txt}</span>'
 
@@ -466,7 +502,9 @@ def _gen_subline(gen: dict) -> str:
     return f"<div class=gensub>{html.escape(' · '.join(parts))}</div>" if parts else ""
 
 
-def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows: int | None) -> str:
+def _render_scores_rows(
+    rows: Sequence[dict], fields: Sequence[str], *, max_rows: int | None
+) -> str:
     shown = rows if max_rows is None else rows[:max_rows]
     out = []
     for r in shown:
@@ -480,7 +518,8 @@ def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows
             rat_html = f"<div class=rat>{html.escape(rat)}</div>" if rat else ""
             cols.append(
                 f'<div><div class=fh><span class=fl>{html.escape(f)}</span>'
-                f'{_badge(f, fields, c["score"])}{_det_chip(c["detector"])}{_vale_chip(c["vale"])}</div>'
+                f'{_badge(f, fields, c["score"])}{_det_chip(c["detector"])}'
+                f'{_vale_chip(c["vale"])}</div>'
                 f"<div class=ft>{html.escape(preview)}</div>{rat_html}</div>"
             )
         delta = r["delta"]
@@ -497,13 +536,17 @@ def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows
             f'data-prompt="{html.escape(r["prompt"], quote=True)}" '
             f'data-turn="{"" if turn is None else turn}" '
             f'data-sim="{"" if r.get("sim") is None else r["sim"]}" '
-            f'data-slop="{"" if slop_s is None else slop_s}" data-dan="{"" if dan_s is None else dan_s}" '
+            f'data-slop="{"" if slop_s is None else slop_s}" '
+            f'data-dan="{"" if dan_s is None else dan_s}" '
             f'data-delta="{"" if delta is None else delta}" '
-            f'data-src="{html.escape(r["source"], quote=True)}" data-len="{total_len}" data-hit="1">'
-            f"<td class=facet>{html.escape(r['strategy'])}<div class=srcsub>{html.escape(r['source'])}</div></td>"
+            f'data-src="{html.escape(r["source"], quote=True)}" '
+            f'data-len="{total_len}" data-hit="1">'
+            f"<td class=facet>{html.escape(r['strategy'])}"
+            f"<div class=srcsub>{html.escape(r['source'])}</div></td>"
             f"<td class=facet>{html.escape(r['generator'])}{_gen_subline(r['gen'])}</td>"
             f"<td class=facet>{html.escape(r['reasoning'])}</td>"
-            f'<td class=facet title="{html.escape(r["prompt"], quote=True)}">{html.escape(r["prompt_label"])}</td>'
+            f'<td class=facet title="{html.escape(r["prompt"], quote=True)}">'
+            f'{html.escape(r["prompt_label"])}</td>'
             f"<td class=\"facet num\">{'—' if turn is None else turn}</td>"
             f'<td class="facet num">{sim_txt}</td>'
             f'<td class="len {d_cls}">{html.escape(d_txt)}</td>'
@@ -513,23 +556,40 @@ def _render_scores_rows(rows: Sequence[dict], fields: Sequence[str], *, max_rows
 
 
 def _score_histos(rows: Sequence[dict], fields: Sequence[str], *, bins: int) -> str:
-    slop = [r["cells"][fields[0]]["score"] for r in rows if r["cells"][fields[0]]["score"] is not None]
-    dan = [r["cells"][fields[-1]]["score"] for r in rows if r["cells"][fields[-1]]["score"] is not None]
-    sv = _histogram_svg(slop, bins=bins, unit="judge", width=320, height=120) if slop else "<svg></svg>"
-    dv = _histogram_svg(dan, bins=bins, unit="judge", width=320, height=120) if dan else "<svg></svg>"
+    slop = [
+        r["cells"][fields[0]]["score"] for r in rows if r["cells"][fields[0]]["score"] is not None
+    ]
+    dan = [
+        r["cells"][fields[-1]]["score"] for r in rows if r["cells"][fields[-1]]["score"] is not None
+    ]
+    sv = (
+        _histogram_svg(slop, bins=bins, unit="judge", width=320, height=120)
+        if slop
+        else "<svg></svg>"
+    )
+    dv = (
+        _histogram_svg(dan, bins=bins, unit="judge", width=320, height=120)
+        if dan
+        else "<svg></svg>"
+    )
     return (
-        f"<div class=histos><figure>{sv}<figcaption>{html.escape(fields[0])} judge scores</figcaption></figure>"
-        f"<figure>{dv}<figcaption>{html.escape(fields[-1])} judge scores</figcaption></figure></div>"
+        f"<div class=histos><figure>{sv}"
+        f"<figcaption>{html.escape(fields[0])} judge scores</figcaption></figure>"
+        f"<figure>{dv}"
+        f"<figcaption>{html.escape(fields[-1])} judge scores</figcaption></figure></div>"
     )
 
 
-def _render_headline(headline_rows: Sequence[dict], fields: Sequence[str], *, by_label: str = "strategy") -> str:
+def _render_headline(
+    headline_rows: Sequence[dict], fields: Sequence[str], *, by_label: str = "strategy"
+) -> str:
     if not headline_rows:
         return ""
     fmt = lambda x: "—" if x is None else f"{x}"  # noqa: E731
     body = "".join(
         f"<tr><td>{html.escape(str(h['strategy']))}</td><td class=num>{h['n']}</td>"
-        f"<td class=num>{fmt(h['slop'])}</td><td class=num>{fmt(h['dan'])}</td><td class=num>{fmt(h['delta'])}</td></tr>"
+        f"<td class=num>{fmt(h['slop'])}</td><td class=num>{fmt(h['dan'])}</td>"
+        f"<td class=num>{fmt(h['delta'])}</td></tr>"
         for h in headline_rows
     )
     return (
@@ -541,7 +601,9 @@ def _render_headline(headline_rows: Sequence[dict], fields: Sequence[str], *, by
 
 def _scores_stat_cards(stats: dict, fields: Sequence[str]) -> str:
     fmt = lambda x: "—" if x is None else x  # noqa: E731
-    card = lambda v, lab: f"<div class=stat><b>{v}</b><span>{html.escape(lab)}</span></div>"  # noqa: E731
+    def card(v, lab):
+        return f"<div class=stat><b>{v}</b><span>{html.escape(lab)}</span></div>"
+
     cards = [
         card(stats["count"], "pairs"),
         card(stats["n_strategies"], "strategies"),
@@ -597,7 +659,8 @@ def render_scores_report(
         if len(values) < 2:
             return ""
         opts = f'<option value="">all {html.escape(label)}</option>' + "".join(
-            f'<option value="{html.escape(v, quote=True)}">{html.escape(v)}</option>' for v in values
+            f'<option value="{html.escape(v, quote=True)}">{html.escape(v)}</option>'
+            for v in values
         )
         return f'<select class=facet data-key="{key}">{opts}</select>'
 
@@ -618,7 +681,8 @@ def render_scores_report(
         "<th onclick=\"sortBy('reasoning',false)\">reasoning</th>"
         "<th onclick=\"sortBy('prompt',false)\">prompt</th>"
         "<th class=num onclick=\"sortBy('turn',true)\">turn</th>"
-        "<th class=num onclick=\"sortBy('sim',true)\" title=\"copying ratio slop↔target; 1.0 = verbatim no-op\">sim</th>"
+        "<th class=num onclick=\"sortBy('sim',true)\" "
+        "title=\"copying ratio slop↔target; 1.0 = verbatim no-op\">sim</th>"
         "<th class=num onclick=\"sortBy('delta',true)\">Δ</th>"
         f"<th>comparison ({html.escape(fields[0])} ↔ {html.escape(fields[-1])})</th></tr></thead>"
         f"<tbody>{_render_scores_rows(rows, fields, max_rows=max_rows)}</tbody></table>"
@@ -632,7 +696,9 @@ def render_scores_report(
     page = _scores_page(
         title=title,
         stat_cards=_scores_stat_cards(stats, fields),
-        headline=_render_headline(_scores_headline_rows(records, fields, by=facet_by), fields, by_label=facet_by),
+        headline=_render_headline(
+            _scores_headline_rows(records, fields, by=facet_by), fields, by_label=facet_by
+        ),
         histos=_score_histos(rows, fields, bins=histogram_bins),
         controls=controls,
         table=table,
@@ -642,7 +708,14 @@ def render_scores_report(
     return out_path
 
 
-def format_scores_sample(scores, pairs_path: Path | str, n: int, *, fields: Sequence[str] = ("slop", "target"), seed: int | None = None) -> str:
+def format_scores_sample(
+    scores,
+    pairs_path: Path | str,
+    n: int,
+    *,
+    fields: Sequence[str] = ("slop", "target"),
+    seed: int | None = None,
+) -> str:
     """Plain-text sample of joined scores for stdout (`eval --sample`)."""
     _, rows = _load_scores_rows(scores, pairs_path, fields)
     pick = random.Random(seed).sample(rows, min(n, len(rows)))

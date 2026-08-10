@@ -74,7 +74,10 @@ def test_rewrite_delegates_and_flattens_result():
 
     def rewriter(text, *, context=None, best_of=4):
         calls.append((text, context, best_of))
-        return {"input_score": 0.5, "candidates": [{"text": "better", "score": 0.2, "anchors_lost": []}]}
+        return {
+            "input_score": 0.5,
+            "candidates": [{"text": "better", "score": 0.2, "anchors_lost": []}],
+        }
 
     (resp,) = run_lines(
         {"id": 3, "op": "rewrite", "text": "meh prose", "context": "## H", "best_of": 2},

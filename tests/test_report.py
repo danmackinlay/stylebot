@@ -9,7 +9,12 @@ from stylebot.synth import Target
 
 def _targets(n, base_len=120):
     return [
-        Target(text="word " * (base_len // 5 + i), source=f"post/p{i % 3}.qmd", chunk_index=i, chunk_total=n)
+        Target(
+            text="word " * (base_len // 5 + i),
+            source=f"post/p{i % 3}.qmd",
+            chunk_index=i,
+            chunk_total=n,
+        )
         for i in range(n)
     ]
 
@@ -25,7 +30,12 @@ def test_render_writes_self_contained_html(tmp_path):
 
 def test_report_escapes_target_text(tmp_path):
     p = tmp_path / "r.html"
-    evil = Target(text="<script>alert(1)</script> & <b>bold</b>", source="post/e.qmd", chunk_index=0, chunk_total=1)
+    evil = Target(
+        text="<script>alert(1)</script> & <b>bold</b>",
+        source="post/e.qmd",
+        chunk_index=0,
+        chunk_total=1,
+    )
     report.render_targets_report([evil], p, max_rows=None)
     h = p.read_text()
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in h
@@ -74,11 +84,25 @@ def _make_scored(tmp_path, *, judge=None):
     """Build a 2-pair corpus (2 strategies, one heading, one with <script>) and score it."""
     d = tmp_path / "corpus"
     specs = [
-        ("Body prose under a heading, terse and idiosyncratic, the Dan target here.", "## A Heading", "catalogue"),
-        ("<script>alert(1)</script> and then a real authored paragraph after the tag.", None, "polish"),
+        (
+            "Body prose under a heading, terse and idiosyncratic, the Dan target here.",
+            "## A Heading",
+            "catalogue",
+        ),
+        (
+            "<script>alert(1)</script> and then a real authored paragraph after the tag.",
+            None,
+            "polish",
+        ),
     ]
     for i, (text, context, strategy) in enumerate(specs):
-        t = synth.Target(text=text, source=f"post/p{i}.qmd", chunk_index=0, chunk_total=1, context=context or "")
+        t = synth.Target(
+            text=text,
+            source=f"post/p{i}.qmd",
+            chunk_index=0,
+            chunk_total=1,
+            context=context or "",
+        )
         g = synth.Generator(name="m", generate=lambda s: "slop: " + s, strategy=strategy)
         synth.synthesize_pairs([t], d, [g])
     pairs, scores = d / "pairs.jsonl", tmp_path / "scores.jsonl"
@@ -138,8 +162,17 @@ def test_scores_report_keyless_no_crash(tmp_path):
 def test_scores_report_max_rows_caps(tmp_path):
     d = tmp_path / "c"
     for i in range(6):
-        t = synth.Target(text=f"Paragraph number {i} of authored prose to be scored now.", source=f"post/p{i}.qmd", chunk_index=0, chunk_total=1)
-        synth.synthesize_pairs([t], d, [synth.Generator(name="m", generate=lambda s: "slop: " + s, strategy="polish")])
+        t = synth.Target(
+            text=f"Paragraph number {i} of authored prose to be scored now.",
+            source=f"post/p{i}.qmd",
+            chunk_index=0,
+            chunk_total=1,
+        )
+        synth.synthesize_pairs(
+            [t],
+            d,
+            [synth.Generator(name="m", generate=lambda s: "slop: " + s, strategy="polish")],
+        )
     pairs, scores = d / "pairs.jsonl", tmp_path / "s.jsonl"
     ev.score_pairs_file(pairs, scores, judge=_judge)
     p = tmp_path / "r.html"
@@ -168,7 +201,9 @@ def _make_scored_with_gen(tmp_path, *, judge=None):
         g = synth.Generator(
             name="m",
             reasoning_effort=effort,
-            generate=lambda s, e=effort: synth.GenOutput("slop: " + s, {"model": "anthropic/claude-opus-4.8", "reasoning_effort": e}),
+            generate=lambda s, e=effort: synth.GenOutput(
+                "slop: " + s, {"model": "anthropic/claude-opus-4.8", "reasoning_effort": e}
+            ),
         )
         synth.synthesize_pairs([t], d, [g])
     pairs, scores = d / "pairs.jsonl", tmp_path / "scores.jsonl"
@@ -191,7 +226,12 @@ def test_scores_report_prompt_column_is_human_readable(tmp_path):
     # A pair recording prompt_label/version renders "catalogue v1" (hash id in
     # the tooltip) — never a bare content hash in the visible cell.
     d = tmp_path / "corpus"
-    t = synth.Target(text="A long-enough authored paragraph for scoring purposes.", source="p.qmd", chunk_index=0, chunk_total=1)
+    t = synth.Target(
+        text="A long-enough authored paragraph for scoring purposes.",
+        source="p.qmd",
+        chunk_index=0,
+        chunk_total=1,
+    )
     g = synth.Generator(
         name="m",
         generate=lambda s: synth.GenOutput(
@@ -243,7 +283,11 @@ def test_scores_report_vale_chip_keyless(tmp_path):
             "id": ev.record_id(pr),
             "meta": {"slop_strategy": "polish", "source": pr["meta"]["source"], "generator": "m"},
             "scores": {
-                f: {"vale": {"available": True, "alerts": 3}, "judge": None, "detector": {"score": None}}
+                f: {
+                    "vale": {"available": True, "alerts": 3},
+                    "judge": None,
+                    "detector": {"score": None},
+                }
                 for f in ("slop", "target")
             },
         }

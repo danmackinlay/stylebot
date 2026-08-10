@@ -29,7 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCHEMA_VERSION = 1
@@ -78,7 +78,7 @@ def make_splits(
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "seed": seed,
         "eval_posts": eval_posts,
         "rest_rule": {"kind": "hash", "detector_frac": detector_frac, "salt": str(seed)},

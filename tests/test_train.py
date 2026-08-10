@@ -36,7 +36,10 @@ def _write_corpus(path, n_posts: int = 6, chunks: int = 2, n_synth_posts: int = 
                 rec = {
                     "messages": [
                         {"role": "system", "content": STYLE_SYSTEM},
-                        {"role": "user", "content": f"It is worth noting that post {p} chunk {c} delves deeply."},
+                        {
+                            "role": "user",
+                            "content": f"It is worth noting that post {p} chunk {c} delves deeply.",
+                        },
                         {"role": "assistant", "content": f"Post {p} chunk {c}: the tight version."},
                     ],
                     "meta": meta,

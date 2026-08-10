@@ -18,7 +18,9 @@ def _dataset(posts_pairs: dict[str, int], synth_posts: set | None = None) -> Dat
     ds = Dataset()
     for post, n in posts_pairs.items():
         for c in range(n):
-            ds._add_pair(f"slop {post}.{c}", f"author {post}.{c}", post, synthetic=post in synth_posts)
+            ds._add_pair(
+                f"slop {post}.{c}", f"author {post}.{c}", post, synthetic=post in synth_posts
+            )
     return ds
 
 

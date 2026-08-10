@@ -140,7 +140,13 @@ def _make_pairs(data_dir, specs):
     target text -> distinct synth_key), appended to data_dir/pairs.jsonl.
     """
     for i, (text, context, strategy) in enumerate(specs):
-        target = synth.Target(text=text, source=f"post/p{i}.qmd", chunk_index=0, chunk_total=1, context=context or "")
+        target = synth.Target(
+            text=text,
+            source=f"post/p{i}.qmd",
+            chunk_index=0,
+            chunk_total=1,
+            context=context or "",
+        )
         gen = synth.Generator(name="m", generate=lambda s: "[slop] " + s, strategy=strategy)
         synth.synthesize_pairs([target], data_dir, [gen])
     return data_dir / "pairs.jsonl"
@@ -167,7 +173,11 @@ def test_score_pairs_file_emits_id_keyed_scores(tmp_path):
 
 def test_score_pairs_file_strips_heading_context(tmp_path):
     pairs = _make_pairs(tmp_path / "c", [
-        ("Body prose that sits beneath the heading and should be scored alone here.", "## A Heading", "catalogue"),
+        (
+            "Body prose that sits beneath the heading and should be scored alone here.",
+            "## A Heading",
+            "catalogue",
+        ),
     ])
     assert validate_pairs_file(pairs) == []  # the heading IS a verbatim prefix in the corpus
 
@@ -183,7 +193,9 @@ def test_score_pairs_file_strips_heading_context(tmp_path):
 
 
 def test_record_id_precedence():
-    assert ev.record_id({"meta": {"synth_key": "abc", "capture_id": "cap", "chunk_index": 2}}) == "abc"
+    assert (
+        ev.record_id({"meta": {"synth_key": "abc", "capture_id": "cap", "chunk_index": 2}}) == "abc"
+    )
     assert ev.record_id({"meta": {"capture_id": "cap", "chunk_index": 2}}) == "cap:2"
     rid = ev.record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}})
     assert rid == ev.record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}})  # stable
@@ -283,7 +295,10 @@ def test_score_pairs_file_keyless(tmp_path):
 
 
 def test_score_pairs_file_concurrency_same_ids(tmp_path):
-    specs = [(f"Paragraph number {i}, long enough to be scored as a candidate here.", None, "polish") for i in range(6)]
+    specs = [
+        (f"Paragraph number {i}, long enough to be scored as a candidate here.", None, "polish")
+        for i in range(6)
+    ]
     pairs = _make_pairs(tmp_path / "c", specs)
     out1, out8 = tmp_path / "s1.jsonl", tmp_path / "s8.jsonl"
     ev.score_pairs_file(pairs, out1, judge=fake_judge, max_workers=1)
@@ -373,7 +388,10 @@ def test_prune_orphan_scores_round_trips_undecodable_lines(tmp_path):
     ])
     out = tmp_path / "scores.jsonl"
     ev.score_pairs_file(pairs, out, judge=fake_judge)
-    out.write_text(out.read_text() + '{"id": "ghost", "scores": {}}\n' + "not json at all\n", encoding="utf-8")
+    out.write_text(
+        out.read_text() + '{"id": "ghost", "scores": {}}\n' + "not json at all\n",
+        encoding="utf-8",
+    )
 
     assert ev.prune_orphan_scores(pairs, out) == 1
     assert "not json at all" in out.read_text()
@@ -403,7 +421,11 @@ def _score_rec(strategy, slop_score, target_score):
 
 
 def test_summarize_scores_by_facet():
-    records = [_score_rec("catalogue", 2, 5), _score_rec("catalogue", 4, 5), _score_rec("polish", 3, 4)]
+    records = [
+        _score_rec("catalogue", 2, 5),
+        _score_rec("catalogue", 4, 5),
+        _score_rec("polish", 3, 4),
+    ]
     summary = ev.summarize_scores(records, by="slop_strategy")
     assert summary["pairs"] == 3
     assert summary["fields"]["slop"]["n"] == 3
@@ -417,17 +439,36 @@ def test_carried_gen_meta_flattened_and_faceted(tmp_path):
     # A synthetic pair's meta.gen covariates flatten onto the score record, so
     # summarize_scores(by=…) facets by them for free.
     data_dir = tmp_path / "c"
-    t1 = synth.Target(text="A paragraph long enough to be scored as a candidate here.", source="post/a.qmd", chunk_index=0, chunk_total=1)
-    t2 = synth.Target(text="Another paragraph, also comfortably long enough to score.", source="post/b.qmd", chunk_index=0, chunk_total=1)
-    g_hi = synth.Generator(name="m", reasoning_effort="high", generate=lambda s: synth.GenOutput("[slop] " + s, {"reasoning_effort": "high"}))
-    g_lo = synth.Generator(name="m", reasoning_effort="low", generate=lambda s: synth.GenOutput("[slop] " + s, {"reasoning_effort": "low"}))
+    t1 = synth.Target(
+        text="A paragraph long enough to be scored as a candidate here.",
+        source="post/a.qmd",
+        chunk_index=0,
+        chunk_total=1,
+    )
+    t2 = synth.Target(
+        text="Another paragraph, also comfortably long enough to score.",
+        source="post/b.qmd",
+        chunk_index=0,
+        chunk_total=1,
+    )
+    g_hi = synth.Generator(
+        name="m",
+        reasoning_effort="high",
+        generate=lambda s: synth.GenOutput("[slop] " + s, {"reasoning_effort": "high"}),
+    )
+    g_lo = synth.Generator(
+        name="m",
+        reasoning_effort="low",
+        generate=lambda s: synth.GenOutput("[slop] " + s, {"reasoning_effort": "low"}),
+    )
     synth.synthesize_pairs([t1], data_dir, [g_hi])
     synth.synthesize_pairs([t2], data_dir, [g_lo])
 
     out = tmp_path / "scores.jsonl"
     ev.score_pairs_file(data_dir / "pairs.jsonl", out, judge=fake_judge)
     recs = [json.loads(line) for line in out.read_text().splitlines() if line.strip()]
-    assert {r["meta"].get("reasoning_effort") for r in recs} == {"high", "low"}  # flattened from meta.gen
+    # flattened from meta.gen
+    assert {r["meta"].get("reasoning_effort") for r in recs} == {"high", "low"}
     by = ev.summarize_scores(out, by="reasoning_effort")["by"]
     assert set(by) == {"high", "low"}  # facets by the gen covariate for free
 
@@ -437,7 +478,11 @@ def test_real_pair_without_gen_buckets_null():
     # them under "null" rather than erroring.
     rec = {"id": "r1", "meta": {"slop_strategy": None}, "scores": {
         "slop": {"judge": {"score": 3}, "vale": {"available": False}, "detector": {"score": None}},
-        "target": {"judge": {"score": 5}, "vale": {"available": False}, "detector": {"score": None}},
+        "target": {
+            "judge": {"score": 5},
+            "vale": {"available": False},
+            "detector": {"score": None},
+        },
     }}
     by = ev.summarize_scores([rec], by="reasoning_effort")["by"]
     assert set(by) == {"null"}

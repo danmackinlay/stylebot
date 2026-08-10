@@ -178,7 +178,7 @@ def _keep_chunk(
         return False
     if drop_list_items and _is_list_item(s):
         return False
-    if drop_link_dumps and _is_link_list(s):
+    if drop_link_dumps and _is_link_list(s):  # noqa: SIM103 — last of a guard chain
         return False
     return True
 
@@ -372,7 +372,9 @@ def iter_targets(
     `sort_key` orders the resulting chunks. Returns a flat list of `Target`s.
     """
     if files is not None and blog_root is not None:
-        raise ValueError("pass either `files` (pre-selected) or `blog_root` (walk + selector), not both")
+        raise ValueError(
+            "pass either `files` (pre-selected) or `blog_root` (walk + selector), not both"
+        )
     if files is None and blog_root is None:
         raise ValueError("provide `files` (pre-selected list) or `blog_root` (walk)")
 

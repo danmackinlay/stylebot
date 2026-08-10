@@ -121,7 +121,8 @@ def test_rewrite_pairs_file_writes_output_and_resumes(tmp_path):
     rows = [json.loads(line) for line in out.read_text().splitlines()]
     assert rows[0]["output"] == "CTX\n\nSLOP 0"
     # The eval extractor strips the heading context from the output field...
-    assert FIELD_EXTRACTORS["output"](rows[0]) == "CTX\n\nSLOP 0"  # ctx uppercased -> prefix miss is kept
+    # ctx uppercased -> prefix miss is kept
+    assert FIELD_EXTRACTORS["output"](rows[0]) == "CTX\n\nSLOP 0"
     # ...and a well-behaved styler that PRESERVES the context prefix strips clean.
     rows[0]["output"] = "ctx\n\nSLOP 0"
     assert FIELD_EXTRACTORS["output"](rows[0]) == "SLOP 0"
@@ -356,7 +357,10 @@ def test_rewrite_candidates_enforces_the_single_prose_chunk_contract():
 
 # --- inline headings (v2 cross-heading diet) ------------------------------
 
-_DOC = "First para of prose here.\n\n## A Section\n\nSecond para under it.\n\n### Deeper\n\nThird para.\n"
+_DOC = (
+    "First para of prose here.\n\n## A Section\n\n"
+    "Second para under it.\n\n### Deeper\n\nThird para.\n"
+)
 
 
 def test_segment_default_protects_headings():
