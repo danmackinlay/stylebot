@@ -46,10 +46,9 @@ def read_w_frontmatter_text(text: str) -> tuple[dict, str]:
 def split_paragraphs(text: str) -> list[str]:
     """Split prose into paragraphs on blank-line boundaries.
 
-    A "paragraph" is the natural chunk for prose diffing and synthesis: a run
-    of non-blank lines with no internal blank line. List items, headings, and
-    code-fence blocks each become their own paragraph block. Trailing newlines
-    inside a block are stripped.
+    A "paragraph" is a run of non-blank lines with no internal blank line, so
+    list items, headings, and code-fence blocks each become their own block;
+    trailing newlines inside a block are stripped.
 
     This is the **shared** chunk shape for the corpus: Phase 1 (`ai-style log`)
     diffs against it and Phase 2 (`stylebot.synth`) samples it, so real edit
@@ -72,9 +71,7 @@ def split_paragraphs(text: str) -> list[str]:
 
 # --- Markdown prose/structure segmentation -------------------------------
 #
-# Ported (generic, stdlib-only) from livingthing's `qmd_core.py`
-# `segment_for_edit` — the blog's canonical editable/protected splitter. This is
-# generic markdown tooling (no frontmatter / blog knowledge), so per the
+# Generic markdown tooling (no frontmatter / blog knowledge), so per the
 # OVERVIEW boundary it lives here alongside `split_paragraphs` / `gather_qmd_files`.
 # SIBLING: `livingthing/src/livingthing/qmd_core.py::segment_for_edit` — keep
 # behaviour in sync; the segmenter tests in `tests/test_segment.py` pin it.
@@ -184,9 +181,9 @@ def gather_qmd_files(
     """Return a list of valid QMD file paths from either provided files or default glob.
 
     With `files`, keep those that exist and pass `is_valid_qmd_file`; otherwise
-    walk `base` for `default_glob`. Selection beyond file validity (e.g. dropping
-    auxiliary or AI-touched posts) is the caller's policy — hand in a pre-filtered
-    list or apply a `selector` downstream (see `is_human_authored`).
+    walk `base` for `default_glob`. Selection beyond file validity is the
+    caller's policy — hand in a pre-filtered list or apply a `selector`
+    downstream (see `is_human_authored`).
     """
     if files:
         return [Path(f) for f in files if Path(f).is_file() and is_valid_qmd_file(Path(f))]
@@ -199,12 +196,10 @@ def is_human_authored(
     """True if frontmatter marks this content as human-written (no/low AI).
 
     This is the **one** blog-specific seam stylebot is allowed to carry (see
-    `_plans/OVERVIEW.md`). Everything else about loading prose — frontmatter +
-    markdown — is generic across Quarto/Hugo/Jekyll/etc. Dan's blog records an
-    ``automation`` level per post; ``automation: 0`` means no AI was involved,
-    which is exactly the pure-human prose we want as training *targets* and
-    reference. Another blog retargets this by passing its own ``field`` /
-    ``max_level`` — the defaults encode Dan's convention, nothing more.
+    `_plans/OVERVIEW.md`). Dan's blog records an ``automation`` level per post;
+    ``automation: 0`` means no AI was involved, which is the pure-human prose we
+    want as training *targets*. Another blog retargets this by passing its own
+    ``field`` / ``max_level`` — the defaults encode Dan's convention, nothing more.
 
     Conservative by design: a missing or unparseable field is treated as NOT
     human-authored. The clean posts are *marked* (low ``automation``); absence
@@ -227,12 +222,11 @@ def is_modified_after(
     """True if ``meta[field]`` is a date on or after ``after`` (ISO ``YYYY-MM-DD``).
 
     A generic frontmatter-date gate, parallel to `is_human_authored`: the caller
-    supplies the field name and threshold as policy. (Dan's blog uses
-    ``date-modified`` to restrict targets to recent, current-voice prose, since his
-    style has evolved.) Robust to the value being a YAML ``date``/``datetime`` object
-    or an ISO-8601 string — ISO dates sort lexicographically, so the ``YYYY-MM-DD``
-    prefix is compared. Conservative: a missing or malformed date is treated as NOT
-    recent (excluded), matching `is_human_authored`'s "unknown means exclude".
+    supplies the field name and threshold as policy. Robust to the value being a
+    YAML ``date``/``datetime`` object or an ISO-8601 string — ISO dates sort
+    lexicographically, so the ``YYYY-MM-DD`` prefix is compared. Conservative: a
+    missing or malformed date is treated as NOT recent (excluded), matching
+    `is_human_authored`'s "unknown means exclude".
     """
     raw = meta.get(field)
     if raw is None:

@@ -6,21 +6,19 @@ the frozen eval scores. This module is the single source of truth for that
 partition: a small committed `splits.json` mapping every POST — present and
 future — to one of three roles:
 
-- **eval**: the frozen final-eval posts. Pinned as an explicit list; nothing
-  else may ever add to or remove from it silently. No fitting or selection
-  decision may touch these posts.
+- **eval**: the frozen final-eval posts. Pinned as an explicit list; no fitting
+  or selection decision may ever touch them.
 - **styler**: Phase-3 training posts for the slop-remover.
 - **detector**: the classifier pool. Hyperparameter selection (C, backbone)
   happens by *nested group-CV inside this pool* — there is deliberately no
   fourth materialised split; at blog-corpus scale it would be uselessly small.
 
-**Growth stability.** The corpus grows (synth generation over new posts), so
-only the eval list is materialised. Every non-eval post is assigned by a
-deterministic hash rule (`sha256(salt:source)` → uniform [0,1) → detector if
-below `detector_frac`, else styler). A post's role therefore never changes as
-the corpus grows, new posts flow to detector/styler in fixed proportion with
-no file churn, and the eval stratum cannot drift. Synthetic pairs inherit
-their source post's role via `meta.source`.
+**Growth stability.** Only the eval list is materialised. Every non-eval post is
+assigned by a deterministic hash rule (`sha256(salt:source)` → uniform [0,1) →
+detector if below `detector_frac`, else styler), so a post's role never changes
+as the corpus grows, new posts flow to detector/styler in fixed proportion with
+no file churn, and the eval stratum cannot drift. Synthetic pairs inherit their
+source post's role via `meta.source`.
 
 Stdlib-only by design: Phase 3 and the eval harness import this without the
 `stylebot[classifier]` extra.
@@ -60,7 +58,7 @@ def make_splits(
     `posts` is the universe of POST sources known now (used only to size the
     eval sample); `eval_candidates` restricts which posts are eligible for eval
     — pass the real-capture posts so the frozen eval isn't made of our own
-    synthetic paraphrases. The eval sample is deterministic in `seed`.
+    synthetic paraphrases. Deterministic in `seed`.
     """
     if not 0 < eval_frac < 1:
         raise ValueError(f"eval_frac must be in (0,1), got {eval_frac}")
@@ -91,10 +89,9 @@ def unit_from_digest(digest: bytes) -> float:
     """A sha256 digest → a uniform coordinate in [0, 1). The shared half of the rule.
 
     `targets.hash_unit` draws its subsamples through this same conversion. Only
-    the *conversion* is shared: what goes into the hash stays each caller's
+    the *conversion* is shared — what goes into the hash stays each caller's
     business, because the byte-level input here is a frozen contract (the
-    committed `splits.json` pins every post's role through `f"{salt}:{source}"`)
-    and `hash_unit`'s `"\\x00"`-joined form is not the same string.
+    committed `splits.json` pins every post's role through `f"{salt}:{source}"`).
     """
     return int.from_bytes(digest[:8], "big") / 2**64
 

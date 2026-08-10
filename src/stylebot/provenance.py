@@ -2,7 +2,6 @@
 
 Every artifact that gets committed — a pair record, a run manifest, a classifier
 `meta.json` — answers "when, from which tree, over what bytes" with these three.
-Each of them had grown a second copy somewhere; this is the one copy.
 
 Stdlib-only and import-cheap on purpose: like `splits`, this must import with
 no extras installed (Phase 3 and the eval harness both depend on it).
@@ -21,8 +20,8 @@ def now_iso() -> str:
 
     Microsecond precision so records stamped close together (e.g. two sessions
     opened by a script) get distinct values — `ai-style log`'s `save` matches a
-    snapshot on ``snapped_at``, and second-resolution collisions used to make
-    two adjacent `open` calls indistinguishable.
+    snapshot on ``snapped_at``, and at second resolution two adjacent `open`
+    calls are indistinguishable.
     """
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 

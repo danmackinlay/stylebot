@@ -1,8 +1,7 @@
 """Validation for the shared `pairs.jsonl` contract.
 
 The corpus schema is the seam between Phase 1 (real edit pairs), Phase 2
-(synthetic pairs), and Phase 3 (training). This module makes that contract
-*enforceable* rather than just documented: Phase 2 should validate its output
+(synthetic pairs), and Phase 3 (training). Phase 2 should validate its output
 here as a done-criteria gate, and Phase 3 should validate its input before
 spending money on a training run.
 
@@ -27,11 +26,8 @@ from stylebot.jsonl import iter_jsonl
 # Chunk-scale facets (optional, synthetic pairs): `merge_max_chars` is the pack
 # budget, `chunk_mode` is how the chunk was cut — None/"section" for
 # section-bounded (heading excluded from the text, carried as `context`) or
-# "cross-heading" for headings packed in as CONTENT. Both are needed to ablate
-# a mixed-scale corpus, and mode dominates: section-bounded packing hits the
-# section wall long before the budget, so records differing only in
-# `merge_max_chars` are near-identical diets. Cross-heading records carry no
-# `context` (an inline heading is rewritable text, not fixed context), so the
+# "cross-heading" for headings packed in as CONTENT. Cross-heading records carry
+# no `context` (an inline heading is rewritable text, not fixed context), so the
 # verbatim-prefix invariant below simply does not apply to them.
 REQUIRED_META_KEYS = (
     "source",
@@ -42,12 +38,11 @@ REQUIRED_META_KEYS = (
 )
 
 # --- meta.gen schema (synthetic pairs only) ----------------------------------
-# The generation covariates recorded under `meta.gen`, assembled by
-# stylebot.synth's generator factories and consumed by stylebot.eval (flattened
-# onto score records) and stylebot.report (row columns). One list, so a key
-# rename fails a test instead of silently producing empty facet columns
-# downstream. Callers may extend the dict via a factory's `extra_meta`; the
-# stock schema is what's listed here.
+# The generation covariates recorded under `meta.gen`, written by stylebot.synth
+# and consumed by stylebot.eval (flattened onto score records) and
+# stylebot.report (row columns). One list, so a key rename fails a test instead
+# of silently producing empty facet columns downstream. Callers may extend the
+# dict via a factory's `extra_meta`.
 GEN_META_KEYS = (
     "model",
     "reasoning_effort",
@@ -73,12 +68,10 @@ GEN_SESSION_KEYS = ("session_id", "session_turn", "context_window", "window_fill
 # The experiment-relevant subset eval flattens onto each score record so
 # `summarize_scores(by=...)` and the report can facet by them directly.
 #
-# This is also the *durable* record of an experiment: a scores.jsonl outlives
-# the pairs.jsonl it was scored from (the corpus is regenerable slop; the
-# analysis is not). So it carries the covariates that explain an outcome —
-# cost, latency and context position — not just the knobs that were set. A
-# sweep whose scores omit `gen_seconds` cannot answer "what did that effort
-# level buy", and no amount of re-aggregation gets it back.
+# A scores.jsonl outlives the pairs.jsonl it was scored from, so this list must
+# keep the covariates that *explain* an outcome (cost, latency, context
+# position), not just the knobs that were set: dropping one costs an answer no
+# re-aggregation can recover.
 GEN_FACET_KEYS = (
     "model",
     "reasoning_effort",
@@ -109,8 +102,7 @@ def build_pair_content(context: str, body: str) -> str:
     (`stylebot.synth`): `context` — a section heading the body sits under — is
     prepended *identically* to both the user (slop) and assistant (target) sides
     so the styler learns to preserve the heading and restyle only the body
-    beneath it (matching `STYLE_SYSTEM`'s preserve-structure clause). Empty
-    context returns the body unchanged, so heading-less pairs are unaffected.
+    beneath it. Empty context returns the body unchanged.
 
     Both producers MUST build message content through this one function, and
     record the same `context` under `meta.context`, so real and synthetic pairs
@@ -124,10 +116,9 @@ def build_pair_content(context: str, body: str) -> str:
 def pair_body(content: str, context: str | None) -> str:
     """The prose body of a pair message, with the heading-context prefix removed.
 
-    `build_pair_content(context, body)` prepends ``f"{context}\\n\\n"``
-    *identically to both sides* of a pair when a heading context is present; this
-    is its inverse, so a consumer sees the transform region (the body), not the
-    shared heading. No context (or content lacking the prefix) returns unchanged.
+    The inverse of `build_pair_content`, so a consumer sees the transform region
+    (the body), not the heading shared by both sides. No context (or content
+    lacking the prefix) returns unchanged.
     """
     if not context:
         return content
@@ -171,8 +162,7 @@ def _recut_digest(recut: object) -> str:
     Canonical JSON (sorted keys, no whitespace) so the digest keys off the
     policy's VALUES, not off dict insertion order — and so any key a future
     `recut_archives` adds to the stamp participates automatically. Eight hex
-    chars: this discriminates a handful of hand-chosen cut policies, not a
-    corpus, so collision pressure is nil and the id stays readable.
+    chars discriminates a handful of hand-chosen cut policies with room to spare.
     """
     try:
         canon = json.dumps(recut, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -188,47 +178,36 @@ def record_id(record: dict) -> str:
     (real captures group by `capture_id`); else a hash of `source` + chunk index.
 
     **Re-cut records additionally carry the cut policy in the key.**
-    `capture.recut_archives` deliberately REUSES the archive's `capture_id` and
-    renumbers `chunk_index` from 0 — that is exactly what makes a re-cut
-    idempotent *in `pairs.jsonl`* (the re-cut replaces the old cut for that
-    capture instead of stacking duplicates). The cost is that
-    `capture_id:chunk_index` alone is NOT stable across a re-cut: after
-    coalescing, `<cap>:0` names a merged multi-paragraph pair where it used to
-    name a single paragraph. That is a correctness bug downstream, not
-    cosmetics — everything that joins or resumes on this key would silently
-    mismatch:
-
-    - `eval.score_pairs_file` resumes by skipping ids already in `scores.jsonl`,
-      so a re-cut pair reads as "already scored" and STALE scores stay attached
-      to materially changed prose;
-    - `report.render_scores_report` joins `pairs_by_id`, so the pair browser
-      renders new text under old judge/detector numbers;
-    - `infer.rewrite_pairs_file` skips it on resume for the same reason.
+    `capture.recut_archives` REUSES the archive's `capture_id` and renumbers
+    `chunk_index` from 0, so `capture_id:chunk_index` alone is NOT stable across
+    a re-cut: after coalescing, `<cap>:0` names a merged multi-paragraph pair
+    where it used to name a single paragraph. Everything that joins or resumes
+    on this key would then silently mismatch — `eval.score_pairs_file` and
+    `infer.rewrite_pairs_file` would skip the pair as already done, leaving
+    stale scores attached to materially changed prose, and
+    `report.render_scores_report` would render new text under old numbers.
 
     So fold `meta.recut` — the gap policy `recut_archives` stamps on every
-    record it emits, and the only discriminator available — into the key. A
-    re-cut id then differs from the original cut's and from another policy's,
-    while staying byte-identical when the SAME policy is re-run: a re-cut has
-    to remain idempotent end to end, not just inside `pairs.jsonl`.
+    record it emits — into the key. A re-cut id then differs from the original
+    cut's and from another policy's, while staying byte-identical when the SAME
+    policy is re-run, so a re-cut stays idempotent end to end.
 
     Records with no `meta.recut` keep their key byte-for-byte. That is
-    load-bearing: a committed `scores.jsonl` lives blog-side and must keep
-    joining for the never-re-cut captures that are most of the corpus.
+    load-bearing: a committed `scores.jsonl` must keep joining for the
+    never-re-cut captures that are most of the corpus.
     """
     meta = record.get("meta") or {}
     if meta.get("synth_key"):
         return str(meta["synth_key"])
     recut = meta.get("recut")
-    # Empty for the overwhelmingly common non-re-cut record — which is what
-    # preserves the historical id shape exactly.
+    # Empty for a non-re-cut record, which preserves the historical id shape.
     policy = f":r{_recut_digest(recut)}" if recut else ""
     capture_id = meta.get("capture_id")
     chunk_index = meta.get("chunk_index")
     if capture_id is not None:
         return f"{capture_id}{policy}:{chunk_index}"
-    # No capture_id (hand-built / pre-capture_id records). Same reasoning, so
-    # the policy joins the hashed material rather than the visible key; with no
-    # re-cut stamp the hashed string is unchanged and so is the digest.
+    # No capture_id (hand-built records): the policy joins the hashed material
+    # rather than the visible key, so an unstamped record hashes unchanged.
     h = hashlib.sha256(f"{meta.get('source')}\x00{chunk_index}{policy}".encode("utf-8"))
     return h.hexdigest()[:16]
 
@@ -271,12 +250,10 @@ def validate_pair_record(rec: object) -> list[str]:
             if key not in meta:
                 errors.append(f"meta missing required key {key!r}")
 
-        # Heading-context invariant (shared contract): if a pair declares
-        # meta.context, that heading must be the verbatim prefix of BOTH the
-        # user and assistant content — i.e. it was added as fixed context via
-        # build_pair_content, not paraphrased into the slop. Catches accidental
-        # heading-rewriting. Only enforced when context is present and the
-        # message triple parsed cleanly above.
+        # Heading-context invariant: a declared meta.context must be the
+        # verbatim prefix of BOTH the user and assistant content — added as
+        # fixed context via build_pair_content, not paraphrased into the slop.
+        # Only enforced when context is present and the triple parsed cleanly.
         context = meta.get("context")
         if context and isinstance(msgs, list) and len(msgs) == 3:
             for role_idx, label in ((1, "user"), (2, "assistant")):
@@ -315,9 +292,9 @@ def validate_pairs_file(path: str | Path) -> list[tuple[int, list[str]]]:
 def iter_pairs(path: str | Path) -> Iterator[dict]:
     """Yield each JSON object from a `pairs.jsonl`, one per non-blank line.
 
-    The tolerant reader for the corpus schema (`stylebot.jsonl` under the hood:
-    UTF-8, blank / undecodable / non-object lines skipped rather than raising).
-    Yields the raw parsed dict; callers validate with `validate_pair_record` if
-    they need the contract enforced. A missing file yields nothing.
+    Tolerant (`stylebot.jsonl` under the hood: UTF-8, blank / undecodable /
+    non-object lines skipped, missing file yields nothing). Yields the raw
+    parsed dict; callers validate with `validate_pair_record` if they need the
+    contract enforced.
     """
     yield from iter_jsonl(path)

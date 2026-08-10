@@ -5,7 +5,7 @@
 # `stylebot.pairs.validate_pair_record` will fail the whole corpus until every
 # record's system message is re-stamped (`scripts/restamp_style_system.py`).
 #
-# v2 (2026-08-04) dropped "headings" from the preserve list. Cross-heading
+# "headings" is deliberately absent from the preserve list: cross-heading
 # chunking packs heading lines into the chunk as rewritable CONTENT, so a prompt
 # demanding they be preserved verbatim contradicts what the data teaches. The
 # level/meaning clause keeps the structural guarantee that actually matters —

@@ -1,26 +1,17 @@
 """Eval harness — offline scoring of candidate prose against the four signals.
 
-This is the ground-truth scorer every later phase reports against. It runs
-**offline**: it scores candidate output and is *not* wired into the trainer and
-*not* baked into the served adapter. See `_plans/eval-harness.md` for the spec.
+The ground-truth scorer every later phase reports against. It runs **offline**:
+it scores candidate output and is *not* wired into the trainer, *not* baked into
+the served adapter. Spec: `_plans/eval-harness.md`.
 
-Library-first: these are typed functions over explicit prose strings / file
-lists. The `ai-style eval` CLI is a thin wrapper the caller builds on top; this
+Library-first: typed functions over explicit prose strings / file lists. This
 module never imports a CLI and never imports `livingthing`.
 
-The four signals (`_plans/eval-harness.md` "The four signals"):
-
-1. **Vale** — mechanical slop (banned words, indefinite "you", -ize spelling).
-   Shelled out to the `vale` binary; degrades gracefully if it is absent.
-2. **LLM-as-judge** — "is this Dan-shaped" at the voice level. An injectable
-   `Judge` callable; `openrouter_judge` builds a real one on the `openai` SDK.
-3. **Statistical detector** — "would an external classifier flag this". A
-   pluggable `Detector` seam, defaulting to `null_detector` (no model wired).
-   The detector *audition* (Binoculars / RADAR / Ghostbuster / Pangram) is a
-   deliberate later decision — see `_plans/eval-harness.md` "The detector
-   decision". We do NOT download or run any detector here.
-4. **Dan's eyeball** — the veto channel, not automatable: an optional
-   `eyeball` string carried alongside the machine scores.
+The four signals (`_plans/eval-harness.md` "The four signals"): **Vale**
+(mechanical slop, shelled out to the binary, degrades gracefully if absent), an
+**LLM judge** (injectable `Judge`; `openrouter_judge` builds a real one), a
+**statistical detector** (pluggable `Detector`, `null_detector` by default), and
+**Dan's eyeball** (the non-automatable veto channel, carried as a string).
 
 Guardrail (`_plans/eval-harness.md` "Guardrail"): this harness is **not** a
 slop-detection evader. A styler should lower its detector score only as a
@@ -53,10 +44,9 @@ from typing import Protocol
 
 from stylebot.jsonl import dumps_line, iter_jsonl, read_jsonl, write_jsonl_atomic
 
-# The pair-text extractors and the score join key live in `stylebot.pairs` (they
-# are the inverse of `build_pair_content`). The ones this module does not itself
-# use are imported anyway and re-exported: callers outside this repo reach that
-# surface through `stylebot.eval`.
+# The pair-text extractors and the score join key live in `stylebot.pairs`. The
+# ones this module does not itself use are imported anyway and re-exported:
+# callers outside this repo reach that surface through `stylebot.eval`.
 from stylebot.pairs import (
     FIELD_EXTRACTORS,
     GEN_FACET_KEYS,
@@ -82,23 +72,16 @@ def vale_score(text: str, *, config_path: str | Path | None = None) -> dict:
 
     Shells out to ``vale --output=JSON`` over the text written to a temporary
     ``*.md`` file (NOT stdin). Vale applies glob-scoped styles by matching the
-    *filename* — a config like ``[*.{md,qmd}] BasedOnStyles = …`` only fires on
-    paths the glob matches. Vale's synthetic stdin filename matches no such glob,
-    so those styles silently never run (every alert count comes back 0). Passing
-    a real ``.md`` path makes glob sections apply. `config_path` points at a Vale
-    config (`.vale.ini`); it is an explicit *parameter* — never a hardcoded blog
+    *filename*, and its synthetic stdin filename matches no glob, so a config
+    like ``[*.{md,qmd}] BasedOnStyles = …`` silently never runs over stdin and
+    every alert count comes back 0. `config_path` points at a Vale config
+    (`.vale.ini`); it is an explicit *parameter* — never a hardcoded blog
     ruleset. If `vale` is not on PATH, or no usable config is available, this
     returns ``{"available": False, ...}`` and never raises, so a run without Vale
     still completes.
 
-    Returns::
-
-        {
-          "available": bool,
-          "alerts": int,                       # total alerts (0 when unavailable)
-          "by_severity": {"error": int, "warning": int, "suggestion": int},
-          "raw": [ {alert}, ... ],             # vale's per-alert objects
-        }
+    Returns ``{"available", "alerts", "by_severity", "raw"}``, where `alerts` is
+    the total (0 when unavailable) and `raw` is vale's per-alert objects.
     """
     empty = {
         "available": False,
@@ -258,9 +241,6 @@ def openrouter_judge(
 ) -> Judge:
     """Build a `Judge` backed by OpenRouter via the OpenAI-compatible SDK.
 
-    Mirrors `synth.openai_generator` (lazy `import openai`,
-    `client.chat.completions.create`) but stays independent of `synth.py`.
-
     Keys/paths resolve through `stylebot.config`: `OPENROUTER_API_KEY` is
     required (via `config.require_key`); `OPENROUTER_BASE_URL` overrides the
     default endpoint (via `config.get_key`). Nothing here prints a key.
@@ -305,12 +285,9 @@ class Detector(Protocol):
 def null_detector(prose: str) -> dict:
     """The default detector: scores nothing, signals it is unconfigured.
 
-    Wiring a real statistical detector (Binoculars / RADAR / Ghostbuster /
-    Pangram) is a deliberate later decision that is GPU/$$-heavy and needs the
-    operator's go-ahead — see `_plans/eval-harness.md` "The detector decision".
-    Until that audition is run, the seam stays here returning ``score=None`` so
-    the rest of the harness composes cleanly without pretending to a signal it
-    does not have.
+    Returns ``score=None`` so the rest of the harness composes cleanly without
+    pretending to a signal it does not have. Wiring a real one is the operator's
+    call — see `_plans/eval-harness.md` "The detector decision".
     """
     return {"score": None, "name": "null", "configured": False}
 
@@ -331,18 +308,11 @@ def score_candidate(
     """Score one candidate passage across the available signals.
 
     `judge=None` skips the LLM signal (the harness then runs with no API key);
-    its field comes back ``None``. `detector` defaults to `null_detector`.
-    `eyeball` is an optional human note carried verbatim into the record.
+    its field comes back ``None``. `eyeball` is an optional human note carried
+    verbatim into the record.
 
-    Returns a stable, JSON-able record::
-
-        {
-          "text_chars": int,
-          "vale": {available, alerts, by_severity, raw, ...},
-          "judge": {"score": int, "rationale": str, ...} | None,
-          "detector": {"score": float|None, "name": str, ...},
-          "eyeball": str | None,
-        }
+    Returns a stable, JSON-able record keyed
+    ``text_chars`` / ``vale`` / ``judge`` / ``detector`` / ``eyeball``.
     """
     return {
         "text_chars": len(text),
@@ -381,21 +351,17 @@ def _aggregate(records: list[dict]) -> dict:
 # Batched, JSONL-native scoring over a pairs.jsonl corpus
 # ---------------------------------------------------------------------------
 #
-# The pipeline's lingua franca is `pairs.jsonl` (chat-completion records). Rather
-# than one-prose-per-file, eval reads a corpus and scores named *fields* per row,
-# emitting one id-keyed score record per row so scores join back to the corpus,
-# stay idempotent/resumable (like `synth`), and can be faceted (e.g. by slop
-# strategy). The per-text primitives above (`score_candidate` etc.) are reused
-# verbatim; this layer is just batching + extraction + aggregation.
+# Eval scores named *fields* per corpus row, emitting one id-keyed score record
+# per row so scores join back to the corpus, stay idempotent/resumable, and can
+# be faceted. Batching + extraction + aggregation over the primitives above.
 
 
 # meta keys carried onto each score record, so scores group / filter / join
 # downstream without re-reading the corpus.
 _CARRIED_META = ("source", "synthetic", "generator", "slop_strategy", "chunk_index", "transform_sim")
-# Generation covariates live nested under `meta.gen` (synthetic pairs only). Flatten
-# the experiment-relevant ones onto each score record so `summarize_scores(by=…)` can
-# facet by them directly; real pairs lack `meta.gen` and simply omit these (null bucket).
-# The list itself is the shared schema constant in stylebot.pairs.
+# Generation covariates nested under `meta.gen` (synthetic pairs only), flattened
+# onto each score record so `summarize_scores(by=…)` can facet by them directly.
+# Real pairs lack `meta.gen` and simply omit these (null bucket).
 _CARRIED_GEN = GEN_FACET_KEYS
 
 
@@ -414,13 +380,10 @@ def prune_orphan_scores(pairs_path: str | Path, out_path: str | Path) -> int:
 
     `scores.jsonl` is append-only and joins to `pairs.jsonl` on `record_id`, so
     re-cutting a capture or regenerating the corpus strands the superseded row
-    there forever. Nothing downstream checks the join, and orphans are counted
-    as pairs: measured on a 3-record scores file against a 1-pair corpus,
-    `summarize_scores` reported n=3 / mean 2.33 where the truth was n=1 /
-    mean 5.0, and `covariate_table` emitted a phantom row per superseded id —
-    into a CSV that gets committed next to a write-up. Pruning at the source
-    keeps every consumer consistent for free, which is cheaper than teaching
-    each of them the join.
+    there forever. No consumer checks the join, so orphans are counted as pairs:
+    `summarize_scores` inflates n and skews every mean, and `covariate_table`
+    emits a phantom row per superseded id into a CSV that gets committed.
+    Pruning at the source keeps every consumer consistent for free.
 
     Undecodable lines are round-tripped verbatim rather than dropped (see
     `jsonl.write_jsonl_atomic`); a decodable record with no `id` has no join
@@ -492,22 +455,19 @@ def score_pairs_file(
 
     For each pair, score the named `fields` (default the slop and Dan sides) and
     append one score record keyed by `record_id`, so scores join back to the
-    corpus. Idempotent + resumable: ids already in `out_path` are skipped, so
-    re-running never duplicates and a crash resumes where it stopped.
+    corpus. Idempotent + resumable: ids already in `out_path` are skipped.
 
     Scoring is concurrent (`max_workers` threads — the judge / Vale are blocking
-    IO, and the `openai` SDK is sync); a single writer appends results as they
-    complete and flushes per line (crash-safe). A field/judge error on one record
-    is captured in `ScoreResult.errors` and never aborts the run. Pass
-    `judge=None` to run keyless (Vale + null detector only).
+    IO); a single writer appends results as they complete and flushes per line
+    (crash-safe). A field/judge error on one record is captured in
+    `ScoreResult.errors` and never aborts the run.
 
     On entry, `out_path` is pruned of records whose pair no longer exists
     (`prune_orphan_scores`; count in `ScoreResult.pruned_orphans` — surface it,
     this rewrites a file the caller may have committed). `limit` does not
     narrow that: the live id set is the WHOLE corpus regardless of how many
-    pairs this run scores. Set `prune_orphans=False` for the one case where the
-    prune is wrong — `out_path` belonging to a *different* corpus, where every
-    record reads as orphaned.
+    pairs this run scores. Set `prune_orphans=False` when `out_path` belongs to
+    a *different* corpus, where every record would read as orphaned.
     """
     pairs_path = Path(pairs_path)
     out_path = Path(out_path)
@@ -564,9 +524,8 @@ def score_pairs_file(
 def load_scores(scores: str | Path | Iterable[dict]) -> list[dict]:
     """Load score records from a `scores.jsonl` path (or accept them in-memory).
 
-    The shared reader for the scores artifact (`stylebot.jsonl` under the hood:
-    UTF-8, blank/undecodable lines skipped, missing file → empty). An iterable
-    is returned as a list unchanged.
+    Tolerant (`stylebot.jsonl`: blank/undecodable lines skipped, missing file →
+    empty). An iterable is returned as a list unchanged.
     """
     if isinstance(scores, (str, Path)):
         return read_jsonl(scores)
@@ -591,8 +550,7 @@ def summarize_scores(scores: str | Path | Iterable[dict], *, by: str | None = No
 
     Fields-across-rows are the "groups" the styler is judged by movement across
     (slop vs target vs output). `by` additionally facets by a carried `meta` key
-    — `by="slop_strategy"` gives per-strategy means, the experimental-loop view
-    that turns "is casual slop better than polish" into a number.
+    — `by="slop_strategy"` gives per-strategy means.
     """
     records = load_scores(scores)
     summary: dict = {
@@ -610,11 +568,10 @@ def summarize_scores(scores: str | Path | Iterable[dict], *, by: str | None = No
 
 
 # --- the publishable artifact -------------------------------------------------
-# A scores.jsonl is the durable half of an experiment, but it is not a shape you
-# can commit next to a blog post: it nests, and Vale's `raw` alert objects are
-# most of its bytes. `covariate_table` projects it to one tidy row per pair with
-# no prose text — which is small enough to version, and sufficient to redraw
-# every figure, including re-cuts nobody thought of when the run happened.
+# A scores.jsonl nests and is mostly Vale's `raw` alert objects, so it is not a
+# shape you can commit next to a blog post. `covariate_table` projects it to one
+# tidy row per pair with no prose text — small enough to version, and sufficient
+# to redraw every figure.
 
 
 def _flatten_scores(scores: dict) -> dict:
@@ -641,14 +598,13 @@ def covariate_table(
     """Project a `scores.jsonl` to tidy per-pair rows -> `(rows, constants)`.
 
     Each row is `id` + the carried `meta` covariates + one column per scalar
-    signal. No prose text: the passages and the slop are ~95% of a corpus's
-    bytes and contribute to no figure, and for a synthetic sweep they are
-    regenerable besides.
+    signal. No prose text: the passages are ~95% of a corpus's bytes, contribute
+    to no figure, and for a synthetic sweep are regenerable besides.
 
     `drop_constant` hoists columns that never vary into the returned
     `constants` dict rather than repeating them on every row — an embedder id
-    or a detector name describes the *run*, not the pair, and on a real corpus
-    that repetition is ~40% of the file.
+    or a detector name describes the *run*, not the pair, and that repetition
+    is ~40% of the file on a real corpus.
     """
     records = load_scores(scores)
     rows: list[dict] = []
@@ -658,8 +614,8 @@ def covariate_table(
         row.update(_flatten_scores(rec.get("scores") or {}))
         rows.append(row)
 
-    # Column order: id, then generation covariates in schema order, then the
-    # rest alphabetically — so a human opening the CSV reads design before signal.
+    # Column order: id, generation covariates in schema order, then the rest
+    # alphabetically — design columns before signal columns.
     seen = {k for row in rows for k in row}
     ordered = ["id", *(k for k in GEN_FACET_KEYS if k in seen)]
     ordered += sorted(seen - set(ordered))
@@ -674,8 +630,8 @@ def covariate_table(
                 constants[col] = values.pop()
                 ordered.remove(col)
 
-    # Project every row onto the same column list either way, so a row missing a
-    # key still carries it as an explicit None (a rectangular CSV, not a ragged one).
+    # Project every row onto the same column list, so a row missing a key
+    # carries it as an explicit None: a rectangular CSV, not a ragged one.
     rows = [{k: row.get(k) for k in ordered} for row in rows]
     return rows, constants
 
@@ -688,11 +644,10 @@ def write_covariate_table(
 ) -> dict:
     """Write the tidy table as CSV plus a `<stem>.meta.json` provenance sidecar.
 
-    The sidecar is the half that survives a lost working directory: it records
-    the hoisted constants, the row/column counts, and a digest of the scores
-    file the table came from, so a future reader can tell whether a re-run is
-    comparable or merely similar. `extra` carries the caller's experiment
-    config (model list, splits role, sample fraction) into that record.
+    The sidecar records the hoisted constants, the row/column counts, and a
+    digest of the scores file the table came from, so a future reader can tell
+    whether a re-run is comparable or merely similar. `extra` carries the
+    caller's experiment config (model list, splits role, sample fraction).
     """
     out_path = Path(out_path)
     rows, constants = covariate_table(scores)
