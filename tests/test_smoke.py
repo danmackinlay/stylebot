@@ -136,11 +136,6 @@ def test_run_backend_errors_keep_their_exit_codes(tmp_path, monkeypatch, args, e
     assert message in result.output
 
 
-@pytest.mark.xfail(
-    reason="depends on worktree A's infer.rewrite_text(inline_anchors=...)",
-    raises=TypeError,
-    strict=True,
-)
 def test_run_strict_anchors_reaches_rewrite_text(tmp_path, monkeypatch):
     """--strict-anchors is the CLI face of A's `inline_anchors` guard.
 
