@@ -1,9 +1,13 @@
-"""Tests for the read-only target visualiser (stylebot.report)."""
+"""Tests for the read-only HTML reports (stylebot.report)."""
 
 from __future__ import annotations
 
+import re
+from html.parser import HTMLParser
+
 from stylebot import eval as ev
 from stylebot import report, synth
+from stylebot.pairs import iter_pairs
 from stylebot.synth import Target
 
 
@@ -298,3 +302,247 @@ def test_scores_report_vale_chip_keyless(tmp_path):
     h = p.read_text()
     assert "vale 3" in h  # the third signal is now visible per cell
     assert "—" in h  # judge badges render the keyless placeholder
+
+
+# --- the shared scaffolding (one CSS, one JS, one page) ---------------------
+#
+# Both reports are rendered from the same `_page` / `_CSS` / `_JS`, so the way
+# they can regress is by drifting apart again, or by the markup and the script
+# disagreeing about a name. These pin the joins between them.
+
+
+def _assets(h):
+    """The `<style>` and `<script>` bodies of a rendered report."""
+    return (
+        re.search(r"<style>(.*?)</style>", h, re.S).group(1),
+        re.search(r"<script>(.*?)</script>", h, re.S).group(1),
+    )
+
+
+class _Markup(HTMLParser):
+    """Every tag and attribute name the browser would actually see."""
+
+    def __init__(self, h):
+        super().__init__()
+        self.tags: list[str] = []
+        self.attrs: set[str] = set()
+        self.feed(h)
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.append(tag)
+        self.attrs.update(k for k, _ in attrs)
+
+
+def _both(tmp_path):
+    """One targets report and one scores report over the same fixture corpus."""
+    pairs, scores = _make_scored(tmp_path, judge=_judge)
+    t, s = tmp_path / "t.html", tmp_path / "s.html"
+    report.render_targets_report(_targets(4), t)
+    report.render_scores_report(scores, pairs, s)
+    return t.read_text(), s.read_text()
+
+
+def test_both_reports_share_one_css_and_one_js(tmp_path):
+    th, sh = _both(tmp_path)
+    assert _assets(th) == _assets(sh)  # the whole point of the consolidation
+
+
+def test_controls_bind_to_the_data_table_not_the_headline(tmp_path):
+    # The scores page renders the headline table FIRST, so a bare
+    # querySelector('tbody') would wire every control to the wrong table.
+    th, sh = _both(tmp_path)
+    for h in (th, sh):
+        assert "document.querySelector('#rows tbody')" in h
+        assert h.count("<table id=rows>") == 1
+    assert sh.index("<table class=headline>") < sh.index("<table id=rows>")
+    assert "id=rows" not in sh[: sh.index("<table id=rows>")]
+
+
+def test_sort_handlers_match_the_shared_js_signature(tmp_path):
+    # Every onclick in the markup must call the two-argument sortBy(key, numeric).
+    for h in _both(tmp_path):
+        markup = h[: h.index("<script>")]
+        calls = re.findall(r"sortBy\(([^)]*)\)", markup)
+        assert calls
+        assert all(re.fullmatch(r"'\w+',(true|false)", c) for c in calls), calls
+
+
+def test_reports_carry_a_dark_palette(tmp_path):
+    for h in _both(tmp_path):
+        assert "@media (prefers-color-scheme:dark)" in h
+
+
+def test_empty_histogram_is_an_empty_svg():
+    # _score_histos leans on this rather than guarding each series itself.
+    assert report._histogram_svg([], bins=5) == "<svg></svg>"
+
+
+# --- escaping (a security property, so test the parsed DOM, not substrings) --
+
+
+def _skeleton(h):
+    """The document's shape: its tag sequence and the attribute names used.
+
+    Hostile corpus text may change what a report *says*; it must never change
+    this. Comparing a hostile render against a benign twin catches an injected
+    tag or attribute without having to enumerate the payloads to look for.
+    """
+    m = _Markup(h)
+    return m.tags, sorted(m.attrs)
+
+
+def test_hostile_target_cannot_inject_tags_or_attributes(tmp_path):
+    def render(text, source, context):
+        p = tmp_path / f"{abs(hash(text))}.html"
+        t = Target(text=text, source=source, chunk_index=0, chunk_total=1, context=context)
+        report.render_targets_report([t], p, max_rows=None)
+        return p.read_text()
+
+    evil = render(
+        '<img src=x onerror="alert(1)"> & <b>bold</b>',
+        'post/e" onmouseover="alert(2)".qmd',
+        '## H "quoted" <script>alert(3)</script>',
+    )
+    assert _skeleton(evil) == _skeleton(render("plain text", "post/e.qmd", "## H"))
+    assert _Markup(evil).tags.count("script") == 1  # only the report's own script
+    # …and the hostile strings survive as readable, inert text.
+    assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;" in evil
+    assert "post/e&quot; onmouseover=&quot;alert(2)&quot;.qmd" in evil
+
+
+def test_scores_report_escapes_hostile_facet_values(tmp_path):
+    pairs, _ = _make_scored_with_gen(tmp_path, judge=None)
+
+    def render(strategy):
+        recs = [
+            {
+                "id": ev.record_id(pr),
+                "meta": {"slop_strategy": strategy, "source": pr["meta"]["source"]},
+                "scores": {
+                    f: {"judge": {"score": 2, "rationale": "<i>r</i>"}} for f in ("slop", "target")
+                },
+            }
+            for pr in iter_pairs(pairs)
+        ]
+        p = tmp_path / f"{abs(hash(strategy))}.html"
+        report.render_scores_report(recs, pairs, p)
+        return p.read_text()
+
+    # A strategy name reaches a data- attribute, a <td>, a <select> option and
+    # the headline table — four escape sites for one value.
+    evil = render('<b>x</b>" onclick="y')
+    assert _skeleton(evil) == _skeleton(render("plain"))
+    assert "&lt;b&gt;x&lt;/b&gt;&quot; onclick=&quot;y" in evil
+    assert "&lt;i&gt;r&lt;/i&gt;" in evil  # the judge rationale too
+
+
+# --- edges: empty input, the row cap, clipping, malformed signals -----------
+
+
+def test_empty_targets_report_renders(tmp_path):
+    p = tmp_path / "r.html"
+    report.render_targets_report([], p)
+    h = p.read_text()
+    assert "showing all 0 targets" in h
+    assert "<svg></svg>" in h and "<tbody></tbody>" in h
+    assert "<b>0</b><span>targets</span>" in h
+
+
+def test_empty_scores_report_renders(tmp_path):
+    pairs, _ = _make_scored(tmp_path, judge=None)
+    p = tmp_path / "r.html"
+    report.render_scores_report([], pairs, p)
+    h = p.read_text()
+    assert "showing all 0 pairs" in h
+    assert "<table class=headline>" not in h  # nothing to facet, no headline
+    assert "<b>0</b><span>pairs</span>" in h
+    assert "<tbody></tbody>" in h
+
+
+def test_cap_note_states_what_the_stats_still_cover(tmp_path):
+    p = tmp_path / "t.html"
+    report.render_targets_report(_targets(50), p, max_rows=10)
+    assert "showing 10 of 50 rows (stats + histogram cover all 50)" in p.read_text()
+    pairs, scores = _make_scored(tmp_path, judge=_judge)
+    q = tmp_path / "s.html"
+    report.render_scores_report(scores, pairs, q, max_rows=1)
+    assert "showing 1 of 2 rows (stats + summary cover all 2)" in q.read_text()
+
+
+def test_long_target_is_clipped_with_the_full_text_in_the_tooltip(tmp_path):
+    body = "z" * 900
+    t = Target(text=body, source="p.qmd", chunk_index=0, chunk_total=1)
+    p = tmp_path / "r.html"
+    report.render_targets_report([t], p, max_rows=None)
+    h = p.read_text()
+    assert f'title="{body}"' in h  # tooltip keeps everything
+    assert "z" * 500 + "…</td>" in h  # the cell is clipped
+    assert "z" * 501 + "…" not in h
+
+
+def test_signal_reader_degrades_instead_of_raising():
+    # One accessor now serves judge/detector/vale, so its tolerance of junk is
+    # the tolerance of all three. Anything not shaped like a signal reads None.
+    for junk in (None, "nonsense", 7, [], {"judge": None}, {"judge": 7}, {}):
+        assert report._signal(junk, "judge") is None
+        assert report._signal(junk, "judge", "rationale") is None
+        assert report._vale_alerts(junk) is None
+    assert report._signal({"judge": {"score": 3}}, "judge") == 3
+    assert report._vale_alerts({"vale": {"available": True}}) == 0  # available, no alerts
+    assert report._vale_alerts({"vale": {"available": False, "alerts": 9}}) is None
+
+
+def test_scores_report_tolerates_malformed_signal_payloads(tmp_path):
+    # A judge payload that isn't a dict degrades to a placeholder rather than
+    # failing the whole report. (Only shapes `eval.summarize_scores` itself
+    # survives are exercised end to end; `_signal`'s full tolerance is unit
+    # tested above, since the headline goes through eval's aggregator.)
+    pairs, _ = _make_scored_with_gen(tmp_path, judge=None)
+    recs = [
+        {
+            "id": ev.record_id(pr),
+            "meta": {"slop_strategy": "polish", "source": pr["meta"]["source"]},
+            "scores": {
+                f: {"judge": 7, "vale": {"available": True, "alerts": 0}}
+                for f in ("slop", "target")
+            },
+        }
+        for pr in iter_pairs(pairs)
+    ]
+    p = tmp_path / "r.html"
+    report.render_scores_report(recs, pairs, p)
+    h = p.read_text()
+    assert 'data-slop=""' in h and 'data-delta=""' in h
+    assert "vale 0" in h  # available with zero alerts is a chip, not an omission
+
+
+def test_detector_cards_appear_only_when_a_detector_ran(tmp_path):
+    pairs, _ = _make_scored_with_gen(tmp_path, judge=None)
+    base = [
+        {"id": ev.record_id(pr), "meta": {"slop_strategy": "polish"}, "scores": {}}
+        for pr in iter_pairs(pairs)
+    ]
+    off = [
+        dict(r, scores={f: {"detector": {"score": None}} for f in ("slop", "target")}) for r in base
+    ]
+    on = [
+        dict(r, scores={f: {"detector": {"score": 0.5}} for f in ("slop", "target")}) for r in base
+    ]
+    p, q = tmp_path / "off.html", tmp_path / "on.html"
+    report.render_scores_report(off, pairs, p)
+    report.render_scores_report(on, pairs, q)
+    assert "P(slop)" not in p.read_text()
+    assert "mean slop P(slop)" in q.read_text() and "P(slop) 0.50" in q.read_text()
+
+
+def test_middle_field_gets_the_neutral_badge(tmp_path):
+    # Three fields: only the first and last are the compared ends.
+    pairs, scores = _make_scored(tmp_path, judge=_judge)
+    recs = [
+        dict(r, scores={**r["scores"], "output": r["scores"]["target"]})
+        for r in ev.load_scores(scores)
+    ]
+    p = tmp_path / "r.html"
+    report.render_scores_report(recs, pairs, p, fields=("slop", "output", "target"))
+    h = p.read_text()
+    assert "s-slop" in h and "s-dan" in h and "s-mid" in h
