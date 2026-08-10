@@ -6,7 +6,9 @@ prose into [Dan Mackinlay's](https://danmackinlay.name) voice — a specialist
 
 The motivation, design, and economics are written up in the blog post
 [*Fine-tuning danbot*](https://danmackinlay.name/notebook/fine_tuning_danbot.html). The development
-plan and phase contracts live in [`_plans/`](_plans/OVERVIEW.md).
+plan lives in [`_plans/`](_plans/OVERVIEW.md) — including
+[`decisions.md`](_plans/decisions.md) (why each choice landed, and what was
+rejected) and [`findings.md`](_plans/findings.md) (the measured results).
 
 ## What's here
 

@@ -156,8 +156,7 @@ an AI-detector score) run over **two strata** — synthetic pairs vs the **real-
 reference** (the 254 Phase-1 pairs, ≥48 from `automation:2`; plus `automation:1/2`
 prose) — and a side-by-side distribution view per strategy/covariate. **Seam:** the
 `meta.synthetic` facet (real = `synthetic` falsy/absent) over the existing aggregation;
-it consumes the `meta.gen` covariates Phase-2 now records. See
-[`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) → Experiment 3.
+it consumes the `meta.gen` covariates synth records per pair.
 
 ## Outputs
 
