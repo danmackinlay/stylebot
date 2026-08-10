@@ -9,7 +9,6 @@ requires-python = ">=3.11"
 dependencies = [
     "click>=8.4.2",
     "ruamel-yaml>=0.19.1",
-    "python-dateutil>=2.9.0",
     "openai>=1.60.0",
 ]
 
