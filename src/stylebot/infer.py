@@ -146,7 +146,11 @@ def _blocks_with_separators(
 
 
 def _segment(
-    body: str, *, max_chars: int, inline_headings: bool = False
+    body: str,
+    *,
+    max_chars: int,
+    inline_headings: bool = False,
+    div_is_prose: markdown.DivIsProse | None = None,
 ) -> tuple[list[tuple[str, str]], list[str]]:
     """Segment the body the way TRAINING saw data.
 
@@ -168,7 +172,7 @@ def _segment(
     heading that ends up alone keeps kind "heading", so callers can skip a bare
     header.
     """
-    kinds = markdown.line_kinds(body)
+    kinds = markdown.line_kinds(body, div_is_prose=div_is_prose)
     blocks, seps, block_kinds = _blocks_with_separators(body, kinds)
     items: list[tuple[str, str]] = []
     iseps: list[str] = []
@@ -305,6 +309,7 @@ def rewrite_candidates(
     scorer: Callable[[str], float] | None = None,
     max_chunk_chars: int = STYLE_CHARS_PER_CHUNK,
     inline_headings: bool = False,
+    div_is_prose: markdown.DivIsProse | None = None,
 ) -> dict:
     """All candidates for ONE prose chunk, none auto-chosen — the editor seam.
 
@@ -338,7 +343,12 @@ def rewrite_candidates(
     frontmatter, body = split_frontmatter(text)
     if frontmatter:
         raise ValueError("selection includes YAML frontmatter — select prose only")
-    items, _seps = _segment(body, max_chars=max_chunk_chars, inline_headings=inline_headings)
+    items, _seps = _segment(
+        body,
+        max_chars=max_chunk_chars,
+        inline_headings=inline_headings,
+        div_is_prose=div_is_prose,
+    )
     kinds = [kind for kind, chunk in items if chunk.strip()]
     # Headings are content under the cross-heading diet; fences never are.
     allowed = {"prose", "heading"} if inline_headings else {"prose"}
@@ -387,6 +397,7 @@ def rewrite_text(
     on_decision: Callable[..., None] | None = None,
     inline_headings: bool = False,
     inline_anchors: bool = False,
+    div_is_prose: markdown.DivIsProse | None = None,
 ) -> RewriteResult:
     """Rewrite prose chunk-by-chunk through the styler, mirroring training.
 
@@ -425,7 +436,12 @@ def rewrite_text(
     from stylebot.pairs import build_pair_content, pair_body
 
     frontmatter, body = split_frontmatter(text)
-    items, seps = _segment(body, max_chars=max_chunk_chars, inline_headings=inline_headings)
+    items, seps = _segment(
+        body,
+        max_chars=max_chunk_chars,
+        inline_headings=inline_headings,
+        div_is_prose=div_is_prose,
+    )
     result = RewriteResult(text="")
     out_chunks: list[str] = []
     context: str | None = None

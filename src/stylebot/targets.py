@@ -25,7 +25,7 @@ from stylebot.lib import (
     read_w_frontmatter_text,
     split_paragraphs,
 )
-from stylebot.markdown import heading_title, is_heading_line
+from stylebot.markdown import DivIsProse, heading_title, is_heading_line
 from stylebot.splits import role_of, unit_from_digest
 
 logger = logging.getLogger(__name__)
@@ -91,6 +91,9 @@ class ChunkPolicy:
     # Only meaningful with `merge`; forces `heading_context` off, since an
     # inline heading is text the styler rewrites rather than fixed context.
     cross_heading: bool = False
+    # Which `:::` div classes wrap prose rather than markup (see
+    # `stylebot.markdown`). None = every div protected wholesale.
+    div_is_prose: DivIsProse | None = None
 
 
 def _norm_header(text: str) -> str:
@@ -246,7 +249,7 @@ def _post_targets(path: Path, source: str, policy: ChunkPolicy) -> list[Target]:
     body = _truncate_at_headers(body, policy.stop_at_headers)
     # Drop protected blocks before splitting, so they never become targets and
     # chunk boundaries match what the blog's own edit pipeline sees.
-    text = editable_prose(body) if policy.prose_only else body
+    text = editable_prose(body, div_is_prose=policy.div_is_prose) if policy.prose_only else body
     cross = policy.cross_heading and policy.merge
     # An inline heading is content the styler rewrites, so it cannot also be
     # fixed context — cross-heading mode wins over heading_context.
@@ -339,6 +342,7 @@ def iter_targets(
     stop_at_headers: Sequence[str] = (),
     heading_context: str = "none",
     cross_heading: bool = False,
+    div_is_prose: DivIsProse | None = None,
     sort_key: Callable[[Target], object] | None = None,
 ) -> list[Target]:
     """Collect prose chunks to use as synthesis targets.
@@ -350,8 +354,16 @@ def iter_targets(
     caller's marker choice.
 
     - `prose_only` (default True): drop protected blocks — fenced code,
-      ``$$math$$``, ``:::`` divs/callouts, blockquotes — before splitting, so
-      they never become targets (STYLE_SYSTEM preserves them verbatim anyway).
+      block ``$$math$$``, ``:::`` divs/callouts, blockquotes — before splitting,
+      so they never become targets (STYLE_SYSTEM preserves them verbatim anyway).
+    - `div_is_prose`: a predicate over a ``:::`` opener's attribute text saying
+      whether that div *wraps prose*. When true, only the div's fence lines are
+      protected (they carry class semantics) and its contents flow into the
+      normal prose path — a callout is the author's own voice, merely inside a
+      container. Nested divs keep their own protection, so a figure inside a
+      callout stays out. Default None protects every div wholesale; which
+      classes bear prose is the caller's policy, not stylebot's (blog/generic
+      boundary — ``.callout-note`` is a Quarto convention).
     - `min_chars` / `max_chars`: oversized chunks are DROPPED, never truncated —
       truncating corrupts the target.
     - `ignore_markers`: drop chunks containing any of these literal strings.
@@ -397,6 +409,7 @@ def iter_targets(
         cross_heading=cross_heading,
         stop_at_headers=stop_at_headers,
         heading_context=heading_context,
+        div_is_prose=div_is_prose,
     )
 
     if files is not None:

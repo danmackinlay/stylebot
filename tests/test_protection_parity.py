@@ -196,15 +196,26 @@ def _is_callout(attrs: str) -> bool:
     return CALLOUT_POLICY in attrs
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="A-7 pending: `div_is_prose` reaches `lib.segment_for_edit` but is not yet "
-    "threaded through `infer._segment`. Flip when the hook lands on both sides.",
-)
 def test_callout_policy_frees_the_same_contents_on_both_sides(doc: str):
     train = training_protected_lines(doc, div_is_prose=_is_callout)
     serve = inference_protected_lines(doc, div_is_prose=_is_callout)
     assert train == serve
+
+
+def test_callout_policy_admits_a_heading_inside_a_callout(doc: str):
+    # A `##` inside a callout is common and becomes a section boundary in
+    # `_split_sections` once the callout's contents are prose — correct, and
+    # pinned here because it is easy to break silently.
+    kinds = md.line_kinds(doc, div_is_prose=_is_callout)
+    idx = doc.split("\n").index("## A heading inside a callout")
+    assert kinds[idx] == md.HEADING
+
+    at_inference = [
+        kind
+        for kind, s, e in _segment_spans(doc, div_is_prose=_is_callout)
+        if doc[s:e].strip() == "## A heading inside a callout"
+    ]
+    assert at_inference == ["heading"]
 
 
 def test_callout_policy_keeps_fences_and_nested_figures_protected(doc: str):
