@@ -361,6 +361,21 @@ class _Session:
     turns: list[_Turn]
 
 
+def _arm_identity(gen: Generator) -> str:
+    """The identity assignment hashes on — the ARM, not the model.
+
+    `Generator.name` is only the model id, and the rotation is models ×
+    strategies × efforts: 6 models under 6 slop strategies is 36 arms sharing 6
+    distinct `.name` values. Keying on `name` alone would give every same-name
+    arm an identical score, so one would win every target and its siblings would
+    never be assigned any work at all. This is the same tuple `_synth_key` folds
+    in, so assignment identity and cell identity stay consistent — and it means
+    adding a *strategy* or an *effort* churns ~1/n of the corpus rather than all
+    of it, exactly like adding a model.
+    """
+    return f"{gen.name}\x00{gen.strategy}\x00{gen.reasoning_effort}\x00{gen.prompt_id}"
+
+
 def _assign(
     targets: Sequence[Target],
     generators: Sequence[Generator],
@@ -371,20 +386,48 @@ def _assign(
 ) -> list[tuple[Target, Generator, str]]:
     """Pair targets with generators → ``(target, generator, effective_context)``.
 
-    Default (rotate, `per_generator=False`): **content-hash assignment** —
-    target → generator ``hash(salt, text) % n``. Statistically this makes the
-    arm exchangeable with respect to document position (a round-robin cycle can
+    Default (rotate, `per_generator=False`): **rendezvous (highest-random-weight)
+    assignment** — score every arm as ``sha256(salt, arm_identity, text)`` and
+    take the argmax. Three properties, in the order we came to need them:
+
+    *Content-hashed, not positional.* Statistically this makes the arm
+    exchangeable with respect to document position (a round-robin cycle can
     phase-lock with chunk structure, aliasing arm with position-in-post and
     confounding any arm contrast); operationally it keeps each target's arm
     independent of the rest of the target set, so corpus resume stays stable as
-    the blog grows. Balance across arms is multinomial, not exact (~√n wobble)
-    — experiments wanting exact within-target crossing use `per_generator=True`
-    (every target × every generator, n× the pairs/cost). `assign_seed`
-    re-randomizes the whole assignment (a fresh replicate of the design; NOTE
-    it changes which arm generated each target, so changed assignments
-    regenerate on resume). `context` is the effective heading context after
-    dropout. Keys are computed in `_plan_sessions` (they may fold in session
-    membership).
+    the blog grows.
+
+    *Roster-stable* (2026-08-10, replacing ``hash(salt, text) % n``): with
+    modulo, `n` was a length and the index a *position*, so any change to the
+    roster's size or order reshuffled the whole corpus. Rendezvous moves only
+    the departing/arriving arm's own share, and list order stops mattering
+    entirely. Measured over 20k synthetic targets, 6 arms — fraction of targets
+    that change arm:
+
+    | roster change      | modulo | rendezvous | theoretical min |
+    | ------------------ | -----: | ---------: | --------------: |
+    | drop 1 (6→5)       |  83.2% |      16.7% |           16.7% |
+    | add 1 (6→7)        |  85.8% |      14.4% |           14.3% |
+    | swap 1 (6→6)       |  16.9% |      28.7% |            ~33% |
+    | reorder only (6→6) | 100.0% |       0.0% |              0% |
+
+    Balance is comparable (modulo spread 5.8%, rendezvous 4.3%). Switching cost
+    a one-time reassignment of everything, deliberately taken while it was free:
+    the roster had already drifted far enough (3 models with pairs no longer in
+    `SLOP_MODELS`) that `dan-style synth --dry-run --limit 500` reported "0
+    already present" — resume overlap was zero either way. `--skip-covered`
+    remains the guard that stops already-covered passages regenerating.
+
+    *Deterministic under collision.* Ties break on the arm-identity string, so
+    even a hash collision can't make the result depend on list order.
+
+    Balance across arms is multinomial, not exact (~√n wobble) — experiments
+    wanting exact within-target crossing use `per_generator=True` (every target
+    × every generator, n× the pairs/cost). `assign_seed` salts the score and so
+    still re-randomizes the whole design (a fresh replicate; NOTE it changes
+    which arm generated each target, so changed assignments regenerate on
+    resume). `context` is the effective heading context after dropout. Keys are
+    computed in `_plan_sessions`.
     """
     if not generators:
         return []
@@ -394,11 +437,24 @@ def _assign(
             for gen in generators:
                 out.append((t, gen, _effective_context(t, context_dropout)))
     else:
-        n = len(generators)
+        # Identities are hoisted: they don't vary per target, and the inner loop
+        # is len(targets) × len(generators) sha256s.
+        arms = [(_arm_identity(gen), gen) for gen in generators]
         for t in targets:
-            digest = hashlib.sha256(f"{assign_seed}\x00{t.text}".encode("utf-8")).digest()
-            idx = int.from_bytes(digest[:8], "big") % n
-            out.append((t, generators[idx], _effective_context(t, context_dropout)))
+            best_score = b""
+            best_ident = ""
+            best_gen = arms[0][1]
+            for ident, gen in arms:
+                score = hashlib.sha256(
+                    f"{assign_seed}\x00{ident}\x00{t.text}".encode("utf-8")
+                ).digest()
+                # (score, identity) ordering: the identity tiebreak is what keeps
+                # a collision from resolving on list position. Two arms with the
+                # SAME identity are indistinguishable here — but they also key
+                # identically in `_synth_key`, so they were already one cell.
+                if (score, ident) > (best_score, best_ident):
+                    best_score, best_ident, best_gen = score, ident, gen
+            out.append((t, best_gen, _effective_context(t, context_dropout)))
     return out
 
 

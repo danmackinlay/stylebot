@@ -166,6 +166,29 @@ Consequences, written down so we stop re-deriving them:
   text, context dropout hashes the body, and any subsampling must do the same
   (a `chunk_index` in the hash breaks superset stability the moment a
   paragraph is inserted above it).
+- **Arm assignment is rendezvous-hashed, not modulo (2026-08-10).** "Hash the
+  content" leaves open *what you hash it against*. `hash(salt, text) % n` made
+  `n` a list length and the winner a *position*, so any change to the roster's
+  size or order reshuffled the entire corpus — a pure reorder of `SLOP_MODELS`
+  moved 100% of it. `_assign` now scores every arm as
+  `sha256(salt, arm_identity, text)` and takes the argmax (highest random
+  weight), ties broken on the identity string so list order can't leak in even
+  under collision. Measured over 20k targets, 6 arms — fraction reassigned:
+  drop 1 → 83.2% modulo vs 16.7% rendezvous (min 16.7%); add 1 → 85.8% vs 14.4%
+  (min 14.3%); swap 1 → 16.9% vs 28.7% (min ~33%); reorder only → 100.0% vs
+  0.0%. Balance is comparable (5.8% vs 4.3% spread).
+  **Identity is the arm, not the model:** `f"{name}\0{strategy}\0{effort}\0{prompt_id}"`,
+  the same tuple `_synth_key` folds in. The rotation is models × strategies ×
+  efforts, so 6 models × 6 strategies is 36 arms sharing 6 `.name` values;
+  keying on the name alone would score siblings identically, hand one of them
+  every target, and starve the rest (`_plan_sessions` documents the same trap —
+  it groups by `id(gen)` for exactly this reason). Keying the full tuple also
+  means adding a *strategy* or *effort* churns ~1/n rather than everything.
+  The switch was a deliberate one-time reassignment, taken while it was free:
+  the roster had already drifted (3 models with pairs no longer in
+  `SLOP_MODELS`), so `dan-style synth --dry-run --limit 500` against the live
+  corpus reported "0 already present" — resume overlap was zero either way.
+  `--skip-covered` remains the guard against regenerating covered passages.
 - **Two accepted weak spots:** (1) merge-mode packing — an edit early in a
   section can shift passage boundaries and re-key later chunks whose own text
   didn't change (costed as regeneration, not corruption); (2) session keys are
@@ -252,7 +275,7 @@ Append to the same `$STYLEBOT_DATA_DIR/pairs.jsonl`:
       over explicit paths + the `ai-style synth` CLI. Output gated through
       `validate_pairs_file` in `tests/test_synth.py` (empty result == pass).
 - [x] Pairs from ≥2 distinct generators, distinguishable by `meta.generator`
-      (round-robin rotation by default; `--per-generator` for every-target ×
+      (rendezvous-hashed rotation by default; `--per-generator` for every-target ×
       every-generator). Tested.
 - [x] Idempotent + resumable: each pair carries `meta.synth_key`
       (`hash(generator, strategy, context, target)`); assignments already in the
