@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from stylebot import capture
 from stylebot.bin import ai_style_log as log
 from stylebot.pairs import build_pair_content, validate_pair_record
 
@@ -144,7 +145,7 @@ def test_captured_pair_has_heading_prefix_and_validates(temp_corpus):
 
 
 def test_build_pair_record_context_matches_build_pair_content():
-    rec = log._build_pair_record(
+    rec = capture.build_pair_record(
         before_body="slop body",
         after_body="dan body",
         source="x",
@@ -462,3 +463,66 @@ def test_env_supplied_data_dir_is_honoured(tmp_path, monkeypatch):
     # Not in the cwd-relative default, and the confirmation names where it went.
     assert not (repo / "_training_pairs").exists()
     assert str((data_dir / "pairs.jsonl").resolve()) in out
+
+
+# ---- the error idiom: UsageError -> 2, ClickException -> 1 ----------------
+#
+# `log` used to `echo(err=True)` then `sys.exit(N)` at 13 sites, which made the
+# exit code a hand-maintained constant next to each message. It now raises like
+# the rest of `ai-style`, and these pin the two classes apart: a wrong FLAG
+# COMBINATION is a UsageError (2), a fine invocation against an unready world is
+# a ClickException (1). Downstream scripts branch on that.
+
+
+def _err(*args):
+    """Invoke `log` expecting failure; return (exit_code, output)."""
+    result = CliRunner().invoke(log.main, ["-q", *args])
+    assert result.exit_code != 0, result.output
+    return result.exit_code, result.output
+
+
+def test_contradictory_flags_are_usage_errors(session_repo):
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nIt is worth noting the rich tapestry.\n", encoding="utf-8")
+    CliRunner().invoke(log.main, ["-q", "open", "post/foo.qmd"])
+    f.write_text("## S\n\nWe dig in.\n", encoding="utf-8")
+
+    code, out = _err("save", "--replace", "--append", "post/foo.qmd")
+    assert code == 2
+    assert "mutually exclusive" in out
+
+
+def test_pair_flag_misuse_is_a_usage_error(temp_corpus, tmp_path):
+    before = tmp_path / "b.txt"
+    after = tmp_path / "a.txt"
+    before.write_text("It is worth noting the rich tapestry.\n", encoding="utf-8")
+    after.write_text("We dig in.\n", encoding="utf-8")
+
+    code, out = _err("pair", "--before", "-", "--after", "-")
+    assert code == 2
+    assert "only one of --before/--after may be '-'" in out
+
+    # --replace without the --source it filters on: the flags contradict.
+    code, out = _err("pair", "--before", str(before), "--after", str(after), "--replace")
+    assert code == 2
+    assert "--replace requires --source" in out
+
+
+def test_unready_world_is_a_click_exception(session_repo, tmp_path):
+    """Flags are fine; there is just nothing to act on. Exit 1, not 2."""
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nbody one.\n", encoding="utf-8")
+
+    assert _err("save", "post/foo.qmd")[0] == 1  # no open session
+    assert _err("drop", "post/foo.qmd")[0] == 1  # nothing to drop
+
+    CliRunner().invoke(log.main, ["-q", "open", "post/foo.qmd"])
+    code, out = _err("save", "post/foo.qmd")  # opened, but nothing edited
+    assert code == 1
+    assert "nothing to save" in out
+
+    same = tmp_path / "same.txt"
+    same.write_text("identical text\n", encoding="utf-8")
+    code, out = _err("pair", "--before", str(same), "--after", str(same))
+    assert code == 1
+    assert "refusing to log" in out
