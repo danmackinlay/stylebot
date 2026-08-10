@@ -50,10 +50,6 @@ def split_frontmatter_meta(text: str) -> tuple[dict, str]:
         return {}, text
 
 
-# `stylebot.bin.ai_style_log` binds the old name.
-split_frontmatter = split_frontmatter_meta
-
-
 # ---- Paragraph-level diffing ----
 
 # A markdown ATX header line: up to 3 leading spaces, 1-6 hashes, then a space
