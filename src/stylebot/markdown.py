@@ -156,7 +156,7 @@ def _div_spans(
     return spans
 
 
-def find_div_blocks(content: str, *, div_is_prose: DivIsProse | None = None) -> list[Span]:
+def _find_div_blocks(content: str, *, div_is_prose: DivIsProse | None = None) -> list[Span]:
     """All ``:::`` div/callout spans, nesting-aware (end includes the newline)."""
     lines = content.splitlines(keepends=True)
     offsets: list[int] = []
@@ -195,6 +195,14 @@ def protected_spans(
     `block_only` restricts ``$$…$$`` to line-anchored display math; an inline
     ``$$k$$`` then stays in the prose the styler rewrites. Overlapping spans of
     different kinds merge under the kind that starts first.
+
+    Public on purpose, though every caller today is in this module: this IS the
+    module's central question — what a rewrite must never be handed — and it is
+    the entry point a second implementation should consume rather than re-port.
+    `livingthing.qmd_core` still carries its own copy of this logic and has
+    already drifted from it (`~~~` fences, inline ``$$``); harmonising it means
+    calling this. Contrast `_find_div_blocks`, private because nothing outside
+    wants divs alone.
     """
     spans: list[Span] = []
     for m in CODE_FENCE_RE.finditer(text):
@@ -205,7 +213,7 @@ def protected_spans(
         spans.append((m.start(), m.end(), MATH))
     for m in BLOCKQUOTE_RE.finditer(text):
         spans.append((m.start(), m.end(), BLOCKQUOTE))
-    spans.extend(find_div_blocks(text, div_is_prose=div_is_prose))
+    spans.extend(_find_div_blocks(text, div_is_prose=div_is_prose))
     spans.sort(key=lambda sp: (sp[0], sp[1]))
 
     merged: list[Span] = []
