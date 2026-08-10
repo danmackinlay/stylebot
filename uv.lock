@@ -2643,7 +2643,6 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "openai" },
-    { name = "python-dateutil" },
     { name = "ruamel-yaml" },
 ]
 
@@ -2673,7 +2672,6 @@ requires-dist = [
     { name = "click", specifier = ">=8.4.2" },
     { name = "numpy", marker = "extra == 'classifier'", specifier = ">=1.26" },
     { name = "openai", specifier = ">=1.60.0" },
-    { name = "python-dateutil", specifier = ">=2.9.0" },
     { name = "ruamel-yaml", specifier = ">=0.19.1" },
     { name = "scikit-learn", marker = "extra == 'classifier'", specifier = ">=1.4" },
     { name = "sentence-transformers", marker = "extra == 'classifier'", specifier = ">=3.0" },

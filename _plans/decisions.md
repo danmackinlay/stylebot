@@ -11,6 +11,10 @@ per-phase design plans that were retired once their work shipped: what we
 thought, what happened, what we concluded. Measurements live in
 [`findings.md`](findings.md).
 
+Everything numbered `D…` was **decided and acted on**. A trailing
+[Open proposals](#open-proposals-not-decided) section holds `P…` entries that are
+written up but still awaiting a call — do not read them as settled.
+
 ## D1: Train on Tinker, serve on Fireworks (fallback: local MLX → Modal)
 
 **Decision (consolidated 2026-06-30)**: train the LoRA on **Tinker**; serve scale-to-zero on **Fireworks**; fall back to **local MLX** on the Mac (the realistic fallback) and **Modal** as a distant container fallback. One trainer, one server, two named fallbacks — the old multi-provider matrix is gone.
@@ -340,3 +344,72 @@ UnknownIssuer` on the very first auth-token call, first hit 2026-07-22. There is
 no supported env or config knob, so `stylebot.tinker_tls` rebuilds the transport
 with system certs and patches the SDK's private transport factory. Best-effort by
 design: if the internals move it warns by name rather than failing the run.
+
+---
+
+# Open proposals (not decided)
+
+Entries below are **awaiting a call from the repo owner**. They are written in the
+same shape as the decisions above so that accepting one is an edit, not a rewrite,
+but nothing here has been acted on.
+
+## P1 (PROPOSAL, 2026-08-10): move `openai` to an `[api]` extra
+
+**Proposal**: demote `openai>=1.60.0` from `[project].dependencies` to a new
+`[project.optional-dependencies] api` extra, alongside `classifier` and `trainer`,
+and give the three lazy import sites a friendly "install `stylebot[api]`" error
+instead of a bare `ModuleNotFoundError`.
+
+**The observation**: every `openai` import in the package is lazy, at exactly
+three sites — `eval.openrouter_judge`, `infer.openai_backend`, and
+`generators.openai_generator` (which `openrouter_generator` is built on).
+Verified by blocking the module on `sys.meta_path`: all 14 stylebot modules,
+including `bin.ai_style`, still import, so the whole `--help` tree survives. Only
+those three factories raise. So the SDK plus its 8 transitive packages (anyio,
+distro, httpx, jiter, pydantic, sniffio, tqdm, typing-extensions) is currently
+mandatory for installers who never touch a network model.
+
+**What would actually break** without the extra installed:
+
+| breaks | survives |
+| --- | --- |
+| `ai-style synth` (every generator factory is OpenAI-compatible) | `log`, `make-splits`, `export-table` |
+| `ai-style eval --judge` | `eval` without `--judge` (Vale / detector / eyeball) |
+| `run` / `serve` with `--backend openai` | `run --backend tinker` (the default), `serve` score-only (backend default `None`) |
+| | `train` (tinker), `train-clf` (classifier extra), `stylebot.classify` |
+
+**Not a packaging break for livingthing** — the thing that looked like the
+blocker, and isn't. livingthing declares `openai>=1.108.0` as its own direct
+dependency and imports it in ~9 of its own modules (`ai_core`, `refs/*`,
+`workflow_preen`, `diagnostics`), so it gets the SDK regardless of what stylebot
+declares. Its `stylebot[classifier,trainer]` line would need no change, and
+`dan-style synth` would keep working. Any *other* consumer that installs plain
+`stylebot` and calls `synth` would break, and there are none known.
+
+**Alternatives considered**: (a) status quo — one fewer failure mode, at the cost
+of making the SDK mandatory for the score-only path; (b) finer-grained extras
+(`[judge]` / `[synth]` / `[serve-openai]`) — three extras for one wheel is worse
+ergonomics than the problem; (c) declaring `stylebot[api]` the documented default
+install so only deliberate minimal installs feel it.
+
+**Deciding constraint (unresolved, hence a proposal)**: `synth` is a
+first-class subcommand, not an add-on, and an extra makes the plain
+`uv add stylebot` install unable to run it. That is a real ergonomic regression
+traded against a leaner `classify`/`serve` install. Worth noting the docstring
+framing is narrower than it first reads: `classify.py` claims
+"ML-dependency-free **at import**", scoped to numpy/sklearn/sentence-transformers,
+and that claim is literally true today. The gap is at the *package* level, not the
+module level.
+
+**Ruled out — `ruamel-yaml` is not the same case.** It is imported eagerly at
+`lib.py:5`, module top level, and the frontmatter path is core to `log` /
+`targets` / `synth`. It stays a hard dependency.
+
+**Re-evaluate if**: stylebot acquires an installer other than livingthing (a PyPI
+release, or a second consumer that only wants the classifier runtime); or a
+non-OpenAI generator backend lands, which would make `synth` survivable without
+the SDK and remove the main objection.
+
+**Note for whoever accepts this**: the friendly-error half touches `eval.py`,
+`infer.py` and `generators.py`, so it cannot ship from a `pyproject.toml`-only
+change.

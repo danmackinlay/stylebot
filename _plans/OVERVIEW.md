@@ -203,6 +203,10 @@ in [`decisions.md`](decisions.md), measurements in [`findings.md`](findings.md).
 - **`synth` option-surface retirements**: 12 class-C proposals still open, incl.
   the `--splits`/`--role`/`--sample-frac`/`--sample-salt` cluster
   ([`synth-flag-audit.md`](synth-flag-audit.md)).
+- **`openai` as an `[api]` extra**: every import of it is lazy, so a
+  `classify`/`serve`/keyless-`eval` install carries the SDK for nothing. Written
+  up as [`decisions.md`](decisions.md) P1 — undecided, and it would cost
+  `ai-style synth` its plain-install path.
 - **Phase 7 preference/DPO** on the same Tinker platform (decisions #D5), with
   the eval-harness Goodhart guards. Preference data already accrues from
   ordinary `--best-of` use.
