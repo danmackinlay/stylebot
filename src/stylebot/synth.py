@@ -26,37 +26,45 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from stylebot.ai_core import STYLE_SYSTEM
+from stylebot.generators import (
+    DEFAULT_REASONING_EFFORT,
+    DEFAULT_STRATEGY,
+    Generator,
+    _normalize_gen_output,
+)
 from stylebot.jsonl import append_jsonl, dumps_line, iter_jsonl
 from stylebot.pairs import build_pair_content, iter_pairs
 from stylebot.provenance import now_iso
+from stylebot.targets import Target
 
 logger = logging.getLogger(__name__)
 
-# Load-bearing re-exports: tests monkeypatch the factories ON THIS MODULE (the
-# CLI kit resolves synth.<factory> by attribute lookup), and external callers
-# import the registry and defaults via stylebot.synth.
+# --- re-exports ---------------------------------------------------------------
+# The surface this module publishes on behalf of its implementation homes
+# (`stylebot.generators`, `stylebot.targets`). Load-bearing, not convenience:
+# `bin/synth_cli.py` and `bin/ai_style.py` import ONLY `stylebot.synth` and reach
+# every name below by attribute lookup (`synth.openrouter_generator`,
+# `synth.MIN_CHUNK_CHARS`, …); livingthing reaches `iter_targets`, `STRATEGIES`
+# and `openrouter_generator` the same way. Tests monkeypatch the factories HERE
+# because that is where production resolves them — a consequence of the CLI
+# idiom, not the reason for it. Names used by this module's own code are
+# imported normally above and are not part of this list.
 from stylebot.generators import (  # noqa: E402, F401
     DEFAULT_GEN_TIMEOUT,
-    DEFAULT_REASONING_EFFORT,
     DEFAULT_SLOP_MAX_TOKENS,
-    DEFAULT_STRATEGY,
-    SLOP_SYSTEM,
-    SLOP_SYSTEM_CASUAL,
-    SLOP_SYSTEM_ENGAGING,
-    SLOP_SYSTEM_LINKEDIN,
-    SLOP_SYSTEM_MEASURED,
-    SLOP_SYSTEM_VERBOSE,
     STRATEGIES,
-    Generator,
     GenOutput,
     ResolvedStrategy,
-    SlopStrategy,
-    _normalize_gen_output,
-    openai_generator,
     openrouter_context_windows,
     openrouter_generator,
     prompt_id_of,
     resolve_strategy,
+)
+from stylebot.targets import (  # noqa: E402, F401
+    MAX_CHUNK_CHARS,
+    MERGE_MAX_CHUNK_CHARS,
+    MIN_CHUNK_CHARS,
+    iter_targets,
 )
 
 
@@ -83,16 +91,6 @@ SESSION_WINDOW_FILL_CAP = 0.8
 # ~quadratically with it). Per-model overrides go on Generator.session_budget.
 DEFAULT_SESSION_MAX_TOKENS = 32_000
 
-
-# Load-bearing re-exports, as above.
-from stylebot.targets import (  # noqa: E402, F401
-    MAX_CHUNK_CHARS,
-    MERGE_MAX_CHUNK_CHARS,
-    MIN_CHUNK_CHARS,
-    ChunkPolicy,
-    Target,
-    iter_targets,
-)
 
 # ---------------------------------------------------------------------------
 # Synthesis — assign generators to targets, generate, append schema-valid pairs
