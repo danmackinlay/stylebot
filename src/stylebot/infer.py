@@ -10,12 +10,12 @@ assistant texts. Two bundled backends:
 - `tinker_backend(...)` — samples the Tinker checkpoint pinned in a training
   manifest, rendered with the SAME cookbook renderer training used (no
   train/serve chat-template skew possible). Needs the ``trainer`` extra +
-  TINKER_API_KEY. The v1 default: zero serving infrastructure.
+  TINKER_API_KEY.
 - `openai_backend(...)` — any OpenAI-compatible endpoint (Fireworks,
-  `mlx_lm.server`, Osaurus, vLLM). The local/hosted exit. NB the served
-  model's chat template must match training's `qwen3_5_disable_thinking`
-  rendering — verify parity by scoring the same inputs through both backends
-  before trusting a new endpoint (see phase-4 plan, MLX slice).
+  `mlx_lm.server`, Osaurus, vLLM). NB the served model's chat template must
+  match training's `qwen3_5_disable_thinking` rendering — verify parity by
+  scoring the same inputs through both backends before trusting a new endpoint
+  (see phase-4 plan, MLX slice).
 
 `rewrite_text` chunks at inference the way training saw data: blank-line
 paragraph regions, grouped to ~STYLE_CHARS_PER_CHUNK chars, with chunk
@@ -44,21 +44,17 @@ from stylebot.jsonl import dumps_line
 logger = logging.getLogger(__name__)
 
 # Default inference chunk budget (chars). MUST match the caller's TRAINING
-# chunk scale: at out-of-distribution lengths the adapter falls back to
-# copying the input (observed 2026-07-22 — a 5.4KB single-chunk rewrite came
-# back byte-identical, while the same model transforms pair-scale chunks
-# well). The old ~8k figure from ai-style-fine-tune.md predates the corpus
-# chunking policy; blog policy trains on <=1500-char merged paragraphs, so
-# dan-style run passes its own MERGE_MAX_CHARS here.
+# chunk scale: at out-of-distribution lengths the adapter stops transforming
+# and returns the input verbatim. Blog policy trains on <=1500-char merged
+# paragraphs, so dan-style run passes its own MERGE_MAX_CHARS here.
 STYLE_CHARS_PER_CHUNK = 1_500
 
 DEFAULT_TEMPERATURE = 0.3
-# Output budget per chunk — a FLOOR, not the whole story. It must clear the
-# chunk budget with room to spare: a ~4500-char cross-heading chunk is ~1200
-# tokens, and truncation mid-rewrite is worse than no rewrite. The backends take
-# max_tokens fixed at construction, so it is the CLI (`ai-style run` / `serve`)
-# that scales it off --max-chunk-chars through `max_tokens_for` whenever
-# --max-tokens is not given explicitly.
+# Output budget per chunk — a FLOOR. It must clear the chunk budget with room
+# to spare (a ~4500-char cross-heading chunk is ~1200 tokens) because truncation
+# mid-rewrite is worse than no rewrite. The backends fix max_tokens at
+# construction, so the CLI (`ai-style run` / `serve`) scales it off
+# --max-chunk-chars through `max_tokens_for` unless --max-tokens is explicit.
 DEFAULT_MAX_TOKENS = 2_000
 # Tokens allowed per character of input chunk (chars/4 for the rewrite, plus
 # generous headroom since the styler may legitimately expand a terse passage).
@@ -143,13 +139,12 @@ def _segment(
     (training pairs never contain them as content — headings ride along as
     `meta.context`); adjacent prose blocks are grouped to <= max_chars.
 
-    `inline_headings` matches the v2 cross-heading diet: headings become
-    groupable content, so a chunk spans sections exactly as the training pairs
-    do. Code fences stay protected either way — they are excluded from the
-    corpus in both modes, so the styler has never been trained to reproduce
-    one. Grouped heading items are relabelled "prose" (they are chunk content
-    now); a heading that ends up alone keeps kind "heading" so callers can
-    still skip a bare trailing header rather than ask for a one-line rewrite.
+    `inline_headings` matches the cross-heading diet: headings become groupable
+    content, so a chunk spans sections exactly as the training pairs do. Code
+    fences stay protected either way — they are excluded from the corpus in both
+    modes, so the styler has never been trained to reproduce one. Grouped
+    heading items are relabelled "prose" (they are chunk content now); a heading
+    that ends up alone keeps kind "heading", so callers can skip a bare header.
     """
     blocks, seps = _blocks_with_separators(body)
     items: list[tuple[str, str]] = []
@@ -215,9 +210,9 @@ class RewriteResult:
 
 
 # Content anchors — the mechanically-checkable information a style rewrite
-# must never lose: markdown link destinations, bare URLs, citation keys. The
-# run-1 failure was exactly this (a rewrite deleted a link + a citation while
-# scoring WELL on voice), so anchor integrity is checked before any scoring.
+# must never lose: markdown link destinations, bare URLs, citation keys. A
+# rewrite can delete these while scoring WELL on voice, so anchor integrity is
+# checked before any scoring, never after it.
 _ANCHOR_RES = (
     re.compile(r"\]\(([^)\s]+)"),          # markdown link/image destination
     re.compile(r"(?<!\()https?://[^\s)\]]+"),  # bare URL
@@ -278,22 +273,17 @@ def rewrite_candidates(
     `max_chunk_chars` (which `_segment` would split), raise ValueError with a
     message fit to surface in an editor.
 
-    Under `inline_headings` (the v2 cross-heading diet) a selection MAY span
-    headings — that is the editor's "rewrite section" mode, and it is exactly
-    what the adapter was trained on. Fences still raise: they are absent from
-    the corpus in both diets, so the styler has never learned to reproduce one
-    and would be free to mangle it. The size limit still applies, since a
-    selection `_segment` would split into several chunks is not one rewrite.
+    Under `inline_headings` (the cross-heading diet) a selection MAY span
+    headings. Fences still raise: they are absent from the corpus in both diets,
+    so the styler has never learned to reproduce one and would be free to mangle
+    it.
 
     Returns `{"input_score": float|None, "n_sampled": int,
-              "candidates": [{"text", "score", "anchors_lost", "identity"},
-                             ...]}`
+              "candidates": [{"text", "score", "anchors_lost", "identity"}, ...]}`
     in sampled order (the caller owns presentation order — and should log it;
     see the presentation-bias note in the plan). Duplicate sample texts are
-    collapsed (low temperature mode-collapses freely — `n_sampled` keeps the
-    draw count honest) and a candidate byte-equal to the input is flagged
-    `identity: true` — the styler declining to change already-Dan prose is a
-    do-no-harm answer, not a candidate worth presenting as new.
+    collapsed, so `n_sampled` keeps the draw count honest, and a candidate
+    byte-equal to the input is flagged `identity: true`.
     """
     from stylebot.pairs import build_pair_content, pair_body
 
@@ -357,22 +347,20 @@ def rewrite_text(
     verbatim; an empty/blank styler answer falls back to the input chunk
     (never destroy prose on a bad sample).
 
-    `inline_headings` selects the v2 cross-heading diet: headings become chunk
+    `inline_headings` selects the cross-heading diet: headings become chunk
     content (rewritable, and no longer emitted as `context`), so chunks span
     sections. Set it to match the promoted adapter's training diet — the
     manifest records that under `data.chunk_scale`.
 
     With a `scorer` (lower = better, e.g. `detector_scorer`), the INPUT chunk
     competes with the candidates — the do-no-harm guard: a chunk is only
-    replaced by a rewrite the scorer rates strictly better, so best-of-N can
-    conclude "leave it alone". Each chunk's decision lands in
-    `result.decisions` for the CLI to surface.
+    replaced by a rewrite the scorer rates strictly better. Each chunk's
+    decision lands in `result.decisions` for the CLI to surface.
 
-    `on_decision(chunk, context, candidates, scores, chosen_index,
-    kept_input)` is called once per prose chunk after its decision — the
-    preference-data seam (best-of choices are chosen-vs-rejected pairs on
-    real inputs). `candidates` are the cleaned sample bodies as considered,
-    `scores` aligns with it (None for unscored/anchor-rejected samples), and
+    `on_decision(chunk, context, candidates, scores, chosen_index, kept_input)`
+    is called once per prose chunk after its decision — the preference-data
+    seam. `candidates` are the cleaned sample bodies as considered, `scores`
+    aligns with it (None for unscored/anchor-rejected samples), and
     `chosen_index` indexes `candidates` (None when the input was kept).
     """
     from stylebot.pairs import build_pair_content, pair_body
@@ -542,8 +530,7 @@ def tinker_backend(
 
     Uses the SAME cookbook renderer as training (default: the model's
     recommended one — pass the manifest's `renderer_name` to be exact), so no
-    chat-template skew is possible. Needs the ``trainer`` extra and
-    TINKER_API_KEY; ~$0.60/1M sampled tokens for a 9B-class model.
+    chat-template skew is possible. Needs the ``trainer`` extra + TINKER_API_KEY.
     """
     try:
         import tinker

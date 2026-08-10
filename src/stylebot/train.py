@@ -1,15 +1,11 @@
 """Phase 3: LoRA SFT of the styler — assembly, manifest, and the Tinker run.
 
 Two layers, mirroring `classify_train`'s split of pure assembly vs paid fit:
-
-- **Assembly** (`assemble_training_corpus`) is pure and keyless: validate the
-  `pairs.jsonl` contract, filter to the **styler**-role posts under the shared
-  splits contract (`stylebot.splits`), apply caller policy hooks, and cut a
-  deterministic by-POST validation split. Fully testable without the extra.
-- **Training** (`run_training`) is the paid path: it renders the assembled
-  chat records with the base model's chat template and runs the Tinker
-  cookbook's supervised recipe (LoRA), then exports a PEFT adapter. All
-  `tinker`/`tinker_cookbook` imports are lazy; the module imports free.
+`assemble_training_corpus` is keyless and fully testable without the extra
+(validate the contract, filter to **styler**-role posts under `stylebot.splits`,
+apply caller policy hooks, cut a deterministic by-POST validation split);
+`run_training` is the paid Tinker path. All `tinker`/`tinker_cookbook` imports
+are lazy; the module imports free.
 
 **Data policy this module deliberately encodes** (pinned in
 `_plans/phase-3-training.md` — do not "fix" these):
@@ -43,20 +39,18 @@ from pathlib import Path
 
 from stylebot.jsonl import dumps_line
 from stylebot.pairs import iter_pairs, validate_pairs_file
-from stylebot.provenance import file_sha256, git_sha  # file_sha256 re-exported: public here since Phase 3
+from stylebot.provenance import file_sha256, git_sha  # file_sha256 re-exported: public here
 from stylebot.tinker_tls import patch_pyqwest_tls_trust
 
-# Back-compat: the patch moved to `stylebot.tinker_tls`; the private name stays
-# bound here for callers that reached it through the trainer.
+# Back-compat alias for callers that reach the TLS patch through the trainer.
 _patch_pyqwest_tls_trust = patch_pyqwest_tls_trust
 
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
-# Defaults follow the Tinker cookbook's supervised recipe; base model per the
-# 2026-07-21 decision (Qwen3.5-9B — current-gen small dense; the older
-# Qwen3-8B pin predates the June 2026 catalog retirements).
+# Defaults follow the Tinker cookbook's supervised recipe, over a current-gen
+# small dense base model.
 DEFAULT_BASE_MODEL = "Qwen/Qwen3.5-9B"
 DEFAULT_LORA_RANK = 32
 DEFAULT_NUM_EPOCHS = 1
@@ -125,16 +119,15 @@ class TrainCorpus:
         """What chunk diet this run was actually trained on.
 
         Serving must chunk at the scale the adapter saw: at out-of-distribution
-        lengths the styler falls back to copying the input verbatim (observed
-        2026-07-22, a 5.4KB chunk returned byte-identical), so a hard-coded
-        inference budget silently rots the moment the corpus moves. Recording
-        it here lets `default_chunk_chars` read the promoted manifest instead
-        of guessing.
+        lengths the styler falls back to copying the input verbatim, so a
+        hard-coded inference budget silently rots the moment the corpus moves.
+        Recording it here lets `default_chunk_chars` read the promoted manifest
+        instead of guessing.
 
         `budgets` maps each `meta.merge_max_chars` present to its pair count
-        ("null" = unmerged / pre-facet records); `modes` does the same for
+        ("null" = unmerged records); `modes` does the same for
         `meta.chunk_mode`. `max_target_chars` is the longest assistant side —
-        the honest ceiling on what the adapter has ever been asked to emit.
+        the ceiling on what the adapter has ever been asked to emit.
         """
         budgets: dict[str, int] = {}
         modes: dict[str, int] = {}
@@ -172,15 +165,13 @@ def assemble_training_corpus(
 ) -> TrainCorpus:
     """Validate, filter, and split the corpus for styler training.
 
-    - `splits`: a loaded `splits.json` (`stylebot.splits.load_splits`). When
-      given, only pairs whose `meta.source` is **styler**-role are kept — the
-      detector pool and the frozen eval posts never enter training. When None,
-      every pair is eligible (fixture/experiment use).
+    - `splits`: a loaded `splits.json`. When given, only **styler**-role pairs
+      are kept — the detector pool and the frozen eval posts never enter
+      training. When None, every pair is eligible (fixture/experiment use).
     - `selector`: pair-level policy hook (record -> keep?). Default keep-all —
       note this deliberately KEEPS near-copy pairs (see module docstring).
     - `per_target`: multiplicity hook. Pairs sharing one target body are passed
-      as a list (corpus order); the hook returns the subset to keep — a cap, a
-      dedup, a downsample. Default identity.
+      as a list (corpus order); the hook returns the subset to keep.
     - The val split shuffles the kept POSTs with `random.Random(seed)` and
       holds out `max(1, round(n * val_frac))` of them (0 with `val_frac=0`),
       so it is deterministic and disjoint by post.
@@ -394,11 +385,9 @@ def run_training(
     The manifest at `manifest_out` is written twice: once pre-run (so even an
     interrupted run leaves its record) and once with `result` filled in. On
     `dry_run` only the pre-run manifest is written — no tinker import, no key,
-    no spend.
-
-    `runner` is the paid-execution seam: `(corpus, manifest, work_dir, **cfg)
-    -> result dict`. Default is `_tinker_runner` (lazy heavy imports); tests
-    inject a fake.
+    no spend. `runner` is the paid-execution seam:
+    `(corpus, manifest, work_dir, **cfg) -> result dict`, defaulting to
+    `_tinker_runner`; tests inject a fake.
     """
     pairs_path = Path(pairs_path)
     work_dir = Path(work_dir)
@@ -474,14 +463,13 @@ def _make_presplit_builder(
     """A ChatDatasetBuilder over OUR by-POST pre-split files.
 
     The cookbook's `FromConversationFileBuilder` row-shuffles one file into
-    train/test — that would leak val posts' sibling chunks into training. This
-    builder takes the two files the assembly stage already split by POST.
-    Defined lazily: `chz` classes need the trainer extra.
+    train/test, which would leak val posts' sibling chunks into training; this
+    builder takes the two files assembly already split by POST. Defined lazily:
+    `chz` classes need the trainer extra.
 
-    `shuffle_seed` is required, not defaulted: it used to be hardcoded to 0 at
-    the construction site, so `--seed` reached the val split but never the epoch
-    shuffle and two "different" seeds trained on the same order (fixed
-    2026-08-09). A missing argument must fail loudly, not silently re-pin 0.
+    `shuffle_seed` is required, not defaulted: it must reach the epoch shuffle
+    as well as the val split, or two "different" seeds train on the same order.
+    A missing argument must fail loudly, not silently re-pin 0.
     """
     import chz
     import datasets as hf_datasets

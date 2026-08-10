@@ -20,10 +20,10 @@ def patch_pyqwest_tls_trust() -> None:
     with `tls_include_system_certs=False`, whose bundled roots reject the
     Google Trust Services chain tinker.thinkingmachines.dev serves
     (`invalid peer certificate: UnknownIssuer` on the very first auth-token
-    call — observed 2026-07-22). Rebuilding the transport with system certs
-    included fixes it; there is no supported env/config knob, so this patches
-    the SDK's private transport factory. Best-effort: if the internals move,
-    log and let the SDK try its own default.
+    call). Rebuilding the transport with system certs included fixes it; there
+    is no supported env/config knob, so this patches the SDK's private transport
+    factory. Best-effort: if the internals move, log and let the SDK try its own
+    default.
     """
     try:
         import pyqwest

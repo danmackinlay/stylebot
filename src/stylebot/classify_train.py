@@ -1,41 +1,25 @@
 """Generic voice-classifier *training* — the other half of `stylebot.classify`.
 
-`classify.py` is the runtime seam (dep-free import, pure-Python scoring of a
-plain-JSON linear head). This module is the trainer that *produces* that
-artifact: assemble a dataset from a `pairs.jsonl` corpus, embed it with a style
-backbone, fit a logistic regression slop-vs-author, evaluate it leakage-safely
-(split by POST), and write `head.json` + `meta.json`.
+`classify.py` is the runtime seam; this module is the trainer that *produces*
+its artifact: assemble a dataset from a `pairs.jsonl` corpus, embed it with a
+style backbone, fit a logistic regression slop-vs-author, evaluate it
+leakage-safely (split by POST), and write `head.json` + `meta.json`. It is
+generic over authors by construction — every input and output is a stylebot
+contract, and the caller-specific choices (`pairs_path`, `embed_model`,
+`extra_positives`) are injected.
 
-It is generic over authors by construction — every input and output is a
-stylebot contract (`pairs.jsonl` in, `head.json`/`meta.json` out), and the
-caller-specific choices are injected:
-
-- **Which pairs**: the `pairs_path` argument.
-- **Extra free-standing positives**: `extra_positives` — an iterable of
-  `(text, source)` pairs (or `synth.Target`s) the *caller* selected under its own
-  policy (cf. `iter_targets(selector=…)`). Off by default: free positives
-  reintroduce a topic signal, so they are flagged and excluded from the metric.
-- **The backbone**: `embed_model`, defaulting to `DEFAULT_EMBED_MODEL` below.
-
-**Dependencies.** This module needs the ``classifier`` extra —
+**Dependencies.** Needs the ``classifier`` extra —
 ``uv add 'stylebot[classifier]'`` (scikit-learn, numpy, sentence-transformers).
-All heavy imports are lazy (inside functions), so importing the module is free
-and `import stylebot.classify` stays ML-dep-free; calling a trainer function
-without the extra raises an actionable ImportError.
+All heavy imports are lazy, so importing the module is free and
+`import stylebot.classify` stays ML-dep-free.
 
 **The methodology crux — train STYLE not TOPIC (leakage safety).** Use
 content-matched pairs (slop vs author of the *same* passage), split by POST
 (`GroupShuffleSplit` — never by paragraph), `class_weight='balanced'`. The
 headline metric is content-matched pairwise accuracy ("pick the author's version
-of the same passage") plus AUC. Two training modes:
-
-- **fit-all (default)**: cross-validated metric over POST splits, head shipped
-  fit on all posts. Honest for *measuring* an independent styler; NOT for
-  grading a styler trained on the same posts.
-- **holdout** (`holdout_frac`/`holdout_posts`): hold out whole POSTs, report the
-  single-split unseen-posts metric, ship the head fit on the train posts only —
-  the leakage-safe configuration when the detector is used as a *reward*. The
-  resolved partition is recorded in `meta.split` so styler-train + eval reuse it.
+of the same passage") plus AUC. The training modes — fit-all, holdout, and the
+three-role splits contract — are documented on `train` below; the holdout ones
+are the leakage-safe configurations to use when the detector is a *reward*.
 
 On a mixed corpus (real edit-pairs + `meta.synthetic` machine paraphrases) both
 modes additionally facet the metric by provenance (`by_provenance.real` /
@@ -63,13 +47,12 @@ from stylebot.provenance import git_sha
 
 logger = logging.getLogger(__name__)
 
-# The default style backbone. Chosen by a measured bake-off on Dan's
-# content-matched corpus (2026-06-30): StyleDistance 0.78 pairwise / 0.72 AUC,
-# beating LUAR (0.76/0.71), Wegmann CISR (0.73/0.67) and the mxbai *semantic*
-# baseline (0.75/0.62) — content-independent style embeddings hold where topic-
-# dominated semantic geometry collapses. A different author should re-run that
-# bake-off on their own pairs rather than trust this default blindly; whatever
-# wins is pinned into the artifact's meta.json and enforced at serve time.
+# The default style backbone, chosen by a measured bake-off on a
+# content-matched corpus: content-independent style embeddings beat the
+# semantic baselines, whose topic-dominated geometry collapses on this task. A
+# different author should re-run that bake-off on their own pairs rather than
+# trust this default blindly; whatever wins is pinned into the artifact's
+# meta.json and enforced at serve time.
 DEFAULT_EMBED_MODEL = "StyleDistance/styledistance"
 NORMALIZE = True
 SCHEMA_VERSION = 1
@@ -84,9 +67,8 @@ DEFAULT_N_SPLITS = 8
 DEFAULT_RANDOM_STATE = 0
 
 # Regularization. C=None everywhere means "select by inner group-CV over C_GRID"
-# (nested CV: selection happens strictly inside each training side, so the
-# reported metric covers the tuning step and hand-sweeping --C against the
-# printed number is never needed). DEFAULT_C is only the fallback when the fit
+# (nested: selection happens strictly inside each training side, so the reported
+# metric covers the tuning step). DEFAULT_C is only the fallback when the fit
 # pool has too few posts for an inner split.
 DEFAULT_C = 1.0
 C_GRID = (0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0)
@@ -119,11 +101,10 @@ class Dataset:
 
     `texts[i]` has label `labels[i]` and belongs to POST `groups[i]`. `pair_rows`
     lists `(slop_row, author_row)` index twins (the content-matched pairs) — the
-    only rows the headline metric scores. `pair_synth[k]` marks pair `k` as
-    synthetic (`meta.synthetic` — a machine paraphrase rather than a real edit
-    capture), so metrics can facet real vs synthetic. `is_free[i]` marks
-    free-standing positives (off by default); these augment the *fit* but never
-    the metric, so their topic signal can't inflate the reported numbers.
+    only rows the headline metric scores. `pair_synth[k]` marks pair `k` as a
+    machine paraphrase rather than a real edit capture, so metrics can facet real
+    vs synthetic. `is_free[i]` marks free-standing positives; these augment the
+    *fit* but never the metric, so their topic signal can't inflate it.
     """
 
     texts: list[str] = field(default_factory=list)
@@ -177,21 +158,18 @@ def assemble_dataset(
     """Build the slop-vs-author dataset from a content-matched pairs corpus.
 
     Each pair contributes its slop side (`messages[1]`, label slop) and its
-    author side (`messages[2]`, label author), heading-context stripped (via
-    `pairs.extract_slop`/`extract_target`), grouped by `meta.source` (the POST).
-    `meta.synthetic` (truthy on `ai-style synth` output, absent on real edit
-    captures) is carried into `pair_synth` so metrics can facet by provenance.
-
-    Pairs whose `meta.transform_sim` (the copying ratio synth records) exceeds
-    `max_transform_sim` are dropped: two near-identical texts with opposite
-    labels are label noise for the classifier. Pairs without the covariate
-    (real captures, pre-covariate synth) are kept — `None` disables the gate.
+    author side (`messages[2]`, label author), heading-context stripped, grouped
+    by `meta.source` (the POST). `meta.synthetic` is carried into `pair_synth`
+    so metrics can facet by provenance. Pairs whose `meta.transform_sim` (the
+    copying ratio synth records) exceeds `max_transform_sim` are dropped: two
+    near-identical texts with opposite labels are label noise. Pairs without the
+    covariate are kept — `None` disables the gate.
 
     `extra_positives` enriches the author class with free-standing prose the
-    *caller* selected under its own policy — each item is a `synth.Target` (or
-    any object with `.text` and `.source`) or a plain `(text, source)` tuple.
-    They are flagged `is_free` and excluded from the headline metric, because
-    free positives reintroduce a topic signal that would inflate it.
+    *caller* selected — each item is a `synth.Target` (anything with `.text` and
+    `.source`) or a `(text, source)` tuple. They are flagged `is_free` and
+    excluded from the headline metric, because free positives reintroduce a
+    topic signal that would inflate it.
     """
     ds = Dataset()
     n_near_identity = 0
@@ -235,8 +213,8 @@ def subset_dataset(ds: Dataset, keep_groups) -> tuple[Dataset, list[int]]:
 
     Returns `(sub, rows)` where `rows` are the kept original row indices in
     original order — so an embedding matrix subsets in lockstep: `X[rows]`
-    aligns with `sub`. Twins always share a POST, so pairs survive whole.
-    Used for role filtering *before* embedding: excluded posts (e.g. the frozen
+    aligns with `sub`. Twins always share a POST, so pairs survive whole. Used
+    for role filtering *before* embedding, so excluded posts (e.g. the frozen
     eval stratum) are never even encoded.
     """
     keep_groups = set(keep_groups)
@@ -271,8 +249,7 @@ def embed_texts(
 
     Wraps `stylebot.classify.sentence_transformers_batch_embed_fn` — the ONE
     encode call-site shared with serving, so normalize/encode semantics can't
-    drift between training and inference. Heavy imports stay inside the call so
-    importing this module is cheap.
+    drift between training and inference.
     """
     np = _np()
     try:
@@ -315,15 +292,13 @@ def select_C(X, ds: Dataset, rows, *, grid=C_GRID, n_inner: int = 4) -> tuple[fl
     """Pick C by inner GroupKFold over the posts within `rows` (the fit pool).
 
     Scored by content-matched pairwise accuracy on the validation twins — the
-    same quantity as the headline metric. Ties break toward the smallest C
-    (more regularization). With fewer than MIN_POSTS_FOR_C_SELECTION distinct
-    posts an inner split is meaningless: falls back to DEFAULT_C and says so in
-    the returned info (callers surface it).
+    same quantity as the headline metric. Ties break toward the smallest C.
+    With fewer than MIN_POSTS_FOR_C_SELECTION distinct posts an inner split is
+    meaningless: falls back to DEFAULT_C and says so in the returned info.
 
-    Callers use this strictly *inside* a training side (an outer fold's train
-    posts, or the detector pool for the shipped head) — never on rows the
-    resulting metric is reported over. That nesting is what keeps the reported
-    number honest about the tuning step.
+    Call this strictly *inside* a training side (an outer fold's train posts, or
+    the detector pool for the shipped head) — never on rows the resulting metric
+    is reported over.
     """
     np = _np()
     from sklearn.model_selection import GroupKFold
@@ -375,9 +350,8 @@ STRATA = ("real", "synthetic")
 def _provenance_strata(ds: Dataset) -> tuple[dict[str, list[int]], dict[int, str]]:
     """`(stratum -> pair indices, matched row -> stratum)` for real/synthetic faceting.
 
-    The stratum dict is empty unless the corpus is genuinely mixed — on an
-    all-real (or all-synthetic) corpus the facet would just repeat the headline
-    metric, so callers skip `by_provenance` entirely.
+    The stratum dict is empty on a single-provenance corpus, where the facet
+    would just repeat the headline metric, so callers skip `by_provenance`.
     """
     pair_idx = {name: [] for name in STRATA}
     row_stratum: dict[int, str] = {}
@@ -400,11 +374,10 @@ def _stat(xs: list[float]) -> dict:
 def _fold_metrics(p_slop, y, ds: Dataset, test_rows: list[int], *, pair_idx, row_stratum) -> dict:
     """Content-matched metrics for ONE evaluation split, from P(slop) scores.
 
-    The measurement core shared by `evaluate` (accumulating across CV folds)
-    and `evaluate_holdout` (a single split): pairwise twin accuracy + AUC over
-    the matched test rows (free positives excluded), globally and per
-    provenance stratum. Values are raw (unrounded) `(value_or_None, n)` tuples;
-    the callers own aggregation and formatting.
+    The measurement core shared by `evaluate` and `evaluate_holdout`: pairwise
+    twin accuracy + AUC over the matched test rows (free positives excluded),
+    globally and per provenance stratum. Values are raw, unrounded
+    `(value_or_None, n)` tuples; callers own aggregation and formatting.
     """
     from sklearn.metrics import roc_auc_score
 
@@ -453,12 +426,9 @@ def evaluate(
 
     `C=None` (the default) runs **nested CV**: each fold selects C by an inner
     GroupKFold over its *train* posts only (`select_C`), so the reported metric
-    is honest about the tuning step. An explicit C skips selection.
-
-    On a mixed real/synthetic corpus the result gains `by_provenance` — the same
-    two metrics per stratum. The `real` facet is the honest number when synthetic
-    pairs augment the fit: it can't be inflated by "detecting our own paraphrase
-    generator".
+    is honest about the tuning step. An explicit C skips selection. On a mixed
+    real/synthetic corpus the result gains `by_provenance` — the same two
+    metrics per stratum; the `real` facet is the honest number.
     """
     np = _np()
     from sklearn.model_selection import GroupShuffleSplit
@@ -527,9 +497,9 @@ def partition_posts(
     The leakage-safe contract: the detector must NOT be trained on the posts the
     styler trains on or that the final eval scores (see `_plans/eval-harness.md`
     "the split contract"). An explicit `holdout_posts` list pins the exact
-    partition so all three stages (styler-train / detector-train / eval) can reuse
-    it; otherwise the holdout is derived deterministically from `holdout_frac` +
-    `holdout_seed`. `holdout_frac=0` and no list ⇒ no holdout (empty set).
+    partition so all three stages can reuse it; otherwise the holdout is derived
+    deterministically from `holdout_frac` + `holdout_seed`. `holdout_frac=0` and
+    no list ⇒ no holdout.
     """
     posts = sorted(set(sources))
     if holdout_posts:
@@ -549,11 +519,9 @@ def partition_posts(
 def evaluate_holdout(X, ds: Dataset, holdout: set, *, C: float | None = None) -> dict:
     """Single by-POST holdout eval: fit on the train posts, score the holdout twins.
 
-    The honest "unseen posts" number for a head that ships fit on the train posts
-    only — content-matched pairwise accuracy + AUC over the held-out posts. Like
-    `evaluate`, gains a `by_provenance` real/synthetic facet on a mixed corpus.
-    `C=None` selects C by inner group-CV over the *train* posts only (never the
-    holdout), mirroring the nested contract.
+    The "unseen posts" number for a head that ships fit on the train posts only.
+    Like `evaluate`, gains a `by_provenance` facet on a mixed corpus. `C=None`
+    selects C by inner group-CV over the *train* posts only, never the holdout.
     """
     np = _np()
 
@@ -601,10 +569,8 @@ def fit_head(X, ds: Dataset, *, C: float = DEFAULT_C, rows: list[int] | None = N
 
     `coef`/`intercept` are extracted for the P(slop) class so the pure-Python
     `stylebot.classify._logreg_p_slop` reproduces `clf.predict_proba[:, slop]`
-    exactly. (Binary logreg keeps one weight row; we index it by the slop class.)
-
-    `rows` restricts the fit to a subset of row indices — used by the held-out
-    split mode to ship a head that has NOT seen the holdout posts.
+    exactly. `rows` restricts the fit to a subset of row indices — used by the
+    held-out split mode to ship a head that has NOT seen the holdout posts.
     """
     np = _np()
 
@@ -646,15 +612,10 @@ def write_artifact(
     """Write `head.json` (the runtime contract) + `meta.json` [+ optional `model.joblib`].
 
     `head.json` is the plain-JSON linear head `stylebot.classify` serves with no
-    ML deps; `meta.json` pins the embedder + records the held-out metrics. These
-    two are the committable artifact: tiny, diff-able, version-independent, and
-    the only way to use the detector without re-deriving it from the (private)
-    corpus.
-
-    `model.joblib` (the full sklearn estimator) is OFF by default: it is a
-    redundant, sklearn-version-fragile binary pickle of the same weights that no
-    code path loads (both `classify.sklearn_detector` and `--detector-model`
-    read `head.json`).
+    ML deps; `meta.json` pins the embedder + records the held-out metrics. Those
+    two are the committable artifact. `model.joblib` (the full sklearn
+    estimator) is OFF by default: a redundant, sklearn-version-fragile pickle of
+    the same weights that no code path loads.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

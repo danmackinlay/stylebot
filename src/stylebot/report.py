@@ -1,12 +1,11 @@
 """Read-only inspection of synthesis targets — get a *feel* for them.
 
-We make a lot of quality judgments about which prose becomes a training target;
-this module makes those judgments eyeball-able without any API spend:
+Makes the which-prose-becomes-a-target judgments eyeball-able, with no API spend:
 
 - `render_targets_report(targets, path)` writes ONE self-contained HTML file (no
   server, no network, no external assets, no deps beyond the stdlib) with a
   length histogram, summary stats, and a searchable / sortable / random-sampleable
-  table of every target. Open it in a browser.
+  table of every target.
 - `sample_targets` / `format_sample` print a quick random sample to the terminal.
 
 All target text is HTML-escaped; the embedded JS only toggles row visibility on
@@ -245,10 +244,8 @@ def render_targets_report(
 # ---------------------------------------------------------------------------
 #
 # The eval sibling of the targets report: read-only, no spend, self-contained
-# HTML. Reuses the same _CSS / _histogram_svg / escaping discipline and the eval
-# plumbing (load_scores, record_id, FIELD_EXTRACTORS, summarize_scores) +
-# pairs.iter_pairs — so scores stay joined to the corpus by id, and the renderer
-# is generic over score *fields* (slop/target now; slop/output/target later).
+# HTML, same _CSS / _histogram_svg / escaping discipline. Joins scores to the
+# corpus by `record_id`, and is generic over score *fields*.
 
 
 def _judge_score(field_scores: object) -> int | None:
@@ -588,8 +585,7 @@ def render_scores_report(
     by `record_id`, then renders, per pair, each `field`'s body text + judge score
     + rationale side by side (plus a muted generation-covariate sub-line), sortable
     by the slop→Dan delta and filterable by strategy, under a headline grouped by
-    `facet_by` (any carried meta covariate — slop_strategy, reasoning_effort,
-    prompt_id, …). Generic over `fields` — a Phase-4 styler run renders with no change.
+    `facet_by` (any carried meta covariate).
     """
     out_path = Path(out_path)
     records, rows = _load_scores_rows(scores, pairs_path, fields)

@@ -14,9 +14,8 @@ The protocol is deliberately minimal (NDJSON, not LSP or JSON-RPC framing):
     -> {"id": 2, "op": "score", "texts": ["para one", "para two"]}
     <- {"id": 2, "scores": [0.72, 0.31]}
 
-Two further ops arm only when their seam is injected (score-only serving is
-unchanged; an unarmed op errors politely). They are the editor rewrite loop
-(`_plans/slice-vscode-rewrite.md`):
+Two further ops arm only when their seam is injected; an unarmed op errors
+politely. They are the editor rewrite loop (`_plans/slice-vscode-rewrite.md`):
 
     -> {"id": 3, "op": "rewrite", "text": "...", "context": "## Heading",
         "best_of": 4}
@@ -25,21 +24,18 @@ unchanged; an unarmed op errors politely). They are the editor rewrite loop
     -> {"id": 4, "op": "prefer", "decision": {...}}
     <- {"id": 4, "ok": true}
 
-`rewrite` delegates to an injected `rewriter(text, context, best_of)`
-(typically `stylebot.infer.rewrite_candidates` closed over a styler +
-scorer); `prefer` hands the client's decision dict to an injected sink (the
-preference-data seam — the caller owns the schema and the chooser/doc
-annotations).
+`rewrite` delegates to an injected `rewriter(text, context, best_of)` (typically
+`stylebot.infer.rewrite_candidates` closed over a styler + scorer); `prefer`
+hands the client's decision dict to an injected sink (the preference-data seam —
+the caller owns the schema).
 
 `info` doubles as the client's ready handshake: the first response arrives
 only after the model has loaded. Errors never kill the loop — a malformed or
 failing request gets `{"id": ..., "error": "..."}` and the server keeps
-reading. EOF on stdin is the shutdown signal (the editor closes the pipe or
-kills the process).
+reading. EOF on stdin is the shutdown signal.
 
-Like the rest of `stylebot.classify`, this module is ML-dependency-free: the
-detector, rewriter, and prefer sink are injected, so tests drive
-`serve_loop` with stubs.
+Like `stylebot.classify`, this module is ML-dependency-free: the detector,
+rewriter, and prefer sink are injected, so tests drive `serve_loop` with stubs.
 """
 
 from __future__ import annotations
