@@ -212,9 +212,10 @@ it consumes the `meta.gen` covariates Phase-2 now records. See
   `openrouter_judge` (factory) / `Judge` / `JUDGE_SYSTEM` / `parse_judge_reply`,
   `Detector` protocol / `null_detector`, `score_candidate`; **batched layer**
   `score_pairs_file` (corpus → id-keyed `scores.jsonl`, concurrent + resumable) /
-  `summarize_scores(by=…)` / `record_id` / `live_record_ids` /
-  `prune_orphan_scores` / `pair_body` / `FIELD_EXTRACTORS`. The
-  shared reader is `stylebot.pairs.iter_pairs`. (The legacy in-memory
+  `summarize_scores(by=…)` / `live_record_ids` / `prune_orphan_scores`. The
+  pair-schema primitives `record_id` / `pair_body` / `FIELD_EXTRACTORS` live in
+  `stylebot.pairs` (re-exported from `stylebot.eval`), as does the
+  shared reader `stylebot.pairs.iter_pairs`. (The legacy in-memory
   conveniences `evaluate_groups` / `read_prose_files` were removed — the batched
   JSONL path is the one way to score.)
 - **Keyless by default.** No judge ⇒ `judge: null`; Vale absent ⇒

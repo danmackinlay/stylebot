@@ -16,7 +16,7 @@ Narrative/rationale: the blog post [*Fine-tuning danbot*](https://danmackinlay.n
 uv sync                 # install (incl. dev group: pytest, ruff)
 uv run pytest -q        # must stay green
 uv run ai-style log --help
-uv run ai-style --help  # synth (Phase 2); split/train/eval land with their phases
+uv run ai-style --help  # the full subcommand tree; every phase has landed
 ```
 
 **Always run Python through `uv`.** `uv run python …`, `uv run pytest`,
@@ -46,7 +46,7 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
   resolved in `stylebot.config`. Two distinct inputs, never collapsed:
   `--blog-root` (read source) vs `--data-dir` (read/write state).
 - **Defaults where a mistake is cheap, required flags where it isn't.**
-  `ai-style log` has a default data-dir; `train`/`split` must not.
+  `ai-style log` has a default data-dir; `train`/`make-splits` must not.
 - **Selection is a user-supplied policy.** Phases accept a
   `selector: Callable[[dict], bool]` (+ optional `sort_key`/`sampler`),
   defaulting to `stylebot.lib.is_human_authored` (the `automation: 0` example).

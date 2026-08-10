@@ -27,10 +27,10 @@ integration remains a later slice on top of the same library.
   byte-identical (identity fallback at OOD length, 2026-07-22), while the
   same post at training scale moved whole-body detector P(slop) 0.589→0.281.
   `rewrite_pairs_file` emits the eval-ready outputs JSONL (pair record +
-  top-level `"output"`; `eval.FIELD_EXTRACTORS["output"]` added).
+  top-level `"output"`; `pairs.FIELD_EXTRACTORS["output"]` added).
 - **`ai-style run <file>`**: stdout default, `--write` (with `.bak`),
   `--backend tinker|openai`, `--best-of N` reranked by the voice classifier
-  (`detector_reranker`, lowest P(slop) wins; small N is Goodhart-gentle —
+  (`detector_scorer`, lowest P(slop) wins; small N is Goodhart-gentle —
   keep judge+eyeball as the orthogonal guard, see eval-harness.md).
   `--max-chunk-chars` + `--inline-headings` (also on `ai-style serve`) are the
   adapter's training *diet*, recorded in the manifest under `data.chunk_scale`;

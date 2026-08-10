@@ -35,10 +35,10 @@ enough to run on debounced idle keystrokes, not just on save.
   with `ai-style eval`, simplest protocol. Retraining the head = restart the
   sidecar (5 s); fine for a personal tool.
 - **No heading prefix.** The classifier trained on *body* text with heading
-  context stripped (`eval.py` strips via `pair_body` before scoring; dataset
-  assembly did the same). Scoring bare paragraph text is therefore
-  on-distribution — the earlier "prepend the nearest heading" idea was wrong,
-  not deferred.
+  context stripped (the `stylebot.pairs` field extractors strip via `pair_body`
+  before scoring; dataset assembly did the same). Scoring bare paragraph text
+  is therefore on-distribution — the earlier "prepend the nearest heading" idea
+  was wrong, not deferred.
 - **NDJSON over stdin/stdout, not LSP.** LSP has no decoration concept
   (ErrorLens, the closest prior art, is not an LSP server). One JSON object
   per line, both directions; ~30 lines a side, no framing deps.

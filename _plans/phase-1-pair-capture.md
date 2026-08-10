@@ -8,9 +8,9 @@ and the canonical `pairs.jsonl` schema that every other phase depends on.
 `ai-style log`: a manual logger. Every time Dan rewrites an AI draft into his
 own voice, it captures the `(before, after)` diff at paragraph granularity into
 `pairs.jsonl`. No automation, no git hook, no surprise side effects — invoked
-by hand. Full behaviour is in the module docstring of
-`src/stylebot/bin/ai_style_log.py`; that docstring is authoritative for
-mechanics, this file for the contract.
+by hand. Full behaviour is in [`_training_pairs/README.md`](../_training_pairs/README.md)
+(the module docstring of `src/stylebot/bin/ai_style_log.py` is a short pointer
+to it); that README is authoritative for mechanics, this file for the contract.
 
 ## Inputs
 
