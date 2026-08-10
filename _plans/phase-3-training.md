@@ -122,8 +122,8 @@ contract stack to read, in order: `CLAUDE.md` → this file →
 `phase-1-pair-capture.md` (the pairs schema) → `eval-harness.md` ("the split
 contract"). Preconditions to verify before any paid run:
 
-1. `uv sync && uv run pytest -q` green; `TINKER_API_KEY` present in `.env`
-   (copy `.env.example`; never commit either).
+1. `uv sync && uv run pytest -q` green; `TINKER_API_KEY` present in the
+   environment (`direnv exec ~/Source/livingthing uv run …`, or export it).
 2. The corpus coverage run has FINISHED (`dan-style synth --skip-covered ...`
    writes nothing new) — the manifest pins a content hash of `pairs.jsonl`,
    so train on a settled corpus, not a moving one.

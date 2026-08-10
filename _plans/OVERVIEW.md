@@ -34,8 +34,8 @@ and the contracts *between* stages matter more than internal abstraction. So:
 4. **The corpus and secrets never enter this public repo.** The corpus is
    gitignored here; its canonical home is the livingthing repo, where it is
    committed (`_training_pairs/pairs.jsonl`, since 2026-07, for portability —
-   see `_training_pairs/README.md`). Keys live in `.env` (gitignored — see
-   `.env.example`).
+   see `_training_pairs/README.md`). Keys arrive as environment variables —
+   direnv in practice — from a file that is never committed.
 5. **Verify with a number, never with vibes.** "Does the styler work" is
    exactly where an ML project rots. The eval harness is therefore an *early*
    parallel track, not a final step.
@@ -143,7 +143,7 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 
 | Phase | File | Status | Blocked by |
 |-------|------|--------|-----------|
-| 0 · Scaffolding | this repo's pyproject/.env/_plans | ✅ done | — |
+| 0 · Scaffolding | this repo's pyproject/config/_plans | ✅ done | — |
 | 1 · Pair capture | [`phase-1-pair-capture.md`](phase-1-pair-capture.md) | ✅ shipped (daily use) + heading context | — |
 | 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | ✅ shipped; corpus settled 2026-07-22 (~4k pairs) with identity + inflation hygiene gates (`--max-transform-sim` / `--max-length-ratio`) | — |
 | — · Heading context | [`heading-context.md`](heading-context.md) | 🔧 built (both producers; immediate depth) | — |

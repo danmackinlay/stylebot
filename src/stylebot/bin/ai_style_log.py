@@ -221,7 +221,7 @@ State on disk
     $STYLEBOT_DATA_DIR/pairs.jsonl                 # saved pairs (gitignored)
 
 The data dir is resolved per command through `stylebot.config.resolve_data_dir`
-— the shared ladder `--flag` > `$STYLEBOT_DATA_DIR` (environment *or* `.env`) >
+— the shared ladder `--flag` > `$STYLEBOT_DATA_DIR` (from the environment) >
 the cwd-relative default `_training_pairs`. `log` passes no flag: it is the
 convenience command, where a mistake is cheap and a default is right (the
 expensive, stateful commands like `train` / `split` demand an explicit
@@ -295,11 +295,12 @@ from stylebot.jsonl import read_jsonl
 # Both default and override are gitignored. See `_training_pairs/README.md`.
 #
 # Resolved lazily (per use, when a command runs) rather than baked into module
-# constants at import time. An import-time `os.environ` read happens before
-# anything has loaded `.env`, so until 2026-08 `log` was the one subcommand
-# that could not see a `.env`-supplied corpus location and quietly wrote to a
-# cwd-relative `_training_pairs/` instead. `config.resolve_data_dir()` loads
-# `.env` first, and `config.load()` memoises, so per-use resolution is cheap.
+# constants at import time. Import-time constants freeze whatever the
+# environment looked like when the module was first imported, which is the
+# wrong moment: `log` is imported by the CLI entry point and by tests, and in
+# 2026-08 that made it the one subcommand that could quietly write to a
+# cwd-relative `_training_pairs/` instead of the configured corpus. Resolving
+# per use is a dict lookup — there is nothing to cache.
 def _data_dir() -> Path:
     """The corpus root for this invocation."""
     return config.resolve_data_dir()
@@ -328,8 +329,9 @@ def _pairs_path() -> Path:
 
 # The capture mechanism lives in stylebot.capture; this CLI keeps the path
 # policy (the resolvers above) and the session workflow. The wrappers below
-# call `_pairs_path()` at call time, so a test (or a `.env`) that repoints
-# $STYLEBOT_DATA_DIR takes effect without reimporting this module.
+# call `_pairs_path()` at call time, so anything that repoints
+# $STYLEBOT_DATA_DIR — a test, a direnv `.envrc`, a shell export — takes effect
+# without reimporting this module.
 _now_iso = capture.now_iso
 _capture_id = capture.new_capture_id
 _split_frontmatter = capture.split_frontmatter

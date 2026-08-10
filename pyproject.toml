@@ -10,7 +10,6 @@ dependencies = [
     "click>=8.4.2",
     "ruamel-yaml>=0.19.1",
     "python-dateutil>=2.9.0",
-    "python-dotenv>=1.0.1",
     "openai>=1.60.0",
 ]
 

@@ -582,7 +582,7 @@ def openrouter_generator(
     `meta.generator` so its pairs stay distinguishable.
 
     Reads `OPENROUTER_API_KEY` (required) and optional `OPENROUTER_BASE_URL`
-    (default ``https://openrouter.ai/api/v1``) from the environment / `.env`.
+    (default ``https://openrouter.ai/api/v1``) from the environment.
 
     `reasoning_effort` (high|medium|low|off) is a recorded covariate. Many models
     (Qwen3, Nemotron, …) reason by default, which on a paraphrase burns the token

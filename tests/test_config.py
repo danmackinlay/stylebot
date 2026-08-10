@@ -1,7 +1,8 @@
 """Tests for stylebot.config — the one home of the path/secret precedence ladder.
 
-`config._LOADED` is forced True so `.env` discovery can't leak developer-local
-values into the assertions; the ladder below `load()` is what's under test.
+Everything resolves out of the process environment (direnv's job in real use),
+so `monkeypatch.setenv` is the whole fixture: no file discovery to neutralise,
+and no way for a developer-local config to leak into the assertions.
 """
 
 from __future__ import annotations
@@ -11,11 +12,6 @@ from pathlib import Path
 import pytest
 
 from stylebot import config
-
-
-@pytest.fixture(autouse=True)
-def no_dotenv(monkeypatch):
-    monkeypatch.setattr(config, "_LOADED", True)
 
 
 def test_data_dir_flag_beats_env(monkeypatch):

@@ -322,7 +322,6 @@ def serve_cmd(
     """
     from stylebot import classify, infer, serve
 
-    config.load()
     try:
         meta = classify.load_artifact_meta(detector_model)
         detector = classify.sklearn_detector(detector_model)
@@ -681,10 +680,10 @@ def train_cmd(
         click.echo(f"[dry-run] manifest preview -> {preview.manifest_path}")
         return
 
-    config.load()
     if not config.get_key("TINKER_API_KEY"):
         raise click.ClickException(
-            "TINKER_API_KEY is not set — the paid run needs it (see .env.example)."
+            "TINKER_API_KEY is not set — the paid run needs it. Export it, or "
+            "run under direnv (`direnv exec <dir-with-an-.envrc> uv run ai-style train ...`)."
         )
     if not assume_yes:
         click.confirm("Launch the paid Tinker run?", abort=True)
@@ -748,7 +747,6 @@ def run_cmd(
     """
     from stylebot import infer
 
-    config.load()
     # max_tokens is fixed at backend construction, so scale it off the chunk
     # budget here (a big --max-chunk-chars would otherwise truncate mid-rewrite).
     chunk_chars = max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK

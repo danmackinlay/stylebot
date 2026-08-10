@@ -523,7 +523,8 @@ def test_plan_sessions_separates_same_model_strategies():
 def test_missing_openrouter_key_aborts_before_any_generation(tmp_path, monkeypatch, make_blog):
     # A keyless run must die at generator construction with the actionable
     # config error — never reach the API, never write a partial corpus.
-    # (Empty env var wins over any .env file dotenv might discover.)
+    # Set empty rather than deleted: `get_key` treats blank as unset, and this
+    # also survives a test runner launched under direnv with a real key loaded.
     monkeypatch.setenv("OPENROUTER_API_KEY", "")
     root = make_blog(ai=False)
     result = CliRunner().invoke(

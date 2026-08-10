@@ -204,5 +204,7 @@ confirm `npm test` passes, then `npm run package` and reinstall.
   canonical home is the (livingthing) blog repo, where it *is* committed
   (since 2026-07, for portability). See
   [`_training_pairs/README.md`](_training_pairs/README.md).
-- **API keys** — copy `.env.example` to `.env` and fill in. `.env` is
-  gitignored and never committed.
+- **API keys** — read from the process environment (`OPENROUTER_API_KEY`,
+  `TINKER_API_KEY`, …). Export them, or let [direnv](https://direnv.net) do it:
+  `direnv exec <dir-with-an-.envrc> uv run ai-style …`. stylebot loads no
+  dotenv file of its own. Whatever file holds your keys stays gitignored.

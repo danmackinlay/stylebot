@@ -28,7 +28,7 @@ a sample of Dan's paragraphs. Does not need a trained model.
 - `--data-dir` (write): where the resulting `pairs.jsonl` is appended.
 - LLM API keys: `OPENROUTER_API_KEY` (one key, many hosted models — the default
   path), optionally `OPENAI_API_KEY` and a local/utility base model
-  (`LOCAL_LLM_*`). See `.env.example`.
+  (`LOCAL_LLM_*`). All read from the environment; direnv supplies them.
 - `STYLE_SYSTEM` from `stylebot.ai_core` (must match Phase 1 verbatim).
 
 Interface: a `stylebot.synth` function over explicit paths; `ai-style synth`

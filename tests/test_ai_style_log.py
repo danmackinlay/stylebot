@@ -12,9 +12,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from dotenv import load_dotenv as real_load_dotenv
 
-from stylebot import config
 from stylebot.bin import ai_style_log as log
 from stylebot.pairs import build_pair_content, validate_pair_record
 
@@ -25,11 +23,9 @@ def temp_corpus(tmp_path, monkeypatch):
 
     The logger resolves its paths per command through
     `config.resolve_data_dir()`, so setting the env var is all it takes — no
-    module globals to patch, no reimport. `_LOADED` is forced so `load()`
-    can't pull a developer's real `.env` into the test.
+    module globals to patch, no reimport.
     """
     data_dir = tmp_path / "corpus"
-    monkeypatch.setattr(config, "_LOADED", True)
     monkeypatch.setenv("STYLEBOT_DATA_DIR", str(data_dir))
     return data_dir
 
@@ -449,25 +445,18 @@ def test_save_reports_sessionless_prior_pairs_without_crashing(session_repo):
 # ---- corpus location comes from the shared config ladder ------------------
 
 
-def test_dotenv_supplied_data_dir_is_honoured(tmp_path, monkeypatch):
+def test_env_supplied_data_dir_is_honoured(tmp_path, monkeypatch):
     """Regression: `log` resolves its corpus through `stylebot.config`.
 
-    It used to read `os.environ` at import time, before anything had loaded
-    `.env` — the one subcommand that could not see a `.env`-supplied
-    STYLEBOT_DATA_DIR, so a save silently landed in a cwd-relative
-    `_training_pairs/` instead of the real corpus.
+    It used to bake the location into module constants at import time, so an
+    environment that named a corpus was ignored and a save silently landed in a
+    cwd-relative `_training_pairs/` instead. The env var here is set after the
+    module was imported — exactly the case the import-time read got wrong — and
+    the cwd deliberately differs from the corpus, so a regression shows up as a
+    stray `_training_pairs/` under `repo/`.
     """
-    data_dir = tmp_path / "dotenv-corpus"
-    env_file = tmp_path / ".env"
-    env_file.write_text(f"STYLEBOT_DATA_DIR={data_dir}\n", encoding="utf-8")
-
-    # Nothing in the environment: the location must arrive via `.env` alone.
-    monkeypatch.delenv("STYLEBOT_DATA_DIR", raising=False)
-    # `load()` memoises on `_LOADED`, and its `.env` discovery walks up from the
-    # source tree — so reset the flag explicitly rather than relying on import
-    # order, and pin the file we wrote rather than the developer's own `.env`.
-    monkeypatch.setattr(config, "_LOADED", False)
-    monkeypatch.setattr(config, "load_dotenv", lambda: real_load_dotenv(env_file))
+    data_dir = tmp_path / "env-corpus"
+    monkeypatch.setenv("STYLEBOT_DATA_DIR", str(data_dir))
 
     repo = tmp_path / "repo"
     (repo / "post").mkdir(parents=True)

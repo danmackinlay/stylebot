@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from click.testing import CliRunner
 
 from stylebot import config
@@ -22,9 +23,7 @@ def test_cli_help_runs():
 def test_pair_writes_contract_schema(tmp_path, monkeypatch):
     """`pair` must emit the shared chat-completion schema downstream relies on."""
     # The logger resolves its corpus per command through `config`, so the env
-    # override lands without reimporting anything. `_LOADED` is forced so
-    # `load()` can't pull a developer's real `.env` in behind it.
-    monkeypatch.setattr(config, "_LOADED", True)
+    # override lands without reimporting anything.
     monkeypatch.setenv("STYLEBOT_DATA_DIR", str(tmp_path))
 
     before = tmp_path / "b.txt"
@@ -57,10 +56,9 @@ def test_diff_chunks_skips_pure_insert():
 
 def test_config_require_key_is_actionable(monkeypatch):
     monkeypatch.delenv("DEFINITELY_UNSET_KEY", raising=False)
-    config._LOADED = True  # skip .env load in the sandbox
-    try:
+    with pytest.raises(RuntimeError) as excinfo:
         config.require_key("DEFINITELY_UNSET_KEY")
-    except RuntimeError as exc:
-        assert "DEFINITELY_UNSET_KEY" in str(exc)
-    else:
-        raise AssertionError("expected RuntimeError for missing key")
+    msg = str(excinfo.value)
+    # Name the key, and say how to supply it — direnv is how Dan's shell does it.
+    assert "DEFINITELY_UNSET_KEY" in msg
+    assert "direnv" in msg

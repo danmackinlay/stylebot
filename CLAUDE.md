@@ -70,10 +70,15 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
   tooling. The real corpus lives in the livingthing repo, where it *is*
   committed (`_training_pairs/pairs.jsonl`, since 2026-07, for portability) —
   that's the backup story. The rule here is about *this* repo, not the data.
-- **Secrets** (`.env`). Copy `.env.example` → `.env` and fill in per-phase keys.
+- **Secrets.** Keys reach the process as ordinary environment variables; Dan's
+  come from direnv (`direnv exec ~/Source/livingthing uv run ai-style …`).
+  Whatever holds them — an `.envrc`, an `.env` you source yourself — stays out
+  of git. stylebot has no dotenv loader: `python-dotenv` was dropped 2026-08
+  because bare `load_dotenv()` searches upward from `src/stylebot/`, so it read
+  the checkout's neighbourhood rather than the directory you ran from.
 
 Sanity-check before any commit in stylebot: `git status` must never show
-`.env` or `pairs.jsonl`.
+`.env` / `.envrc` or `pairs.jsonl`.
 
 ## Validating corpus data
 
