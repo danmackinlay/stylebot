@@ -4,11 +4,6 @@ from pathlib import Path
 from ruamel.yaml import YAML
 
 from stylebot import markdown
-from stylebot.markdown import (  # noqa: F401 — public API, re-exported for livingthing
-    BLOCKQUOTE_RE,
-    CODE_FENCE_RE,
-    MATH_BLOCK_RE,
-)
 
 yaml = YAML(typ="rt")
 yaml.preserve_quotes = True
