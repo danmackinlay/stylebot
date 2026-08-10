@@ -1,16 +1,16 @@
 """Shared CLI kit for synth-style commands.
 
 `ai-style synth` and downstream blog wrappers (e.g. livingthing's
-`train-targets`) present the same knobs over the same engine; only *selection*
-(which posts, which selector) and a few pinned defaults differ per caller.
-This module is the single source for the shared surface so specializations
-override instead of copy-paste (the fork drift this replaces: divergent exit
-codes, missing progress heartbeat, duplicated dry-run preset names):
+`dan-style synth`) present the same knobs over the same engine; only *selection*
+(which posts, which selector) and a few pinned defaults differ per caller. This
+module is the single source for the shared surface so specializations override
+instead of copy-paste:
 
-- `synth_options(exclude=…, **default_overrides)` — decorator applying the
-  shared chunking/inspection/generation option set from one spec table. A
-  wrapper overrides defaults by param name and excludes options it pins as
-  policy constants.
+- the six frozen **option bundles** below, grouped along the seams of the
+  surface (by the consumer each group feeds). Each field declares its own flag
+  via `cli_options.opt()`, so a default exists in exactly one place;
+- `synth_options(bundles=…, defaults=…, exclude=…)` — the click decorator over
+  those bundles (`stylebot.cli_options` is the generic, app-agnostic kit);
 - `run_synth(targets, …)` — the whole command body after target selection:
   count echo, `--sample`/`--report` short-circuit, generator construction
   (incl. dry-run stubs), `synthesize_pairs`, result reporting, and the
@@ -19,42 +19,39 @@ codes, missing progress heartbeat, duplicated dry-run preset names):
 Per-command concerns stay with the caller: target selection options, the
 `--data-dir` resolution policy (the caller checks for the inspection modes
 first and passes None when nothing will be written, so its own "no silent
-default" message stays in its own command), and provenance tags.
-
-**One list, not three.** The shared flags are described *once*, in
-`_OPTION_SPECS`; everything downstream is derived from it instead of restating
-it. Each spec name is a field of exactly one frozen **option bundle**
-(`ChunkOpts`, `InspectOpts`, `GenOpts`, `SessionOpts`, `SubstrateOpts`,
-`CorpusOpts`) — grouped along the seams of the surface, i.e. by the consumer
-each group feeds — and an import-time check refuses to load the module if a
-spec name has no bundle field. That is the guard the surface used to lack:
-`CHUNK_PARAM_NAMES` was a hand-written tuple and `run_synth` restated 42
-keywords by hand, so a flag could be added to the table and quietly reach
-nothing. `CHUNK_PARAM_NAMES` is now `fields(ChunkOpts)` and `run_synth` takes
-bundles.
-
-`run_synth` still accepts every flag as a **loose keyword** — external
-wrappers (livingthing's `dan-style synth`) splat the click callback's `**kw`
-straight in, and pass individual overrides by param name — but the loose names
-are now *routed* into the bundles by the same registry, and an unrecognised
-name raises `TypeError` instead of being swallowed. Typed callers can pass the
-bundles directly (`gen=GenOpts(...)`); loose keywords override bundle fields.
+default" message stays in its own command), and provenance tags. A callback's
+`**kw` becomes bundles via `pop_bundles`.
 
 `ChunkOpts` is the CLI-side twin of `targets.ChunkPolicy` (the same hygiene
-knobs, plus `--sort`, which `iter_targets` takes as a `sort_key` callable).
+knobs, plus `--sort`, which `iter_targets` takes as a `sort_key` callable); it
+feeds `iter_targets` on the *selection* side, the other five feed `run_synth`.
 """
 
 from __future__ import annotations
 
 import time
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 import click
 
 from stylebot import synth
+from stylebot.cli_options import (
+    SectionedCommand,
+    bundle_options,
+    bundles_from_kwargs,
+    field_owners,
+    opt,
+)
 from stylebot.splits import ROLES as SPLIT_ROLES
+
+__all__ = [
+    "Arm", "BUNDLE_PARAMS", "ChunkOpts", "CorpusOpts", "DEFAULT_BUNDLES", "GenOpts",
+    "InspectOpts", "SectionedCommand", "SessionOpts", "SubstrateOpts",
+    "build_generators", "iter_arms", "pop_bundles", "run_synth", "sort_key",
+    "synth_options",
+]
 
 # Progress heartbeat cadence for generation (seconds of wall-clock silence).
 _HEARTBEAT_SECS = 20.0
@@ -79,71 +76,12 @@ def sort_key(name: str):
     raise click.BadParameter(f"unknown sort key {name!r}")
 
 
-# The shared option surface, one spec per param name (the key MUST match the
-# callback parameter). Order here is help order. Wrappers override `default`
-# by name via synth_options(**overrides) or drop an option via exclude=….
-_OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
-    # -- chunking / hygiene (feed iter_targets) --
-    "min_chars": (("--min-chars",), dict(default=synth.MIN_CHUNK_CHARS, show_default=True, type=int, help="Skip prose chunks shorter than this.")),
-    "max_chars": (("--max-chars",), dict(default=synth.MAX_CHUNK_CHARS, show_default=True, type=int, help="Drop prose chunks longer than this (0 disables the cap).")),
-    "prose_only": (("--prose-only/--no-prose-only",), dict(default=True, show_default=True, help="Drop code/math/:::divs/blockquotes before chunking.")),
-    "ignore_markers": (("--ignore-marker", "ignore_markers"), dict(multiple=True, help="Drop any chunk containing this literal (repeatable), e.g. a stub marker.")),
-    "stop_at_headers": (("--stop-at-header", "stop_at_headers"), dict(multiple=True, help="Truncate each post body at this section header (repeatable), e.g. '## Incoming'.")),
-    "drop_link_dumps": (("--drop-link-dumps/--keep-link-dumps",), dict(default=True, show_default=True, help="Drop chunks that are mostly markdown links (little authored prose).")),
-    "drop_list_items": (("--drop-list-items/--keep-list-items",), dict(default=False, show_default=True, help="Drop chunks that are entirely markdown list items.")),
-    "merge": (("--merge/--no-merge",), dict(default=False, show_default=True, help="Pack consecutive prose paragraphs within a section into multi-paragraph passages.")),
-    "merge_max_chars": (("--merge-max-chars",), dict(default=synth.MERGE_MAX_CHUNK_CHARS, show_default=True, type=int, help="Soft char budget per packed passage (merge mode).")),
-    "heading_context": (("--heading-context",), dict(type=click.Choice(["none", "immediate"]), default="none", show_default=True, help="Prepend the section heading (verbatim) to both sides of each pair as fixed context.")),
-    "cross_heading": (("--cross-heading/--no-cross-heading",), dict(default=False, show_default=True, help="Pack across section boundaries with headings as chunk content (needs --merge; overrides --heading-context). This, not --merge-max-chars, is what buys chunk length.")),
-    "context_dropout": (("--context-dropout",), dict(default=0.0, show_default=True, type=float, help="Fraction of pairs to keep heading-less (deterministic) so the styler doesn't require a heading.")),
-    "sort_name": (("--sort", "sort_name"), dict(type=click.Choice(["none", "length", "source"]), default="none", show_default=True)),
-    # -- read-only inspection (handled inside run_synth, exit before generation) --
-    "report_path": (("--report", "report_path"), dict(type=click.Path(dir_okay=False, path_type=Path), default=None, help="Write a self-contained HTML report of the selected targets and exit (pre-generation — vets selection, generates nothing; browse generated pairs via ai-style eval --report).")),
-    "report_max_rows": (("--report-max-rows",), dict(default=2000, show_default=True, type=int, help="Cap table rows in the HTML report (0 = all).")),
-    "sample_n": (("--sample", "sample_n"), dict(type=int, default=None, help="Print N random targets to stdout and exit (no generation).")),
-    # -- generation --
-    "openrouter_models": (("--openrouter-model", "openrouter_models"), dict(multiple=True, help="OpenRouter model id to generate slop with (repeatable), e.g. anthropic/claude-opus-4-8. One key ($OPENROUTER_API_KEY) reaches many upstream models — ideal for multi-source rotation.")),
-    "provider_sort": (("--provider-sort",), dict(type=click.Choice(["throughput", "price", "latency", "none"]), default="throughput", show_default=True, help="OpenRouter provider-routing preference (default load-balancing favours price and can land on ~10 tok/s upstreams; 'none' restores it). OpenRouter models only; recorded in meta.gen next to the served provider.")),
-    "sticky_provider": (("--sticky-provider/--no-sticky-provider",), dict(default=True, show_default=True, help="Pin each live session to the provider that served its first turn — keeps its prefix cache hot AND the serving stack constant, so window-position covariates aren't confounded by provider hops. OpenRouter models only; no effect on stateless runs.")),
-    "prompt_cache": (("--prompt-cache/--no-prompt-cache",), dict(default=True, show_default=True, help="Anthropic models: mark session history with a moving cache_control breakpoint (cache reads at 0.1x after a 1.25x write; inert under ~1024-token prefixes and for other model families). Verify via meta.gen cached_tokens/cost.")),
-    "slop_strategies": (("--slop-strategy", "slop_strategies"), dict(multiple=True, default=(synth.DEFAULT_STRATEGY,), show_default=True, help=f"Slop-prompt flavour ({', '.join(synth.STRATEGIES)}); repeatable — the rotation becomes models x strategies, so one run diversifies prompts like it already diversifies models. Recorded as meta.slop_strategy and folded into synth_key. With --slop-system-file, pass exactly one label for the custom prompt.")),
-    "slop_system_file": (("--slop-system-file",), dict(type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="Override the slop system prompt with this file's contents (e.g. an author's own slop catalogue), labelled by --slop-strategy. Keeps blog-specific prompts out of stylebot.")),
-    "max_tokens": (("--max-tokens",), dict(default=synth.DEFAULT_SLOP_MAX_TOKENS, show_default=True, type=int, help="Max completion tokens per slop generation. Raise if a model truncates.")),
-    "timeout": (("--timeout",), dict(default=synth.DEFAULT_GEN_TIMEOUT, show_default=True, type=float, help="Per-request HTTP timeout (seconds) for slop generation. A timed-out pair is reported immediately and recorded as an error; it ends its own session (remaining turns defer to the next run) while other sessions continue.")),
-    "reasoning_efforts": (("--reasoning-effort", "reasoning_efforts"), dict(type=click.Choice(["high", "medium", "low", "off"]), multiple=True, default=(synth.DEFAULT_REASONING_EFFORT,), show_default=True, help="Reasoning effort for the slop generator ('off' disables reasoning); repeatable — the rotation becomes models x strategies x efforts, so effort joins the sweep (facet eval by reasoning_effort). Recorded in meta.gen and folded into synth_key; the requested effort is recorded regardless of what the provider honors.")),
-    "capture_reasoning": (("--capture-reasoning",), dict(is_flag=True, help="Save each pair's reasoning/thinking trace to <data-dir>/reasoning.jsonl (keyed by synth_key; never enters pairs.jsonl). Diagnose reasoning blowouts by READING what the model deliberated about; costs nothing extra (the tokens were already paid for).")),
-    "temperature": (("--temperature",), dict(type=float, default=None, help="Sampling temperature, sent to the API and recorded (provider default if unset).")),
-    "top_p": (("--top-p", "top_p"), dict(type=float, default=None, help="Nucleus top_p, sent to the API and recorded (provider default if unset).")),
-    "per_generator": (("--per-generator",), dict(is_flag=True, help="Emit a pair from EVERY generator per target (n× cost) — the fully-crossed within-target design for experiments; default assigns each target ONE arm by content hash.")),
-    "assign_seed": (("--assign-seed",), dict(default="", help="Salt for the content-hash arm assignment. Change it to re-randomize which (model, strategy, effort) arm each target gets — a fresh replicate of the design (changed assignments regenerate on resume).")),
-    "max_workers": (("--max-workers",), dict(default=0, show_default="auto", type=int, help="Concurrent sessions (asyncio). 0 = auto: 16 for the OpenRouter rotation this CLI builds, 1 for a library caller's injected generators (an unknown endpoint may want sequential).")),
-    "session_turns": (("--session-turns",), dict(default=1, show_default=True, type=int, help="Session mode switch + backstop: 1 = stateless; >1 groups turns into live sessions (each turn sees the real prior passage->slop exchanges, meta.gen session_turn / window_fill). Depth is controlled by --session-max-tokens, NOT this number — sessions end when the token budget binds and leftover turns reflow into fresh sessions; the value only caps turns per session as a runaway guard.")),
-    "session_max_tokens": (("--session-max-tokens",), dict(default=synth.DEFAULT_SESSION_MAX_TOKENS, show_default=True, type=int, help="THE session depth control: per-session prompt-token budget (absolute; input cost grows ~quadratically with it). Also capped at 80% of each model's context window. Turns beyond the budget reflow into fresh sessions, never dropped.")),
-    "replicate": (("--replicate",), dict(default="", show_default=True, help="Deliberate-resample label folded into synth_key: the same substrate under a new label mints new cells without colliding with the base corpus (e.g. 'deep128k' for a deep-window arm, 'draw2' for a second sample). Recorded as meta.gen.replicate. Empty = the base corpus.")),
-    "skip_covered": (("--skip-covered/--no-skip-covered",), dict(default=False, show_default=True, help="Corpus-building coverage mode: skip any target whose text already has >=1 pair in the data-dir under ANY config or epoch (cell-level dedup still applies to the rest). Use when the goal is one pair per passage — without it, a re-key epoch (e.g. an effort-default change) regenerates already-covered targets and doubles their training weight.")),
-    "max_transform_sim": (("--max-transform-sim",), dict(type=float, default=None, help="Identity gate: drop (don't write) any generated pair whose transform_sim exceeds this — the model returned (nearly) the input, which would teach the styler to copy. Dropped pairs are counted loudly (skipped_degenerate) and their cells retry next run. Unset = record everything (the covariate is always stored).")),
-    "max_length_ratio": (("--max-length-ratio",), dict(type=float, default=None, help="Inflation gate: drop any generated pair whose slop/target length ratio exceeds this — a manically inflating model (qwen3-32b ran 4-7x) teaches manic deletion. Counted as skipped_inflated; cells retry next run. Unset = record everything.")),
-    # -- substrate selection: WHICH population this run measures (before --limit) --
-    "splits_path": (("--splits", "splits_path"), dict(type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="splits.json of by-post roles (see ai-style make-splits). Required by --role.")),
-    "role": (("--role",), dict(type=click.Choice(SPLIT_ROLES), default=None, help="Keep only chunks whose post holds this role. Measurement runs want 'styler': disjoint from the detector's training pool, so the voice classifier stays an unbiased instrument.")),
-    "sample_frac": (("--sample-frac",), dict(type=float, default=None, help="Keep this fraction of chunks by content hash. Growth-stable: a later run on a larger corpus is a SUPERSET of this one, so the two stay comparable (--limit is not, its first N shifts as posts are added).")),
-    "sample_salt": (("--sample-salt",), dict(default="", show_default=True, help="Re-draw an independent subsample of the same size (a fresh replicate of the design).")),
-    "limit": (("--limit",), dict(type=int, default=None, help="Cap the number of target chunks (cost control / smoke runs). A cap on the substrate, not a definition of it — see --sample-frac.")),
-    "dry_run": (("--dry-run",), dict(is_flag=True, help="Report planned targets/pairs without calling any API or writing.")),
-}
-
-
 # ---------------------------------------------------------------------------
-# Option bundles: the surface grouped along its seams, one frozen dataclass
-# per consumer. These replace `run_synth`'s 42 hand-restated keywords — the
-# names now live in exactly two places (the spec table, which owns the flag
-# spelling/help/default, and one bundle field, which owns the plumbing), and
-# `_FIELD_OWNER` below welds the two together at import time.
-#
-# Defaults MUST equal the spec defaults: `run_synth` is a public library entry
-# point reachable without click, so a default that drifts from its flag
-# silently changes what a paid run generates. `tests/test_synth_cli.py`
-# asserts the equality mechanically.
+# The option bundles: the surface grouped along its seams, one frozen dataclass
+# per consumer. Each field carries its own flag (`opt(default, *decls, **kw)`),
+# so a default is declared exactly once and `run_synth` — a public library
+# entry point reachable without click — cannot drift from the CLI. A field
+# WITHOUT `opt()` is library-only: no flag, set by a caller in code.
 # ---------------------------------------------------------------------------
 
 
@@ -152,40 +90,78 @@ class ChunkOpts:
     """Chunking / hygiene — feeds `iter_targets`, i.e. WHAT counts as a target.
 
     Consumed on the *selection* side, before `run_synth` ever sees the targets:
-    the CLI splats these into `synth.iter_targets` via `pop_chunk_kwargs`. The
+    the caller splats `iter_targets_kwargs()` into `synth.iter_targets`. The
     twin of `targets.ChunkPolicy` with `sort_name` added (the flag is a choice
     string; `iter_targets` wants a `sort_key` callable).
     """
 
-    min_chars: int = synth.MIN_CHUNK_CHARS
-    max_chars: int = synth.MAX_CHUNK_CHARS  # 0 -> None (uncapped) at translation
-    prose_only: bool = True
-    ignore_markers: Sequence[str] = ()
-    stop_at_headers: Sequence[str] = ()
-    drop_link_dumps: bool = True
-    drop_list_items: bool = False
-    merge: bool = False
-    merge_max_chars: int = synth.MERGE_MAX_CHUNK_CHARS
-    heading_context: str = "none"
-    cross_heading: bool = False
-    sort_name: str = "none"
+    cli_section = "Chunking / hygiene (selection)"
+
+    min_chars: int = opt(
+        synth.MIN_CHUNK_CHARS, "--min-chars", show_default=True, type=int,
+        help="Skip prose chunks shorter than this.")
+    max_chars: int = opt(  # 0 -> None (uncapped) at translation
+        synth.MAX_CHUNK_CHARS, "--max-chars", show_default=True, type=int,
+        help="Drop prose chunks longer than this (0 disables the cap).")
+    prose_only: bool = opt(
+        True, "--prose-only/--no-prose-only", show_default=True,
+        help="Drop code/math/:::divs/blockquotes before chunking.")
+    ignore_markers: Sequence[str] = opt(
+        (), "--ignore-marker", "ignore_markers", multiple=True,
+        help="Drop any chunk containing this literal (repeatable), e.g. a stub marker.")
+    stop_at_headers: Sequence[str] = opt(
+        (), "--stop-at-header", "stop_at_headers", multiple=True,
+        help="Truncate each post body at this section header (repeatable), e.g. '## Incoming'.")
+    drop_link_dumps: bool = opt(
+        True, "--drop-link-dumps/--keep-link-dumps", show_default=True,
+        help="Drop chunks that are mostly markdown links (little authored prose).")
+    drop_list_items: bool = opt(
+        False, "--drop-list-items/--keep-list-items", show_default=True,
+        help="Drop chunks that are entirely markdown list items.")
+    merge: bool = opt(
+        False, "--merge/--no-merge", show_default=True,
+        help="Pack consecutive prose paragraphs within a section into multi-paragraph passages.")
+    merge_max_chars: int = opt(
+        synth.MERGE_MAX_CHUNK_CHARS, "--merge-max-chars", show_default=True, type=int,
+        help="Soft char budget per packed passage (merge mode).")
+    heading_context: str = opt(
+        "none", "--heading-context", type=click.Choice(["none", "immediate"]), show_default=True,
+        help="Prepend the section heading (verbatim) to both sides of each pair as fixed context.")
+    cross_heading: bool = opt(
+        False, "--cross-heading/--no-cross-heading", show_default=True,
+        help="Pack across section boundaries with headings as chunk content (needs --merge; overrides --heading-context). This, not --merge-max-chars, is what buys chunk length.")
+    sort_name: str = opt(
+        "none", "--sort", "sort_name",
+        type=click.Choice(["none", "length", "source"]), show_default=True)
 
     def iter_targets_kwargs(self) -> dict:
-        """This bundle shaped for `iter_targets` (the typed path; the CLI's
-        `**kw` path goes through `pop_chunk_kwargs`, which shares the rules)."""
-        return pop_chunk_kwargs({f.name: getattr(self, f.name) for f in fields(self)})
+        """This bundle shaped for `iter_targets` — the single documented path
+        from the CLI's chunking flags to selection (`--max-chars 0` -> no cap;
+        `--sort NAME` -> a `sort_key` callable)."""
+        out = {f.name: getattr(self, f.name) for f in fields(self)}
+        out["max_chars"] = out["max_chars"] or None
+        out["sort_key"] = sort_key(out.pop("sort_name"))
+        return out
 
 
 @dataclass(frozen=True)
 class InspectOpts:
     """Read-only inspection — `--sample` / `--report`, handled by
     `_inspect_targets`, which exits before any generation (no data-dir, no
-    keys). `report_title` has no flag: it is a caller-supplied label."""
+    keys)."""
 
-    report_path: Path | None = None
-    report_max_rows: int = 2000
-    sample_n: int | None = None
-    report_title: str | None = None
+    cli_section = "Inspection (read-only; exits before generation)"
+
+    report_path: Path | None = opt(
+        None, "--report", "report_path", type=click.Path(dir_okay=False, path_type=Path),
+        help="Write a self-contained HTML report of the selected targets and exit (pre-generation — vets selection, generates nothing; browse generated pairs via ai-style eval --report).")
+    report_max_rows: int = opt(
+        2000, "--report-max-rows", show_default=True, type=int,
+        help="Cap table rows in the HTML report (0 = all).")
+    sample_n: int | None = opt(
+        None, "--sample", "sample_n", type=int,
+        help="Print N random targets to stdout and exit (no generation).")
+    report_title: str | None = None  # library-only: a caller-supplied label
 
 
 @dataclass(frozen=True)
@@ -199,33 +175,70 @@ class GenOpts:
     downstream too (concurrency, windows, reporting).
     """
 
-    openrouter_models: Sequence[str] = ()
-    provider_sort: str = "throughput"
-    sticky_provider: bool = True
-    prompt_cache: bool = True
-    slop_strategies: Sequence[str] = (synth.DEFAULT_STRATEGY,)
-    slop_system_file: Path | None = None
-    max_tokens: int = synth.DEFAULT_SLOP_MAX_TOKENS
-    timeout: float | None = synth.DEFAULT_GEN_TIMEOUT
-    reasoning_efforts: Sequence[str] = (synth.DEFAULT_REASONING_EFFORT,)
-    capture_reasoning: bool = False
-    temperature: float | None = None
-    top_p: float | None = None
-    dry_run: bool = False
+    cli_section = "Generation"
+
+    openrouter_models: Sequence[str] = opt(
+        (), "--openrouter-model", "openrouter_models", multiple=True,
+        help="OpenRouter model id to generate slop with (repeatable), e.g. anthropic/claude-opus-4-8. One key ($OPENROUTER_API_KEY) reaches many upstream models — ideal for multi-source rotation.")
+    provider_sort: str = opt(
+        "throughput", "--provider-sort",
+        type=click.Choice(["throughput", "price", "latency", "none"]), show_default=True,
+        help="OpenRouter provider-routing preference (default load-balancing favours price and can land on ~10 tok/s upstreams; 'none' restores it). OpenRouter models only; recorded in meta.gen next to the served provider.")
+    sticky_provider: bool = opt(
+        True, "--sticky-provider/--no-sticky-provider", show_default=True,
+        help="Pin each live session to the provider that served its first turn — keeps its prefix cache hot AND the serving stack constant, so window-position covariates aren't confounded by provider hops. OpenRouter models only; no effect on stateless runs.")
+    prompt_cache: bool = opt(
+        True, "--prompt-cache/--no-prompt-cache", show_default=True,
+        help="Anthropic models: mark session history with a moving cache_control breakpoint (cache reads at 0.1x after a 1.25x write; inert under ~1024-token prefixes and for other model families). Verify via meta.gen cached_tokens/cost.")
+    slop_strategies: Sequence[str] = opt(
+        (synth.DEFAULT_STRATEGY,), "--slop-strategy", "slop_strategies",
+        multiple=True, show_default=True,
+        help=f"Slop-prompt flavour ({', '.join(synth.STRATEGIES)}); repeatable — the rotation becomes models x strategies, so one run diversifies prompts like it already diversifies models. Recorded as meta.slop_strategy and folded into synth_key. With --slop-system-file, pass exactly one label for the custom prompt.")
+    slop_system_file: Path | None = opt(
+        None, "--slop-system-file",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        help="Override the slop system prompt with this file's contents (e.g. an author's own slop catalogue), labelled by --slop-strategy. Keeps blog-specific prompts out of stylebot.")
+    max_tokens: int = opt(
+        synth.DEFAULT_SLOP_MAX_TOKENS, "--max-tokens", show_default=True, type=int,
+        help="Max completion tokens per slop generation. Raise if a model truncates.")
+    timeout: float | None = opt(
+        synth.DEFAULT_GEN_TIMEOUT, "--timeout", show_default=True, type=float,
+        help="Per-request HTTP timeout (seconds) for slop generation. A timed-out pair is reported immediately and recorded as an error; it ends its own session (remaining turns defer to the next run) while other sessions continue.")
+    reasoning_efforts: Sequence[str] = opt(
+        (synth.DEFAULT_REASONING_EFFORT,), "--reasoning-effort", "reasoning_efforts",
+        type=click.Choice(["high", "medium", "low", "off"]), multiple=True, show_default=True,
+        help="Reasoning effort for the slop generator ('off' disables reasoning); repeatable — the rotation becomes models x strategies x efforts, so effort joins the sweep (facet eval by reasoning_effort). Recorded in meta.gen and folded into synth_key; the requested effort is recorded regardless of what the provider honors.")
+    capture_reasoning: bool = opt(
+        False, "--capture-reasoning", is_flag=True,
+        help="Save each pair's reasoning/thinking trace to <data-dir>/reasoning.jsonl (keyed by synth_key; never enters pairs.jsonl). Diagnose reasoning blowouts by READING what the model deliberated about; costs nothing extra (the tokens were already paid for).")
+    temperature: float | None = opt(
+        None, "--temperature", type=float,
+        help="Sampling temperature, sent to the API and recorded (provider default if unset).")
+    top_p: float | None = opt(
+        None, "--top-p", "top_p", type=float,
+        help="Nucleus top_p, sent to the API and recorded (provider default if unset).")
+    dry_run: bool = opt(
+        False, "--dry-run", is_flag=True,
+        help="Report planned targets/pairs without calling any API or writing.")
 
 
 @dataclass(frozen=True)
 class SessionOpts:
-    """Live-session shape and the concurrency that runs them.
+    """Live-session shape and the concurrency that runs them."""
 
-    `session_budgets` has no flag — it is the policy hook a wrapper uses to
-    hand in a per-model budget map (the blog pins one), applied on top of
-    `session_max_tokens`.
-    """
+    cli_section = "Sessions / concurrency"
 
-    session_turns: int = 1
-    session_max_tokens: int = synth.DEFAULT_SESSION_MAX_TOKENS
-    max_workers: int = 0  # 0 = auto (16; see run_synth)
+    session_turns: int = opt(
+        1, "--session-turns", show_default=True, type=int,
+        help="Session mode switch + backstop: 1 = stateless; >1 groups turns into live sessions (each turn sees the real prior passage->slop exchanges, meta.gen session_turn / window_fill). Depth is controlled by --session-max-tokens, NOT this number — sessions end when the token budget binds and leftover turns reflow into fresh sessions; the value only caps turns per session as a runaway guard.")
+    session_max_tokens: int = opt(
+        synth.DEFAULT_SESSION_MAX_TOKENS, "--session-max-tokens", show_default=True, type=int,
+        help="THE session depth control: per-session prompt-token budget (absolute; input cost grows ~quadratically with it). Also capped at 80% of each model's context window. Turns beyond the budget reflow into fresh sessions, never dropped.")
+    max_workers: int = opt(
+        0, "--max-workers", show_default="auto", type=int,
+        help="Concurrent sessions (asyncio). 0 = auto: 16 for the OpenRouter rotation this CLI builds, 1 for a library caller's injected generators (an unknown endpoint may want sequential).")
+    # Library-only policy hook: a wrapper's per-model budget map (the blog pins
+    # one), applied on top of `session_max_tokens`.
     session_budgets: Mapping[str, int] | None = None
 
 
@@ -237,11 +250,24 @@ class SubstrateOpts:
     only a cost cap on it, which is why it is applied afterwards.
     """
 
-    splits_path: Path | None = None
-    role: str | None = None
-    sample_frac: float | None = None
-    sample_salt: str = ""
-    limit: int | None = None
+    cli_section = "Substrate (which population this run measures)"
+
+    splits_path: Path | None = opt(
+        None, "--splits", "splits_path",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        help="splits.json of by-post roles (see ai-style make-splits). Required by --role.")
+    role: str | None = opt(
+        None, "--role", type=click.Choice(SPLIT_ROLES),
+        help="Keep only chunks whose post holds this role. Measurement runs want 'styler': disjoint from the detector's training pool, so the voice classifier stays an unbiased instrument.")
+    sample_frac: float | None = opt(
+        None, "--sample-frac", type=float,
+        help="Keep this fraction of chunks by content hash. Growth-stable: a later run on a larger corpus is a SUPERSET of this one, so the two stay comparable (--limit is not, its first N shifts as posts are added).")
+    sample_salt: str = opt(
+        "", "--sample-salt", show_default=True,
+        help="Re-draw an independent subsample of the same size (a fresh replicate of the design).")
+    limit: int | None = opt(
+        None, "--limit", type=int,
+        help="Cap the number of target chunks (cost control / smoke runs). A cap on the substrate, not a definition of it — see --sample-frac.")
 
 
 @dataclass(frozen=True)
@@ -255,102 +281,75 @@ class CorpusOpts:
     which generated pairs survive to the file).
     """
 
-    per_generator: bool = False
-    assign_seed: str = ""
-    context_dropout: float = 0.0
-    replicate: str = ""
-    skip_covered: bool = False
-    max_transform_sim: float | None = None
-    max_length_ratio: float | None = None
+    cli_section = "Corpus (design cell + write gates)"
+
+    per_generator: bool = opt(
+        False, "--per-generator", is_flag=True,
+        help="Emit a pair from EVERY generator per target (n× cost) — the fully-crossed within-target design for experiments; default assigns each target ONE arm by content hash.")
+    assign_seed: str = opt(
+        "", "--assign-seed",
+        help="Salt for the content-hash arm assignment. Change it to re-randomize which (model, strategy, effort) arm each target gets — a fresh replicate of the design (changed assignments regenerate on resume).")
+    context_dropout: float = opt(
+        0.0, "--context-dropout", show_default=True, type=float,
+        help="Fraction of pairs to keep heading-less (deterministic) so the styler doesn't require a heading.")
+    replicate: str = opt(
+        "", "--replicate", show_default=True,
+        help="Deliberate-resample label folded into synth_key: the same substrate under a new label mints new cells without colliding with the base corpus (e.g. 'deep128k' for a deep-window arm, 'draw2' for a second sample). Recorded as meta.gen.replicate. Empty = the base corpus.")
+    skip_covered: bool = opt(
+        False, "--skip-covered/--no-skip-covered", show_default=True,
+        help="Corpus-building coverage mode: skip any target whose text already has >=1 pair in the data-dir under ANY config or epoch (cell-level dedup still applies to the rest). Use when the goal is one pair per passage — without it, a re-key epoch (e.g. an effort-default change) regenerates already-covered targets and doubles their training weight.")
+    max_transform_sim: float | None = opt(
+        None, "--max-transform-sim", type=float,
+        help="Identity gate: drop (don't write) any generated pair whose transform_sim exceeds this — the model returned (nearly) the input, which would teach the styler to copy. Dropped pairs are counted loudly (skipped_degenerate) and their cells retry next run. Unset = record everything (the covariate is always stored).")
+    max_length_ratio: float | None = opt(
+        None, "--max-length-ratio", type=float,
+        help="Inflation gate: drop any generated pair whose slop/target length ratio exceeds this — a manically inflating model (qwen3-32b ran 4-7x) teaches manic deletion. Counted as skipped_inflated; cells retry next run. Unset = record everything.")
 
 
-# The bundle registry: field name -> owning bundle. This is the weld between
-# the spec table and the plumbing, and the reason the two lists cannot drift.
-_BUNDLES: tuple[type, ...] = (
-    ChunkOpts, InspectOpts, GenOpts, SessionOpts, SubstrateOpts, CorpusOpts,
-)
+# The shared surface, keyed by the parameter each bundle binds to downstream:
+# "chunk" goes to `iter_targets`, the rest are `run_synth`'s own bundle params.
+BUNDLE_PARAMS: dict[str, type] = {
+    "chunk": ChunkOpts,
+    "inspection": InspectOpts,
+    "gen": GenOpts,
+    "session": SessionOpts,
+    "substrate": SubstrateOpts,
+    "corpus": CorpusOpts,
+}
+DEFAULT_BUNDLES: tuple[type, ...] = tuple(BUNDLE_PARAMS.values())
 
-_FIELD_OWNER: dict[str, type] = {}
-for _bundle_cls in _BUNDLES:
-    for _f in fields(_bundle_cls):
-        if _f.name in _FIELD_OWNER:
-            raise RuntimeError(
-                f"synth option {_f.name!r} claimed by two bundles "
-                f"({_FIELD_OWNER[_f.name].__name__}, {_bundle_cls.__name__}) — "
-                "routing would be ambiguous"
-            )
-        _FIELD_OWNER[_f.name] = _bundle_cls
-
-# THE drift guard. A flag added to `_OPTION_SPECS` with no bundle field would
-# reach no consumer: the click callback would collect it into **kw and
-# `run_synth` would have nowhere to route it. Fail loudly at import, not on the
-# operator's paid run.
-_ORPHAN_SPECS = sorted(set(_OPTION_SPECS) - set(_FIELD_OWNER))
-if _ORPHAN_SPECS:
-    raise RuntimeError(
-        f"synth option(s) {_ORPHAN_SPECS} are declared in _OPTION_SPECS but are "
-        "not a field of any option bundle, so nothing consumes them. Add each to "
-        "the bundle whose consumer should read it (see _BUNDLES)."
-    )
-
-
-# `run_synth`'s own parameters must never collide with a routed flag name, or
-# the loose keyword would bind to the parameter instead of reaching its bundle.
-_RUN_SYNTH_OWN_PARAMS = frozenset({
-    "targets", "data_dir", "gen", "session", "substrate", "inspection", "corpus",
-    "count_note", "extra_tags", "generators",
+# Two bundles must not claim one field name, and no field may collide with a
+# parameter `run_synth` already has — either would make routing ambiguous.
+field_owners(DEFAULT_BUNDLES, reserved=BUNDLE_PARAMS.keys() | {
+    "targets", "data_dir", "count_note", "extra_tags", "generators",
 })
-_COLLIDING_PARAMS = sorted(_RUN_SYNTH_OWN_PARAMS & set(_FIELD_OWNER))
-if _COLLIDING_PARAMS:
-    raise RuntimeError(
-        f"synth option(s) {_COLLIDING_PARAMS} collide with run_synth's own "
-        "parameter names and could never be routed to a bundle — rename one side."
-    )
 
 
-def split_bundle_kwargs(flat: dict) -> dict[type, dict]:
-    """Route loose param names to their owning bundle (mutating `flat`).
+def synth_options(
+    *,
+    bundles: Sequence[type] = DEFAULT_BUNDLES,
+    defaults: Iterable[object] = (),
+    exclude: Iterable[str] = (),
+):
+    """Decorator applying the shared synth option set.
 
-    Whatever is left in `flat` afterwards belongs to no bundle — the caller
-    decides whether that is an error (`run_synth`: yes) or its own param.
+    `defaults` re-pins flag defaults as bundle instances
+    (`defaults=[GenOpts(max_tokens=900)]`); `exclude` drops flags the wrapper
+    pins as policy constants (its callback never sees them, and it sets those
+    fields on the bundle itself); `bundles` is the extension point — another
+    repo passes `[*DEFAULT_BUNDLES, MyRepoOpts]` to add its own options.
+
+    Use `cls=SectionedCommand` on the command for sectioned `--help`.
     """
-    routed: dict[type, dict] = {}
-    for name in [n for n in flat if n in _FIELD_OWNER]:
-        routed.setdefault(_FIELD_OWNER[name], {})[name] = flat.pop(name)
-    return routed
+    return bundle_options(bundles, defaults=defaults, exclude=exclude)
 
 
-def _bundle(cls, given, routed: dict[type, dict]):
-    """One bundle instance: the caller's object (if any) with loose overrides
-    applied on top, else a fresh one from the loose values / defaults."""
-    over = routed.pop(cls, {})
-    if given is None:
-        return cls(**over)
-    return replace(given, **over) if over else given
-
-
-# Shared params consumed by iter_targets (selection-side); the rest of the
-# shared set feeds run_synth. Lets a wrapper collect the whole shared surface
-# as **kw and split it without restating ~30 parameter names. DERIVED from
-# ChunkOpts — this tuple used to be hand-written next to the spec table, which
-# is exactly how it could fall behind it.
-CHUNK_PARAM_NAMES = tuple(f.name for f in fields(ChunkOpts))
-
-
-def pop_chunk_kwargs(kw: dict) -> dict:
-    """Pop the chunking/hygiene params out of a **kw catch-all, shaped for
-    iter_targets (--max-chars 0 -> no cap; --sort name -> sort_key callable).
-
-    Only the keys actually PRESENT are returned: a wrapper that pins some chunk
-    knobs as policy constants (`synth_options(exclude=...)`) passes those to
-    `iter_targets` itself, and injecting defaults for them here would collide.
-    """
-    out = {k: kw.pop(k) for k in CHUNK_PARAM_NAMES if k in kw}
-    if "max_chars" in out:
-        out["max_chars"] = out["max_chars"] or None
-    if "sort_name" in out:
-        out["sort_key"] = sort_key(out.pop("sort_name"))
-    return out
+def pop_bundles(kw: dict, bundles: Mapping[str, type] = BUNDLE_PARAMS) -> dict[str, object]:
+    """Fold a click callback's `**kw` into bundle instances, keyed by the
+    parameter each binds to (`chunk` for `iter_targets`, the rest for
+    `run_synth`). `kw` is left holding only the command's own parameters; a
+    wrapper with extra bundles passes its own `{name: cls}` map."""
+    return bundles_from_kwargs(kw, bundles)
 
 
 @dataclass(frozen=True)
@@ -440,34 +439,6 @@ def build_generators(
             sticky_provider=sticky_provider, prompt_cache=prompt_cache,
         ))
     return out
-
-
-def synth_options(*, exclude: Iterable[str] = (), **default_overrides):
-    """Decorator applying the shared synth option set.
-
-    `default_overrides` swaps an option's default by param name (a wrapper's
-    policy defaults); `exclude` omits options the wrapper pins as constants
-    (its callback then must not take those params, and passes the pinned
-    values straight to iter_targets/run_synth). Unknown names raise at import
-    time — a typo must not silently leave a stylebot default in force.
-    """
-    exclude = set(exclude)
-    unknown = (set(default_overrides) | exclude) - set(_OPTION_SPECS)
-    if unknown:
-        raise ValueError(f"unknown synth option param(s): {sorted(unknown)}")
-
-    def deco(f):
-        # Apply in reverse so help order matches _OPTION_SPECS order.
-        for name in reversed(list(_OPTION_SPECS)):
-            if name in exclude:
-                continue
-            decls, kw = _OPTION_SPECS[name]
-            if name in default_overrides:
-                kw = {**kw, "default": default_overrides[name], "show_default": True}
-            f = click.option(*decls, **kw)(f)
-        return f
-
-    return deco
 
 
 def _inspect_targets(
@@ -640,21 +611,13 @@ def run_synth(
     count_note: str = "",
     extra_tags: Sequence[str] = (),
     generators: Sequence[synth.Generator] | None = None,
-    **flat,
 ) -> synth.SynthResult | None:
     """Everything after target selection, shared by all synth-style commands.
 
-    The knobs arrive as **option bundles** (see the module docstring). Two
-    calling styles, both first-class:
-
-    - typed: ``run_synth(targets, data_dir=d, gen=GenOpts(max_tokens=900))``;
-    - loose: every flag is still accepted by its own param name, e.g.
-      ``run_synth(targets, data_dir=d, max_tokens=900, session_turns=4)``, or
-      splatted wholesale from a click callback's ``**kw`` — which is how
-      `ai-style synth` and the blog's `dan-style synth` wrapper call it.
-      Loose values override the matching field of a bundle passed alongside.
-
-    An unrecognised keyword is a `TypeError`, not a silent drop.
+    The knobs arrive as **option bundles** — ``run_synth(targets, data_dir=d,
+    gen=GenOpts(max_tokens=900))``, or splatted from ``pop_bundles(kw)`` in a
+    click callback. `ChunkOpts` is not among them: it is consumed on the
+    selection side, by `iter_targets`.
 
     `data_dir` may be None **only** for the inspection modes, which write
     nothing and need no corpus location or API keys: the caller decides
@@ -664,27 +627,11 @@ def run_synth(
     entirely. Returns the SynthResult, or None when an inspection mode
     short-circuited. Exits 1 on generation errors.
     """
-    routed = split_bundle_kwargs(flat)
-    if flat:  # whatever survived routing matches no flag and no bundle field
-        raise TypeError(
-            f"run_synth() got unexpected keyword argument(s): {sorted(flat)}. "
-            "Every synth flag routes to an option bundle; a name that does not "
-            "is a typo or a flag that was never wired up."
-        )
-    gen = _bundle(GenOpts, gen, routed)
-    session = _bundle(SessionOpts, session, routed)
-    substrate = _bundle(SubstrateOpts, substrate, routed)
-    inspection = _bundle(InspectOpts, inspection, routed)
-    corpus = _bundle(CorpusOpts, corpus, routed)
-    # ChunkOpts is consumed on the selection side (iter_targets), so its names
-    # are already gone by the time the caller reaches here; a stray one means
-    # the caller forgot `pop_chunk_kwargs`.
-    if routed:
-        raise TypeError(
-            f"run_synth() got selection-side keyword argument(s): "
-            f"{sorted(n for b in routed.values() for n in b)} — pass them through "
-            "pop_chunk_kwargs() to iter_targets instead."
-        )
+    gen = gen if gen is not None else GenOpts()
+    session = session if session is not None else SessionOpts()
+    substrate = substrate if substrate is not None else SubstrateOpts()
+    inspection = inspection if inspection is not None else InspectOpts()
+    corpus = corpus if corpus is not None else CorpusOpts()
 
     # Substrate selection runs BEFORE --limit: role and sample-frac define
     # *which* population this run measures, --limit is only a cost cap on it.

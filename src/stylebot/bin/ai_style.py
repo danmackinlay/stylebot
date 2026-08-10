@@ -40,7 +40,7 @@ def main() -> None:
 main.add_command(_log, name="log")
 
 
-@main.command("synth")
+@main.command("synth", cls=synth_cli.SectionedCommand)
 @click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option(
     "--blog-root",
@@ -88,19 +88,22 @@ def synth_cmd(
     else:
         selector = partial(is_human_authored, field=field, max_level=max_level)
 
+    # The shared surface arrives as **kw; fold it back into its option bundles.
+    opts = synth_cli.pop_bundles(kw)
     targets = synth.iter_targets(
         files=list(files) or None,
         blog_root=blog_root,
         selector=selector,
         glob=glob,
-        **synth_cli.pop_chunk_kwargs(kw),
+        **opts.pop("chunk").iter_targets_kwargs(),
     )
 
     # The read-only inspection modes (--sample/--report) exit before generation:
     # they write nothing, so they need no corpus location. Deciding that HERE —
     # above the resolution — is what keeps `run_synth`'s data_dir a plain path
     # while this command keeps its own tailored refusal message.
-    inspecting = kw.get("sample_n") is not None or kw.get("report_path") is not None
+    inspection = opts["inspection"]
+    inspecting = inspection.sample_n is not None or inspection.report_path is not None
 
     def _data_dir(*, required: bool) -> Path | None:
         # Resolve the corpus location: explicit flag > $STYLEBOT_DATA_DIR. Refuse the
@@ -117,7 +120,7 @@ def synth_cmd(
     # Still resolved for inspection runs when it IS available, so the inspection
     # hints can name the real pairs path.
     synth_cli.run_synth(
-        targets, data_dir=_data_dir(required=not inspecting), extra_tags=tags, **kw
+        targets, data_dir=_data_dir(required=not inspecting), extra_tags=tags, **opts
     )
 
 

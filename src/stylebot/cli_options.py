@@ -1,0 +1,189 @@
+"""Dataclass-driven CLI option bundles — generic machinery, no app specifics.
+
+A *bundle* is a frozen dataclass whose fields are a command's options. `opt()`
+marks a field as also being a CLI flag, carrying the click declaration on the
+field's metadata, so each default is written exactly once — the dataclass is
+the single source of truth. A field declared WITHOUT `opt()` is library-only:
+it gets no flag and is set by callers in code.
+
+    @dataclass(frozen=True)
+    class GenOpts:
+        cli_section = "Generation"                  # --help heading (optional)
+        max_tokens: int = opt(800, "--max-tokens", type=int, help="...")
+        budgets: Mapping[str, int] | None = None    # library-only, no flag
+
+`bundle_options(bundles, defaults=…, exclude=…)` builds the click decorator,
+`bundles_from_kwargs()` folds a callback's `**kw` back into instances, and
+`SectionedCommand` groups `--help` by bundle. A downstream repo extends a
+surface with `bundle_options([*SOME_BUNDLES, MyOpts], defaults=[GenOpts(...)])`.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import Field, field, fields
+from typing import Any
+
+import click
+
+# Metadata key under which a field carries its click declaration.
+CLI = "cli"
+
+
+def opt(default: Any, /, *decls: str, **click_kw: Any) -> Any:
+    """A bundle field that is also a CLI flag.
+
+    `default` is the field default AND the flag default (never pass `default=`
+    in `click_kw` — that is the duplication this exists to remove); `decls` and
+    `click_kw` are handed to `click.option` verbatim.
+    """
+    if "default" in click_kw:
+        raise ValueError(
+            f"opt({decls}) got default= in its click kwargs; the first positional "
+            "argument is the one default"
+        )
+    return field(default=default, metadata={CLI: (decls, click_kw)})
+
+
+def cli_fields(bundle: type) -> list[tuple[Field, tuple[str, ...], dict]]:
+    """The flag-bearing fields of `bundle`, in declaration order."""
+    return [
+        (f, f.metadata[CLI][0], f.metadata[CLI][1])
+        for f in fields(bundle)
+        if CLI in f.metadata
+    ]
+
+
+def field_owners(
+    bundles: Sequence[type], *, reserved: Iterable[str] = ()
+) -> dict[str, type]:
+    """field name -> owning bundle.
+
+    Raises if two bundles claim one name, or if a name collides with `reserved`
+    (the consuming function's own parameter names) — either way the field could
+    not be routed unambiguously.
+    """
+    owners: dict[str, type] = {}
+    for bundle in bundles:
+        for f in fields(bundle):
+            if f.name in owners:
+                raise ValueError(
+                    f"option {f.name!r} is claimed by two bundles "
+                    f"({owners[f.name].__name__}, {bundle.__name__}) — routing "
+                    "would be ambiguous"
+                )
+            owners[f.name] = bundle
+    clash = sorted(set(reserved) & set(owners))
+    if clash:
+        raise ValueError(
+            f"option(s) {clash} collide with reserved parameter name(s) — rename one side"
+        )
+    return owners
+
+
+def section_name(bundle: type) -> str:
+    """The `--help` heading for a bundle: its `cli_section`, else its name."""
+    return getattr(bundle, "cli_section", None) or bundle.__name__
+
+
+def _pinned_defaults(instances: Iterable[Any], bundles: Sequence[type]) -> dict[str, Any]:
+    """Field values that differ from their declared default, from bundle
+    instances passed as `defaults=` — i.e. the caller's re-pinned defaults."""
+    out: dict[str, Any] = {}
+    for inst in instances:
+        cls = type(inst)
+        if cls not in bundles:
+            raise ValueError(f"{cls.__name__} is not one of this command's bundles")
+        for f in fields(cls):
+            value = getattr(inst, f.name)
+            if value == f.default:
+                continue
+            if CLI not in f.metadata:
+                raise ValueError(
+                    f"{cls.__name__}.{f.name} has no CLI flag, so it has no default "
+                    "to re-pin; set it on the bundle you pass at call time instead"
+                )
+            out[f.name] = value
+    return out
+
+
+def _last_param(f: Any) -> click.Parameter:
+    """The parameter `click.option` just attached (command or bare function)."""
+    return f.params[-1] if isinstance(f, click.Command) else f.__click_params__[-1]
+
+
+def bundle_options(
+    bundles: Sequence[type],
+    *,
+    defaults: Iterable[Any] = (),
+    exclude: Iterable[str] = (),
+):
+    """Click decorator applying every flag-bearing field of `bundles`.
+
+    `defaults` re-pins flag defaults, given as bundle *instances* — a typo'd
+    field name fails in the dataclass constructor. `exclude` drops flags the
+    wrapper pins as policy constants (its callback then never sees them, and it
+    sets those fields on the bundle itself). `--help` order is bundle order,
+    then field order within each bundle.
+    """
+    bundles = tuple(bundles)
+    field_owners(bundles)  # refuse an ambiguous surface before declaring flags
+    exclude = set(exclude)
+    flaggable = {f.name for b in bundles for f, _, _ in cli_fields(b)}
+    unknown = exclude - flaggable
+    if unknown:
+        raise ValueError(
+            f"exclude names no CLI field of these bundles: {sorted(unknown)} "
+            f"(known: {sorted(flaggable)})"
+        )
+    pinned = _pinned_defaults(defaults, bundles)
+
+    def deco(f):
+        # Applied in reverse: click reverses __click_params__ when it builds the
+        # command, so this yields declaration order in --help.
+        for bundle in reversed(bundles):
+            section = section_name(bundle)
+            for fld, decls, click_kw in reversed(cli_fields(bundle)):
+                if fld.name in exclude:
+                    continue
+                kw = dict(click_kw, default=fld.default)
+                if fld.name in pinned:
+                    kw["default"] = pinned[fld.name]
+                    kw["show_default"] = True
+                f = click.option(*decls, **kw)(f)
+                _last_param(f).help_section = section
+        return f
+
+    return deco
+
+
+def bundles_from_kwargs(kw: dict, bundles: Mapping[str, type]) -> dict[str, Any]:
+    """Pop each bundle's fields out of a click callback's `**kw` and build one
+    instance per bundle, keyed by the caller's parameter name.
+
+    Fields not present in `kw` (excluded flags, library-only fields) keep their
+    declared default; `kw` is left holding only the command's own parameters.
+    """
+    return {
+        name: cls(**{f.name: kw.pop(f.name) for f in fields(cls) if f.name in kw})
+        for name, cls in bundles.items()
+    }
+
+
+class SectionedCommand(click.Command):
+    """A command whose `--help` groups options under their bundle's heading.
+
+    Options carry `help_section` (set by `bundle_options`); anything without one
+    — the command's own flags, `--help` — lands in a leading "Options" block.
+    """
+
+    def format_options(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        sections: dict[str, list[tuple[str, str]]] = {}
+        for param in self.get_params(ctx):
+            record = param.get_help_record(ctx)
+            if record is not None:
+                title = getattr(param, "help_section", None) or "Options"
+                sections.setdefault(title, []).append(record)
+        for title, records in sections.items():
+            with formatter.section(title):
+                formatter.write_dl(records)
