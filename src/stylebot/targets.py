@@ -1,13 +1,12 @@
 """Targets — human-authored prose chunks, the assistant side of each pair.
 
-Everything about turning blog posts into synthesis targets lives here: the
-frontmatter/selector walk, prose-only extraction, section-aware splitting and
-merge-packing, and the chunk-hygiene gates. All generic (no blog knowledge —
-policy arrives via the caller's `selector`, markers and header names).
+Turning posts into synthesis targets: the frontmatter/selector walk, prose-only
+extraction, section-aware splitting and merge-packing, and the chunk-hygiene
+gates. All generic — policy arrives via the caller's `selector`, markers and
+header names.
 
-`stylebot.synth` re-exports the public names (`Target`, `ChunkPolicy`,
-`iter_targets`, the chunk constants) — external callers keep importing via
-`stylebot.synth`; this module is the implementation home.
+`stylebot.synth` re-exports the public names; this module is the implementation
+home.
 """
 
 from __future__ import annotations
@@ -36,10 +35,10 @@ MIN_CHUNK_CHARS = 80  # drop chunks shorter than this
 MAX_CHUNK_CHARS = 8000  # drop chunks longer than this (truncating would corrupt the target)
 MERGE_MAX_CHUNK_CHARS = 1500  # soft budget per packed passage in merge mode
 
-# Link-LIST detection by *prose residual* (not link-char density): strip the
-# `[text](url)` spans and measure how much real prose is left, as a fraction of
-# the chunk. Density mis-fires on link-dense prose because URLs are long; the
-# residual *fraction* is URL- and size-immune — a pure link list leaves ~0%
+# Link-LIST detection by *prose residual*, not link-char density: strip the
+# `[text](url)` spans and measure the real prose left as a fraction of the
+# chunk. Density mis-fires on link-dense prose because URLs are long; the
+# residual fraction is URL- and size-immune — a pure link list leaves ~0%
 # whatever its length, while link-dense prose keeps most of its words.
 LINK_LIST_MIN_PROSE_FRACTION = 0.2
 
@@ -51,9 +50,8 @@ class Target:
     """One paragraph-chunk (or merged passage) of human-authored prose.
 
     `context` is the section heading this passage sits under (verbatim, possibly
-    empty) — prepended identically to both sides of the pair at synthesis time so
-    the styler restyles the body conditioned on the heading. See
-    `_plans/heading-context.md`.
+    empty), prepended identically to both sides of the pair at synthesis time.
+    See `_plans/heading-context.md`.
     """
 
     text: str
@@ -61,30 +59,21 @@ class Target:
     chunk_index: int
     chunk_total: int
     context: str = ""
-    # The merge budget this chunk was packed under (None = unmerged single
-    # paragraphs). Stamped into pair meta so a mixed-scale corpus stays
-    # ablatable by chunk scale — the v2 longer-rewrites plan trains 1500- and
-    # 4500-char diets together and needs the facet to compare them
-    # (`_plans/v2-longer-rewrites.md`; same lesson as the generator facet).
+    # Chunk-scale facet, stamped into pair meta so a corpus mixing chunk diets
+    # stays ablatable by scale (`_plans/v2-longer-rewrites.md`): the merge budget
+    # (None = unmerged single paragraphs), and how the chunk was cut — None =
+    # within one section with the heading riding along as `context`,
+    # "cross-heading" = heading lines packed in as content, spanning sections.
     merge_max_chars: int | None = None
-    # How the chunk was cut: None/"section" = packed within one section (a chunk
-    # never crosses a heading, and the heading rides along as `context`);
-    # "cross-heading" = heading lines are packed INTO the text as content, so a
-    # chunk spans sections and carries no separate context. Stamped into pair
-    # meta beside `merge_max_chars` — the two together are the chunk-scale
-    # facet, and mode matters more than budget: Dan's sections are median ~550
-    # chars, so section-bounded packing hits the section wall long before the
-    # budget (`_plans/v2-longer-rewrites.md`).
     chunk_mode: str | None = None
 
 
 @dataclass(frozen=True)
 class ChunkPolicy:
-    """The chunk-hygiene knobs, bundled.
+    """The chunk-hygiene knobs, bundled — internal only.
 
-    Internal shape: `iter_targets`' flat kwargs remain the public API (callers
-    splat a CLI surface into it); this object is how they thread through
-    `_post_targets` — the completion of what was an ad-hoc kwargs dict.
+    `iter_targets`' flat kwargs remain the public API; this is how they thread
+    through `_post_targets`.
     """
 
     min_chars: int = MIN_CHUNK_CHARS
@@ -116,10 +105,8 @@ def _norm_header(text: str) -> str:
 def _truncate_at_headers(body: str, headers: Sequence[str]) -> str:
     """Drop everything from the first matching section header to end of document.
 
-    Generic "cut a trailing section" mechanism: each entry in `headers` is
-    matched (level-agnostic, case-insensitive) against the body's header lines.
-    The caller supplies the section name as policy (e.g. ``"## Incoming"`` — a
-    trailing link/quote dump with no authored signal).
+    Entries in `headers` match level-agnostically and case-insensitively; the
+    caller supplies the section names as policy.
     """
     if not headers:
         return body
@@ -141,9 +128,8 @@ _MARKUP_NOISE_RE = re.compile(r"[\s*_#>|`/\\\-]+")
 def _prose_residual_len(chunk: str) -> int:
     """Length of the actual prose left after removing links and list/markup noise.
 
-    A "link list" — a run of bare ``[Title](url)`` lines, bulleted or not — has
-    almost nothing left once the link spans, list markers, and markup are gone;
-    real prose (even link-dense prose) keeps its words. URL-immune by design.
+    A link list has almost nothing left once link spans, list markers and markup
+    are gone, while real prose keeps its words even when link-dense.
     """
     t = _LINK_RE.sub(" ", chunk)
     t = re.sub(r"(?m)^\s*(?:[-*+]|\d+[.)])\s", " ", t)  # leading list markers
@@ -202,9 +188,8 @@ def _load_meta_body(path: Path) -> tuple[dict, str]:
     try:
         meta, body = read_w_frontmatter_text(text)
     except Exception:
-        # Garbage frontmatter raises out of the YAML parser (see test_lib).
-        # Empty meta means the selector rejects the post — same outcome as
-        # before, but no longer silent.
+        # Garbage frontmatter raises out of the YAML parser. Empty meta means
+        # the selector rejects the post — warned about, never silent.
         logger.warning("unparseable frontmatter in %s — treated as unselected", path)
         return {}, text
     return (meta or {}), body
@@ -213,12 +198,11 @@ def _load_meta_body(path: Path) -> tuple[dict, str]:
 def _split_sections(text: str) -> list[tuple[str, str]]:
     """Split a body into ``(heading, section_body)`` pairs.
 
-    A header line (`_HEADER_RE`) starts a new section and is itself **excluded**
-    from the body (headers carry no paragraph voice and must never pack with
-    prose) — instead it becomes the `heading` of the section that *follows* it
-    (the immediate heading the section sits under). The pre-first-header preamble
-    has an empty heading. Run this *after* `editable_prose` so code-comment ``#``
-    lines — already stripped as protected blocks — can't be mistaken for headers.
+    A header line starts a new section and is itself **excluded** from the body —
+    headers carry no paragraph voice and must never pack with prose — becoming
+    the `heading` of the section that follows. The preamble has an empty heading.
+    Run this *after* `editable_prose`, so code-comment ``#`` lines (stripped as
+    protected blocks) can't be mistaken for headers.
     """
     sections: list[tuple[str, str]] = []
     heading = ""
@@ -239,10 +223,8 @@ def _split_sections(text: str) -> list[tuple[str, str]]:
 def _pack_paragraphs(paras: Sequence[str], *, merge_max_chars: int) -> list[str]:
     """Greedily pack consecutive paragraphs into blocks up to a soft budget.
 
-    Paragraphs are joined with a blank line. A paragraph already larger than the
-    budget is emitted alone (kept whole — splitting mid-paragraph would corrupt
-    the target). NB: not `qmd_core.chunk_editable_preserve_newlines`, which is
-    char-budget chunking of one span — neither paragraph- nor section-aware.
+    Joined with a blank line. A paragraph already over budget is emitted alone,
+    kept whole — splitting mid-paragraph would corrupt the target.
     """
     blocks: list[str] = []
     buf: list[str] = []
@@ -264,9 +246,8 @@ def _post_targets(path: Path, source: str, policy: ChunkPolicy) -> list[Target]:
     _, body = _load_meta_body(path)
     # Cut trailing dump sections (e.g. "## Incoming") before anything else.
     body = _truncate_at_headers(body, policy.stop_at_headers)
-    # Prose-only: drop protected blocks (code/math/:::divs/blockquotes) before
-    # splitting, so they never become targets and chunk boundaries match what
-    # the blog's own edit pipeline sees.
+    # Drop protected blocks before splitting, so they never become targets and
+    # chunk boundaries match what the blog's own edit pipeline sees.
     text = editable_prose(body) if policy.prose_only else body
     cross = policy.cross_heading and policy.merge
     # An inline heading is content the styler rewrites, so it cannot also be
@@ -277,19 +258,17 @@ def _post_targets(path: Path, source: str, policy: ChunkPolicy) -> list[Target]:
         drop_link_dumps=policy.drop_link_dumps,
         drop_list_items=policy.drop_list_items,
     )
-    # Junk gate applied per-paragraph BEFORE packing (no min/max floor — short
-    # prose survives to be rescued by its neighbours; tables/lists/link dumps
-    # are dropped so they never pollute a packed block).
+    # Junk gate per-paragraph BEFORE packing, with no min/max floor: short prose
+    # survives to be rescued by its neighbours, while tables/lists/link dumps are
+    # dropped so they never pollute a packed block.
     prepack_kw = dict(min_chars=1, max_chars=None, **gate_kw)
 
     chunks: list[tuple[str, str]] = []  # (text, context)
     if cross:
-        # Flatten the whole document into one ordered unit stream — each
-        # heading line followed by its surviving paragraphs — and pack across
-        # section boundaries. Headings are kept unconditionally (a heading is
-        # short and would never clear the junk gate on its own, but as the
-        # first line of a packed block it is exactly the structure we want the
-        # styler to learn to carry).
+        # Flatten to one ordered unit stream — each heading line followed by its
+        # surviving paragraphs — and pack across section boundaries. Headings
+        # bypass the junk gate: alone a heading is too short to clear it, but as
+        # a packed block's first line it is the structure the styler must carry.
         units: list[str] = []
         for heading, section in _split_sections(text):
             if heading:
@@ -359,54 +338,36 @@ def iter_targets(
 ) -> list[Target]:
     """Collect prose chunks to use as synthesis targets.
 
-    Two mutually exclusive input modes (OVERVIEW "Selection is a user-supplied
-    policy"):
-
-    - **`files`** — a pre-selected list the caller already filtered/ordered. The
-      `selector` is **not** applied (the caller owns selection); every readable
-      file is chunked.
-    - **`blog_root` + `selector`** — stylebot walks `blog_root` for `glob`,
-      reads each post's frontmatter, and keeps those for which `selector(meta)`
-      is true. `selector` defaults to the bundled `is_human_authored`
-      (`automation: 0`); pass your own to retarget.
-
-    Chunk hygiene (all generic — no blog knowledge; policy stays in `selector`
-    and the caller's marker choice):
+    Two mutually exclusive input modes: **`files`** is a pre-selected list, and
+    the `selector` is **not** applied to it (the caller owns selection);
+    **`blog_root`** walks for `glob` and keeps posts where `selector(meta)` is
+    true. Chunk hygiene below is all generic — policy stays in `selector` and the
+    caller's marker choice.
 
     - `prose_only` (default True): drop protected blocks — fenced code,
-      ``$$math$$``, ``:::`` divs/callouts, blockquotes — via
-      `stylebot.lib.editable_prose` before splitting, so they never become
-      targets (STYLE_SYSTEM preserves them verbatim anyway).
-    - `min_chars` / `max_chars`: drop chunks outside the range (oversized chunks
-      are dropped, never truncated — truncating corrupts the target).
-    - `ignore_markers`: drop any chunk containing one of these literal strings
-      (e.g. a stub marker like ``"🚧TODO🚧"`` the caller maintains).
-    - `drop_link_dumps`: drop chunks that are mostly markdown links with little
-      authored prose (measured by prose residual, not link density).
+      ``$$math$$``, ``:::`` divs/callouts, blockquotes — before splitting, so
+      they never become targets (STYLE_SYSTEM preserves them verbatim anyway).
+    - `min_chars` / `max_chars`: oversized chunks are DROPPED, never truncated —
+      truncating corrupts the target.
+    - `ignore_markers`: drop chunks containing any of these literal strings.
+    - `drop_link_dumps`: drop chunks that are mostly markdown links, measured by
+      prose residual rather than link density.
     - `drop_list_items`: drop chunks that are entirely markdown list items.
-    - `merge`: pack consecutive prose paragraphs *within a section* into
-      multi-paragraph passages up to `merge_max_chars` (never crossing a header,
-      which keeps passages topically tight and self-limits length). Rescues short
-      paragraphs that the `min_chars` floor would otherwise discard; `min_chars`
-      then floors the *packed* block. A single paragraph over the budget is kept
-      whole; `max_chars` still hard-drops anything oversized.
-    - `stop_at_headers`: truncate each post body at the first matching section
-      header (level-agnostic, case-insensitive), dropping everything after it —
-      e.g. a trailing ``"## Incoming"`` dump of quotes/links with no authored
-      signal.
-    - `heading_context` (``"none"`` | ``"immediate"``): when ``"immediate"``,
-      populate ``Target.context`` with the section heading each chunk sits under,
-      so `synthesize_pairs` can prepend it verbatim to both sides of the pair.
-      ``"none"`` (default) leaves context empty (unchanged behaviour).
+    - `merge`: pack consecutive paragraphs *within a section* up to
+      `merge_max_chars`, never crossing a header. Rescues short paragraphs the
+      `min_chars` floor would discard, and `min_chars` then floors the *packed*
+      block. A single paragraph over budget is kept whole.
+    - `stop_at_headers`: truncate each body at the first matching section header
+      (level-agnostic, case-insensitive) — e.g. a trailing link dump.
+    - `heading_context` (``"none"`` | ``"immediate"``): populate
+      ``Target.context`` with the heading each chunk sits under.
     - `cross_heading` (requires `merge`): pack across section boundaries with
-      heading lines as chunk **content**, so a passage spans sections. This is
-      the knob that actually buys length: section-bounded packing hits the
-      section wall long before `merge_max_chars` (Dan's sections are median
-      ~550 chars, and only ~14% exceed 1500), so raising the budget alone
-      barely moves the distribution. Forces `heading_context` off — an inline
-      heading is text the styler rewrites, not fixed context — and stamps
-      ``Target.chunk_mode = "cross-heading"``. See
-      `_plans/v2-longer-rewrites.md`.
+      heading lines as chunk **content**. This is the knob that actually buys
+      length: most sections are far shorter than `merge_max_chars`, so
+      section-bounded packing hits the section wall before the budget bites and
+      raising the budget alone barely moves the distribution. Forces
+      `heading_context` off — an inline heading is text the styler rewrites, not
+      fixed context. See `_plans/v2-longer-rewrites.md`.
 
     `sort_key` orders the resulting chunks. Returns a flat list of `Target`s.
     """
@@ -452,12 +413,11 @@ def iter_targets(
 def hash_unit(*parts: object, salt: str = "") -> float:
     """A stable coordinate in [0, 1) for a tuple of identifiers.
 
-    Pure function of the identifiers — no RNG state, no ordering, no corpus
-    size. That is the whole point: it is what lets a subsample stay put while
-    the thing it is sampled from grows underneath it. Same growth-stability
-    property the splits hash rule runs on, and the same digest → [0, 1)
-    conversion (`splits.unit_from_digest`); the hashed *input* differs and stays
-    that way, since each side's byte format is pinned by data already on disk.
+    Pure function of the identifiers — no RNG state, no ordering, no corpus size
+    — which is what lets a subsample stay put while the thing it is sampled from
+    grows underneath it. Shares the digest → [0, 1) conversion with the splits
+    hash rule but NOT the hashed input: each side's byte format is pinned by data
+    already on disk, so they must stay separate.
     """
     blob = "\x00".join([str(salt), *(str(p) for p in parts)]).encode("utf-8")
     return unit_from_digest(hashlib.sha256(blob).digest())
@@ -475,29 +435,20 @@ def select_targets(
 
     Two independent filters, both deliberately *not* random:
 
-    - **`role`** keeps only chunks whose post carries that role under the
-      by-post splits contract (`stylebot.splits.role_of`). An experiment that
-      measures with the voice classifier must not draw passages from the
-      classifier's own training pool, or the detector is marking its own
-      homework; `role="styler"` is the usual answer, since it is disjoint from
-      both the detector pool and the frozen eval stratum. Filtering on the
-      *contract* rather than on the posts a particular artifact happened to see
-      keeps that guarantee true across retrains.
+    - **`role`** keeps only chunks whose post carries that role under the by-post
+      splits contract. An experiment measured with the voice classifier must not
+      draw passages from the classifier's own training pool, or the detector
+      marks its own homework; `role="styler"` is the usual answer, being disjoint
+      from both the detector pool and the frozen eval stratum.
 
-    - **`sample_frac`** keeps a fraction by `hash_unit(source, text)`, NOT by
-      taking the first N or by sampling randomly. Membership is a property of
-      the chunk's *content* (an index would churn the whole post's membership
-      the moment a paragraph is inserted above it), so as the corpus grows
-      every previously selected chunk stays selected and new ones join at the
-      same rate: a later run is a strict **superset** of an earlier one. Old
-      measurements stay valid on their subset, and the two runs can be
-      compared on the intersection. `--limit` cannot do this — its first N
-      shifts the moment a new post sorts in ahead of an old one. Identical
-      text twice in one post co-selects; harmless, since `synth_key` is
-      content-keyed and collapses identical (config, context, text) anyway.
+    - **`sample_frac`** keeps a fraction by `hash_unit(source, text)`, NOT the
+      first N and not randomly. Membership is a property of the chunk's
+      *content*, so as the corpus grows a later run is a strict **superset** of
+      an earlier one: old measurements stay valid on their subset and two runs
+      are comparable on the intersection. `--limit` cannot do this — its first N
+      shifts the moment a new post sorts in ahead of an old one.
 
-    `sample_salt` re-draws an independent subsample of the same size (a fresh
-    replicate of the design).
+    `sample_salt` re-draws an independent subsample of the same size.
     """
     out = list(targets)
     if role is not None:
