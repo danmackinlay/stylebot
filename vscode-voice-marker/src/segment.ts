@@ -8,7 +8,7 @@
  * frontmatter and heading lines. The classifier trained on bare prose bodies,
  * so scoring anything else would be off-distribution.
  *
- * Keep behaviour in sync with stylebot/src/stylebot/lib.py — the shared
+ * Keep behaviour in sync with stylebot/src/stylebot/markdown.py — the shared
  * fixture (`stylebot/tests/fixtures/segmentation.qmd` +
  * `expected_segments.json`) is asserted by BOTH pytest and this package's
  * tests. No `vscode` import here, so tests run under plain `node --test`.
@@ -23,16 +23,18 @@ export interface Paragraph {
   end: number;
 }
 
-// Protected-span regexes — transliterations of stylebot.lib's patterns.
+// Protected-span regexes — transliterations of stylebot.markdown's patterns.
 // Python re.MULTILINE|re.DOTALL becomes /gm with [\s\S] standing in for
 // DOTALL-dot; Python's (?:\n|\Z) trailing-newline consumption becomes \n?.
-const CODE_FENCE_RE = /^[ \t]*```.*?$[\s\S]*?^[ \t]*```[ \t]*$\n?/gm;
+// Opener and closer alternate independently — deliberately NOT a backreference
+// (see stylebot.markdown.CODE_FENCE_RE for the measurement).
+const CODE_FENCE_RE = /^[ \t]*(?:```|~~~).*?$[\s\S]*?^[ \t]*(?:```|~~~)[ \t]*$\n?/gm;
 const MATH_BLOCK_RE = /\$\$[\s\S]*?\$\$[ \t]*(?:\{[^}\n]*\})?/g;
 const BLOCKQUOTE_RE = /^(?:[ \t]{0,3}>[^\n]*\n?)+/gm;
 
 type Span = [number, number];
 
-/** Nesting-aware ::: div/callout spans — port of stylebot.lib._find_div_blocks. */
+/** Nesting-aware ::: div/callout spans — port of stylebot.markdown.find_div_blocks. */
 function findDivBlocks(content: string): Span[] {
   const spans: Span[] = [];
   const lines = content.split(/(?<=\n)/); // keepends=True equivalent
@@ -92,11 +94,31 @@ function regexSpans(content: string, re: RegExp): Span[] {
   return spans;
 }
 
+/**
+ * Port of stylebot.markdown._is_block_anchored: does the span occupy whole
+ * lines (at most 3 spaces in, nothing but whitespace out)?
+ *
+ * Display math is protected only when it is block-anchored. Excising a
+ * mid-sentence `$$k$$` joins the remnants — `high-$$d$$ behaviour` becomes
+ * `high- behaviour` — which corrupted real training targets and would split a
+ * scoreable paragraph in two here.
+ */
+function isBlockAnchored(content: string, start: number, end: number): boolean {
+  const lineStart = content.lastIndexOf("\n", start - 1) + 1;
+  const indent = content.slice(lineStart, start);
+  if (indent.length > 3 || /[^ ]/.test(indent)) {
+    return false;
+  }
+  const nl = content.indexOf("\n", end);
+  const tail = nl === -1 ? content.slice(end) : content.slice(end, nl);
+  return tail.trim() === "";
+}
+
 /** Merged protected spans (code, math, divs, blockquotes, frontmatter). */
 export function protectedSpans(content: string): Span[] {
   const spans: Span[] = [
     ...regexSpans(content, CODE_FENCE_RE),
-    ...regexSpans(content, MATH_BLOCK_RE),
+    ...regexSpans(content, MATH_BLOCK_RE).filter(([s, e]) => isBlockAnchored(content, s, e)),
     ...regexSpans(content, BLOCKQUOTE_RE),
     ...findDivBlocks(content),
   ];
@@ -117,7 +139,10 @@ export function protectedSpans(content: string): Span[] {
   return merged;
 }
 
-const HEADING_RE = /^[ \t]{0,3}#{1,6}[ \t]/;
+// Port of stylebot.markdown.ATX_HEADING_RE, tested against a paragraph's FIRST
+// line: up to 3 *spaces* of indent (a tab indents by 4, so it cannot open a
+// heading), 1-6 hashes, then end-of-line or a space/tab and the title.
+const HEADING_RE = /^ {0,3}#{1,6}(?:[ \t].*?)?[ \t]*$/;
 
 /**
  * The scoreable prose paragraphs of a markdown document, with offsets.
@@ -185,7 +210,7 @@ function pushParagraph(
     end -= 1;
   }
   const text = content.slice(start, end);
-  if (text.length === 0 || HEADING_RE.test(text)) {
+  if (text.length === 0 || HEADING_RE.test(text.split("\n", 1)[0])) {
     return;
   }
   if (text.length < minChars) {

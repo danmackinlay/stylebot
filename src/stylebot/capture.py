@@ -13,7 +13,6 @@ import difflib
 import json
 import logging
 import os
-import re
 import shutil
 import uuid
 from pathlib import Path
@@ -21,6 +20,7 @@ from pathlib import Path
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.jsonl import append_jsonl, read_jsonl, write_jsonl_atomic
 from stylebot.lib import read_w_frontmatter_text, split_paragraphs
+from stylebot.markdown import is_heading_line
 from stylebot.pairs import build_pair_content
 from stylebot.provenance import now_iso  # `ai-style log` binds capture.now_iso
 
@@ -48,11 +48,6 @@ def split_frontmatter_meta(text: str) -> tuple[dict, str]:
 
 # ---- Paragraph-level diffing ----
 
-# A markdown ATX header line: up to 3 leading spaces, 1-6 hashes, then a space
-# and the heading text. Matched against the FIRST line of a paragraph (post
-# `split_paragraphs`) so only standalone header paragraphs count as headings.
-_ATX_HEADER_RE = re.compile(r"^\s{0,3}#{1,6}\s")
-
 
 def _is_heading_paragraph(para: str) -> bool:
     """True if `para` is a standalone ATX header paragraph.
@@ -64,7 +59,7 @@ def _is_heading_paragraph(para: str) -> bool:
     if not para:
         return False
     first_line = para.splitlines()[0] if "\n" in para else para
-    return bool(_ATX_HEADER_RE.match(first_line))
+    return is_heading_line(first_line)
 
 
 def _nearest_heading(paras: list[str], idx: int) -> str:

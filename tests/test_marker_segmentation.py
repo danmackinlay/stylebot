@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 
 from stylebot.lib import segment_for_edit, split_paragraphs
+from stylebot.markdown import is_heading_line
 
 FIXTURE = Path(__file__).parent / "fixtures" / "segmentation.qmd"
 EXPECTED = Path(__file__).parent / "fixtures" / "expected_segments.json"
@@ -42,8 +43,8 @@ def _strip_frontmatter(content: str) -> str:
 
 
 def _is_heading(paragraph: str) -> bool:
-    stripped = paragraph.lstrip(" \t")
-    return stripped.startswith("#") and stripped.lstrip("#").startswith((" ", "\t"))
+    """Mirror of segment.ts's heading drop — the paragraph's FIRST line decides."""
+    return is_heading_line(paragraph.split("\n", 1)[0])
 
 
 def marker_paragraphs(content: str) -> list[str]:
@@ -78,6 +79,7 @@ def test_fixture_exercises_every_protected_kind():
     protected = "".join(seg for seg, editable in segment_for_edit(content) if not editable)
     assert "```python" in protected
     assert "```sh" in protected  # fence adjacent to prose, no blank line
+    assert "~~~yaml" in protected  # tilde fence (defect A2 — was a training target)
     assert "\\int_0^1" in protected  # $$math$$ with {#eq-...} attributes
     assert "> A blockquote" in protected
     assert "callout-tip" in protected  # nested ::: div
@@ -87,5 +89,7 @@ def test_fixture_exercises_every_protected_kind():
     assert "must not be scored" not in text  # heading dropped
     assert "title: Segmentation parity fixture" not in text  # frontmatter dropped
     assert "Short." in paragraphs  # minChars is the caller's policy, not segmentation's
+    # Mid-line display math stays inside its paragraph rather than splitting it.
+    assert any("high-$$d$$ behaviour" in p for p in paragraphs)
     assert any(p.startswith("- a list item") for p in paragraphs)
     assert any("adjacent fence" not in p for p in paragraphs)

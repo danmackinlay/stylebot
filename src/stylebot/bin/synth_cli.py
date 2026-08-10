@@ -30,7 +30,7 @@ feeds `iter_targets` on the *selection* side, the other five feed `run_synth`.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from pathlib import Path
 
@@ -190,6 +190,11 @@ class ChunkOpts:
         type=click.Choice(["none", "length", "source"]),
         show_default=True,
     )
+    # Library-only (no `opt()`, so no flag), like `session_budgets` and
+    # `report_title`: a predicate is not expressible on a command line, and
+    # *which* `:::` classes wrap prose is blog policy set in code — see
+    # `stylebot.markdown` and livingthing's `training_targets.div_is_prose`.
+    div_is_prose: Callable[[str], bool] | None = None
 
     def iter_targets_kwargs(self) -> dict:
         """This bundle shaped for `iter_targets` — the single documented path

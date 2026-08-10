@@ -1,8 +1,14 @@
-import re
 from datetime import date, datetime
 from pathlib import Path
 
 from ruamel.yaml import YAML
+
+from stylebot import markdown
+from stylebot.markdown import (  # noqa: F401 — public API, re-exported for livingthing
+    BLOCKQUOTE_RE,
+    CODE_FENCE_RE,
+    MATH_BLOCK_RE,
+)
 
 yaml = YAML(typ="rt")
 yaml.preserve_quotes = True
@@ -72,90 +78,32 @@ def split_paragraphs(text: str) -> list[str]:
 
 # --- Markdown prose/structure segmentation -------------------------------
 #
-# Generic markdown tooling (no frontmatter / blog knowledge), so per the
-# OVERVIEW boundary it lives here alongside `split_paragraphs` / `gather_qmd_files`.
-# SIBLING: `livingthing/src/livingthing/qmd_core.py::segment_for_edit` — keep
-# behaviour in sync; the segmenter tests in `tests/test_segment.py` pin it.
-
-# Protected spans the styler must not paraphrase (preserved verbatim per
-# STYLE_SYSTEM): fenced code, display math, blockquotes.
-CODE_FENCE_RE = re.compile(r"^[ \t]*```.*?$.*?^[ \t]*```[ \t]*$(?:\n|\Z)", re.MULTILINE | re.DOTALL)
-MATH_BLOCK_RE = re.compile(r"\$\$.*?\$\$[ \t]*(?:\{[^}\n]*\})?", re.DOTALL)
-BLOCKQUOTE_RE = re.compile(r"^(?:[ \t]{0,3}>[^\n]*\n?)+", re.MULTILINE)
+# The primitives now live in `stylebot.markdown` (one segmentation, shared by
+# every phase). These names stay here because they are PUBLIC API: livingthing
+# imports them, and the VS Code marker's parity fixture is asserted against
+# them. Re-export, don't relocate.
 
 
-def _find_div_blocks(content: str) -> list[tuple[int, int]]:
-    """Find all ``:::`` div/callout blocks, nesting-aware.
-
-    Returns ``(start, end)`` char spans (end includes the trailing newline).
-    Pandoc rule: a closing fence is a line that is exactly ``:::`` (whitespace
-    allowed); a ``:::`` line with arguments opens a nested div.
-    """
-    spans: list[tuple[int, int]] = []
-    lines = content.splitlines(keepends=True)
-    i = 0
-    current_pos = 0
-    while i < len(lines):
-        line_content = lines[i]
-        if line_content.strip().startswith(":::"):
-            start_pos = current_pos
-            depth = 1
-            j = i + 1
-            while j < len(lines) and depth > 0:
-                inner = lines[j].strip()
-                if inner.startswith(":::"):
-                    if inner == ":::":
-                        depth -= 1
-                    else:
-                        depth += 1
-                j += 1
-            if depth == 0:
-                end_pos = start_pos + sum(len(lines[k]) for k in range(i, j))
-                spans.append((start_pos, end_pos))
-                current_pos = end_pos
-                i = j
-                continue
-        current_pos += len(line_content)
-        i += 1
-    return spans
-
-
-def segment_for_edit(content: str) -> list[tuple[str, bool]]:
+def segment_for_edit(
+    content: str, *, div_is_prose: markdown.DivIsProse | None = None
+) -> list[tuple[str, bool]]:
     """Split markdown into ``(text, editable)`` spans, losslessly.
 
-    ``editable`` is False for protected blocks — fenced code, ``$$math$$``,
+    ``editable`` is False for protected blocks — fenced code, display math,
     ``:::`` divs/callouts, and blockquotes — which must pass through verbatim.
     Concatenating every ``text`` reproduces ``content`` exactly.
+
+    ``div_is_prose`` is the caller's policy for which div classes wrap prose
+    (see `stylebot.markdown`); the default protects every div wholesale.
     """
-    spans: list[tuple[int, int]] = []
-    for pattern in (CODE_FENCE_RE, MATH_BLOCK_RE, BLOCKQUOTE_RE):
-        for m in pattern.finditer(content):
-            spans.append((m.start(), m.end()))
-    spans.extend(_find_div_blocks(content))
-    spans.sort()
-
-    merged: list[tuple[int, int]] = []
-    for start, end in spans:
-        if merged and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-
-    out: list[tuple[str, bool]] = []
-    i = 0
-    for s, e in merged:
-        if i < s:
-            out.append((content[i:s], True))
-        out.append((content[s:e], False))
-        i = e
-    if i < len(content):
-        out.append((content[i:], True))
-    return out
+    return markdown.segment_spans(content, div_is_prose=div_is_prose)
 
 
-def editable_prose(content: str) -> str:
+def editable_prose(content: str, *, div_is_prose: markdown.DivIsProse | None = None) -> str:
     """Return only the editable prose of ``content`` (protected blocks dropped)."""
-    return "".join(seg for seg, editable in segment_for_edit(content) if editable)
+    return "".join(
+        seg for seg, editable in segment_for_edit(content, div_is_prose=div_is_prose) if editable
+    )
 
 
 def is_valid_qmd_file(path: Path) -> bool:

@@ -15,7 +15,8 @@ assistant texts. Two bundled backends:
   `mlx_lm.server`, Osaurus, vLLM). NB the served model's chat template must
   match training's `qwen3_5_disable_thinking` rendering — verify parity by
   scoring the same inputs through both backends before trusting a new endpoint
-  (see phase-4 plan, MLX slice).
+  (the MLX exit did exactly that: `_plans/findings.md` "MLX local-serving
+  parity" for the numbers and gates, `_plans/decisions.md` D8 for the caveats).
 
 `rewrite_text` chunks at inference the way training saw data: blank-line
 paragraph regions, grouped to ~STYLE_CHARS_PER_CHUNK chars, with chunk
@@ -38,6 +39,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from stylebot import markdown
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.jsonl import dumps_line
 
@@ -70,11 +72,10 @@ def max_tokens_for(max_chunk_chars: int) -> int:
 Styler = Callable[..., list[str]]
 
 _FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
-_FENCE_RE = re.compile(r"^(```+|~~~+)", re.MULTILINE)
 
 
 # ---------------------------------------------------------------------------
-# Chunking — match training granularity, never slice a fence
+# Chunking — match training granularity, never slice a protected block
 # ---------------------------------------------------------------------------
 
 
@@ -85,90 +86,113 @@ def split_frontmatter(text: str) -> tuple[str, str]:
     return (m.group(0), text[m.end() :]) if m else ("", text)
 
 
-def _blocks_with_separators(body: str) -> tuple[list[str], list[str]]:
-    """Split body into blocks on blank-line runs OUTSIDE code fences.
+def _blocks_with_separators(
+    body: str, kinds: list[str | None]
+) -> tuple[list[str], list[str], list[list[str | None]]]:
+    """Split body into blocks on blank-line runs that are OUTSIDE everything.
 
-    Returns `(blocks, seps)` with `len(seps) == len(blocks) - 1`;
+    `kinds` is `markdown.line_kinds(body)` — one label per line of
+    `body.split("\\n")`, so the indices line up exactly. A line separates blocks
+    only when it is blank *and* unprotected: a blank line inside a `:::` div or
+    a display-math block belongs to that block.
+
+    Returns `(blocks, seps, block_kinds)` with `len(seps) == len(blocks) - 1`;
     `blocks[0] + seps[0] + blocks[1] + ...` reproduces the body exactly.
-    Leading/trailing blank runs stay attached to their neighbouring block.
+    Leading/trailing blank runs stay attached to their neighbouring block, and
+    `block_kinds[i]` is the per-line kind list of `blocks[i].split("\\n")`.
+
+    The fence STATE MACHINE runs alongside the mask and is not redundant with
+    it: `markdown.CODE_FENCE_RE` needs a closer, so an unclosed fence yields no
+    span at all, and only the state machine's run-to-EOF behaviour keeps a
+    runaway fence out of the styler's hands.
     """
     if not body:
-        return [], []
-    # Segment lines into alternating runs: content (any line inside a fence,
-    # or non-blank outside) vs separator (blank lines outside fences).
-    runs: list[tuple[bool, list[str]]] = []  # (is_sep, lines)
+        return [], [], []
+    # Segment lines into alternating runs: content (any line inside a fence or
+    # other protected block, or non-blank outside) vs separator (blank,
+    # unprotected lines).
+    runs: list[tuple[bool, list[str], list[str | None]]] = []  # (is_sep, lines, kinds)
     fence: str | None = None
-    for line in body.split("\n"):
-        opener = _FENCE_RE.match(line)
-        is_sep = fence is None and not line.strip()
+    for line, mask in zip(body.split("\n"), kinds, strict=True):
+        opener = markdown.FENCE_OPEN_RE.match(line)
+        in_fence = fence is not None or opener is not None
+        kind = mask if mask is not None else (markdown.FENCE if in_fence else None)
+        is_sep = not in_fence and kind is None and not line.strip()
         if runs and runs[-1][0] == is_sep:
             runs[-1][1].append(line)
+            runs[-1][2].append(kind)
         else:
-            runs.append((is_sep, [line]))
+            runs.append((is_sep, [line], [kind]))
         if not is_sep:
             if fence is None and opener:
-                fence = opener.group(1)
+                fence = opener.group("fence")
             elif fence is not None and line.strip().startswith(fence):
                 fence = None
     # Fold a leading separator into the first block, a trailing one into the last.
     if runs and runs[0][0]:
         if len(runs) == 1:
-            return ["\n".join(runs[0][1])], []
-        runs[1] = (False, runs[0][1] + runs[1][1])
+            return ["\n".join(runs[0][1])], [], [runs[0][2]]
+        runs[1] = (False, runs[0][1] + runs[1][1], runs[0][2] + runs[1][2])
         runs = runs[1:]
     if runs and runs[-1][0]:
-        runs[-2] = (False, runs[-2][1] + runs[-1][1])
+        runs[-2] = (False, runs[-2][1] + runs[-1][1], runs[-2][2] + runs[-1][2])
         runs = runs[:-1]
-    blocks = ["\n".join(lines) for is_sep, lines in runs if not is_sep]
+    blocks = ["\n".join(lines) for is_sep, lines, _ in runs if not is_sep]
+    block_kinds = [ks for is_sep, _, ks in runs if not is_sep]
     # A separator string carries its boundary newlines, so plain concatenation
     # (block + sep + block + ...) reproduces the body byte-for-byte.
-    seps = ["\n" + "\n".join(lines) + "\n" for is_sep, lines in runs if is_sep]
-    return blocks, seps
-
-
-_HEADING_RE = re.compile(r"^#{1,6}\s")
+    seps = ["\n" + "\n".join(lines) + "\n" for is_sep, lines, _ in runs if is_sep]
+    return blocks, seps, block_kinds
 
 
 def _segment(
-    body: str, *, max_chars: int, inline_headings: bool = False
+    body: str,
+    *,
+    max_chars: int,
+    inline_headings: bool = False,
+    div_is_prose: markdown.DivIsProse | None = None,
 ) -> tuple[list[tuple[str, str]], list[str]]:
     """Segment the body the way TRAINING saw data.
 
     Returns `(items, seps)` where each item is `(kind, text)`, kind in
-    {"prose", "heading", "fence"}; concatenating item texts interleaved with
-    seps reproduces the body exactly. Headings and code fences are protected
-    (training pairs never contain them as content — headings ride along as
-    `meta.context`); adjacent prose blocks are grouped to <= max_chars.
+    {"prose", "heading"} | `markdown.PROTECTED_KINDS`; concatenating item texts
+    interleaved with seps reproduces the body exactly. Everything the training
+    pipeline drops before chunking — fenced code, display math, `:::` divs,
+    blockquotes — is protected here too, per construct rather than under one
+    flat "protected" label, so `rewrite_candidates` can tell an editor *which*
+    thing it refused. Headings are protected as well (training pairs never
+    contain them as content — they ride along as `meta.context`); adjacent prose
+    blocks are grouped to <= max_chars.
 
     `inline_headings` matches the cross-heading diet: headings become groupable
-    content, so a chunk spans sections exactly as the training pairs do. Code
-    fences stay protected either way — they are excluded from the corpus in both
-    modes, so the styler has never been trained to reproduce one. Grouped
-    heading items are relabelled "prose" (they are chunk content now); a heading
-    that ends up alone keeps kind "heading", so callers can skip a bare header.
+    content, so a chunk spans sections exactly as the training pairs do. The
+    other protected kinds stay protected either way — they are excluded from the
+    corpus in both modes, so the styler has never been trained to reproduce one.
+    Grouped heading items are relabelled "prose" (they are chunk content now); a
+    heading that ends up alone keeps kind "heading", so callers can skip a bare
+    header.
     """
-    blocks, seps = _blocks_with_separators(body)
+    kinds = markdown.line_kinds(body, div_is_prose=div_is_prose)
+    blocks, seps, block_kinds = _blocks_with_separators(body, kinds)
     items: list[tuple[str, str]] = []
     iseps: list[str] = []
-    for idx, block in enumerate(blocks):
+    for idx, (block, mask) in enumerate(zip(blocks, block_kinds, strict=True)):
         if idx:
             iseps.append(seps[idx - 1])
+        # Uniform run-length split on equal line kind. This is what replaced the
+        # bespoke leading-heading split, and it is why a heading glued to prose,
+        # a blockquote with no blank line after it, and a fence riding on the
+        # end of a paragraph all come apart the same way. Joining consecutive
+        # runs with "\n" reproduces the block, so reassembly stays byte-exact.
         lines = block.split("\n")
-        n_head = 0
-        while n_head < len(lines) and _HEADING_RE.match(lines[n_head]):
-            n_head += 1
-        if n_head and n_head < len(lines):
-            # A heading glued to prose with no blank line: split it off.
-            items.append(("heading", "\n".join(lines[:n_head])))
-            iseps.append("\n")
-            rest = "\n".join(lines[n_head:])
-            items.append(("fence" if _FENCE_RE.match(rest) else "prose", rest))
-        elif n_head:
-            items.append(("heading", block))
-        elif _FENCE_RE.match(block):
-            items.append(("fence", block))
-        else:
-            items.append(("prose", block))
+        start = 0
+        for i in range(1, len(lines) + 1):
+            if i < len(lines) and mask[i] == mask[start]:
+                continue
+            if start:
+                iseps.append("\n")
+            items.append((mask[start] or "prose", "\n".join(lines[start:i])))
+            start = i
     # Group ADJACENT groupable items within the budget (never across a
     # protected item). Under inline_headings, headings are groupable too, so a
     # chunk spans sections the way a cross-heading training pair does.
@@ -220,21 +244,49 @@ _ANCHOR_RES = (
     re.compile(r"@[A-Za-z][A-Za-z0-9_:-]*"),  # Quarto/pandoc citation key
 )
 
+# Inline markup the styler must carry through verbatim: a code span or a piece
+# of inline math is not prose and has no voice, but unlike a fenced block it
+# lives INSIDE a chunk, so segmentation cannot protect it and only the anchor
+# guard can. Both are single-line by construction: with DOTALL the code pattern
+# happily swallows a whole fenced block.
+#
+# The math pattern is deliberately tight. The obvious `\$([^$\n]+?)\$` matches
+# "it costs $5 and $10" and calls "5 and " an anchor, so every price in a
+# paragraph becomes a false positive; requiring non-space at both ends kills it.
+# Double-backtick spans are left unmatched on purpose — conservative, since a
+# missed anchor costs nothing while a false one rejects a good rewrite.
+_INLINE_ANCHOR_RES = (
+    re.compile(r"(?<!`)(`+)(?P<anchor>[^`\n]+?)\1(?!`)"),  # inline code span
+    re.compile(r"(?<![\\$\w])\$(?![\s$])(?P<anchor>[^$\n]*?[^\s$])\$(?!\$)"),  # inline math
+)
 
-def content_anchors(text: str) -> dict[str, int]:
-    """Multiset of link targets / URLs / citation keys in `text`."""
+
+def content_anchors(text: str, *, inline: bool = False) -> dict[str, int]:
+    """Multiset of link targets / URLs / citation keys in `text`.
+
+    With `inline`, code spans and inline math count too. That is a much stricter
+    guard — measured over the 4624-pair corpus it takes the share of pairs where
+    a real Dan rewrite would be disqualified from 6.4% to 19.1% — so it is
+    opt-in for `rewrite_text` (which decides) and always on for
+    `rewrite_candidates` (which only flags, and a human decides).
+    """
     counts: dict[str, int] = {}
-    for pattern in _ANCHOR_RES:
+    patterns = _ANCHOR_RES + _INLINE_ANCHOR_RES if inline else _ANCHOR_RES
+    for pattern in patterns:
         for m in pattern.finditer(text):
-            key = m.group(1) if m.groups() else m.group(0)
+            if "anchor" in pattern.groupindex:
+                key = m.group("anchor")
+            else:
+                key = m.group(1) if m.groups() else m.group(0)
             counts[key] = counts.get(key, 0) + 1
     return counts
 
 
-def missing_anchors(source: str, candidate: str) -> list[str]:
+def missing_anchors(source: str, candidate: str, *, inline: bool = False) -> list[str]:
     """Anchors present in `source` that `candidate` lost (count decreased)."""
-    have = content_anchors(candidate)
-    return [key for key, n in content_anchors(source).items() if have.get(key, 0) < n]
+    have = content_anchors(candidate, inline=inline)
+    want = content_anchors(source, inline=inline)
+    return [key for key, n in want.items() if have.get(key, 0) < n]
 
 
 def detector_scorer(detector: Callable[[str], dict]) -> Callable[[str], float]:
@@ -257,6 +309,7 @@ def rewrite_candidates(
     scorer: Callable[[str], float] | None = None,
     max_chunk_chars: int = STYLE_CHARS_PER_CHUNK,
     inline_headings: bool = False,
+    div_is_prose: markdown.DivIsProse | None = None,
 ) -> dict:
     """All candidates for ONE prose chunk, none auto-chosen — the editor seam.
 
@@ -267,14 +320,16 @@ def rewrite_candidates(
     `stylebot.serve` (see `_plans/decisions.md` D20).
 
     Single-chunk contract: `text` must be prose at training chunk scale —
-    frontmatter, headings, or fences in the selection, or prose over
+    frontmatter, headings, or a protected block in the selection, or prose over
     `max_chunk_chars` (which `_segment` would split), raise ValueError with a
-    message fit to surface in an editor.
+    message fit to surface in an editor, naming the construct
+    ("selection contains a blockquote — select prose only").
 
     Under `inline_headings` (the cross-heading diet) a selection MAY span
-    headings. Fences still raise: they are absent from the corpus in both diets,
-    so the styler has never learned to reproduce one and would be free to mangle
-    it.
+    headings. Protected blocks still raise: they are absent from the corpus in
+    both diets, so the styler has never learned to reproduce one and would be
+    free to mangle it — and a styler quietly rewording somebody else's quoted
+    words is the worst outcome this package has.
 
     Returns `{"input_score": float|None, "n_sampled": int,
               "candidates": [{"text", "score", "anchors_lost", "identity"}, ...]}`
@@ -288,7 +343,12 @@ def rewrite_candidates(
     frontmatter, body = split_frontmatter(text)
     if frontmatter:
         raise ValueError("selection includes YAML frontmatter — select prose only")
-    items, _seps = _segment(body, max_chars=max_chunk_chars, inline_headings=inline_headings)
+    items, _seps = _segment(
+        body,
+        max_chars=max_chunk_chars,
+        inline_headings=inline_headings,
+        div_is_prose=div_is_prose,
+    )
     kinds = [kind for kind, chunk in items if chunk.strip()]
     # Headings are content under the cross-heading diet; fences never are.
     allowed = {"prose", "heading"} if inline_headings else {"prose"}
@@ -313,7 +373,9 @@ def rewrite_candidates(
         {
             "text": c,
             "score": scorer(c) if scorer is not None else None,
-            "anchors_lost": missing_anchors(chunk, c),
+            # Always inline here: this seam only FLAGS, and a human picks. It is
+            # precisely where a strict mask-preservation check earns its keep.
+            "anchors_lost": missing_anchors(chunk, c, inline=True),
             "identity": c == chunk,
         }
         for c in deduped
@@ -334,11 +396,15 @@ def rewrite_text(
     scorer: Callable[[str], float] | None = None,
     on_decision: Callable[..., None] | None = None,
     inline_headings: bool = False,
+    inline_anchors: bool = False,
+    div_is_prose: markdown.DivIsProse | None = None,
 ) -> RewriteResult:
     """Rewrite prose chunk-by-chunk through the styler, mirroring training.
 
-    Frontmatter, headings, and code fences pass through verbatim (training
-    pairs never contain them as content); each prose chunk is sent with the
+    Frontmatter, headings, and every protected block — fenced code, display
+    math, `:::` divs, blockquotes — pass through verbatim, matching what
+    `lib.editable_prose` drops before a target is ever cut (training pairs
+    never contain them as content); each prose chunk is sent with the
     nearest preceding heading prepended exactly as `build_pair_content` did
     at capture time, and the heading prefix is stripped from the sample
     (`pair_body`) before reassembly. Original whitespace is reassembled
@@ -349,6 +415,12 @@ def rewrite_text(
     content (rewritable, and no longer emitted as `context`), so chunks span
     sections. Set it to match the promoted adapter's training diet — the
     manifest records that under `data.chunk_scale`.
+
+    `inline_anchors` widens the anchor-integrity guard to inline code spans and
+    inline math. Default off: measured across the 4624-pair corpus it triples
+    the share of pairs where a genuine Dan rewrite is disqualified (6.4% ->
+    19.1%), and a disqualified chunk is kept verbatim, so enabling it by default
+    would trade a rare corruption for a common no-op.
 
     With a `scorer` (lower = better, e.g. `detector_scorer`), the INPUT chunk
     competes with the candidates — the do-no-harm guard: a chunk is only
@@ -364,16 +436,32 @@ def rewrite_text(
     from stylebot.pairs import build_pair_content, pair_body
 
     frontmatter, body = split_frontmatter(text)
-    items, seps = _segment(body, max_chars=max_chunk_chars, inline_headings=inline_headings)
+    items, seps = _segment(
+        body,
+        max_chars=max_chunk_chars,
+        inline_headings=inline_headings,
+        div_is_prose=div_is_prose,
+    )
     result = RewriteResult(text="")
     out_chunks: list[str] = []
     context: str | None = None
     for kind, chunk in items:
         if kind == "heading":
-            context = chunk.split("\n")[-1]
+            # Under the cross-heading diet a heading is chunk CONTENT, and those
+            # pairs record no `meta.context` at all — so setting `context` here
+            # would prepend a prefix to every following chunk that training
+            # never saw. Defect A4: prospective today (the corpus has zero
+            # cross-heading pairs) and live the moment the blog's
+            # CROSS_HEADING policy produces its first batch.
+            if not inline_headings:
+                context = chunk.split("\n")[-1]
             out_chunks.append(chunk)
             continue
-        if kind == "fence" or not chunk.strip():
+        # A protected block passes through and — deliberately — does NOT reset
+        # `context`. `targets._split_sections` runs AFTER `editable_prose`, so
+        # protected blocks are invisible to it and never break a section; the
+        # heading a chunk was captured under must survive one in between.
+        if kind in markdown.PROTECTED_KINDS or not chunk.strip():
             out_chunks.append(chunk)
             continue
         result.n_chunks += 1
@@ -393,7 +481,7 @@ def rewrite_text(
         keep = []
         keep_idx: list[int] = []  # positions of `keep` entries within `raw`
         for i, c in enumerate(raw):
-            gone = missing_anchors(chunk, c)
+            gone = missing_anchors(chunk, c, inline=inline_anchors)
             if gone:
                 lost.extend(gone)
                 result.n_anchor_rejected += 1
