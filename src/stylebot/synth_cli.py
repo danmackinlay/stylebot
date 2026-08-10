@@ -14,7 +14,7 @@ instead of copy-paste:
 - `run_synth(targets, …)` — the whole command body after target selection:
   count echo, `--sample`/`--report` short-circuit, generator construction
   (incl. dry-run stubs), `synthesize_pairs`, result reporting, and the
-  non-zero exit on generation errors.
+  `SynthGenerationError` raised when any pair failed.
 
 Per-command concerns stay with the caller: target selection options, the
 `--data-dir` resolution policy (the caller checks for the inspection modes
@@ -25,6 +25,12 @@ default" message stays in its own command), and provenance tags. A callback's
 `ChunkOpts` is the CLI-side twin of `targets.ChunkPolicy` (the same hygiene
 knobs, plus `--sort`, which `iter_targets` takes as a `sort_key` callable); it
 feeds `iter_targets` on the *selection* side, the other five feed `run_synth`.
+
+**click declares this module's options; it does not decide its control flow.**
+The option bundles carry `click.Choice`/`click.Path` types because they exist to
+become flags, but the library entry points raise the `SynthError` family below
+and never exit the process. `bin/ai_style.py` translates them at the CLI
+boundary, which is where the exit codes scripts branch on are decided.
 """
 
 from __future__ import annotations
@@ -57,6 +63,10 @@ __all__ = [
     "SectionedCommand",
     "SessionOpts",
     "SubstrateOpts",
+    "SynthConfigError",
+    "SynthError",
+    "SynthGenerationError",
+    "SynthRunError",
     "build_generators",
     "iter_arms",
     "pop_bundles",
@@ -67,6 +77,56 @@ __all__ = [
 
 # Progress heartbeat cadence for generation (seconds of wall-clock silence).
 _HEARTBEAT_SECS = 20.0
+
+
+# ---------------------------------------------------------------------------
+# The error vocabulary. These replace the `click.UsageError` /
+# `click.BadParameter` / `click.ClickException` / `SystemExit(1)` this module
+# used to raise: a library function reachable without click must not hand its
+# caller a CLI exception, and must never exit the process.
+#
+# The split mirrors the repo's established error idiom (see
+# `tests/test_ai_style_log.py`): a configuration the caller must fix is a usage
+# error, a fine configuration against an unready world is not. `bin/ai_style.py`
+# maps the former to exit 2 and the latter to exit 1, unchanged from when the
+# raises were click's own.
+# ---------------------------------------------------------------------------
+
+
+class SynthError(Exception):
+    """Base for every failure this kit raises on purpose."""
+
+
+class SynthConfigError(SynthError, ValueError):
+    """The arguments are wrong or incoherent — the caller must change them.
+
+    `param_hint`, when set, names the flag a CLI wrapper should blame (it
+    becomes `click.BadParameter`'s hint); without it the wrapper raises a plain
+    usage error. Either way: exit 2.
+    """
+
+    def __init__(self, message: str, *, param_hint: str | None = None) -> None:
+        super().__init__(message)
+        self.param_hint = param_hint
+
+
+class SynthRunError(SynthError, RuntimeError):
+    """The configuration is fine but the world isn't — a missing API key, an
+    unreachable model registry. Exit 1."""
+
+
+class SynthGenerationError(SynthError, RuntimeError):
+    """The run completed but some pairs failed to generate.
+
+    Carries the `SynthResult` so a library caller can still see what landed;
+    the per-error detail and the run summary have already been reported by the
+    time this is raised. Exit 1, with nothing further to print.
+    """
+
+    def __init__(self, result: synth.SynthResult) -> None:
+        super().__init__(f"{len(result.errors)} generation error(s)")
+        self.result = result
+
 
 # Slop models are selected by `--openrouter-model` alone (one key, many upstream
 # models). The direct-API `gpt`/`local` presets were retired 2026-08-10: across
@@ -85,7 +145,9 @@ def sort_key(name: str):
         return lambda t: len(t.text)
     if name == "source":
         return lambda t: (t.source, t.chunk_index)
-    raise click.BadParameter(f"unknown sort key {name!r}")
+    # Unreachable from the CLI (`--sort` is a click.Choice); this guards the
+    # library path, where a caller sets `ChunkOpts(sort_name=…)` in code.
+    raise SynthConfigError(f"unknown sort key {name!r}", param_hint="--sort")
 
 
 # ---------------------------------------------------------------------------
@@ -736,7 +798,7 @@ def _resolve_windows(
         try:
             registry = synth.openrouter_context_windows()
         except Exception as exc:
-            raise click.ClickException(
+            raise SynthRunError(
                 f"could not fetch OpenRouter context windows for the session sweep: {exc}"
             ) from exc
         for n in or_names:
@@ -776,7 +838,13 @@ def _report_result(
     max_transform_sim: float | None = None,
     max_length_ratio: float | None = None,
 ) -> None:
-    """Echo the run summary; exit 1 when any generation failed."""
+    """Echo the run summary — reporting only.
+
+    It used to `raise SystemExit(1)` on generation errors, which a library
+    function must not do; deciding the run failed is now `run_synth`'s (it
+    raises `SynthGenerationError`), and deciding what that costs the process is
+    the CLI's.
+    """
     if dry_run:
         click.echo(
             f"[dry-run] would write {result.planned - result.skipped_existing} new pair(s) "
@@ -845,7 +913,6 @@ def _report_result(
         click.echo(f"{len(result.errors)} generation error(s):", err=True)
         for key, msg in result.errors[:10]:
             click.echo(f"  {key}: {msg}", err=True)
-        raise SystemExit(1)
 
 
 def run_synth(
@@ -874,7 +941,12 @@ def run_synth(
     before calling, having seen `--sample`/`--report` first. Library callers
     may inject ready-made `generators`, bypassing the OpenRouter construction
     entirely. Returns the SynthResult, or None when an inspection mode
-    short-circuited. Exits 1 on generation errors.
+    short-circuited.
+
+    Raises `SynthConfigError` for an unusable configuration, `SynthRunError`
+    when the environment can't serve the run, and `SynthGenerationError` (which
+    carries the result) when pairs failed to generate. It does not exit the
+    process — see the note at the top of the module.
     """
     gen = gen if gen is not None else GenOpts()
     session = session if session is not None else SessionOpts()
@@ -890,7 +962,7 @@ def run_synth(
 
         before = len(targets)
         if substrate.role is not None and substrate.splits_path is None:
-            raise click.UsageError("--role requires --splits")
+            raise SynthConfigError("--role requires --splits")
         loaded = (
             splits_mod.load_splits(substrate.splits_path) if substrate.role is not None else None
         )
@@ -938,7 +1010,7 @@ def run_synth(
         # At least one slop source is required (no silent default — synth spends money
         # and may hit a provider key the operator hasn't configured).
         if not gen.openrouter_models:
-            raise click.UsageError(
+            raise SynthConfigError(
                 "no generators selected: pass --openrouter-model MODEL "
                 "(synth needs at least one slop source)"
             )
@@ -952,14 +1024,14 @@ def run_synth(
         )
         strategy_names = list(dict.fromkeys(gen.slop_strategies)) or [synth.DEFAULT_STRATEGY]
         if custom_system is not None and len(strategy_names) > 1:
-            raise click.UsageError(
+            raise SynthConfigError(
                 "--slop-system-file provides ONE custom prompt; pass exactly one "
                 "--slop-strategy label for it (registry strategies can rotate, a file cannot)"
             )
         try:
             resolved_strategies = [synth.resolve_strategy(s, custom_system) for s in strategy_names]
         except ValueError as exc:
-            raise click.BadParameter(str(exc), param_hint="--slop-strategy") from exc
+            raise SynthConfigError(str(exc), param_hint="--slop-strategy") from exc
         efforts = list(dict.fromkeys(gen.reasoning_efforts)) or [synth.DEFAULT_REASONING_EFFORT]
 
         # The rotation is the models x strategies x efforts cross product:
@@ -983,7 +1055,7 @@ def run_synth(
                 prompt_cache=gen.prompt_cache,
             )
         except RuntimeError as exc:  # missing key, surfaced by config.require_key
-            raise click.ClickException(str(exc)) from exc
+            raise SynthRunError(str(exc)) from exc
 
     # Per-model session budgets (policy hook, e.g. a blog's model->budget map).
     if session.session_budgets:
@@ -1013,7 +1085,7 @@ def run_synth(
     # in None for them (and to keep its own "no silent default" policy message
     # where it belongs — see `synth_cmd`).
     if data_dir is None:
-        raise click.UsageError("a data-dir is required to write pairs.jsonl")
+        raise SynthConfigError("a data-dir is required to write pairs.jsonl")
     resolved_dir = data_dir
 
     # Heartbeat on wall-clock, not pair count: at high reasoning effort a pair
@@ -1064,4 +1136,8 @@ def run_synth(
         max_transform_sim=corpus.max_transform_sim,
         max_length_ratio=corpus.max_length_ratio,
     )
+    if result.errors:
+        # `_report_result` has already printed each error and the summary; this
+        # only signals the failure upward, carrying the result with it.
+        raise SynthGenerationError(result)
     return result

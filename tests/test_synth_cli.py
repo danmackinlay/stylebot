@@ -3,7 +3,8 @@
 The kit exists so `ai-style synth` and downstream blog wrappers share one
 option surface and one command body instead of copy-pasting them. These pin
 the defaults/exclude machinery and the drift-prone body behaviors (dry-run
-stubs, the non-zero exit on generation errors).
+stubs, the domain errors the kit raises and the exit codes `ai-style` maps
+them to).
 
 The "-- the drift guard --" block below is the structural half: `synth` is a
 50-option command, and every one of its shared flags must reach a consumer.
@@ -296,29 +297,61 @@ def test_ai_style_synth_requires_a_generator(tmp_path, make_blog):
         ai_style_main,
         ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"), "--dry-run"],
     )
-    assert result.exit_code != 0
+    # A flag combination the user must fix is a usage error: exit 2.
+    assert result.exit_code == 2, result.output
     assert "no generators selected" in result.output
 
 
 # -- run_synth body --
 
 
-def test_run_synth_exits_nonzero_on_generation_errors(tmp_path, capsys, make_blog):
+def test_run_synth_raises_on_generation_errors(tmp_path, capsys, make_blog):
+    # The library signals failure by raising, carrying the result; it must NOT
+    # exit the process (it used to `raise SystemExit(1)` from `_report_result`).
     targets = synth.iter_targets(blog_root=make_blog(ai=False))
 
     def _boom(_text: str) -> str:
         raise RuntimeError("api down")
 
     bad = synth.Generator(name="boom", generate=_boom)
-    with pytest.raises(SystemExit) as excinfo:
+    with pytest.raises(synth_cli.SynthGenerationError) as excinfo:
         synth_cli.run_synth(targets, data_dir=tmp_path / "corpus", generators=[bad])
-    assert excinfo.value.code == 1
+    assert excinfo.value.result.errors  # the result survives the failure
     err = capsys.readouterr().err
     assert "generation error(s)" in err  # exit summary
     assert "!!" in err and "api down" in err  # surfaced immediately, not just at exit
     # Attribution: a failed pair is never written, so the message itself must
     # name the config that produced it.
     assert "[boom strategy=polish effort=off]" in err
+
+
+def test_ai_style_synth_still_exits_1_on_generation_errors(tmp_path, monkeypatch, make_blog):
+    # ... and the CLI boundary turns that raise back into the exit code scripts
+    # branch on — 1, not click's 2, and with no traceback.
+    root = make_blog(ai=False)
+
+    def fake_factory(*, model, **kw):
+        def _boom(_text: str) -> str:
+            raise RuntimeError("api down")
+
+        return synth.Generator(name=f"openrouter/{model}", generate=_boom)
+
+    monkeypatch.setattr(synth, "openrouter_generator", fake_factory)
+    result = CliRunner().invoke(
+        ai_style_main,
+        [
+            "synth",
+            "--blog-root",
+            str(root),
+            "--data-dir",
+            str(tmp_path / "corpus"),
+            "--openrouter-model",
+            "x/y",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert "generation error(s)" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_timeout_reaches_generator_factories(tmp_path, monkeypatch, make_blog):
@@ -383,7 +416,7 @@ def test_run_synth_needs_no_data_dir_for_inspection(tmp_path, make_blog):
     )
 
     # But a generating run without one is refused, not silently defaulted.
-    with pytest.raises(click.UsageError, match="data-dir is required"):
+    with pytest.raises(synth_cli.SynthConfigError, match="data-dir is required"):
         synth_cli.run_synth(
             targets,
             data_dir=None,
@@ -391,11 +424,11 @@ def test_run_synth_needs_no_data_dir_for_inspection(tmp_path, make_blog):
         )
 
 
-def test_role_without_splits_is_a_usage_error(make_blog):
+def test_role_without_splits_is_a_config_error(make_blog):
     # The guard must run BEFORE load_splits, or --role alone dies inside
     # os.fspath(None) with a TypeError nobody can act on.
     targets = synth.iter_targets(blog_root=make_blog(ai=False))
-    with pytest.raises(click.UsageError, match="--role requires --splits"):
+    with pytest.raises(synth_cli.SynthConfigError, match="--role requires --splits"):
         synth_cli.run_synth(
             targets, data_dir=None, substrate=synth_cli.SubstrateOpts(role="styler")
         )
@@ -559,7 +592,7 @@ def test_custom_system_file_rejects_multiple_strategies(tmp_path, make_blog):
             "--dry-run",
         ],
     )
-    assert result.exit_code != 0
+    assert result.exit_code == 2, result.output
     assert "ONE custom prompt" in result.output
 
 
@@ -607,7 +640,8 @@ def test_missing_openrouter_key_aborts_before_any_generation(tmp_path, monkeypat
             "qwen/qwen3-8b",
         ],
     )
-    assert result.exit_code != 0
+    # An unready world, not a bad invocation: ClickException -> exit 1.
+    assert result.exit_code == 1, result.output
     assert "Missing required secret 'OPENROUTER_API_KEY'" in result.output
     assert not (tmp_path / "corpus" / "pairs.jsonl").exists()
 

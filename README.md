@@ -86,8 +86,10 @@ worked example, and its whole synthesis layer is two small files:
    the shared option surface with your defaults swapped in and your pinned
    options removed — and the command body is just
    `iter_targets(selector=…)` → `run_synth(…)`. Inspection modes, generator
-   wiring, progress, resume and error handling all come from stylebot, so the
-   wrapper can't drift.
+   wiring, progress and resume all come from stylebot, so the wrapper can't
+   drift. `run_synth` raises `SynthConfigError` / `SynthRunError` /
+   `SynthGenerationError` rather than exiting — mirror `ai-style`'s
+   `_synth_errors` boundary to map them onto exit 2 / exit 1.
 
 **Naming convention:** mirror the `ai-style` subcommands under your own prefix.
 On Dan's blog, `dan-style synth|train-clf|eval` are the policy versions of
