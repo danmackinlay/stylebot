@@ -78,18 +78,8 @@ def test_diff_chunks_off_yields_no_context():
 
 def test_diff_chunks_picks_immediate_not_breadcrumb():
     # Two heading levels precede the change; immediate depth = the nearest one.
-    before = (
-        "# Top\n\n"
-        "## Mid\n\n"
-        "### Leaf\n\n"
-        "old leaf text"
-    )
-    after = (
-        "# Top\n\n"
-        "## Mid\n\n"
-        "### Leaf\n\n"
-        "new leaf text"
-    )
+    before = "# Top\n\n## Mid\n\n### Leaf\n\nold leaf text"
+    after = "# Top\n\n## Mid\n\n### Leaf\n\nnew leaf text"
     triples = log.diff_chunks(before, after, heading_context=True)
     assert len(triples) == 1
     assert triples[0][2] == "### Leaf"

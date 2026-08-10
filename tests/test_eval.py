@@ -73,7 +73,7 @@ def _write_glob_scoped_vale_config(root):
     # An `existence` rule that fires on a couple of unmistakable slop tokens.
     (style / "Slop.yml").write_text(
         "extends: existence\n"
-        'message: "Avoid AI-slop token \'%s\'."\n'
+        "message: \"Avoid AI-slop token '%s'.\"\n"
         "level: warning\n"
         "ignorecase: true\n"
         "tokens:\n"
@@ -153,10 +153,17 @@ def _make_pairs(data_dir, specs):
 
 
 def test_score_pairs_file_emits_id_keyed_scores(tmp_path):
-    pairs = _make_pairs(tmp_path / "c", [
-        ("A first paragraph of prose, long enough to be scored as a candidate.", None, "catalogue"),
-        ("A second paragraph, also comfortably long enough to be a candidate.", None, "polish"),
-    ])
+    pairs = _make_pairs(
+        tmp_path / "c",
+        [
+            (
+                "A first paragraph of prose, long enough to be scored as a candidate.",
+                None,
+                "catalogue",
+            ),
+            ("A second paragraph, also comfortably long enough to be a candidate.", None, "polish"),
+        ],
+    )
     out = tmp_path / "scores.jsonl"
     res = ev.score_pairs_file(pairs, out, judge=fake_judge)
     assert res.written == 2
@@ -172,13 +179,16 @@ def test_score_pairs_file_emits_id_keyed_scores(tmp_path):
 
 
 def test_score_pairs_file_strips_heading_context(tmp_path):
-    pairs = _make_pairs(tmp_path / "c", [
-        (
-            "Body prose that sits beneath the heading and should be scored alone here.",
-            "## A Heading",
-            "catalogue",
-        ),
-    ])
+    pairs = _make_pairs(
+        tmp_path / "c",
+        [
+            (
+                "Body prose that sits beneath the heading and should be scored alone here.",
+                "## A Heading",
+                "catalogue",
+            ),
+        ],
+    )
     assert validate_pairs_file(pairs) == []  # the heading IS a verbatim prefix in the corpus
 
     captured: list[str] = []
@@ -245,10 +255,15 @@ def test_record_id_is_stable_for_the_same_recut_policy():
     stamp must not matter either (the digest is over canonical JSON)."""
     first = ev.record_id({"meta": {"capture_id": "cap", "chunk_index": 1, "recut": _RECUT_A}})
     again = ev.record_id({"meta": {"capture_id": "cap", "chunk_index": 1, "recut": dict(_RECUT_A)}})
-    reordered = ev.record_id({
-        "meta": {"capture_id": "cap", "chunk_index": 1,
-                 "recut": {"gap_chars": 800, "gap_paras": 2}},
-    })
+    reordered = ev.record_id(
+        {
+            "meta": {
+                "capture_id": "cap",
+                "chunk_index": 1,
+                "recut": {"gap_chars": 800, "gap_paras": 2},
+            },
+        }
+    )
     assert first == again == reordered
 
 
@@ -268,10 +283,13 @@ def test_record_id_synthetic_pairs_ignore_recut():
 
 
 def test_score_pairs_file_resumable(tmp_path):
-    pairs = _make_pairs(tmp_path / "c", [
-        ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
-        ("Another paragraph, also long enough to count as a candidate here.", None, "polish"),
-    ])
+    pairs = _make_pairs(
+        tmp_path / "c",
+        [
+            ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
+            ("Another paragraph, also long enough to count as a candidate here.", None, "polish"),
+        ],
+    )
     out = tmp_path / "scores.jsonl"
     first = ev.score_pairs_file(pairs, out, judge=fake_judge)
     assert first.written == 2
@@ -283,9 +301,12 @@ def test_score_pairs_file_resumable(tmp_path):
 
 
 def test_score_pairs_file_keyless(tmp_path):
-    pairs = _make_pairs(tmp_path / "c", [
-        ("A paragraph long enough to be a candidate for scoring now.", None, "polish"),
-    ])
+    pairs = _make_pairs(
+        tmp_path / "c",
+        [
+            ("A paragraph long enough to be a candidate for scoring now.", None, "polish"),
+        ],
+    )
     out = tmp_path / "scores.jsonl"
     ev.score_pairs_file(pairs, out, judge=None)
     rec = json.loads(out.read_text().splitlines()[0])
@@ -321,10 +342,17 @@ def _read_scores(path):
 
 
 def test_score_pairs_file_prunes_orphans_and_reports_the_count(tmp_path):
-    pairs = _make_pairs(tmp_path / "c", [
-        ("A first paragraph of prose, long enough to be scored as a candidate.", None, "polish"),
-        ("A second paragraph, also comfortably long enough to be a candidate.", None, "polish"),
-    ])
+    pairs = _make_pairs(
+        tmp_path / "c",
+        [
+            (
+                "A first paragraph of prose, long enough to be scored as a candidate.",
+                None,
+                "polish",
+            ),
+            ("A second paragraph, also comfortably long enough to be a candidate.", None, "polish"),
+        ],
+    )
     out = tmp_path / "scores.jsonl"
     ev.score_pairs_file(pairs, out, judge=fake_judge)
     survivor, doomed = _read_scores(out)
@@ -349,9 +377,12 @@ def test_score_pairs_file_prunes_orphans_and_reports_the_count(tmp_path):
 def test_score_pairs_file_leaves_an_orphan_free_file_alone(tmp_path, monkeypatch):
     """A clean file is not rewritten at all — the prune must not churn a
     committed artifact (or its mtime) on every re-run."""
-    pairs = _make_pairs(tmp_path / "c", [
-        ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
-    ])
+    pairs = _make_pairs(
+        tmp_path / "c",
+        [
+            ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
+        ],
+    )
     out = tmp_path / "scores.jsonl"
     ev.score_pairs_file(pairs, out, judge=fake_judge)
 
@@ -365,12 +396,18 @@ def test_score_pairs_file_leaves_an_orphan_free_file_alone(tmp_path, monkeypatch
 def test_score_pairs_file_prune_orphans_off_is_the_wrong_corpus_escape_hatch(tmp_path):
     """`--out` pointed at ANOTHER corpus's scores would read as 100% orphaned;
     the flag is the valve, and there is deliberately no threshold heuristic."""
-    pairs = _make_pairs(tmp_path / "c", [
-        ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
-    ])
-    other = _make_pairs(tmp_path / "d", [
-        ("A wholly different paragraph, long enough to be a candidate too.", None, "polish"),
-    ])
+    pairs = _make_pairs(
+        tmp_path / "c",
+        [
+            ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
+        ],
+    )
+    other = _make_pairs(
+        tmp_path / "d",
+        [
+            ("A wholly different paragraph, long enough to be a candidate too.", None, "polish"),
+        ],
+    )
     out = tmp_path / "scores.jsonl"
     ev.score_pairs_file(other, out, judge=fake_judge)
     before = _read_scores(out)
@@ -383,9 +420,12 @@ def test_score_pairs_file_prune_orphans_off_is_the_wrong_corpus_escape_hatch(tmp
 def test_prune_orphan_scores_round_trips_undecodable_lines(tmp_path):
     """A corrupt line has no join key but must never be silently dropped by a
     rewrite (same rule as `jsonl.write_jsonl_atomic`)."""
-    pairs = _make_pairs(tmp_path / "c", [
-        ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
-    ])
+    pairs = _make_pairs(
+        tmp_path / "c",
+        [
+            ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
+        ],
+    )
     out = tmp_path / "scores.jsonl"
     ev.score_pairs_file(pairs, out, judge=fake_judge)
     out.write_text(
@@ -399,9 +439,12 @@ def test_prune_orphan_scores_round_trips_undecodable_lines(tmp_path):
 
 
 def test_prune_orphan_scores_on_a_missing_scores_file_is_a_noop(tmp_path):
-    pairs = _make_pairs(tmp_path / "c", [
-        ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
-    ])
+    pairs = _make_pairs(
+        tmp_path / "c",
+        [
+            ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
+        ],
+    )
     missing = tmp_path / "nope.jsonl"
     assert ev.prune_orphan_scores(pairs, missing) == 0
     assert not missing.exists()
@@ -476,13 +519,21 @@ def test_carried_gen_meta_flattened_and_faceted(tmp_path):
 def test_real_pair_without_gen_buckets_null():
     # Real (Phase-1) pairs have no meta.gen; faceting by a gen covariate buckets
     # them under "null" rather than erroring.
-    rec = {"id": "r1", "meta": {"slop_strategy": None}, "scores": {
-        "slop": {"judge": {"score": 3}, "vale": {"available": False}, "detector": {"score": None}},
-        "target": {
-            "judge": {"score": 5},
-            "vale": {"available": False},
-            "detector": {"score": None},
+    rec = {
+        "id": "r1",
+        "meta": {"slop_strategy": None},
+        "scores": {
+            "slop": {
+                "judge": {"score": 3},
+                "vale": {"available": False},
+                "detector": {"score": None},
+            },
+            "target": {
+                "judge": {"score": 5},
+                "vale": {"available": False},
+                "detector": {"score": None},
+            },
         },
-    }}
+    }
     by = ev.summarize_scores([rec], by="reasoning_effort")["by"]
     assert set(by) == {"null"}

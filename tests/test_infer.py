@@ -72,7 +72,9 @@ def test_best_of_picks_best_candidate_and_reports():
         return {"score": 0.1 if "dan" in text else 0.9}
 
     result = infer.rewrite_text(
-        "sloppy input", two_candidates, best_of=2,
+        "sloppy input",
+        two_candidates,
+        best_of=2,
         scorer=infer.detector_scorer(fake_detector),
     )
     assert result.text == "dan version"
@@ -90,7 +92,9 @@ def test_do_no_harm_guard_keeps_better_input():
         return {"score": 0.2 if "dan" in text else 0.8}
 
     result = infer.rewrite_text(
-        "dan-grade input prose", worse_candidates, best_of=2,
+        "dan-grade input prose",
+        worse_candidates,
+        best_of=2,
         scorer=infer.detector_scorer(fake_detector),
     )
     assert result.text == "dan-grade input prose"
@@ -104,15 +108,21 @@ def test_rewrite_pairs_file_writes_output_and_resumes(tmp_path):
     pairs = tmp_path / "pairs.jsonl"
     recs = []
     for i in range(3):
-        recs.append({
-            "messages": [
-                {"role": "system", "content": STYLE_SYSTEM},
-                {"role": "user", "content": f"ctx\n\nslop {i}"},
-                {"role": "assistant", "content": f"ctx\n\ndan {i}"},
-            ],
-            "meta": {"source": f"p{i}", "capture_id": f"c{i}", "chunk_index": 0,
-                     "context": "ctx"},
-        })
+        recs.append(
+            {
+                "messages": [
+                    {"role": "system", "content": STYLE_SYSTEM},
+                    {"role": "user", "content": f"ctx\n\nslop {i}"},
+                    {"role": "assistant", "content": f"ctx\n\ndan {i}"},
+                ],
+                "meta": {
+                    "source": f"p{i}",
+                    "capture_id": f"c{i}",
+                    "chunk_index": 0,
+                    "context": "ctx",
+                },
+            }
+        )
     pairs.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
 
     out = tmp_path / "outputs.jsonl"
@@ -183,7 +193,10 @@ def test_anchor_guard_rejects_information_loss():
         return {"score": 0.5 if "for more" in text else 0.3}
 
     result = infer.rewrite_text(
-        chunk, candidates, best_of=2, scorer=infer.detector_scorer(fake_detector),
+        chunk,
+        candidates,
+        best_of=2,
+        scorer=infer.detector_scorer(fake_detector),
     )
     assert "notes.qmd#sec" in result.text and "@Halpern2016Actual" in result.text
     assert "tighter" in result.text  # the intact rewrite shipped
@@ -193,7 +206,8 @@ def test_anchor_guard_rejects_information_loss():
 def test_anchor_guard_reverts_when_all_samples_lose_content():
     chunk = "Read [this](https://example.org/x)."
     result = infer.rewrite_text(
-        chunk, lambda m, num_samples=1: ["Read this — trust me."],
+        chunk,
+        lambda m, num_samples=1: ["Read this — trust me."],
     )
     assert result.text == chunk
     assert result.n_kept_input == 1 and result.n_anchor_rejected == 1
@@ -213,7 +227,9 @@ def test_on_decision_reports_candidates_scores_and_choice():
         return {"score": 0.1 if "dan" in text else 0.9}
 
     infer.rewrite_text(
-        "sloppy input", two_candidates, best_of=2,
+        "sloppy input",
+        two_candidates,
+        best_of=2,
         scorer=infer.detector_scorer(fake_detector),
         on_decision=lambda *args: calls.append(args),
     )
@@ -235,7 +251,9 @@ def test_on_decision_kept_input_has_no_chosen_index():
         return {"score": 0.2 if "dan" in text else 0.8}
 
     infer.rewrite_text(
-        "dan-grade input prose", worse_candidates, best_of=2,
+        "dan-grade input prose",
+        worse_candidates,
+        best_of=2,
         scorer=infer.detector_scorer(fake_detector),
         on_decision=lambda *args: calls.append(args),
     )
@@ -260,7 +278,9 @@ def test_on_decision_anchor_rejected_candidate_is_unscored():
         return {"score": 0.3 if "tighter" in text else 0.5}
 
     infer.rewrite_text(
-        chunk, candidates, best_of=2,
+        chunk,
+        candidates,
+        best_of=2,
         scorer=infer.detector_scorer(fake_detector),
         on_decision=lambda *args: calls.append(args),
     )
@@ -274,7 +294,9 @@ def test_on_decision_receives_heading_context_and_fires_per_prose_chunk():
     calls = []
     text = "Intro paragraph.\n\n## The Heading\n\nUnder the heading."
     infer.rewrite_text(
-        text, _upper_styler, max_chunk_chars=10,
+        text,
+        _upper_styler,
+        max_chunk_chars=10,
         on_decision=lambda *args: calls.append(args),
     )
     assert [(c[0], c[1]) for c in calls] == [
@@ -312,8 +334,10 @@ def test_rewrite_candidates_scores_and_flags_anchors():
     assert result["n_sampled"] == 2
     kept, dropped = result["candidates"]
     assert kept == {
-        "text": "See [that](./a.qmd). Fine.", "score": 0.2,
-        "anchors_lost": [], "identity": False,
+        "text": "See [that](./a.qmd). Fine.",
+        "score": 0.2,
+        "anchors_lost": [],
+        "identity": False,
     }
     # Anchor loss FLAGS, never disqualifies — the human decides.
     assert dropped["anchors_lost"] == ["./a.qmd"]
@@ -417,7 +441,7 @@ def test_rewrite_candidates_still_rejects_fences_under_inline_headings():
 
 def test_max_tokens_scales_with_chunk_budget():
     assert infer.max_tokens_for(1500) == infer.DEFAULT_MAX_TOKENS  # floor holds
-    assert infer.max_tokens_for(4500) > infer.DEFAULT_MAX_TOKENS   # 4.5k chunk needs room
+    assert infer.max_tokens_for(4500) > infer.DEFAULT_MAX_TOKENS  # 4.5k chunk needs room
 
 
 # --- the `run` / `serve` CLI seam ------------------------------------------

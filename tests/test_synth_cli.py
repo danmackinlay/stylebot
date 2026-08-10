@@ -100,8 +100,13 @@ def test_bundle_field_names_are_unambiguous():
     # it here too so the failure names the offender in the test log.
     owners = field_owners(
         synth_cli.DEFAULT_BUNDLES,
-        reserved=synth_cli.BUNDLE_PARAMS.keys() | {
-            "targets", "data_dir", "count_note", "extra_tags", "generators",
+        reserved=synth_cli.BUNDLE_PARAMS.keys()
+        | {
+            "targets",
+            "data_dir",
+            "count_note",
+            "extra_tags",
+            "generators",
         },
     )
     assert set(owners) == {f.name for b in synth_cli.DEFAULT_BUNDLES for f in fields(b)}
@@ -152,15 +157,21 @@ def test_run_synth_takes_bundles_only():
     # No targets: run_synth echoes the count and returns before it needs a
     # data-dir or a generator, so this exercises pure bundle plumbing. The
     # loose-keyword form went with the spec table — bundles are the one shape.
-    assert synth_cli.run_synth(
-        [], data_dir=None,
-        gen=synth_cli.GenOpts(max_tokens=900),
-        session=synth_cli.SessionOpts(session_turns=4),
-        substrate=synth_cli.SubstrateOpts(limit=10),
-        inspection=synth_cli.InspectOpts(report_title="t"),
-        corpus=synth_cli.CorpusOpts(replicate="draw2"),
-        count_note="(note)", extra_tags=("x",), generators=None,
-    ) is None
+    assert (
+        synth_cli.run_synth(
+            [],
+            data_dir=None,
+            gen=synth_cli.GenOpts(max_tokens=900),
+            session=synth_cli.SessionOpts(session_turns=4),
+            substrate=synth_cli.SubstrateOpts(limit=10),
+            inspection=synth_cli.InspectOpts(report_title="t"),
+            corpus=synth_cli.CorpusOpts(replicate="draw2"),
+            count_note="(note)",
+            extra_tags=("x",),
+            generators=None,
+        )
+        is None
+    )
     with pytest.raises(TypeError, match="unexpected keyword"):
         synth_cli.run_synth([], data_dir=None, max_tokens=900)
     # ChunkOpts is not a run_synth bundle: it is consumed by iter_targets.
@@ -174,11 +185,7 @@ def test_synth_command_surface_is_exactly_the_bundles_plus_its_own():
     # `synth` adds only its own selection/provenance flags.
     params = [p for p in ai_style_main.commands["synth"].params if isinstance(p, click.Option)]
     own = {"blog_root", "data_dir", "field", "max_level", "select_all", "glob", "tags"}
-    shared = {
-        f.name
-        for bundle in synth_cli.DEFAULT_BUNDLES
-        for f, _, _ in cli_fields(bundle)
-    }
+    shared = {f.name for bundle in synth_cli.DEFAULT_BUNDLES for f, _, _ in cli_fields(bundle)}
     assert len(params) == 50
     assert {p.name for p in params} - own == shared
     # Library-only fields stay off the CLI — that is what omitting opt() means.
@@ -210,9 +217,15 @@ def test_dry_run_stub_names_match_real_generator_names(monkeypatch):
         ["a/b", "c/d"],
     )
     kw = dict(
-        custom_system=None, max_tokens=1000, timeout=5.0, capture_reasoning=False,
-        temperature=None, top_p=None, provider_sort="throughput",
-        sticky_provider=True, prompt_cache=True,
+        custom_system=None,
+        max_tokens=1000,
+        timeout=5.0,
+        capture_reasoning=False,
+        temperature=None,
+        top_p=None,
+        provider_sort="throughput",
+        sticky_provider=True,
+        prompt_cache=True,
     )
     stubs = synth_cli.build_generators(arms, dry_run=True, **kw)
     real = synth_cli.build_generators(arms, dry_run=False, **kw)
@@ -235,8 +248,16 @@ def test_ai_style_synth_dry_run(tmp_path, make_blog):
     root = make_blog(ai=False)
     result = CliRunner().invoke(
         ai_style_main,
-        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
-         "--openrouter-model", "test/model", "--dry-run"],
+        [
+            "synth",
+            "--blog-root",
+            str(root),
+            "--data-dir",
+            str(tmp_path / "corpus"),
+            "--openrouter-model",
+            "test/model",
+            "--dry-run",
+        ],
     )
     assert result.exit_code == 0, result.output
     assert "2 target chunk(s) from 1 source(s)" in result.output
@@ -246,9 +267,7 @@ def test_ai_style_synth_dry_run(tmp_path, make_blog):
 
 def test_ai_style_synth_sample_needs_no_data_dir(tmp_path, make_blog):
     root = make_blog(ai=False)
-    result = CliRunner().invoke(
-        ai_style_main, ["synth", "--blog-root", str(root), "--sample", "1"]
-    )
+    result = CliRunner().invoke(ai_style_main, ["synth", "--blog-root", str(root), "--sample", "1"])
     assert result.exit_code == 0, result.output
 
 
@@ -317,8 +336,17 @@ def test_timeout_reaches_generator_factories(tmp_path, monkeypatch, make_blog):
     monkeypatch.setattr(synth, "openrouter_generator", fake_factory)
     result = CliRunner().invoke(
         ai_style_main,
-        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
-         "--openrouter-model", "x/y", "--timeout", "7"],
+        [
+            "synth",
+            "--blog-root",
+            str(root),
+            "--data-dir",
+            str(tmp_path / "corpus"),
+            "--openrouter-model",
+            "x/y",
+            "--timeout",
+            "7",
+        ],
     )
     assert result.exit_code == 0, result.output
     assert captured["timeout"] == 7.0
@@ -329,8 +357,17 @@ def test_timeout_reaches_generator_factories(tmp_path, monkeypatch, make_blog):
     # --provider-sort none restores OpenRouter's own load-balancing (field omitted).
     result = CliRunner().invoke(
         ai_style_main,
-        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus2"),
-         "--openrouter-model", "x/y", "--provider-sort", "none"],
+        [
+            "synth",
+            "--blog-root",
+            str(root),
+            "--data-dir",
+            str(tmp_path / "corpus2"),
+            "--openrouter-model",
+            "x/y",
+            "--provider-sort",
+            "none",
+        ],
     )
     assert result.exit_code == 0, result.output
     assert captured["provider_sort"] is None
@@ -341,14 +378,16 @@ def test_run_synth_needs_no_data_dir_for_inspection(tmp_path, make_blog):
     # caller (synth_cmd) checks for inspection *before* resolving, which is why
     # run_synth's data_dir is a plain path rather than a deferred callable.
     targets = synth.iter_targets(blog_root=make_blog(ai=False))
-    assert synth_cli.run_synth(
-        targets, data_dir=None, inspection=synth_cli.InspectOpts(sample_n=1)
-    ) is None
+    assert (
+        synth_cli.run_synth(targets, data_dir=None, inspection=synth_cli.InspectOpts(sample_n=1))
+        is None
+    )
 
     # But a generating run without one is refused, not silently defaulted.
     with pytest.raises(click.UsageError, match="data-dir is required"):
         synth_cli.run_synth(
-            targets, data_dir=None,
+            targets,
+            data_dir=None,
             generators=[synth.Generator("fake", generate=lambda t: "s")],
         )
 
@@ -376,7 +415,8 @@ def test_max_workers_auto_rule(tmp_path, monkeypatch, make_blog):
 
     monkeypatch.setattr(synth, "synthesize_pairs", spy)
     monkeypatch.setattr(
-        synth, "openrouter_generator",
+        synth,
+        "openrouter_generator",
         lambda *, model, **kw: synth.Generator(
             name=f"openrouter/{model}", generate=lambda t, history=None: "s"
         ),
@@ -443,9 +483,20 @@ def test_strategy_rotation_cross_product(tmp_path, make_blog):
     root = make_blog(ai=False, many=10)
     result = CliRunner().invoke(
         ai_style_main,
-        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
-         "--openrouter-model", "x/y", "--slop-strategy", "polish", "--slop-strategy", "casual",
-         "--dry-run"],
+        [
+            "synth",
+            "--blog-root",
+            str(root),
+            "--data-dir",
+            str(tmp_path / "corpus"),
+            "--openrouter-model",
+            "x/y",
+            "--slop-strategy",
+            "polish",
+            "--slop-strategy",
+            "casual",
+            "--dry-run",
+        ],
     )
     assert result.exit_code == 0, result.output
     assert "would write 10 new pair(s)" in result.output  # cross product rotates, not multiplies
@@ -455,7 +506,8 @@ def test_strategy_rotation_cross_product(tmp_path, make_blog):
     def fake_factory(*, model, strategy, **kw):
         captured.append(strategy)
         return synth.Generator(
-            name=f"openrouter/{model}", strategy=strategy,
+            name=f"openrouter/{model}",
+            strategy=strategy,
             generate=lambda t, history=None: f"[{strategy}] {t}",
         )
 
@@ -465,8 +517,19 @@ def test_strategy_rotation_cross_product(tmp_path, make_blog):
         mp.setattr(synth, "openrouter_generator", fake_factory)
         live = CliRunner().invoke(
             ai_style_main,
-            ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
-             "--openrouter-model", "x/y", "--slop-strategy", "polish", "--slop-strategy", "casual"],
+            [
+                "synth",
+                "--blog-root",
+                str(root),
+                "--data-dir",
+                str(tmp_path / "corpus"),
+                "--openrouter-model",
+                "x/y",
+                "--slop-strategy",
+                "polish",
+                "--slop-strategy",
+                "casual",
+            ],
         )
     assert live.exit_code == 0, live.output
     assert captured == ["polish", "casual"]  # one generator per strategy
@@ -480,9 +543,22 @@ def test_custom_system_file_rejects_multiple_strategies(tmp_path, make_blog):
     prompt.write_text("Rewrite it my way.", encoding="utf-8")
     result = CliRunner().invoke(
         ai_style_main,
-        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
-         "--openrouter-model", "x/y", "--slop-system-file", str(prompt),
-         "--slop-strategy", "a", "--slop-strategy", "b", "--dry-run"],
+        [
+            "synth",
+            "--blog-root",
+            str(root),
+            "--data-dir",
+            str(tmp_path / "corpus"),
+            "--openrouter-model",
+            "x/y",
+            "--slop-system-file",
+            str(prompt),
+            "--slop-strategy",
+            "a",
+            "--slop-strategy",
+            "b",
+            "--dry-run",
+        ],
     )
     assert result.exit_code != 0
     assert "ONE custom prompt" in result.output
@@ -492,8 +568,12 @@ def test_plan_sessions_separates_same_model_strategies():
     # Same model under two strategies must NOT merge into one session bucket
     # (grouping is by generator identity), and their session ids differ.
     targets = [
-        synth.Target(text=f"Long enough paragraph number {i} of prose.", source="p.qmd",
-                     chunk_index=i, chunk_total=4)
+        synth.Target(
+            text=f"Long enough paragraph number {i} of prose.",
+            source="p.qmd",
+            chunk_index=i,
+            chunk_total=4,
+        )
         for i in range(4)
     ]
     g_polish = synth.Generator(name="openrouter/x", strategy="polish")
@@ -518,8 +598,15 @@ def test_missing_openrouter_key_aborts_before_any_generation(tmp_path, monkeypat
     root = make_blog(ai=False)
     result = CliRunner().invoke(
         ai_style_main,
-        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
-         "--openrouter-model", "qwen/qwen3-8b"],
+        [
+            "synth",
+            "--blog-root",
+            str(root),
+            "--data-dir",
+            str(tmp_path / "corpus"),
+            "--openrouter-model",
+            "qwen/qwen3-8b",
+        ],
     )
     assert result.exit_code != 0
     assert "Missing required secret 'OPENROUTER_API_KEY'" in result.output
@@ -534,9 +621,20 @@ def test_reasoning_effort_rotation_cross_product(tmp_path, make_blog):
     root = make_blog(ai=False, many=10)
     dry = CliRunner().invoke(
         ai_style_main,
-        ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
-         "--openrouter-model", "x/y", "--reasoning-effort", "off", "--reasoning-effort", "high",
-         "--dry-run"],
+        [
+            "synth",
+            "--blog-root",
+            str(root),
+            "--data-dir",
+            str(tmp_path / "corpus"),
+            "--openrouter-model",
+            "x/y",
+            "--reasoning-effort",
+            "off",
+            "--reasoning-effort",
+            "high",
+            "--dry-run",
+        ],
     )
     assert dry.exit_code == 0, dry.output
     assert "would write 10 new pair(s)" in dry.output  # rotation, not multiplication
@@ -546,7 +644,9 @@ def test_reasoning_effort_rotation_cross_product(tmp_path, make_blog):
     def fake_factory(*, model, strategy, reasoning_effort, **kw):
         captured.append(reasoning_effort)
         return synth.Generator(
-            name=f"openrouter/{model}", strategy=strategy, reasoning_effort=reasoning_effort,
+            name=f"openrouter/{model}",
+            strategy=strategy,
+            reasoning_effort=reasoning_effort,
             generate=lambda t, history=None: synth.GenOutput(
                 f"[slop] {t}", {"reasoning_effort": reasoning_effort}
             ),
@@ -558,9 +658,19 @@ def test_reasoning_effort_rotation_cross_product(tmp_path, make_blog):
         mp.setattr(synth, "openrouter_generator", fake_factory)
         live = CliRunner().invoke(
             ai_style_main,
-            ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "corpus"),
-             "--openrouter-model", "x/y",
-             "--reasoning-effort", "off", "--reasoning-effort", "high"],
+            [
+                "synth",
+                "--blog-root",
+                str(root),
+                "--data-dir",
+                str(tmp_path / "corpus"),
+                "--openrouter-model",
+                "x/y",
+                "--reasoning-effort",
+                "off",
+                "--reasoning-effort",
+                "high",
+            ],
         )
     assert live.exit_code == 0, live.output
     assert captured == ["off", "high"]  # one generator per effort

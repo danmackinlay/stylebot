@@ -190,7 +190,8 @@ def assemble_dataset(
     if n_near_identity:
         logger.info(
             "dropped %d near-identity pair(s) (transform_sim > %s) — label noise",
-            n_near_identity, max_transform_sim,
+            n_near_identity,
+            max_transform_sim,
         )
 
     if extra_positives is not None:
@@ -651,11 +652,15 @@ def write_artifact(
         "n_posts": ds.n_posts,
         "n_free_positives": sum(ds.is_free),
         "head_C": head_C,  # how the shipped head's regularization was chosen
-        "split": split or {"mode": "fit_all", "note": (
-            "head fit on ALL posts; honest for measuring an INDEPENDENT styler, but "
-            "NOT for grading a styler trained on these posts — use holdout_frac/"
-            "holdout_posts for the shared by-POST split when the detector is a reward."
-        )},
+        "split": split
+        or {
+            "mode": "fit_all",
+            "note": (
+                "head fit on ALL posts; honest for measuring an INDEPENDENT styler, but "
+                "NOT for grading a styler trained on these posts — use holdout_frac/"
+                "holdout_posts for the shared by-POST split when the detector is a reward."
+            ),
+        },
         "metrics": metrics,
     }
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -670,8 +675,15 @@ def _resolve_head_C(X, ds: Dataset, rows, C: float | None) -> tuple[float, dict]
 
 
 def _ship_head(
-    X, ds: Dataset, *, rows, head_C: float, head_C_info: dict, metrics: dict,
-    split: dict | None, ship_kw: dict,
+    X,
+    ds: Dataset,
+    *,
+    rows,
+    head_C: float,
+    head_C_info: dict,
+    metrics: dict,
+    split: dict | None,
+    ship_kw: dict,
 ) -> tuple[Path, dict]:
     """Fit the final head (optionally on a row subset) and write the artifact.
 
@@ -682,16 +694,28 @@ def _ship_head(
     """
     coef, intercept = fit_head(X, ds, C=head_C, rows=rows)
     out = write_artifact(
-        coef=coef, intercept=intercept, ds=ds, metrics=metrics,
-        split=split, head_C=head_C_info, **ship_kw,
+        coef=coef,
+        intercept=intercept,
+        ds=ds,
+        metrics=metrics,
+        split=split,
+        head_C=head_C_info,
+        **ship_kw,
     )
     return out, metrics
 
 
 def _train_splits_mode(
-    ds: Dataset, splits_path: str | Path, *,
-    test_size: float, n_splits: int, C: float | None,
-    embed_model: str, normalize: bool, batch_size: int, ship_kw: dict,
+    ds: Dataset,
+    splits_path: str | Path,
+    *,
+    test_size: float,
+    n_splits: int,
+    C: float | None,
+    embed_model: str,
+    normalize: bool,
+    batch_size: int,
+    ship_kw: dict,
 ) -> tuple[Path, dict]:
     """The shared three-role contract: fit on the detector pool only.
 
@@ -715,7 +739,9 @@ def _train_splits_mode(
         raise ValueError("splits: the detector pool has no pairs — nothing to train on")
     logger.info(
         "embedding %d passages with %s (%d eval-role posts excluded)",
-        len(work_ds.texts), embed_model, sum(1 for r in role.values() if r == "eval"),
+        len(work_ds.texts),
+        embed_model,
+        sum(1 for r in role.values() if r == "eval"),
     )
     X = embed_texts(work_ds.texts, model_id=embed_model, normalize=normalize, batch_size=batch_size)
     X_det = X[det_rows]
@@ -735,14 +761,27 @@ def _train_splits_mode(
         "warnings": warnings,
     }
     return _ship_head(
-        X_det, det_ds, rows=None, head_C=head_C, head_C_info=head_C_info,
-        metrics=metrics, split=split, ship_kw=ship_kw,
+        X_det,
+        det_ds,
+        rows=None,
+        head_C=head_C,
+        head_C_info=head_C_info,
+        metrics=metrics,
+        split=split,
+        ship_kw=ship_kw,
     )
 
 
 def _train_holdout_mode(
-    X, ds: Dataset, train_posts: set, holdout: set, *,
-    holdout_frac: float, holdout_seed: int, C: float | None, ship_kw: dict,
+    X,
+    ds: Dataset,
+    train_posts: set,
+    holdout: set,
+    *,
+    holdout_frac: float,
+    holdout_seed: int,
+    C: float | None,
+    ship_kw: dict,
 ) -> tuple[Path, dict]:
     """Hold out POSTs: report the single-split unseen-posts metric and ship a
     head fit on the train posts ONLY."""
@@ -758,20 +797,38 @@ def _train_holdout_mode(
         "holdout_posts": sorted(holdout),
     }
     return _ship_head(
-        X, ds, rows=train_rows, head_C=head_C, head_C_info=head_C_info,
-        metrics=metrics, split=split, ship_kw=ship_kw,
+        X,
+        ds,
+        rows=train_rows,
+        head_C=head_C,
+        head_C_info=head_C_info,
+        metrics=metrics,
+        split=split,
+        ship_kw=ship_kw,
     )
 
 
 def _train_fit_all(
-    X, ds: Dataset, *, test_size: float, n_splits: int, C: float | None, ship_kw: dict,
+    X,
+    ds: Dataset,
+    *,
+    test_size: float,
+    n_splits: int,
+    C: float | None,
+    ship_kw: dict,
 ) -> tuple[Path, dict]:
     """Cross-validated metric over POST splits, then ship the head fit on ALL posts."""
     metrics = evaluate(X, ds, test_size=test_size, n_splits=n_splits, C=C)
     head_C, head_C_info = _resolve_head_C(X, ds, list(range(len(ds.texts))), C)
     return _ship_head(
-        X, ds, rows=None, head_C=head_C, head_C_info=head_C_info,
-        metrics=metrics, split=None, ship_kw=ship_kw,
+        X,
+        ds,
+        rows=None,
+        head_C=head_C,
+        head_C_info=head_C_info,
+        metrics=metrics,
+        split=None,
+        ship_kw=ship_kw,
     )
 
 
@@ -816,15 +873,24 @@ def train(
         raise ValueError(f"no content-matched pairs found in {pairs_path}")
 
     ship_kw = dict(
-        out_dir=out_dir, embed_model=embed_model, normalize=normalize, git_repo=git_repo,
+        out_dir=out_dir,
+        embed_model=embed_model,
+        normalize=normalize,
+        git_repo=git_repo,
     )
 
     if splits_path is not None:
         if holdout_frac or holdout_posts:
             raise ValueError("splits_path is mutually exclusive with holdout_frac/holdout_posts")
         return _train_splits_mode(
-            ds, splits_path, test_size=test_size, n_splits=n_splits, C=C,
-            embed_model=embed_model, normalize=normalize, batch_size=batch_size,
+            ds,
+            splits_path,
+            test_size=test_size,
+            n_splits=n_splits,
+            C=C,
+            embed_model=embed_model,
+            normalize=normalize,
+            batch_size=batch_size,
             ship_kw=ship_kw,
         )
 
@@ -836,7 +902,13 @@ def train(
     )
     if holdout:
         return _train_holdout_mode(
-            X, ds, train_posts, holdout,
-            holdout_frac=holdout_frac, holdout_seed=holdout_seed, C=C, ship_kw=ship_kw,
+            X,
+            ds,
+            train_posts,
+            holdout,
+            holdout_frac=holdout_frac,
+            holdout_seed=holdout_seed,
+            C=C,
+            ship_kw=ship_kw,
         )
     return _train_fit_all(X, ds, test_size=test_size, n_splits=n_splits, C=C, ship_kw=ship_kw)

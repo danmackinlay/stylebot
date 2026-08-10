@@ -137,8 +137,7 @@ def summarize_roles(splits: dict, ds) -> dict:
     `pair_is_synthetic`). Free positives are ignored — roles govern pairs.
     """
     summary = {
-        role: {"posts": set(), "pairs": 0, "pairs_real": 0, "pairs_synthetic": 0}
-        for role in ROLES
+        role: {"posts": set(), "pairs": 0, "pairs_real": 0, "pairs_synthetic": 0} for role in ROLES
     }
     for k, (s_row, _) in enumerate(ds.pair_rows):
         role = role_of(ds.groups[s_row], splits)
@@ -149,9 +148,7 @@ def summarize_roles(splits: dict, ds) -> dict:
             entry["pairs_synthetic"] += 1
         else:
             entry["pairs_real"] += 1
-    return {
-        role: {**entry, "posts": len(entry["posts"])} for role, entry in summary.items()
-    }
+    return {role: {**entry, "posts": len(entry["posts"])} for role, entry in summary.items()}
 
 
 def check_splits(splits: dict, ds) -> list[str]:

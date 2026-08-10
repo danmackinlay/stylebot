@@ -48,8 +48,7 @@ SLOP_SYSTEM_CASUAL = (  # "casual": the friendly-technical-blog register
     "approachable register of a popular developer blog: conversational and "
     "upbeat, address the reader as 'you', break dense phrasing into short "
     "clear sentences, add light connective tissue ('so', 'basically', 'the "
-    "nice thing is'), and round each idea off so nothing lands abruptly. "
-    + _SLOP_PRESERVE
+    "nice thing is'), and round each idea off so nothing lands abruptly. " + _SLOP_PRESERVE
 )
 SLOP_SYSTEM_MEASURED = (  # "measured": the mild stereotypical-LLM register — texture, not tokens
     "You are a careful AI writing assistant. Rewrite the user's passage in a "
@@ -57,8 +56,7 @@ SLOP_SYSTEM_MEASURED = (  # "measured": the mild stereotypical-LLM register — 
     "hedging of strong claims, tidy structure, slightly more formal vocabulary, "
     "and an even sentence rhythm. Let the register show in the overall texture, "
     "not in any stock phrase — do not open with generic scene-setting, and vary "
-    "your sentence openings and structure naturally from passage to passage. "
-    + _SLOP_PRESERVE
+    "your sentence openings and structure naturally from passage to passage. " + _SLOP_PRESERVE
 )
 SLOP_SYSTEM_LINKEDIN = (  # "linkedin": the personal-brand / thought-leadership register
     "You are a personal-brand content strategist. Rewrite the user's passage so it "
@@ -68,8 +66,7 @@ SLOP_SYSTEM_LINKEDIN = (  # "linkedin": the personal-brand / thought-leadership 
     "as its own short declarative sentence. Aim for a brisk motivational cadence "
     "and an air of earned authority. Let the register show in the texture, not in "
     "any stock phrase — no emoji, no hashtags, no stock openers or sign-offs, and "
-    "vary your sentence openings naturally from passage to passage. "
-    + _SLOP_PRESERVE
+    "vary your sentence openings naturally from passage to passage. " + _SLOP_PRESERVE
 )
 SLOP_SYSTEM_VERBOSE = (  # "verbose": moderate inflation — the compression-training flavour
     "You are a thorough writing assistant. Rewrite the user's passage at "
@@ -164,6 +161,7 @@ def resolve_strategy(name: str, system: str | None = None) -> ResolvedStrategy:
         ) from None
     return ResolvedStrategy(strat.label, strat.system, strat.version, prompt_id_of(strat.system))
 
+
 # Slop is an *expansion* of the target (AI prose runs 1.5-3x longer), so the cap
 # must comfortably exceed the target's own token count: targets cap at
 # MAX_CHUNK_CHARS (~2k tokens), leaving room for 3-4x.
@@ -171,8 +169,6 @@ DEFAULT_SLOP_MAX_TOKENS = 8192
 # Per-request HTTP timeout. Without one the openai SDK waits 600s per attempt
 # (times its retries), so a bad upstream stalls a run for half an hour in silence.
 DEFAULT_GEN_TIMEOUT = 300.0
-
-
 
 
 @dataclass(frozen=True)

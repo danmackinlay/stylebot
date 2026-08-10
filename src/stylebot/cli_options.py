@@ -48,15 +48,11 @@ def opt(default: Any, /, *decls: str, **click_kw: Any) -> Any:
 def cli_fields(bundle: type) -> list[tuple[Field, tuple[str, ...], dict]]:
     """The flag-bearing fields of `bundle`, in declaration order."""
     return [
-        (f, f.metadata[CLI][0], f.metadata[CLI][1])
-        for f in fields(bundle)
-        if CLI in f.metadata
+        (f, f.metadata[CLI][0], f.metadata[CLI][1]) for f in fields(bundle) if CLI in f.metadata
     ]
 
 
-def field_owners(
-    bundles: Sequence[type], *, reserved: Iterable[str] = ()
-) -> dict[str, type]:
+def field_owners(bundles: Sequence[type], *, reserved: Iterable[str] = ()) -> dict[str, type]:
     """field name -> owning bundle.
 
     Raises if two bundles claim one name, or if a name collides with `reserved`

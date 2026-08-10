@@ -245,9 +245,7 @@ def estimate_tokens(records: Sequence[dict]) -> int:
     """Keyless order-of-magnitude token estimate (~4 chars/token) over every
     message of every record — for the dry-run cost preview only; the paid path
     counts real rendered tokens."""
-    chars = sum(
-        len(m.get("content") or "") for rec in records for m in rec.get("messages", ())
-    )
+    chars = sum(len(m.get("content") or "") for rec in records for m in rec.get("messages", ()))
     return chars // _CHARS_PER_TOKEN
 
 
@@ -322,9 +320,7 @@ def build_manifest(
             "basis": f"~{_CHARS_PER_TOKEN} chars/token heuristic x {num_epochs} epoch(s)",
             "train_price_per_mtok": train_price_per_mtok,
             "cost_usd": (
-                round(est / 1_000_000 * train_price_per_mtok, 4)
-                if train_price_per_mtok
-                else None
+                round(est / 1_000_000 * train_price_per_mtok, 4) if train_price_per_mtok else None
             ),
         },
         "result": None,  # filled by the paid run
@@ -415,12 +411,21 @@ def run_training(
         "per_target": getattr(per_target, "__name__", repr(per_target)) if per_target else None,
     }
     manifest = build_manifest(
-        run_id=run_id, pairs_path=pairs_path, corpus=corpus,
-        base_model=base_model, lora_rank=lora_rank, learning_rate=learning_rate,
-        lr_schedule=lr_schedule, num_epochs=num_epochs, batch_size=batch_size,
-        max_length=max_length, renderer_name=renderer_name, seed=seed,
+        run_id=run_id,
+        pairs_path=pairs_path,
+        corpus=corpus,
+        base_model=base_model,
+        lora_rank=lora_rank,
+        learning_rate=learning_rate,
+        lr_schedule=lr_schedule,
+        num_epochs=num_epochs,
+        batch_size=batch_size,
+        max_length=max_length,
+        renderer_name=renderer_name,
+        seed=seed,
         splits_path=Path(splits_path) if splits_path else None,
-        dry_run=dry_run, train_price_per_mtok=train_price_per_mtok,
+        dry_run=dry_run,
+        train_price_per_mtok=train_price_per_mtok,
         filters=filters,
     )
     manifest_path = write_manifest(manifest, manifest_out)
@@ -430,10 +435,18 @@ def run_training(
     work_dir.mkdir(parents=True, exist_ok=True)
     run = runner or _tinker_runner
     result = run(
-        corpus, manifest, work_dir,
-        base_model=base_model, lora_rank=lora_rank, learning_rate=learning_rate,
-        lr_schedule=lr_schedule, num_epochs=num_epochs, batch_size=batch_size,
-        max_length=max_length, renderer_name=renderer_name, seed=seed,
+        corpus,
+        manifest,
+        work_dir,
+        base_model=base_model,
+        lora_rank=lora_rank,
+        learning_rate=learning_rate,
+        lr_schedule=lr_schedule,
+        num_epochs=num_epochs,
+        batch_size=batch_size,
+        max_length=max_length,
+        renderer_name=renderer_name,
+        seed=seed,
         download_adapter=download_adapter,
     )
     manifest["dry_run"] = False
@@ -441,7 +454,9 @@ def run_training(
     manifest_path = write_manifest(manifest, manifest_out)
     adapter = result.get("adapter_dir")
     return TrainResult(
-        manifest=manifest, manifest_path=manifest_path, corpus=corpus,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        corpus=corpus,
         adapter_dir=Path(adapter) if adapter else None,
     )
 
@@ -590,8 +605,12 @@ def _tinker_runner(corpus: TrainCorpus, manifest: dict, work_dir: Path, **cfg) -
     )
     logger.info(
         "tinker SFT: %s rank=%s lr=%.3g renderer=%s (%d train / %d val pairs)",
-        base_model, cfg["lora_rank"], learning_rate, renderer_name,
-        corpus.n_train, corpus.n_val,
+        base_model,
+        cfg["lora_rank"],
+        learning_rate,
+        renderer_name,
+        corpus.n_train,
+        corpus.n_val,
     )
     asyncio.run(sft.main(config))
 

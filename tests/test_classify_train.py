@@ -224,7 +224,10 @@ def test_fit_head_polarity_and_artifact_roundtrip(tmp_path):
     assert _logreg_p_slop([-1.0, 0.0], coef, intercept) < 0.5
 
     out = ct.write_artifact(
-        tmp_path / "voice-clf", coef=coef, intercept=intercept, ds=ds,
+        tmp_path / "voice-clf",
+        coef=coef,
+        intercept=intercept,
+        ds=ds,
         metrics={"pairwise_accuracy": {"mean": 1.0}},
     )
     # Contract files exist and meta pins the embedder + polarity + split mode.
@@ -295,11 +298,13 @@ def test_train_with_splits_contract(tmp_path, monkeypatch):
     _write_fake_corpus(corpus, n_posts=12, chunks=2, n_synth_posts=4)
     ds_all = ct.assemble_dataset(corpus)
     posts = sorted(set(ds_all.groups))
-    real_posts = sorted({
-        ds_all.groups[s]
-        for k, (s, _) in enumerate(ds_all.pair_rows)
-        if not ds_all.pair_is_synthetic(k)
-    })
+    real_posts = sorted(
+        {
+            ds_all.groups[s]
+            for k, (s, _) in enumerate(ds_all.pair_rows)
+            if not ds_all.pair_is_synthetic(k)
+        }
+    )
     splits_doc = sp.make_splits(
         posts, eval_frac=0.25, detector_frac=0.5, seed=0, eval_candidates=real_posts
     )

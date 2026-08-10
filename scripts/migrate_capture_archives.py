@@ -58,8 +58,10 @@ def migrate_captures(cap_dir: Path, *, apply: bool) -> tuple[int, int]:
             print(f"  SKIP {path.name}: {target.name}/ already exists")
             skipped += 1
             continue
-        print(f"  {path.name} -> {cap_id}/  ({len(blob.get('before_text') or '')} -> "
-              f"{len(blob.get('after_text') or '')} chars)")
+        print(
+            f"  {path.name} -> {cap_id}/  ({len(blob.get('before_text') or '')} -> "
+            f"{len(blob.get('after_text') or '')} chars)"
+        )
         if not apply:
             converted += 1
             continue
@@ -73,8 +75,11 @@ def migrate_captures(cap_dir: Path, *, apply: bool) -> tuple[int, int]:
             after_text=blob.get("after_text") or "",
         )
         back = read_archive(target)
-        if back is None or back["before_text"] != (blob.get("before_text") or "") \
-                or back["after_text"] != (blob.get("after_text") or ""):
+        if (
+            back is None
+            or back["before_text"] != (blob.get("before_text") or "")
+            or back["after_text"] != (blob.get("after_text") or "")
+        ):
             sys.exit(f"FATAL: round-trip mismatch for {path.name}; legacy file kept")
         path.unlink()  # only after the new form verifies
         converted += 1
@@ -111,8 +116,10 @@ def migrate_snapshots(snap_root: Path, *, apply: bool) -> tuple[int, int]:
         (target / "meta.json").write_text(
             json.dumps(
                 {"source": blob.get("source"), "snapped_at": blob.get("snapped_at")},
-                ensure_ascii=False, indent=2,
-            ) + "\n",
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
             encoding="utf-8",
         )
         if (target / "content.md").read_text(encoding="utf-8") != content:

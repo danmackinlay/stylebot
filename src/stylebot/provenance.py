@@ -30,7 +30,9 @@ def git_sha(repo: str | Path | None) -> str | None:
     try:
         out = subprocess.run(
             ["git", "-C", str(repo or "."), "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return out.stdout.strip() or None
     except (OSError, subprocess.CalledProcessError):

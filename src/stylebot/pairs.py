@@ -123,7 +123,7 @@ def pair_body(content: str, context: str | None) -> str:
     if not context:
         return content
     prefix = f"{context}\n\n"
-    return content[len(prefix):] if content.startswith(prefix) else content
+    return content[len(prefix) :] if content.startswith(prefix) else content
 
 
 def extract_slop(record: dict) -> str:

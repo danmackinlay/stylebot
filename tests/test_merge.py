@@ -203,8 +203,12 @@ def test_cross_heading_forces_context_off(tmp_path):
     body = f"---\ntitle: t\nautomation: 0\n---\n\n## A Section\n\n{P1}\n"
     _write(root, "post/y.qmd", body)
     blocks = synth.iter_targets(
-        blog_root=root, min_chars=50, merge=True, merge_max_chars=5000,
-        cross_heading=True, heading_context="immediate",
+        blog_root=root,
+        min_chars=50,
+        merge=True,
+        merge_max_chars=5000,
+        cross_heading=True,
+        heading_context="immediate",
     )
     assert all(t.context == "" for t in blocks)
     assert "## A Section" in blocks[0].text

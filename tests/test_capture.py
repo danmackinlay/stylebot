@@ -68,8 +68,11 @@ def test_capture_pairs_archives_full_texts_for_rechunking(tmp_path):
 def test_capture_pairs_raises_when_nothing_changed(tmp_path):
     with pytest.raises(ValueError, match="no changed text chunks"):
         capture.capture_pairs(
-            "same text", "same text", pairs_path=tmp_path / "pairs.jsonl",
-            source=None, snapped_at=None,
+            "same text",
+            "same text",
+            pairs_path=tmp_path / "pairs.jsonl",
+            source=None,
+            snapped_at=None,
         )
 
 
@@ -104,9 +107,7 @@ def test_diff_chunks_default_does_not_bridge_gaps():
 
 
 def test_diff_chunks_bridges_a_short_gap():
-    triples = capture.diff_chunks(
-        _BEFORE, _AFTER, coalesce_gap_paras=2, coalesce_gap_chars=800
-    )
+    triples = capture.diff_chunks(_BEFORE, _AFTER, coalesce_gap_paras=2, coalesce_gap_chars=800)
     assert len(triples) == 1
     before, after, _ctx = triples[0]
     # The bridged paragraph appears on BOTH sides — it is context inside one
@@ -156,7 +157,10 @@ def test_coalescing_preserves_pure_insert_delete_skip():
 
 def _capture(pairs_path, before, after, source):
     return capture.capture_pairs(
-        before, after, pairs_path=pairs_path, source=source,
+        before,
+        after,
+        pairs_path=pairs_path,
+        source=source,
         snapped_at="2026-08-01T00:00:00+00:00",
     )
 
@@ -195,16 +199,19 @@ def test_recut_leaves_unarchived_captures_alone(tmp_path):
     pairs_path = tmp_path / "pairs.jsonl"
     _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")
     legacy = capture.build_pair_record(
-        before_body="It is worth noting the tapestry.", after_body="We dig in.",
-        source="post/legacy.qmd", snapped_at=None,
-        before_frontmatter=None, after_frontmatter=None,
-        capture_id="deadbeef", chunk_index=0, chunk_total=1,
+        before_body="It is worth noting the tapestry.",
+        after_body="We dig in.",
+        source="post/legacy.qmd",
+        snapped_at=None,
+        before_frontmatter=None,
+        after_frontmatter=None,
+        capture_id="deadbeef",
+        chunk_index=0,
+        chunk_total=1,
     )
     capture.append_pair(pairs_path, legacy)
 
-    capture.recut_archives(
-        pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0
-    )
+    capture.recut_archives(pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0)
     ids = {r["meta"]["capture_id"] for r in capture.read_jsonl(pairs_path)}
     assert "deadbeef" in ids  # untouched
 
@@ -214,8 +221,11 @@ def test_recut_dry_run_does_not_write(tmp_path):
     _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")
     before = pairs_path.read_text(encoding="utf-8")
     recut = capture.recut_archives(
-        pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800,
-        min_chars=0, dry_run=True,
+        pairs_path,
+        coalesce_gap_paras=2,
+        coalesce_gap_chars=800,
+        min_chars=0,
+        dry_run=True,
     )
     assert recut and pairs_path.read_text(encoding="utf-8") == before
 
@@ -223,9 +233,7 @@ def test_recut_dry_run_does_not_write(tmp_path):
 def test_recut_output_validates(tmp_path):
     pairs_path = tmp_path / "pairs.jsonl"
     _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")
-    capture.recut_archives(
-        pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0
-    )
+    capture.recut_archives(pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0)
     assert validate_pairs_file(pairs_path) == []
 
 
@@ -239,9 +247,7 @@ def test_recut_preserves_a_corrupt_line(tmp_path):
     with pairs_path.open("a", encoding="utf-8") as fp:
         fp.write(corrupt + "\n")
 
-    capture.recut_archives(
-        pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0
-    )
+    capture.recut_archives(pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0)
     assert corrupt in pairs_path.read_text(encoding="utf-8").splitlines()
 
 
@@ -260,9 +266,13 @@ def test_archive_write_is_atomic(tmp_path):
 
     # A fresh write over the same id clears the stale staging dir and lands whole.
     capture.write_archive(
-        cap_dir / "abcd1234", capture_id="abcd1234", source="post/a.qmd",
-        snapped_at="2026-08-04T00:00:00+00:00", whole=False,
-        before_text="B", after_text="A",
+        cap_dir / "abcd1234",
+        capture_id="abcd1234",
+        source="post/a.qmd",
+        snapped_at="2026-08-04T00:00:00+00:00",
+        whole=False,
+        before_text="B",
+        after_text="A",
     )
     assert not stale.exists()
     got = list(capture.iter_archives(tmp_path / "pairs.jsonl"))
@@ -274,11 +284,19 @@ def test_iter_archives_still_reads_legacy_json(tmp_path, caplog):
     like 'that capture had no changed regions'."""
     cap_dir = tmp_path / "captures"
     cap_dir.mkdir()
-    (cap_dir / "deadbeef.json").write_text(json.dumps({
-        "capture_id": "deadbeef", "source": "post/legacy.qmd",
-        "snapped_at": "2026-07-01T00:00:00+00:00", "whole": False,
-        "before_text": "It is worth noting the tapestry.", "after_text": "We dig in.",
-    }), encoding="utf-8")
+    (cap_dir / "deadbeef.json").write_text(
+        json.dumps(
+            {
+                "capture_id": "deadbeef",
+                "source": "post/legacy.qmd",
+                "snapped_at": "2026-07-01T00:00:00+00:00",
+                "whole": False,
+                "before_text": "It is worth noting the tapestry.",
+                "after_text": "We dig in.",
+            }
+        ),
+        encoding="utf-8",
+    )
 
     with caplog.at_level("WARNING"):
         got = list(capture.iter_archives(tmp_path / "pairs.jsonl"))
@@ -298,9 +316,7 @@ def test_hand_edited_archive_changes_what_recut_emits(tmp_path):
         after_md.read_text(encoding="utf-8").replace("We dig in.", "We dig in, properly."),
         encoding="utf-8",
     )
-    capture.recut_archives(
-        pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0
-    )
+    capture.recut_archives(pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0)
     targets = [r["messages"][2]["content"] for r in capture.read_jsonl(pairs_path)]
     assert any("We dig in, properly." in t for t in targets)
 
@@ -333,9 +349,7 @@ def test_recut_does_not_reuse_the_previous_cuts_record_ids(tmp_path):
     original = _ids_to_text(pairs_path)
     assert len(original) == 2  # the default cut fragments into two pairs
 
-    capture.recut_archives(
-        pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0
-    )
+    capture.recut_archives(pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0)
     recut = _ids_to_text(pairs_path)
     assert len(recut) == 1  # …bridged into one
 
@@ -361,7 +375,5 @@ def test_recut_ids_are_stable_across_reruns_at_the_same_policy(tmp_path):
     assert _ids_to_text(pairs_path) == first
 
     # A DIFFERENT policy is a different cut, so it must key differently.
-    capture.recut_archives(
-        pairs_path, coalesce_gap_paras=99, coalesce_gap_chars=99999, min_chars=0
-    )
+    capture.recut_archives(pairs_path, coalesce_gap_paras=99, coalesce_gap_chars=99999, min_chars=0)
     assert not (set(_ids_to_text(pairs_path)) & set(first))

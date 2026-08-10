@@ -61,10 +61,7 @@ def test_assemble_keeps_near_copy_pairs(tmp_path):
     """Pinned data policy: transform_sim > 0.85 pairs are styler data, not noise."""
     corpus_path = _write_corpus(tmp_path / "pairs.jsonl")
     corpus = tr.assemble_training_corpus(corpus_path, val_frac=0)
-    sims = [
-        (rec.get("meta") or {}).get("transform_sim")
-        for rec in corpus.train
-    ]
+    sims = [(rec.get("meta") or {}).get("transform_sim") for rec in corpus.train]
     assert 0.95 in sims  # the near-copy survived
 
 
@@ -129,8 +126,12 @@ def test_dry_run_writes_manifest_without_spending(tmp_path):
     calls = []
 
     result = tr.run_training(
-        corpus_path, tmp_path / "work", manifest_out,
-        dry_run=True, run_id="testrun", train_price_per_mtok=1.463,
+        corpus_path,
+        tmp_path / "work",
+        manifest_out,
+        dry_run=True,
+        run_id="testrun",
+        train_price_per_mtok=1.463,
         runner=lambda *a, **k: calls.append(1),
     )
     assert not calls  # the paid seam is never touched on dry-run
@@ -161,8 +162,13 @@ def test_run_training_records_result_via_runner_seam(tmp_path):
         }
 
     result = tr.run_training(
-        corpus_path, tmp_path / "work", manifest_out,
-        val_frac=0.2, seed=1, run_id="r1", runner=fake_runner,
+        corpus_path,
+        tmp_path / "work",
+        manifest_out,
+        val_frac=0.2,
+        seed=1,
+        run_id="r1",
+        runner=fake_runner,
     )
     assert seen["n_train"] == result.corpus.n_train
     assert seen["cfg"]["base_model"] == tr.DEFAULT_BASE_MODEL

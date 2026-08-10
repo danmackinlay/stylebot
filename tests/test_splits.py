@@ -71,16 +71,19 @@ def test_role_of_is_a_frozen_contract():
         "eval_posts": ["post/pinned_a.qmd", "post/pinned_b.qmd"],
         "rest_rule": {"kind": "hash", "detector_frac": 0.4, "salt": "0"},
     }
-    assert {s: sp.role_of(s, splits) for s in (
-        "post/pinned_a.qmd",
-        "post/pinned_b.qmd",
-        "notebook/alpha.qmd",
-        "notebook/beta.qmd",
-        "notebook/gamma.qmd",
-        "post/delta.qmd",
-        "post/epsilon.qmd",
-        "notebook/zeta.qmd",
-    )} == {
+    assert {
+        s: sp.role_of(s, splits)
+        for s in (
+            "post/pinned_a.qmd",
+            "post/pinned_b.qmd",
+            "notebook/alpha.qmd",
+            "notebook/beta.qmd",
+            "notebook/gamma.qmd",
+            "post/delta.qmd",
+            "post/epsilon.qmd",
+            "notebook/zeta.qmd",
+        )
+    } == {
         "post/pinned_a.qmd": "eval",
         "post/pinned_b.qmd": "eval",
         "notebook/alpha.qmd": "styler",
@@ -97,6 +100,7 @@ def test_role_of_is_a_frozen_contract():
         "detector",
         "styler",
     ]
+
     # Pin the digest -> uniform [0,1) conversion itself to ~1e-5 by bracketing
     # one post's coordinate (u("0:notebook/gamma.qmd") = 0.46915…) with the
     # threshold it is compared against.

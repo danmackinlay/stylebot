@@ -65,6 +65,7 @@ def max_tokens_for(max_chunk_chars: int) -> int:
     """Output-token budget matching a chunk budget (never below the default)."""
     return max(DEFAULT_MAX_TOKENS, int(max_chunk_chars * _TOKENS_PER_CHAR))
 
+
 # A styler: (messages, num_samples) -> candidate assistant texts.
 Styler = Callable[..., list[str]]
 
@@ -81,7 +82,7 @@ def split_frontmatter(text: str) -> tuple[str, str]:
     """`(frontmatter, body)` — the YAML block (with trailing newline) is
     protected verbatim; empty string when absent."""
     m = _FRONTMATTER_RE.match(text)
-    return (m.group(0), text[m.end():]) if m else ("", text)
+    return (m.group(0), text[m.end() :]) if m else ("", text)
 
 
 def _blocks_with_separators(body: str) -> tuple[list[str], list[str]]:
@@ -214,9 +215,9 @@ class RewriteResult:
 # rewrite can delete these while scoring WELL on voice, so anchor integrity is
 # checked before any scoring, never after it.
 _ANCHOR_RES = (
-    re.compile(r"\]\(([^)\s]+)"),          # markdown link/image destination
+    re.compile(r"\]\(([^)\s]+)"),  # markdown link/image destination
     re.compile(r"(?<!\()https?://[^\s)\]]+"),  # bare URL
-    re.compile(r"@[A-Za-z][A-Za-z0-9_:-]*"),   # Quarto/pandoc citation key
+    re.compile(r"@[A-Za-z][A-Za-z0-9_:-]*"),  # Quarto/pandoc citation key
 )
 
 
@@ -233,10 +234,7 @@ def content_anchors(text: str) -> dict[str, int]:
 def missing_anchors(source: str, candidate: str) -> list[str]:
     """Anchors present in `source` that `candidate` lost (count decreased)."""
     have = content_anchors(candidate)
-    return [
-        key for key, n in content_anchors(source).items()
-        if have.get(key, 0) < n
-    ]
+    return [key for key, n in content_anchors(source).items() if have.get(key, 0) < n]
 
 
 def detector_scorer(detector: Callable[[str], dict]) -> Callable[[str], float]:
@@ -443,13 +441,12 @@ def rewrite_text(
                     f">= input {input_score:.2f})"
                 )
         if on_decision is not None:
-            on_decision(chunk, context, list(raw), raw_scores, chosen_idx,
-                        chosen_idx is None)
+            on_decision(chunk, context, list(raw), raw_scores, chosen_idx, chosen_idx is None)
         if out is not chunk:
             # Backends strip sampled text; restore the chunk's edge newline
             # runs so reassembly (and EOF newlines) stay byte-faithful.
             lead = chunk[: len(chunk) - len(chunk.lstrip("\n"))]
-            trail = chunk[len(chunk.rstrip("\n")):]
+            trail = chunk[len(chunk.rstrip("\n")) :]
             out = lead + out.strip("\n") + trail
         result.chunk_chars.append((len(chunk), len(out)))
         out_chunks.append(out)
@@ -549,16 +546,15 @@ def tinker_backend(
         renderer_name or model_info.get_recommended_renderer_name(base_model), tokenizer
     )
     params = types.SamplingParams(
-        max_tokens=max_tokens, temperature=temperature,
+        max_tokens=max_tokens,
+        temperature=temperature,
         stop=renderer.get_stop_sequences(),
     )
     client = tinker.ServiceClient().create_sampling_client(model_path=sampler_path)
 
     def styler(messages: list[dict], num_samples: int = 1) -> list[str]:
         prompt = renderer.build_generation_prompt(list(messages))
-        response = client.sample(
-            prompt, num_samples=num_samples, sampling_params=params
-        ).result()
+        response = client.sample(prompt, num_samples=num_samples, sampling_params=params).result()
         outs = []
         for seq in response.sequences:
             message, _ok = renderer.parse_response(seq.tokens)
@@ -589,8 +585,10 @@ def openai_backend(
         outs = []
         for _ in range(num_samples):
             resp = client.chat.completions.create(
-                model=model, messages=list(messages),
-                temperature=temperature, max_tokens=max_tokens,
+                model=model,
+                messages=list(messages),
+                temperature=temperature,
+                max_tokens=max_tokens,
             )
             outs.append((resp.choices[0].message.content or "").strip())
         return outs

@@ -162,7 +162,7 @@ def covered_target_bodies(pairs_path: Path | str) -> set[str]:
         context = ((rec.get("meta") or {}).get("context") or "").strip()
         prefix = f"{context}\n\n"
         if context and content.startswith(prefix):
-            bodies.add(content[len(prefix):])
+            bodies.add(content[len(prefix) :])
         else:
             bodies.add(content)
     return bodies
@@ -174,9 +174,7 @@ def existing_synth_keys(pairs_path: Path | str) -> set[str]:
     Tolerant: blank/undecodable lines are skipped, a missing file reads as empty.
     """
     return {
-        key
-        for rec in iter_pairs(pairs_path)
-        if (key := (rec.get("meta") or {}).get("synth_key"))
+        key for rec in iter_pairs(pairs_path) if (key := (rec.get("meta") or {}).get("synth_key"))
     }
 
 
@@ -252,11 +250,18 @@ class SynthResult:
     model_stats: dict[str, dict] = field(default_factory=dict)
 
     def add_gen_stats(self, name: str, gen_meta: Mapping) -> None:
-        ms = self.model_stats.setdefault(name, {
-            "pairs": 0, "cost": 0.0, "gen_seconds": 0.0,
-            "prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0,
-            "cached_tokens": 0,
-        })
+        ms = self.model_stats.setdefault(
+            name,
+            {
+                "pairs": 0,
+                "cost": 0.0,
+                "gen_seconds": 0.0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "reasoning_tokens": 0,
+                "cached_tokens": 0,
+            },
+        )
         ms["pairs"] += 1
         ms["cost"] += gen_meta.get("cost") or 0.0
         ms["gen_seconds"] += gen_meta.get("gen_seconds") or 0.0
@@ -329,9 +334,7 @@ def _assign(
             best_ident = ""
             best_gen = arms[0][1]
             for ident, gen in arms:
-                score = hashlib.sha256(
-                    f"{assign_seed}\x00{ident}\x00{t.text}".encode()
-                ).digest()
+                score = hashlib.sha256(f"{assign_seed}\x00{ident}\x00{t.text}".encode()).digest()
                 # Tiebreak on identity, so a collision can't resolve on list
                 # position. Arms sharing an identity are already one cell.
                 if (score, ident) > (best_score, best_ident):
@@ -345,9 +348,7 @@ def _session_id(gen: Generator, items: Sequence[tuple[Target, str]]) -> str:
 
     Recomputed at reflow time, so it always names what the session contained.
     """
-    sid_h = hashlib.sha256(
-        f"{gen.name}\x00{gen.strategy}\x00{gen.prompt_id}".encode()
-    )
+    sid_h = hashlib.sha256(f"{gen.name}\x00{gen.strategy}\x00{gen.prompt_id}".encode())
     for target, ctx in items:
         sid_h.update(b"\x00")
         sid_h.update(ctx.encode("utf-8"))
@@ -378,11 +379,7 @@ def _plan_sessions(
     for gen, items in per_gen.values():
         for start in range(0, len(items), max(1, session_turns)):
             chunk = items[start : start + max(1, session_turns)]
-            sid = (
-                _session_id(gen, [(t, ctx) for t, ctx, _ in chunk])
-                if session_turns > 1
-                else ""
-            )
+            sid = _session_id(gen, [(t, ctx) for t, ctx, _ in chunk]) if session_turns > 1 else ""
             turns = [
                 _Turn(target=target, key=key, context=ctx, index=idx)
                 for idx, (target, ctx, key) in enumerate(chunk, start=1)
@@ -490,15 +487,18 @@ def _pop_reasoning_to_sidecar(
     reasoning_text = gen_meta.pop("reasoning_text", None)
     if reasoning_text is None:
         return
-    append_jsonl(data_dir / "reasoning.jsonl", {
-        "synth_key": turn.key,
-        "generator": gen.name,
-        "slop_strategy": gen.strategy,
-        "reasoning_effort": gen.reasoning_effort,
-        "session_turn": turn.index if in_session else None,
-        "reasoning_tokens": gen_meta.get("reasoning_tokens"),
-        "reasoning": reasoning_text,
-    })
+    append_jsonl(
+        data_dir / "reasoning.jsonl",
+        {
+            "synth_key": turn.key,
+            "generator": gen.name,
+            "slop_strategy": gen.strategy,
+            "reasoning_effort": gen.reasoning_effort,
+            "session_turn": turn.index if in_session else None,
+            "reasoning_tokens": gen_meta.get("reasoning_tokens"),
+            "reasoning": reasoning_text,
+        },
+    )
 
 
 async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
@@ -606,19 +606,11 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
         sim = record["meta"].get("transform_sim")
         ratio = len(slop) / len(turn.target.text) if turn.target.text else None
         drop = None
-        if (
-            st.max_transform_sim is not None
-            and sim is not None
-            and sim > st.max_transform_sim
-        ):
+        if st.max_transform_sim is not None and sim is not None and sim > st.max_transform_sim:
             # Identity output: the model returned (nearly) the input.
             st.result.skipped_degenerate += 1
             drop = f"transform_sim={sim:.3f} > {st.max_transform_sim}"
-        elif (
-            st.max_length_ratio is not None
-            and ratio is not None
-            and ratio > st.max_length_ratio
-        ):
+        elif st.max_length_ratio is not None and ratio is not None and ratio > st.max_length_ratio:
             # Inflated output: slop several times the target length, which would
             # teach manic deletion.
             st.result.skipped_inflated += 1
@@ -731,8 +723,11 @@ def synthesize_pairs(
         targets = kept
 
     assignments = _assign(
-        targets, generators,
-        per_generator=per_generator, context_dropout=context_dropout, assign_seed=assign_seed,
+        targets,
+        generators,
+        per_generator=per_generator,
+        context_dropout=context_dropout,
+        assign_seed=assign_seed,
     )
     result = SynthResult(planned=len(assignments), skipped_covered=skipped_covered)
 
@@ -742,8 +737,13 @@ def synthesize_pairs(
     missing: list[tuple[Target, Generator, str, str]] = []
     for target, gen, ctx in assignments:
         key = _synth_key(
-            gen.name, target.text, ctx, gen.strategy, gen.reasoning_effort,
-            gen.prompt_id, replicate=replicate,
+            gen.name,
+            target.text,
+            ctx,
+            gen.strategy,
+            gen.reasoning_effort,
+            gen.prompt_id,
+            replicate=replicate,
         )
         if key in seen:
             continue

@@ -142,14 +142,8 @@ def diff_chunks(
     before_paras = split_paragraphs(before)
     after_paras = split_paragraphs(after)
 
-    matcher = difflib.SequenceMatcher(
-        None, before_paras, after_paras, autojunk=False
-    )
-    raw = [
-        (i1, i2, j1, j2)
-        for tag, i1, i2, j1, j2 in matcher.get_opcodes()
-        if tag != "equal"
-    ]
+    matcher = difflib.SequenceMatcher(None, before_paras, after_paras, autojunk=False)
+    raw = [(i1, i2, j1, j2) for tag, i1, i2, j1, j2 in matcher.get_opcodes() if tag != "equal"]
     regions = _coalesce_regions(
         raw, after_paras, gap_paras=coalesce_gap_paras, gap_chars=coalesce_gap_chars
     )
@@ -453,8 +447,7 @@ def iter_archives(pairs_path: Path):
                 archives.append(arch)
         elif path.suffix == ".json":
             logger.warning(
-                "legacy JSON capture archive %s — migrate with "
-                "scripts/migrate_capture_archives.py",
+                "legacy JSON capture archive %s — migrate with scripts/migrate_capture_archives.py",
                 path,
             )
             try:

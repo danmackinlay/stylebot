@@ -302,8 +302,15 @@ def _post_targets(path: Path, source: str, policy: ChunkPolicy) -> list[Target]:
     scale = policy.merge_max_chars if policy.merge else None
     mode = "cross-heading" if cross else None
     return [
-        Target(text=t, source=source, chunk_index=i, chunk_total=total, context=c,
-               merge_max_chars=scale, chunk_mode=mode)
+        Target(
+            text=t,
+            source=source,
+            chunk_index=i,
+            chunk_total=total,
+            context=c,
+            merge_max_chars=scale,
+            chunk_mode=mode,
+        )
         for i, (t, c) in enumerate(chunks)
     ]
 
@@ -461,9 +468,5 @@ def select_targets(
         if not 0.0 < sample_frac <= 1.0:
             raise ValueError(f"select_targets: sample_frac must be in (0, 1], got {sample_frac}")
         if sample_frac < 1.0:
-            out = [
-                t
-                for t in out
-                if hash_unit(t.source, t.text, salt=sample_salt) < sample_frac
-            ]
+            out = [t for t in out if hash_unit(t.source, t.text, salt=sample_salt) < sample_frac]
     return out

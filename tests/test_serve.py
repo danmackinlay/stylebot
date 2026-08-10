@@ -24,8 +24,12 @@ def run_lines(*requests: object, rewriter=None, prefer=None) -> list[dict]:
     stdin = io.StringIO("\n".join(lines) + "\n")
     stdout = io.StringIO()
     serve.serve_loop(
-        stub_detector, stdin, stdout, meta={"name": "stub-clf", "embed_dim": 2},
-        rewriter=rewriter, prefer=prefer,
+        stub_detector,
+        stdin,
+        stdout,
+        meta={"name": "stub-clf", "embed_dim": 2},
+        rewriter=rewriter,
+        prefer=prefer,
     )
     return [json.loads(line) for line in stdout.getvalue().splitlines()]
 
@@ -85,7 +89,8 @@ def test_rewrite_delegates_and_flattens_result():
     )
     assert calls == [("meh prose", "## H", 2)]
     assert resp == {
-        "id": 3, "input_score": 0.5,
+        "id": 3,
+        "input_score": 0.5,
         "candidates": [{"text": "better", "score": 0.2, "anchors_lost": []}],
     }
 

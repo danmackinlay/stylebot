@@ -323,8 +323,9 @@ def open_session(ctx: click.Context, file: Path):
         "snapped_at": _now_iso(),
         "content": _read_text(file),
     }
-    _write_snapshot(snap, source=payload["source"], snapped_at=payload["snapped_at"],
-                    content=payload["content"])
+    _write_snapshot(
+        snap, source=payload["source"], snapped_at=payload["snapped_at"], content=payload["content"]
+    )
     click.echo(f"opened session for {file} ({len(payload['content'])} chars) -> {snap}")
     _remind_open_sessions(ctx)
 
@@ -624,8 +625,11 @@ def drop_session(ctx: click.Context, file: Path):
 def list_state():
     """List open sessions, saved pairs (grouped by source), and totals."""
     snapshots_dir = _snapshots_dir()
-    snaps = (sorted(p.parent for p in snapshots_dir.rglob(SNAPSHOT_META))
-             if snapshots_dir.exists() else [])
+    snaps = (
+        sorted(p.parent for p in snapshots_dir.rglob(SNAPSHOT_META))
+        if snapshots_dir.exists()
+        else []
+    )
     records = _iter_pairs()
     pair_count = len(records)
 
@@ -638,11 +642,7 @@ def list_state():
 
     click.echo(f"{pair_count} pair(s) across {len(by_source)} source(s) in {_pairs_path()}")
     for src, recs in sorted(by_source.items()):
-        capture_ids = {
-            r.get("meta", {}).get("capture_id")
-            for r in recs
-            if isinstance(r, dict)
-        }
+        capture_ids = {r.get("meta", {}).get("capture_id") for r in recs if isinstance(r, dict)}
         capture_ids.discard(None)
         click.echo(f"  {src}: {len(recs)} pair(s) across {len(capture_ids)} save(s)")
 
@@ -660,9 +660,7 @@ def list_state():
 
     closed_dir = _closed_snapshots_dir()
     closed = (
-        sorted(p.parent for p in closed_dir.rglob(SNAPSHOT_META))
-        if closed_dir.exists()
-        else []
+        sorted(p.parent for p in closed_dir.rglob(SNAPSHOT_META)) if closed_dir.exists() else []
     )
     if closed:
         click.echo(f"{len(closed)} closed session(s), redoable via `reopen` / `save --redo`")
@@ -746,14 +744,34 @@ def tidy_pairs(ctx: click.Context, source: str | None, dry_run: bool):
 
 
 @main.command(name="recut")
-@click.option("--gap-paras", default=2, show_default=True, type=int,
-              help="Bridge unchanged runs of at most this many paragraphs.")
-@click.option("--gap-chars", default=800, show_default=True, type=int,
-              help="Bridge unchanged runs of at most this many characters.")
-@click.option("--max-chars", default=8000, show_default=True, type=int,
-              help="Coalesced pairs over this size fall back to the uncoalesced cut (0 disables).")
-@click.option("--min-chars", default=80, show_default=True, type=int,
-              help="Drop re-cut pairs whose after-side is shorter than this.")
+@click.option(
+    "--gap-paras",
+    default=2,
+    show_default=True,
+    type=int,
+    help="Bridge unchanged runs of at most this many paragraphs.",
+)
+@click.option(
+    "--gap-chars",
+    default=800,
+    show_default=True,
+    type=int,
+    help="Bridge unchanged runs of at most this many characters.",
+)
+@click.option(
+    "--max-chars",
+    default=8000,
+    show_default=True,
+    type=int,
+    help="Coalesced pairs over this size fall back to the uncoalesced cut (0 disables).",
+)
+@click.option(
+    "--min-chars",
+    default=80,
+    show_default=True,
+    type=int,
+    help="Drop re-cut pairs whose after-side is shorter than this.",
+)
 @click.option("--dry-run", is_flag=True, help="Report the new cut without modifying pairs.jsonl.")
 @click.pass_context
 def recut_pairs(ctx, gap_paras, gap_chars, max_chars, min_chars, dry_run):
@@ -897,8 +915,7 @@ def pair(
     total_after = sum(rec["meta"]["after_chars"] for rec in written)
     mode = "whole-input" if whole else "chunk-by-chunk"
     click.echo(
-        f"saved {len(written)} pair(s) "
-        f"({mode}; {total_before} -> {total_after} chars total)"
+        f"saved {len(written)} pair(s) ({mode}; {total_before} -> {total_after} chars total)"
     )
     click.echo(_corpus_confirmation())
     _remind_open_sessions(ctx)

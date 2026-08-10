@@ -110,7 +110,7 @@ def _render_rows(targets: Sequence[Target], *, max_rows: int | None) -> str:
         preview = t.text if len(t.text) <= 500 else t.text[:500] + "…"
         # The heading context (the verbatim prefix the pair will carry) shown
         # muted above the body, so heading+passage units are eyeball-able.
-        ctx_html = f'<div class=ctx>{html.escape(context)}</div>' if context else ""
+        ctx_html = f"<div class=ctx>{html.escape(context)}</div>" if context else ""
         rows.append(
             f'<tr data-src="{html.escape(t.source, quote=True)}" data-len="{len(t.text)}">'
             f"<td class=src>{html.escape(t.source)}</td>"
@@ -196,7 +196,7 @@ def _page_shell(*, title: str, body: str, extra_css: str = "", js: str = "") -> 
 
 def _page(*, title: str, stats: dict, svg: str, rows_html: str, note: str) -> str:
     s = stats
-    stat = lambda v, lab: f'<div class=stat><b>{v:,}</b><span>{lab}</span></div>'  # noqa: E731
+    stat = lambda v, lab: f"<div class=stat><b>{v:,}</b><span>{lab}</span></div>"  # noqa: E731
     stats_html = "".join(
         [
             stat(s["count"], "targets"),
@@ -247,8 +247,7 @@ def render_targets_report(
     n = stats["count"]
     if max_rows is not None and n > max_rows:
         note = (
-            f"showing {max_rows:,} of {n:,} rows in the table "
-            f"(stats + histogram cover all {n:,})"
+            f"showing {max_rows:,} of {n:,} rows in the table (stats + histogram cover all {n:,})"
         )
     else:
         note = f"showing all {n:,} targets"
@@ -332,37 +331,41 @@ def _scores_rows_data(
         # Generation covariates from the joined pair (synthetic only; empty for real).
         pair_meta = (pair or {}).get("meta") or {}
         gen = pair_meta.get("gen") or {}
-        rows.append({
-            "id": rec.get("id", ""),
-            "strategy": meta.get("slop_strategy") or "—",
-            "source": meta.get("source") or "—",
-            # Row-level facet covariates. Score records carry these since the
-            # _CARRIED_GEN flattening; fall back to the joined pair for score
-            # files written before that.
-            "generator": str(meta.get("generator") or pair_meta.get("generator") or "—"),
-            "reasoning": str(meta.get("reasoning_effort") or gen.get("reasoning_effort") or "—"),
-            "prompt": str(meta.get("prompt_id") or gen.get("prompt_id") or "—"),
-            # Human-readable prompt: "catalogue v1" (the content-hash id stays
-            # as the dedup/facet key and the tooltip).
-            "prompt_label": _prompt_display(
-                meta.get("prompt_label") or gen.get("prompt_label"),
-                meta.get("prompt_version") or gen.get("prompt_version"),
-                meta.get("prompt_id") or gen.get("prompt_id"),
-            ),
-            "turn": gen.get("session_turn"),
-            # Copying ratio slop<->target (1.0 = verbatim no-op) — the frozen
-            # hygiene covariate synth records; sortable to surface near-identity
-            # pairs instantly.
-            "sim": meta.get("transform_sim", pair_meta.get("transform_sim")),
-            "cells": cells,
-            "delta": delta,
-            "gen": gen,
-        })
+        rows.append(
+            {
+                "id": rec.get("id", ""),
+                "strategy": meta.get("slop_strategy") or "—",
+                "source": meta.get("source") or "—",
+                # Row-level facet covariates. Score records carry these since the
+                # _CARRIED_GEN flattening; fall back to the joined pair for score
+                # files written before that.
+                "generator": str(meta.get("generator") or pair_meta.get("generator") or "—"),
+                "reasoning": str(
+                    meta.get("reasoning_effort") or gen.get("reasoning_effort") or "—"
+                ),
+                "prompt": str(meta.get("prompt_id") or gen.get("prompt_id") or "—"),
+                # Human-readable prompt: "catalogue v1" (the content-hash id stays
+                # as the dedup/facet key and the tooltip).
+                "prompt_label": _prompt_display(
+                    meta.get("prompt_label") or gen.get("prompt_label"),
+                    meta.get("prompt_version") or gen.get("prompt_version"),
+                    meta.get("prompt_id") or gen.get("prompt_id"),
+                ),
+                "turn": gen.get("session_turn"),
+                # Copying ratio slop<->target (1.0 = verbatim no-op) — the frozen
+                # hygiene covariate synth records; sortable to surface near-identity
+                # pairs instantly.
+                "sim": meta.get("transform_sim", pair_meta.get("transform_sim")),
+                "cells": cells,
+                "delta": delta,
+                "gen": gen,
+            }
+        )
     return rows
 
 
 def _prompt_display(label, version, prompt_id) -> str:
-    """"catalogue v1" when the pair recorded a label; else the bare hash id."""
+    """ "catalogue v1" when the pair recorded a label; else the bare hash id."""
     if label:
         return f"{label} v{version}" if version else str(label)
     return str(prompt_id) if prompt_id else "—"
@@ -398,13 +401,15 @@ def _scores_headline_rows(
         sm = (byfields.get(fields[0]) or {}).get("mean_judge_score")
         dm = (byfields.get(fields[-1]) or {}).get("mean_judge_score")
         delta = round(dm - sm, 2) if (sm is not None and dm is not None) else None
-        out.append({
-            "strategy": facet,
-            "n": (byfields.get(fields[0]) or {}).get("n", 0),
-            "slop": sm,
-            "dan": dm,
-            "delta": delta,
-        })
+        out.append(
+            {
+                "strategy": facet,
+                "n": (byfields.get(fields[0]) or {}).get("n", 0),
+                "slop": sm,
+                "dan": dm,
+                "delta": delta,
+            }
+        )
     return out
 
 
@@ -517,9 +522,9 @@ def _render_scores_rows(
             rat = rat if len(rat) <= 200 else rat[:200] + "…"
             rat_html = f"<div class=rat>{html.escape(rat)}</div>" if rat else ""
             cols.append(
-                f'<div><div class=fh><span class=fl>{html.escape(f)}</span>'
-                f'{_badge(f, fields, c["score"])}{_det_chip(c["detector"])}'
-                f'{_vale_chip(c["vale"])}</div>'
+                f"<div><div class=fh><span class=fl>{html.escape(f)}</span>"
+                f"{_badge(f, fields, c['score'])}{_det_chip(c['detector'])}"
+                f"{_vale_chip(c['vale'])}</div>"
                 f"<div class=ft>{html.escape(preview)}</div>{rat_html}</div>"
             )
         delta = r["delta"]
@@ -546,11 +551,11 @@ def _render_scores_rows(
             f"<td class=facet>{html.escape(r['generator'])}{_gen_subline(r['gen'])}</td>"
             f"<td class=facet>{html.escape(r['reasoning'])}</td>"
             f'<td class=facet title="{html.escape(r["prompt"], quote=True)}">'
-            f'{html.escape(r["prompt_label"])}</td>'
-            f"<td class=\"facet num\">{'—' if turn is None else turn}</td>"
+            f"{html.escape(r['prompt_label'])}</td>"
+            f'<td class="facet num">{"—" if turn is None else turn}</td>'
             f'<td class="facet num">{sim_txt}</td>'
             f'<td class="len {d_cls}">{html.escape(d_txt)}</td>'
-            f'<td class=txt><div class=cmp>{"".join(cols)}</div></td></tr>'
+            f"<td class=txt><div class=cmp>{''.join(cols)}</div></td></tr>"
         )
     return "\n".join(out)
 
@@ -601,6 +606,7 @@ def _render_headline(
 
 def _scores_stat_cards(stats: dict, fields: Sequence[str]) -> str:
     fmt = lambda x: "—" if x is None else x  # noqa: E731
+
     def card(v, lab):
         return f"<div class=stat><b>{v}</b><span>{html.escape(lab)}</span></div>"
 
@@ -682,7 +688,7 @@ def render_scores_report(
         "<th onclick=\"sortBy('prompt',false)\">prompt</th>"
         "<th class=num onclick=\"sortBy('turn',true)\">turn</th>"
         "<th class=num onclick=\"sortBy('sim',true)\" "
-        "title=\"copying ratio slop↔target; 1.0 = verbatim no-op\">sim</th>"
+        'title="copying ratio slop↔target; 1.0 = verbatim no-op">sim</th>'
         "<th class=num onclick=\"sortBy('delta',true)\">Δ</th>"
         f"<th>comparison ({html.escape(fields[0])} ↔ {html.escape(fields[-1])})</th></tr></thead>"
         f"<tbody>{_render_scores_rows(rows, fields, max_rows=max_rows)}</tbody></table>"

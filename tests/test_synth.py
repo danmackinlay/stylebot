@@ -29,9 +29,7 @@ def test_pairs_validate_and_carry_synthetic_meta(tmp_path, make_blog):
     data_dir = tmp_path / "corpus"
     targets = synth.iter_targets(blog_root=root)
 
-    result = synth.synthesize_pairs(
-        targets, data_dir, [_fake("claude-x"), _fake("gpt-y")]
-    )
+    result = synth.synthesize_pairs(targets, data_dir, [_fake("claude-x"), _fake("gpt-y")])
     assert result.written == len(targets)
 
     pairs_path = data_dir / "pairs.jsonl"
@@ -53,9 +51,7 @@ def test_rotation_uses_at_least_two_generators(tmp_path):
     data_dir = tmp_path / "corpus"
     targets = _targets(12)
 
-    result = synth.synthesize_pairs(
-        targets, data_dir, [_fake("claude-x"), _fake("gpt-y")]
-    )
+    result = synth.synthesize_pairs(targets, data_dir, [_fake("claude-x"), _fake("gpt-y")])
     assert set(result.per_generator) == {"claude-x", "gpt-y"}
     assert sum(result.per_generator.values()) == 12
 
@@ -80,8 +76,12 @@ def test_hash_assignment_is_set_stable_and_position_free():
 
 def test_hash_assignment_roughly_balances():
     targets = [
-        synth.Target(text=f"Unique paragraph {i}: " + "prose " * 30, source="p.qmd",
-                     chunk_index=i, chunk_total=300)
+        synth.Target(
+            text=f"Unique paragraph {i}: " + "prose " * 30,
+            source="p.qmd",
+            chunk_index=i,
+            chunk_total=300,
+        )
         for i in range(300)
     ]
     gens = [synth.Generator("a"), synth.Generator("b"), synth.Generator("c")]
@@ -158,9 +158,7 @@ def test_no_arm_starves_across_a_realistic_rotation():
     # The live shape: 6 models × 6 strategies = 36 arms, only 6 distinct names.
     targets = _targets(3600)
     gens = [
-        synth.Generator(f"openrouter/m{m}", strategy=f"s{s}")
-        for m in range(6)
-        for s in range(6)
+        synth.Generator(f"openrouter/m{m}", strategy=f"s{s}") for m in range(6) for s in range(6)
     ]
     counts: dict[str, int] = {}
     for _, g, _ in synth._assign(targets, gens, per_generator=False):
@@ -236,9 +234,7 @@ def test_heading_context_prepended_both_sides(tmp_path):
         given["arg"] = body
         return "[slop] " + body
 
-    result = synth.synthesize_pairs(
-        [target], data_dir, [synth.Generator("g", generate=gen)]
-    )
+    result = synth.synthesize_pairs([target], data_dir, [synth.Generator("g", generate=gen)])
     assert result.written == 1
     assert "## A Heading" not in given["arg"]  # generator saw the body only
 
@@ -814,13 +810,21 @@ def test_model_stats_fold_run_economics(tmp_path):
     def gen(text, history=None):
         return synth.GenOutput(
             "[slop] " + text,
-            {"cost": 0.01, "prompt_tokens": 100, "completion_tokens": 40,
-             "reasoning_tokens": 5, "cached_tokens": 60, "gen_seconds": 2.0},
+            {
+                "cost": 0.01,
+                "prompt_tokens": 100,
+                "completion_tokens": 40,
+                "reasoning_tokens": 5,
+                "cached_tokens": 60,
+                "gen_seconds": 2.0,
+            },
         )
 
     seen_costs: list[float] = []
     result = synth.synthesize_pairs(
-        _targets(2), tmp_path / "c", [synth.Generator("g", generate=gen)],
+        _targets(2),
+        tmp_path / "c",
+        [synth.Generator("g", generate=gen)],
         on_progress=lambda i, total, live: seen_costs.append(live.total_cost),
     )
     ms = result.model_stats["g"]
@@ -831,7 +835,8 @@ def test_model_stats_fold_run_economics(tmp_path):
     assert seen_costs == [0.01, 0.02]  # live accumulation, visible mid-run
     # Generators reporting no usage stay out of the stats' way.
     bare = synth.synthesize_pairs(
-        _targets(3)[2:], tmp_path / "c2",
+        _targets(3)[2:],
+        tmp_path / "c2",
         [synth.Generator("plain", generate=lambda t, history=None: "[slop] " + t)],
     )
     assert bare.model_stats["plain"]["cost"] == 0.0 and bare.total_cost == 0.0
@@ -895,7 +900,8 @@ def test_identical_cells_collapse_within_a_run(tmp_path):
     t = _targets(1)[0]
     dup = synth.Target(text=t.text, source="elsewhere.qmd", chunk_index=9, chunk_total=9)
     result = synth.synthesize_pairs(
-        [t, dup], tmp_path / "c",
+        [t, dup],
+        tmp_path / "c",
         [synth.Generator("g", generate=lambda x, history=None: "[slop] " + x)],
         session_turns=2,
     )
@@ -914,8 +920,11 @@ def test_session_history_accumulates_and_covariates_recorded(tmp_path):
         return synth.GenOutput("[slop] " + text, {"prompt_tokens": 100 * (len(seen_hist))})
 
     result = synth.synthesize_pairs(
-        targets, tmp_path / "c", [synth.Generator("g", generate=gen)],
-        session_turns=3, context_windows={"g": 10_000},
+        targets,
+        tmp_path / "c",
+        [synth.Generator("g", generate=gen)],
+        session_turns=3,
+        context_windows={"g": 10_000},
     )
     assert result.written == 3
     assert [len(h) for h in seen_hist] == [0, 2, 4]  # turn N sees N-1 exchanges
@@ -971,7 +980,8 @@ def test_turn_error_reflows_remainder(tmp_path):
         raise RuntimeError("api down")
 
     result = synth.synthesize_pairs(
-        targets, tmp_path / "c",
+        targets,
+        tmp_path / "c",
         [
             synth.Generator("bad", generate=bad),
             synth.Generator("good", generate=lambda t, history=None: "[slop] " + t),
@@ -1020,8 +1030,11 @@ def test_budget_bind_reflows_instead_of_dropping(tmp_path):
         return synth.GenOutput("[slop] " + text, {"prompt_tokens": 10_000, "completion_tokens": 50})
 
     result = synth.synthesize_pairs(
-        targets, tmp_path / "c", [synth.Generator("g", generate=gen)],
-        session_turns=3, session_max_tokens=100,
+        targets,
+        tmp_path / "c",
+        [synth.Generator("g", generate=gen)],
+        session_turns=3,
+        session_max_tokens=100,
     )
     assert result.written == 3  # budget binds after every turn — but nothing is lost
     assert not result.errors  # a budget stop is not an error
@@ -1055,8 +1068,12 @@ def test_window_cap_stops_session(tmp_path):
         return synth.GenOutput("[slop] " + text, {"prompt_tokens": 790, "completion_tokens": 50})
 
     result = synth.synthesize_pairs(
-        targets, tmp_path / "c", [synth.Generator("g", generate=gen)],
-        session_turns=3, session_max_tokens=None, context_windows={"g": 1000},
+        targets,
+        tmp_path / "c",
+        [synth.Generator("g", generate=gen)],
+        session_turns=3,
+        session_max_tokens=None,
+        context_windows={"g": 1000},
     )
     # cap = 0.8 * 1000 = 800; next-turn estimate from prompt_tokens=790 exceeds
     # it, ending each session after one turn — reflow still writes all three.
@@ -1069,11 +1086,13 @@ def test_openrouter_context_windows_registry(monkeypatch):
     import json as _json
     import urllib.request
 
-    payload = {"data": [
-        {"id": "a/b", "context_length": 32768},
-        {"id": "c/d", "context_length": 200000},
-        {"id": "e/no-window"},
-    ]}
+    payload = {
+        "data": [
+            {"id": "a/b", "context_length": 32768},
+            {"id": "c/d", "context_length": 200000},
+            {"id": "e/no-window"},
+        ]
+    }
 
     class _Resp(io.BytesIO):
         def __enter__(self):
@@ -1190,9 +1209,7 @@ def test_session_loop_uses_begin_session_per_session(tmp_path):
         made.append(g)
         return g
 
-    gen = synth.Generator(
-        "g", generate=lambda t, history=None: "[slop] " + t, begin_session=begin
-    )
+    gen = synth.Generator("g", generate=lambda t, history=None: "[slop] " + t, begin_session=begin)
     result = synth.synthesize_pairs(_targets(4), tmp_path / "c", [gen], session_turns=2)
     assert result.written == 4
     assert len(made) == 2  # one fresh closure per session
@@ -1358,7 +1375,10 @@ def test_report_result_echoes_degenerate_count(capsys, tmp_path):
 
     result = synth.SynthResult(planned=3, skipped_degenerate=3)
     synth_cli._report_result(
-        result, tmp_path / "pairs.jsonl", dry_run=False, session_turns=1,
+        result,
+        tmp_path / "pairs.jsonl",
+        dry_run=False,
+        session_turns=1,
         max_transform_sim=0.95,
     )
     out = capsys.readouterr().out

@@ -279,6 +279,7 @@ def openrouter_judge(
 # Signal 3 — statistical detector (pluggable; null by default)
 # ---------------------------------------------------------------------------
 
+
 # Callable contract: prose -> {"score": float|None, "name": str, ...}, where a
 # higher score means *more AI-like*. The default `null_detector` is unconfigured.
 class Detector(Protocol):
@@ -364,7 +365,12 @@ def _aggregate(records: list[dict]) -> dict:
 # meta keys carried onto each score record, so scores group / filter / join
 # downstream without re-reading the corpus.
 _CARRIED_META = (
-    "source", "synthetic", "generator", "slop_strategy", "chunk_index", "transform_sim",
+    "source",
+    "synthetic",
+    "generator",
+    "slop_strategy",
+    "chunk_index",
+    "transform_sim",
 )
 # Generation covariates nested under `meta.gen` (synthetic pairs only), flattened
 # onto each score record so `summarize_scores(by=…)` can facet by them directly.
@@ -402,7 +408,8 @@ def prune_orphan_scores(pairs_path: str | Path, out_path: str | Path) -> int:
         return 0
     live = live_record_ids(pairs_path)
     kept = [
-        rec for rec in records
+        rec
+        for rec in records
         if (set(rec) == {"_raw"}) or (rec.get("id") is not None and str(rec["id"]) in live)
     ]
     pruned = len(records) - len(kept)

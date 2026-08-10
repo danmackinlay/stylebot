@@ -79,9 +79,7 @@ def split_paragraphs(text: str) -> list[str]:
 
 # Protected spans the styler must not paraphrase (preserved verbatim per
 # STYLE_SYSTEM): fenced code, display math, blockquotes.
-CODE_FENCE_RE = re.compile(
-    r"^[ \t]*```.*?$.*?^[ \t]*```[ \t]*$(?:\n|\Z)", re.MULTILINE | re.DOTALL
-)
+CODE_FENCE_RE = re.compile(r"^[ \t]*```.*?$.*?^[ \t]*```[ \t]*$(?:\n|\Z)", re.MULTILINE | re.DOTALL)
 MATH_BLOCK_RE = re.compile(r"\$\$.*?\$\$[ \t]*(?:\{[^}\n]*\})?", re.DOTALL)
 BLOCKQUOTE_RE = re.compile(r"^(?:[ \t]{0,3}>[^\n]*\n?)+", re.MULTILINE)
 
@@ -191,9 +189,7 @@ def gather_qmd_files(
     return [p for p in base.glob(default_glob) if is_valid_qmd_file(p)]
 
 
-def is_human_authored(
-    meta: dict, *, field: str = "automation", max_level: int = 0
-) -> bool:
+def is_human_authored(meta: dict, *, field: str = "automation", max_level: int = 0) -> bool:
     """True if frontmatter marks this content as human-written (no/low AI).
 
     This is the **one** blog-specific seam stylebot is allowed to carry (see
