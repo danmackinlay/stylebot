@@ -5,7 +5,14 @@ AI-flavoured draft prose into Dan Mackinlay's voice. This file is the operating
 manual; the **plan is the source of truth** — read it first:
 
 → **[`_plans/OVERVIEW.md`](_plans/OVERVIEW.md)** (phase map, data contract,
-interfaces, sequencing) and the per-phase files it links.
+interfaces, open slices) and the files it links —
+[`decisions.md`](_plans/decisions.md) for why a choice landed and what we
+rejected, [`findings.md`](_plans/findings.md) for every measured result.
+
+The per-phase design plans were **retired 2026-08-10** once their work shipped:
+built code is its own best description, and those documents had begun to drift
+from it. What git could not preserve — rejected alternatives and measurements —
+was consolidated into the two files above.
 
 Narrative/rationale: the blog post [*Fine-tuning danbot*](https://danmackinlay.name/notebook/fine_tuning_danbot.html)
 (canonical source `notebook/fine_tuning_danbot.qmd` in the livingthing blog repo — not duplicated here).
@@ -118,13 +125,13 @@ blog's `_training_pairs/runs/`; run 2 is the serving default).
 
 | Piece | State |
 | --- | --- |
-| Phase 0 scaffolding + Phase 1 `ai-style log` | done; daily-used; captures heading context ([`_plans/heading-context.md`](_plans/heading-context.md)) |
-| Phase 2 `ai-style synth` / `dan-style synth` | shipped; corpus settled ~4k pairs with identity + inflation hygiene gates (`--max-transform-sim` / `--max-length-ratio`) ([`_plans/phase-2-synthetic-pairs.md`](_plans/phase-2-synthetic-pairs.md)) |
+| Phase 0 scaffolding + Phase 1 `ai-style log` | done; daily-used; captures heading context (contract enforced in `stylebot.pairs`; mechanics in `_training_pairs/README.md`) |
+| Phase 2 `ai-style synth` / `dan-style synth` | shipped; corpus settled ~4k pairs with identity + inflation hygiene gates (`--max-transform-sim` / `--max-length-ratio`) |
 | Eval harness `ai-style eval` | built: four signals (Vale, LLM judge, detector, eyeball) + the Phase-4 `output` field; JSONL-batched + resumable ([`_plans/eval-harness.md`](_plans/eval-harness.md)) |
 | Voice classifier (the detector signal) | built: StyleDistance embedding + logistic head; dep-free runtime `stylebot.classify`; artifact at livingthing `_models/voice-clf/` |
 | Splits contract | `stylebot.splits` → blog's committed `splits.json`: frozen eval posts, styler posts, hash-stable detector pool |
-| Phase 3 `ai-style train` / `dan-style train` | shipped: Tinker cookbook LoRA SFT behind the `[trainer]` extra; runs 1–2 trained ([`_plans/phase-3-training.md`](_plans/phase-3-training.md)) |
-| Phase 4 `ai-style run` / `dan-style run` | shipped: training-protocol-faithful chunking (headings/fences protected), do-no-harm + anchor-integrity guards, best-of-N; Tinker-sampling backend v1, MLX/Fireworks slices open ([`_plans/phase-4-inference-cli.md`](_plans/phase-4-inference-cli.md)) |
+| Phase 3 `ai-style train` / `dan-style train` | shipped: Tinker cookbook LoRA SFT behind the `[trainer]` extra; runs 1–2 trained (numbers in [`_plans/findings.md`](_plans/findings.md)) |
+| Phase 4 `ai-style run` / `dan-style run` | shipped: training-protocol-faithful chunking (headings/fences protected), do-no-harm + anchor-integrity guards, best-of-N; Tinker-sampling backend v1, MLX exit verified, Fireworks open |
 
 **Naming rule:** `dan-style X` is the blog-policy mirror of `ai-style X` — same
 subcommand, swap the prefix. (The `train-targets` / `train-voice-clf` legacy

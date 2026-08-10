@@ -1,9 +1,23 @@
 # stylebot — development plan
 
-The durable source of truth for this project's phases. Code comments describe
-*how* a thing works; these files describe *what we're building, in what order,
-and how we'll know it's done*. Edit this when decisions change — it should
-always reflect current reality, not the original aspiration.
+The durable source of truth for this project. Code describes *how* a thing
+works and is the better description of anything already built; these files hold
+what the code cannot say for itself — open work, rejected alternatives, and
+measurements. Edit this when decisions change; it should always reflect current
+reality, not the original aspiration.
+
+**What lives here now** (the per-phase design plans were retired 2026-08-10,
+once their work shipped and the code became the better description):
+
+| File | Holds |
+|---|---|
+| this file | goal, process contract, interfaces, data contract, status, open slices |
+| [`decisions.md`](decisions.md) | why each non-obvious choice landed, what we got wrong, what we rejected |
+| [`findings.md`](findings.md) | every measured result — not re-derivable from git |
+| [`eval-harness.md`](eval-harness.md) | the four signals, the detector decision, the split contract |
+| [`v2-longer-rewrites.md`](v2-longer-rewrites.md) | the scale curriculum — mechanism shipped, generation not yet run |
+| [`synth-flag-audit.md`](synth-flag-audit.md) | the `synth` option surface, as-audited evidence + open retirement proposals |
+| [`vscode-marker.md`](vscode-marker.md) | the editor marker design, thresholds, honesty caveats |
 
 Narrative rationale (the "why") lives in the blog post
 [*Fine-tuning danbot*](https://danmackinlay.name/notebook/fine_tuning_danbot.html). This file is
@@ -22,9 +36,11 @@ draft prose into Dan's voice. Treat it as a *prose styler*, not a chatbot.
 This is a **data/ML project**, not just software. Provenance, reproducibility,
 and the contracts *between* stages matter more than internal abstraction. So:
 
-1. **Plans live here, in git.** One file per phase, each with explicit
-   **inputs / outputs / done-criteria**. Decisions are diffable. A subagent
-   should be able to pick up a phase from its file alone.
+1. **Plans live here, in git — until the code outgrows them.** While work is
+   open, a plan states explicit **inputs / outputs / done-criteria** so a
+   subagent can pick it up from the file alone. Once it ships, the plan is
+   retired: the code documents itself, and what survives is the decision
+   (→ `decisions.md`) and the measurement (→ `findings.md`).
 2. **PRs are per phase-slice, and earn their place with a check.** A slice
    becomes a PR when it ends in something verifiable — a passing test or an
    eval number. Plan edits just commit to the branch; they don't need a PR.
@@ -130,7 +146,7 @@ notify downstream.
 
 | Artifact | Producer | Consumer | Format |
 |----------|----------|----------|--------|
-| `pairs.jsonl` | Phase 1 (real), Phase 2 (synthetic) | Phase 3 | chat-completion JSONL, `{messages:[system,user,assistant], meta:{...}}` — schema in `phase-1-pair-capture.md` |
+| `pairs.jsonl` | Phase 1 (real), Phase 2 (synthetic) | Phase 3 | chat-completion JSONL, `{messages:[system,user,assistant], meta:{...}}` — schema enforced by `stylebot.pairs.validate_pair_record`; mechanics in `_training_pairs/README.md` |
 | trained adapter | Phase 3 | Phase 4, eval | LoRA weights (Tinker-trained → HF export; Fireworks-hosted or local MLX) |
 | candidate text | Phase 4 | eval harness | plain prose in, plain prose out |
 | `scores.jsonl` | eval harness | humans, Phase 3/4 | id-keyed (`synth_key`/`capture_id:idx`) per-pair `{meta, scores:{field:{vale,judge,detector}}}`; joins back to `pairs.jsonl` |
@@ -141,16 +157,18 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 
 ## Phase map & status
 
-| Phase | File | Status | Blocked by |
-|-------|------|--------|-----------|
-| 0 · Scaffolding | this repo's pyproject/config/_plans | ✅ done | — |
-| 1 · Pair capture | [`phase-1-pair-capture.md`](phase-1-pair-capture.md) | ✅ shipped (daily use) + heading context | — |
-| 2 · Synthetic pairs | [`phase-2-synthetic-pairs.md`](phase-2-synthetic-pairs.md) | ✅ shipped; corpus settled 2026-07-22 (~4k pairs) with identity + inflation hygiene gates (`--max-transform-sim` / `--max-length-ratio`) | — |
-| — · Heading context | [`heading-context.md`](heading-context.md) | 🔧 built (both producers; immediate depth) | — |
-| 3 · LoRA training | [`phase-3-training.md`](phase-3-training.md) | ✅ shipped — two paid runs (manifests in the blog's `_training_pairs/runs/`); run 2 (post-surgery corpus) is the serving default | — |
-| E · Eval harness | [`eval-harness.md`](eval-harness.md) | 🔧 built (`stylebot.eval` / `ai-style eval`); **all four signals live** — detector = trained voice classifier (StyleDistance) | only sample prose |
-| 4 · Inference CLI | [`phase-4-inference-cli.md`](phase-4-inference-cli.md) | 🔧 built (`stylebot.infer` / `ai-style run` / `dan-style run`; Tinker-sampling v1; MLX/Fireworks slices open) | — |
-| — · VS Code marker | [`vscode-marker.md`](vscode-marker.md) | 🔧 in progress — `ai-style serve` sidecar + editor extension marking paragraphs with detector `P(slop)` | the trained detector (have it) |
+Everything below is **built**; the code is the reference. Where a phase still
+has a durable document, it is linked.
+
+| Phase | Where it lives in code | Status |
+|-------|------------------------|--------|
+| 0 · Scaffolding | pyproject / `stylebot.config` | ✅ done |
+| 1 · Pair capture | `stylebot.capture`, `ai-style log`; mechanics in `_training_pairs/README.md` | ✅ shipped, daily use; heading context on both producers (immediate depth) |
+| 2 · Synthetic pairs | `stylebot.synth`, `stylebot.targets`, `ai-style synth` | ✅ shipped; corpus settled 2026-07-22 (~4k pairs) behind the identity + inflation gates (`--max-transform-sim` / `--max-length-ratio`) |
+| 3 · LoRA training | `stylebot.train`, `ai-style train` | ✅ shipped — two paid runs (manifests in the blog's `_training_pairs/runs/`); run 2 is the serving default |
+| E · Eval harness | `stylebot.eval`, `ai-style eval` — [`eval-harness.md`](eval-harness.md) | ✅ built; all four signals live, detector = the trained voice classifier |
+| 4 · Inference CLI | `stylebot.infer`, `ai-style run` / `dan-style run` | ✅ built; Tinker-sampling backend v1, MLX exit verified, Fireworks open |
+| — · VS Code marker | `stylebot.serve`, `vscode-voice-marker/` — [`vscode-marker.md`](vscode-marker.md) | 🔧 in progress — sidecar + extension marking paragraphs with `P(slop)`, plus interactive best-of rewrite |
 
 > **Codebase hygiene (2026-06-29).** A QA declutter pass removed the dead
 > blog-build code bulk-copied into stylebot (`migrate_ai_dates`,
@@ -163,42 +181,59 @@ and synthetic paraphrase is shape-compatible and mixable with a weight column.
 capture → synth (gated) → train (Tinker LoRA, manifests committed blog-side)
 → `dan-style run` (guarded inference) → eval (detector + judge + Vale).
 Operations live in the blog's `_training_pairs/RUNBOOK.md`; durable decisions
-in [`ai-style-fine-tune-decisions.md`](ai-style-fine-tune-decisions.md).
+in [`decisions.md`](decisions.md), measurements in [`findings.md`](findings.md).
 
-**Open slices** (each self-contained; see the phase files for detail):
+**Open slices** (each self-contained):
 
-- **Local MLX serving** (phase 4 "Open slices"): merge → quantize →
-  `mlx_lm.server`; acceptance = chat-template parity + quantization eval
-  re-check against the Tinker-sampling backend.
-- **Fireworks serving** (ditto): PEFT upload + scale-to-zero; same parity test.
-- **v3 data**: deliberate moderate-compression pairs (Dan compresses 1.5–2×
-  in real edits) now that generator-accident inflation is gated at 3×.
-- **`--mask` defense-in-depth** (phase 4): sentinel-prefix mismatch to
-  reconcile first (`〈MASKED_*〉` vs `〈CODE_/MATH_/URL_*〉`).
-- **Blog-build integration**: `workflow_style.py` over `stylebot.infer`.
-- **Phase 7 preference/DPO** on the same Tinker platform (decisions #D5),
-  with the eval-harness Goodhart guards.
+- **v2 scale curriculum** — the mechanism shipped, the generation has not run:
+  mixed 1500/3000/4500 pairs, one adapter, then a scale-mixed training run.
+  The full state is [`v2-longer-rewrites.md`](v2-longer-rewrites.md).
+- **Fireworks serving**: PEFT upload + scale-to-zero, retry on
+  `503 DEPLOYMENT_SCALING_UP`; acceptance is the same chat-template parity test
+  the MLX exit passed (D8 / `findings.md`).
+- **Blockquote integrity**: a reflowed `> quote` can lose its `>` prefix on
+  continuation lines — quotes aren't anchor-guarded. Candidate fix: add
+  blockquote-prefix counts to `content_anchors`, or protect quote blocks the way
+  fences are.
+- **v3 data**: deliberate moderate-compression pairs (Dan compresses 1.5–2× in
+  real edits) now that generator-accident inflation is gated at 3×.
+- **Synthetic↔real distribution match**: the fifth eval capability — a
+  feature/mannerism extractor over the synthetic vs real-slop strata. Spec in
+  [`eval-harness.md`](eval-harness.md) §"Planned".
+- **`synth` option-surface retirements**: 12 class-C proposals still open, incl.
+  the `--splits`/`--role`/`--sample-frac`/`--sample-salt` cluster
+  ([`synth-flag-audit.md`](synth-flag-audit.md)).
+- **Phase 7 preference/DPO** on the same Tinker platform (decisions #D5), with
+  the eval-harness Goodhart guards. Preference data already accrues from
+  ordinary `--best-of` use.
 
 ## Subagent-friendliness checklist
 
-Before farming out a phase, confirm its file has:
+Before farming out an open slice, confirm it has:
 - [ ] explicit inputs (which files/env/keys) and outputs (which files/schema);
 - [ ] done-criteria stated as a number or a test, not "looks good";
-- [ ] a runnable entrypoint (a `ai-style-*` subcommand or script);
+- [ ] a runnable entrypoint (an `ai-style` subcommand or script);
 - [ ] enough fixture data to build against without other phases existing.
 
 ## Open questions
 
-- **Which generation covariates matter** — reasoning effort, prompt, model, sampling
-  are now recorded per pair (`meta.gen`) and facetable; the Phase-2 experiment specs
-  (reasoning sweep, prompt ablation) decide which move the slop→Dan signal.
-- Synthetic↔real slop **distribution match** — does synthetic slop resemble the real
-  Claude output Dan cleans up? No distributional comparison exists yet (deferred eval
-  phase; see `eval-harness.md` + `phase-2-synthetic-pairs.md` Experiment 3).
-- Single-source vs multi-source slop ablation — worth publishing? (post §"Whose slop?";
-  measurable now via `meta.generator`/`meta.gen`.)
-- Down-weighting synthetic vs real pairs — what weight? (needs a `meta.weight` field?)
-- Which base model: Qwen3 8B first, 70B if headroom is short.
+- **Which generation covariates matter** — reasoning effort, prompt, model and
+  sampling are recorded per pair (`meta.gen`) and facetable. Effort is settled
+  (`findings.md`); the **prompt ablation is the main untried axis**, including
+  prompts that explicitly target under-represented mannerisms (mixed metaphors,
+  false definiteness).
+- Synthetic↔real slop **distribution match** — does synthetic slop resemble the
+  real output Dan cleans up? Eyeballing says it misses some mannerisms; no
+  distributional comparison exists yet. See `eval-harness.md` §"Planned".
+- Single-source vs multi-source slop ablation — worth publishing? (post §"Whose
+  slop?"; measurable now via `meta.generator`/`meta.gen`.)
+- Down-weighting synthetic vs real pairs — what weight? `meta.weight` is a hook
+  (`pair_weight`/`per_target` callables), uniform so far.
+- Per-target multiplicity — re-key epochs and deliberate variants can stack
+  several pairs on one target; assembly should expose a per-target cap so
+  duplicated targets don't silently up-weight their passages.
+- Base-model headroom — `Qwen/Qwen3.5-9B` today; step-up candidates are
+  Qwen3.6-27B (dense) or Qwen3.6-35B-A3B (MoE, the Mac-friendliest shape).
 - Detector — **settled (2026-06-30):** the trained Dan-voice classifier
-  (StyleDistance backbone) is the signal, not Pangram/general AI-detectors. Pangram
-  survives only as an optional independent cross-check. See `eval-harness.md`.
+  (StyleDistance backbone) is the signal, not Pangram/general AI-detectors.
+  Pangram survives only as an optional independent cross-check.

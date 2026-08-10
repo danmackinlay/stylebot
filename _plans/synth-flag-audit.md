@@ -220,9 +220,10 @@ one is a bet that measurement runs will never need a disjoint substrate.
 
 Not part of the classification, but worth recording:
 
-- `_plans/phase-1-pair-capture.md:77` and `_plans/heading-context.md:18,111`
-  reference `--no-heading-context`, which **does not exist on synth**
-  (`--heading-context` is a `click.Choice`). Those refer to `ai-style log`.
+- `phase-1-pair-capture.md` and `heading-context.md` referenced
+  `--no-heading-context`, which **does not exist on synth**
+  (`--heading-context` is a `click.Choice`); they meant `ai-style log`. Both
+  files were retired 2026-08-10, which resolved this drift by deletion.
 - The blog RUNBOOK:162 audits with `--openrouter-model qwen/qwen3-32b`, a model
   commented out of the roster in `training_targets.py:109`.
 - RUNBOOK:190 calls the canonical corpus run "deliberately flagless so policy
