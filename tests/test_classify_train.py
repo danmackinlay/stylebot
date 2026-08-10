@@ -203,7 +203,7 @@ def test_evaluate_facets_by_provenance():
 
 def test_fit_head_polarity_and_artifact_roundtrip(tmp_path):
     ds, X = _separable_dataset()
-    clf, coef, intercept = ct.fit_head(X, ds)
+    coef, intercept = ct.fit_head(X, ds)
     # P(slop) for a slop-like vector should exceed that for an author-like vector.
     from stylebot.classify import _logreg_p_slop
 
@@ -211,8 +211,8 @@ def test_fit_head_polarity_and_artifact_roundtrip(tmp_path):
     assert _logreg_p_slop([-1.0, 0.0], coef, intercept) < 0.5
 
     out = ct.write_artifact(
-        tmp_path / "voice-clf", clf=clf, coef=coef, intercept=intercept, ds=ds,
-        metrics={"pairwise_accuracy": {"mean": 1.0}}, save_joblib=True,
+        tmp_path / "voice-clf", coef=coef, intercept=intercept, ds=ds,
+        metrics={"pairwise_accuracy": {"mean": 1.0}},
     )
     # Contract files exist and meta pins the embedder + polarity + split mode.
     meta = json.loads((out / "meta.json").read_text())
@@ -221,7 +221,7 @@ def test_fit_head_polarity_and_artifact_roundtrip(tmp_path):
     assert meta["label_polarity"] == "p_slop"
     assert meta["split"]["mode"] == "fit_all"
     assert meta["n_pairs_real"] == 18 and meta["n_pairs_synthetic"] == 0
-    assert (out / "head.json").exists() and (out / "model.joblib").exists()
+    assert (out / "head.json").exists()
 
     # The artifact serves through the dep-free runtime with a STUB embed_fn.
     from stylebot import classify
@@ -261,7 +261,7 @@ def test_holdout_eval_and_subset_fit_are_leakage_safe():
 
     # The shipped head, fit on train posts only, has not seen the holdout rows.
     train_rows = [i for i, g in enumerate(ds.groups) if g not in holdout]
-    _, coef, intercept = ct.fit_head(X, ds, rows=train_rows)
+    coef, intercept = ct.fit_head(X, ds, rows=train_rows)
     from stylebot.classify import _logreg_p_slop
 
     assert _logreg_p_slop([1.0, 0.0], coef, intercept) > 0.5 > _logreg_p_slop([-1.0, 0.0], coef, intercept)
