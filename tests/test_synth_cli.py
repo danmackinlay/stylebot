@@ -1,4 +1,4 @@
-"""Tests for the shared synth CLI kit (stylebot.bin.synth_cli).
+"""Tests for the shared synth CLI kit (stylebot.synth_cli).
 
 The kit exists so `ai-style synth` and downstream blog wrappers share one
 option surface and one command body instead of copy-pasting them. These pin
@@ -23,8 +23,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from stylebot import synth
-from stylebot.bin import synth_cli
+from stylebot import synth, synth_cli
 from stylebot.bin.ai_style import main as ai_style_main
 from stylebot.cli_options import cli_fields, field_owners
 

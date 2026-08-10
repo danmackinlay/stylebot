@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from stylebot.bin import synth_cli
+from stylebot import synth_cli
 from stylebot.targets import iter_targets
 
 POST = """---

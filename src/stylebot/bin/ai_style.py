@@ -24,8 +24,7 @@ from pathlib import Path
 
 import click
 
-from stylebot import config, synth
-from stylebot.bin import synth_cli
+from stylebot import config, synth, synth_cli
 from stylebot.bin.ai_style_log import main as _log
 from stylebot.cli_options import SectionedCommand, bundle_options, bundles_from_kwargs, opt
 from stylebot.jsonl import append_jsonl
@@ -49,7 +48,7 @@ main.add_command(_log, name="log")
 # styler from the SAME flags — the sidecar's rewrite op is `run` held open. The
 # declarations lived twice, drifted in wording, and the tinker/openai
 # construction was written twice; both are here now, in the `cli_options`
-# bundle idiom that `bin/synth_cli.py` already uses.
+# bundle idiom that `stylebot/synth_cli.py` already uses.
 #
 # The per-command differences below are deliberate and stay per-command:
 # `run` defaults --backend to tinker (serve omits it for score-only serving),

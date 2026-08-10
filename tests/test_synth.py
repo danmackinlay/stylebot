@@ -1371,7 +1371,7 @@ def test_max_transform_sim_gate_drops_identity_outputs(tmp_path):
 def test_report_result_echoes_degenerate_count(capsys, tmp_path):
     """The CLI summary path must render the degenerate-drop line (regression:
     it referenced a name not in scope and crashed after a paid run)."""
-    from stylebot.bin import synth_cli
+    from stylebot import synth_cli
 
     result = synth.SynthResult(planned=3, skipped_degenerate=3)
     synth_cli._report_result(
