@@ -222,10 +222,18 @@ def segment_spans(text: str, *, div_is_prose: DivIsProse | None = None) -> list[
 
     Concatenating every chunk reproduces `text` exactly; `editable` is False for
     every protected span.
+
+    Display math is **block-anchored** here (`block_only=True`), matching what
+    `line_kinds` — and therefore inference — can see. Excising a mid-sentence
+    ``$$k$$`` and joining the remnants (``high-$$d$$ behaviour`` ->
+    ``high- behaviour``) produced truncated sentences inside real training
+    targets; leaving inline display math in the prose the styler rewrites is the
+    lesser evil, and consistent with raw inline markdown already being
+    in-distribution at ~16% of pairs.
     """
     out: list[tuple[str, bool]] = []
     i = 0
-    for start, end, _kind in protected_spans(text, div_is_prose=div_is_prose):
+    for start, end, _kind in protected_spans(text, block_only=True, div_is_prose=div_is_prose):
         if i < start:
             out.append((text[i:start], True))
         out.append((text[start:end], False))

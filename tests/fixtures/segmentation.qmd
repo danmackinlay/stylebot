@@ -33,6 +33,9 @@ $$
 \int_0^1 x^2 \, dx = \frac{1}{3}
 $$ {#eq-protected}
 
+The high-$$d$$ behaviour is mid-line display math: excising it would join the
+remnants and split this paragraph, so it stays put and is scored as prose.
+
 > A blockquote is somebody else's voice, so it is protected and never scored.
 > It continues over two lines.
 

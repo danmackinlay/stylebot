@@ -28,18 +28,22 @@ from stylebot.pairs import extract_target, iter_pairs
 from stylebot.targets import iter_targets
 
 # Measured 2026-08-10 against the 4624-pair corpus, 3710 distinct
-# (source, target-body) cells from the 4169 synthetic pairs.
+# (source, target-body) cells from the 4169 synthetic pairs. Both floors were
+# lowered by the block-anchored-math fix, which orphans 24 target texts (29
+# pairs) BY DESIGN: those are the ones a non-line-anchored `$$` had mangled
+# into truncated sentences. `scripts/prune_stale_synth_pairs.py` removes them.
+# Before that fix the floors were 3527 / 401.
 #
 # Section-bounded is the diet the corpus was GENERATED under: `CROSS_HEADING`
 # was promoted after it settled, and re-deriving under cross-heading reproduces
 # only 401/3710, which would make this harness a null instrument. So the live
 # policy is read from the blog but the chunk *mode* is pinned to the corpus's
 # own — that is what a stability floor has to compare against.
-FLOOR_SECTION_BOUNDED = 3527
+FLOOR_SECTION_BOUNDED = 3503
 # The same corpus under today's live cross-heading policy: a much weaker signal
 # (the cells barely overlap), but it exercises the cross-heading path over real
 # prose, which no fixture does.
-FLOOR_CROSS_HEADING = 401
+FLOOR_CROSS_HEADING = 396
 
 
 def _blog_root() -> Path:

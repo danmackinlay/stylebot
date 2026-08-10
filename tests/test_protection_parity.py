@@ -98,11 +98,6 @@ def doc() -> str:
 # --- the contract ----------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="A-6 pending: `editable_prose` still excises a mid-line $$k$$, which "
-    "line-based inference protection cannot see. Flip when math goes block-anchored.",
-)
 def test_training_and_inference_protect_the_same_lines(doc: str):
     train = training_protected_lines(doc)
     serve = inference_protected_lines(doc)

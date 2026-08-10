@@ -89,5 +89,7 @@ def test_fixture_exercises_every_protected_kind():
     assert "must not be scored" not in text  # heading dropped
     assert "title: Segmentation parity fixture" not in text  # frontmatter dropped
     assert "Short." in paragraphs  # minChars is the caller's policy, not segmentation's
+    # Mid-line display math stays inside its paragraph rather than splitting it.
+    assert any("high-$$d$$ behaviour" in p for p in paragraphs)
     assert any(p.startswith("- a list item") for p in paragraphs)
     assert any("adjacent fence" not in p for p in paragraphs)

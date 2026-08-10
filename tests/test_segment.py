@@ -33,6 +33,20 @@ def test_math_block_is_protected():
     assert "\\int" not in editable_prose(doc)
 
 
+def test_one_line_display_math_with_attrs_is_protected():
+    doc = "text\n\n$$x = 1$$ {#eq-a}\n\nmore\n"
+    assert any("x = 1" in p for p in _protected(doc))
+
+
+def test_midline_math_stays_in_the_prose():
+    # The corruption this fixed: excising a mid-sentence `$$d$$` joined the
+    # remnants, so a TRAINING TARGET read "high- behaviour". Display math is
+    # line-anchored now, and inline `$$` rides along in the prose instead.
+    doc = "The high-$$d$$ behaviour is strange.\n"
+    assert _protected(doc) == []
+    assert editable_prose(doc) == doc
+
+
 def test_div_block_is_protected():
     # The exact leak: a Quarto figure div that the old filter let through.
     doc = (

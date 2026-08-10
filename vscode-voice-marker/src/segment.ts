@@ -94,11 +94,31 @@ function regexSpans(content: string, re: RegExp): Span[] {
   return spans;
 }
 
+/**
+ * Port of stylebot.markdown._is_block_anchored: does the span occupy whole
+ * lines (at most 3 spaces in, nothing but whitespace out)?
+ *
+ * Display math is protected only when it is block-anchored. Excising a
+ * mid-sentence `$$k$$` joins the remnants — `high-$$d$$ behaviour` becomes
+ * `high- behaviour` — which corrupted real training targets and would split a
+ * scoreable paragraph in two here.
+ */
+function isBlockAnchored(content: string, start: number, end: number): boolean {
+  const lineStart = content.lastIndexOf("\n", start - 1) + 1;
+  const indent = content.slice(lineStart, start);
+  if (indent.length > 3 || /[^ ]/.test(indent)) {
+    return false;
+  }
+  const nl = content.indexOf("\n", end);
+  const tail = nl === -1 ? content.slice(end) : content.slice(end, nl);
+  return tail.trim() === "";
+}
+
 /** Merged protected spans (code, math, divs, blockquotes, frontmatter). */
 export function protectedSpans(content: string): Span[] {
   const spans: Span[] = [
     ...regexSpans(content, CODE_FENCE_RE),
-    ...regexSpans(content, MATH_BLOCK_RE),
+    ...regexSpans(content, MATH_BLOCK_RE).filter(([s, e]) => isBlockAnchored(content, s, e)),
     ...regexSpans(content, BLOCKQUOTE_RE),
     ...findDivBlocks(content),
   ];
