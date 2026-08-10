@@ -18,6 +18,7 @@ from __future__ import annotations
 import datetime
 import json
 import sys
+from dataclasses import dataclass, replace
 from functools import cache, partial
 from pathlib import Path
 
@@ -26,6 +27,7 @@ import click
 from stylebot import config, synth
 from stylebot.bin import synth_cli
 from stylebot.bin.ai_style_log import main as _log
+from stylebot.cli_options import SectionedCommand, bundle_options, bundles_from_kwargs, opt
 from stylebot.jsonl import append_jsonl
 from stylebot.lib import is_human_authored
 
@@ -38,6 +40,174 @@ def main() -> None:
 # Phase 1 capture — the group defined in bin/ai_style_log.py, mounted here as
 # its only entry point.
 main.add_command(_log, name="log")
+
+
+# ---------------------------------------------------------------------------
+# The styler backend: one surface, two commands.
+#
+# `run` (batch, one file) and `serve` (long-lived editor sidecar) arm the SAME
+# styler from the SAME flags — the sidecar's rewrite op is `run` held open. The
+# declarations lived twice, drifted in wording, and the tinker/openai
+# construction was written twice; both are here now, in the `cli_options`
+# bundle idiom that `bin/synth_cli.py` already uses.
+#
+# The per-command differences below are deliberate and stay per-command:
+# `run` defaults --backend to tinker (serve omits it for score-only serving),
+# `serve` defaults --temperature hotter, and serve's --detector-model is
+# required (it IS the service) where run's only feeds --best-of.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BackendOpts:
+    """How to reach the styler — the surface `run` and `serve` share."""
+
+    cli_section = "Styler backend"
+
+    backend: str | None = opt(
+        None,
+        "--backend",
+        type=click.Choice(["tinker", "openai"]),
+        show_default=True,
+        help="tinker: sample the trained checkpoint (no serving infra; needs TINKER_API_KEY + "
+        "trainer extra). openai: any OpenAI-compatible endpoint (Fireworks, mlx_lm.server, "
+        "Osaurus). `serve` defaults to neither: omit it there for score-only serving.",
+    )
+    sampler_path: str | None = opt(
+        None,
+        "--sampler-path",
+        help="[tinker] tinker:// sampler checkpoint (from the training manifest "
+        "result.checkpoints.sampler_path).",
+    )
+    base_model: str | None = opt(
+        None,
+        "--base-model",
+        help="[tinker] Base model id the adapter was trained on (manifest "
+        "hyperparameters.base_model).",
+    )
+    renderer_name: str | None = opt(
+        None,
+        "--renderer",
+        "renderer_name",
+        help="[tinker] Cookbook renderer used at training time (manifest result.renderer_name).",
+    )
+    base_url: str | None = opt(
+        None,
+        "--base-url",
+        help="[openai] Endpoint base URL, e.g. http://localhost:8080/v1.",
+    )
+    model: str | None = opt(None, "--model", help="[openai] Served model name.")
+    api_key_env: str | None = opt(
+        None,
+        "--api-key-env",
+        help="[openai] Env var holding the endpoint key (e.g. FIREWORKS_API_KEY); omit for "
+        "keyless local servers.",
+    )
+    temperature: float = opt(
+        0.3,
+        "--temperature",
+        type=float,
+        show_default=True,
+        help="Sampling temperature. `serve` runs hotter (0.7) on purpose: interactive best-of "
+        "wants DISTINCT candidates; at 0.3 the sampler mode-collapses to near-identical draws.",
+    )
+    max_tokens: int | None = opt(
+        None,
+        "--max-tokens",
+        type=int,
+        help="Output-token budget per chunk. [default: scaled off --max-chunk-chars, floor 2000]",
+    )
+    max_chunk_chars: int | None = opt(
+        None,
+        "--max-chunk-chars",
+        type=int,
+        help="Inference chunk budget; MUST match the adapter's training chunk scale. "
+        "[default: 1500]",
+    )
+    inline_headings: bool = opt(
+        False,
+        "--inline-headings/--no-inline-headings",
+        show_default=True,
+        help="Match the chunk diet the adapter was TRAINED on (the training manifest records it "
+        "under data.chunk_scale). On = the v2 cross-heading diet: headings are chunk content the "
+        "styler may rewrite, and chunks span sections. Off = v1, headings pass through verbatim "
+        "as context. Serving at the wrong diet is out-of-distribution and makes the styler fall "
+        "back to copying its input.",
+    )
+    detector_model: Path | None = opt(
+        None,
+        "--detector-model",
+        type=click.Path(exists=True, file_okay=False, path_type=Path),
+        help="Voice-classifier artifact dir for --best-of reranking.",
+    )
+
+    def chunk_chars(self) -> int:
+        """The inference chunk budget, defaulted from `infer`."""
+        from stylebot import infer
+
+        return self.max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK
+
+    def tokens(self) -> int:
+        """Output-token budget. Fixed at backend construction, so it is scaled
+        off the chunk budget — a big --max-chunk-chars would otherwise truncate
+        a rewrite mid-chunk."""
+        from stylebot import infer
+
+        if self.max_tokens is not None:
+            return self.max_tokens
+        return infer.max_tokens_for(self.chunk_chars())
+
+
+BACKEND_PARAMS: dict[str, type] = {"opts": BackendOpts}
+
+
+def backend_options(**kw):
+    """The shared `--backend …` flags. `defaults=`/`exclude=` as elsewhere."""
+    return bundle_options([BackendOpts], **kw)
+
+
+def build_styler(opts: BackendOpts):
+    """Construct the styler backend described by `opts` — the one build site.
+
+    Raises `click.UsageError` for a flag combination the user must fix (exit 2)
+    and `click.ClickException` for an environment failure (exit 1). `serve`
+    re-raises both as `ValueError`, which `serve.handle_request` reports on the
+    failing request instead of taking the sidecar down.
+    """
+    from stylebot import infer
+
+    tokens = opts.tokens()
+    if opts.backend is None:
+        raise click.UsageError("no --backend given, so there is no styler to build")
+    if opts.backend == "tinker":
+        if not opts.sampler_path or not opts.base_model:
+            raise click.UsageError(
+                "--backend tinker needs --sampler-path and --base-model (see the training manifest)"
+            )
+        if not config.get_key("TINKER_API_KEY"):
+            raise click.ClickException("TINKER_API_KEY is not set")
+        try:
+            return infer.tinker_backend(
+                opts.sampler_path,
+                opts.base_model,
+                renderer_name=opts.renderer_name,
+                temperature=opts.temperature,
+                max_tokens=tokens,
+            )
+        except ImportError as exc:
+            raise click.ClickException(str(exc)) from exc
+    if not opts.base_url or not opts.model:
+        raise click.UsageError("--backend openai needs --base-url and --model")
+    api_key = config.get_key(opts.api_key_env) if opts.api_key_env else None
+    if opts.api_key_env and not api_key:
+        raise click.ClickException(f"{opts.api_key_env} is not set")
+    return infer.openai_backend(
+        opts.base_url,
+        opts.model,
+        api_key=api_key,
+        temperature=opts.temperature,
+        max_tokens=tokens,
+    )
 
 
 @main.command("synth", cls=synth_cli.SectionedCommand)
@@ -436,7 +606,9 @@ def export_table_cmd(
         )
 
 
-@main.command("serve")
+@main.command("serve", cls=SectionedCommand)
+# --detector-model is excluded from the shared bundle and redeclared here: for
+# `serve` it is the service itself, not run's optional --best-of reranker.
 @click.option(
     "--detector-model",
     "detector_model",
@@ -446,89 +618,17 @@ def export_table_cmd(
     "pinned embedder (sentence-transformers) installed.",
 )
 @click.option(
-    "--backend",
-    type=click.Choice(["tinker", "openai"]),
-    default=None,
-    help="Arm the 'rewrite' op with a styler backend (same flags as `ai-style run`). Omit for "
-    "score-only serving.",
-)
-@click.option(
-    "--sampler-path",
-    default=None,
-    help="[tinker] tinker:// sampler checkpoint (manifest result.checkpoints.sampler_path).",
-)
-@click.option(
-    "--base-model",
-    default=None,
-    help="[tinker] Base model id the adapter was trained on.",
-)
-@click.option(
-    "--renderer",
-    "renderer_name",
-    default=None,
-    help="[tinker] Cookbook renderer used at training time.",
-)
-@click.option(
-    "--base-url",
-    default=None,
-    help="[openai] Endpoint base URL, e.g. http://localhost:8123/v1.",
-)
-@click.option("--model", default=None, help="[openai] Served model name.")
-@click.option(
-    "--api-key-env",
-    default=None,
-    help="[openai] Env var holding the endpoint key; omit for keyless local servers.",
-)
-@click.option(
-    "--temperature",
-    default=0.7,
-    show_default=True,
-    type=float,
-    help="Hotter than run/eval's 0.3 on purpose: interactive best-of wants DISTINCT candidates; "
-    "at 0.3 the sampler mode-collapses to near-identical draws.",
-)
-@click.option(
-    "--max-tokens",
-    default=None,
-    type=int,
-    help="Output-token budget per rewrite. [default: scaled off --max-chunk-chars, floor 2000]",
-)
-@click.option(
-    "--max-chunk-chars",
-    default=None,
-    type=int,
-    help="Rewrite-op chunk budget; MUST match the adapter's training chunk scale. [default: 1500]",
-)
-@click.option(
-    "--inline-headings/--no-inline-headings",
-    default=False,
-    show_default=True,
-    help="The other half of the adapter's training diet (the manifest records both under "
-    "data.chunk_scale). On = v2 cross-heading: headings are rewritable chunk content and chunks "
-    "span sections. Off = v1, headings stay protected context. Serving at the wrong diet is "
-    "out-of-distribution and makes the styler fall back to copying its input.",
-)
-@click.option(
     "--preferences",
     "preferences_path",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
     help="Arm the 'prefer' op: append client decisions (plus a UTC ts) to this JSONL.",
 )
+@backend_options(defaults=[BackendOpts(temperature=0.7)], exclude=["detector_model"])
 def serve_cmd(
     detector_model: Path,
-    backend: str | None,
-    sampler_path: str | None,
-    base_model: str | None,
-    renderer_name: str | None,
-    base_url: str | None,
-    model: str | None,
-    api_key_env: str | None,
-    temperature: float,
-    max_tokens: int | None,
-    max_chunk_chars: int | None,
-    inline_headings: bool,
     preferences_path: Path | None,
+    **kw,
 ) -> None:
     """Score texts over stdin/stdout NDJSON (long-lived editor sidecar).
 
@@ -542,6 +642,8 @@ def serve_cmd(
     """
     from stylebot import classify, infer, serve
 
+    opts = replace(bundles_from_kwargs(kw, BACKEND_PARAMS)["opts"], detector_model=detector_model)
+
     try:
         meta = classify.load_artifact_meta(detector_model)
         detector = classify.sklearn_detector(detector_model)
@@ -552,37 +654,22 @@ def serve_cmd(
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    chunk_chars = max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK
-    tokens = max_tokens if max_tokens is not None else infer.max_tokens_for(chunk_chars)
+    chunk_chars = opts.chunk_chars()
 
     rewriter = None
-    if backend is not None:
+    if opts.backend is not None:
         # Build the styler LAZILY: the tinker client dials out at construction,
         # and a flaky network at editor start must not take scoring down with it.
         # `cache` is what makes it lazy-once — the first rewrite op pays, later
         # ones reuse the client.
         @cache
         def make_styler():
-            if backend == "tinker":
-                if not sampler_path or not base_model:
-                    raise ValueError("--backend tinker needs --sampler-path and --base-model")
-                return infer.tinker_backend(
-                    sampler_path,
-                    base_model,
-                    renderer_name=renderer_name,
-                    temperature=temperature,
-                    max_tokens=tokens,
-                )
-            if not base_url or not model:
-                raise ValueError("--backend openai needs --base-url and --model")
-            api_key = config.get_key(api_key_env) if api_key_env else None
-            return infer.openai_backend(
-                base_url,
-                model,
-                api_key=api_key,
-                temperature=temperature,
-                max_tokens=tokens,
-            )
+            try:
+                return build_styler(opts)
+            except click.ClickException as exc:
+                # A sidecar answers, it does not exit: re-raised as ValueError so
+                # the failing rewrite request gets an {"error"} and scoring lives.
+                raise ValueError(exc.format_message()) from exc
 
         scorer = infer.detector_scorer(detector)
 
@@ -594,7 +681,7 @@ def serve_cmd(
                 best_of=best_of,
                 scorer=scorer,
                 max_chunk_chars=chunk_chars,
-                inline_headings=inline_headings,
+                inline_headings=opts.inline_headings,
             )
 
         rewriter = rewrite_op
@@ -1136,71 +1223,11 @@ def train_cmd(
     click.echo(f"manifest -> {result.manifest_path} (commit this)")
 
 
-@main.command("run")
+@main.command("run", cls=SectionedCommand)
 @click.argument(
     "file",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     required=False,
-)
-@click.option(
-    "--backend",
-    type=click.Choice(["tinker", "openai"]),
-    default="tinker",
-    show_default=True,
-    help="tinker: sample the trained checkpoint (no serving infra; needs TINKER_API_KEY + "
-    "trainer extra). openai: any OpenAI-compatible endpoint (Fireworks, mlx_lm.server, Osaurus).",
-)
-@click.option(
-    "--sampler-path",
-    default=None,
-    help="[tinker] tinker:// sampler checkpoint (from the training manifest "
-    "result.checkpoints.sampler_path).",
-)
-@click.option(
-    "--base-model",
-    default=None,
-    help="[tinker] Base model id the adapter was trained on (manifest hyperparameters.base_model).",
-)
-@click.option(
-    "--renderer",
-    "renderer_name",
-    default=None,
-    help="[tinker] Cookbook renderer used at training time (manifest result.renderer_name).",
-)
-@click.option(
-    "--base-url",
-    default=None,
-    help="[openai] Endpoint base URL, e.g. http://localhost:8080/v1.",
-)
-@click.option("--model", default=None, help="[openai] Served model name.")
-@click.option(
-    "--api-key-env",
-    default=None,
-    help="[openai] Env var holding the endpoint key (e.g. FIREWORKS_API_KEY); omit for keyless "
-    "local servers.",
-)
-@click.option("--temperature", default=0.3, show_default=True, type=float)
-@click.option(
-    "--max-tokens",
-    default=None,
-    type=int,
-    help="Output-token budget per chunk. [default: scaled off --max-chunk-chars, floor 2000]",
-)
-@click.option(
-    "--max-chunk-chars",
-    default=None,
-    type=int,
-    help="Inference chunk budget. [default: 1500]",
-)
-@click.option(
-    "--inline-headings/--no-inline-headings",
-    default=False,
-    show_default=True,
-    help="Match the chunk diet the adapter was TRAINED on (the training manifest records it "
-    "under data.chunk_scale). On = the v2 cross-heading diet: headings are chunk content the "
-    "styler may rewrite, and chunks span sections. Off = v1, headings pass through verbatim as "
-    "context. Serving at the wrong diet is out-of-distribution and makes the styler fall back to "
-    "copying its input.",
 )
 @click.option(
     "--best-of",
@@ -1210,10 +1237,11 @@ def train_cmd(
     help="Sample N candidates per chunk and keep the most Dan-scored (needs --detector-model).",
 )
 @click.option(
-    "--detector-model",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default=None,
-    help="Voice-classifier artifact dir for --best-of reranking.",
+    "--strict-anchors",
+    is_flag=True,
+    help="Also require inline code spans and inline math to survive a rewrite, not just links "
+    "and citations. Measured over the corpus this roughly triples the rate at which every "
+    "candidate is rejected and the input is kept verbatim — hence off by default.",
 )
 @click.option(
     "--write",
@@ -1221,22 +1249,13 @@ def train_cmd(
     is_flag=True,
     help="Rewrite FILE in place (a .bak backup is left beside it). Default prints to stdout.",
 )
+@backend_options(defaults=[BackendOpts(backend="tinker")])
 def run_cmd(
     file: Path | None,
-    backend: str,
-    sampler_path: str | None,
-    base_model: str | None,
-    renderer_name: str | None,
-    base_url: str | None,
-    model: str | None,
-    api_key_env: str | None,
-    temperature: float,
-    max_tokens: int | None,
-    max_chunk_chars: int | None,
-    inline_headings: bool,
     best_of: int,
-    detector_model: Path | None,
+    strict_anchors: bool,
     write_in_place: bool,
+    **kw,
 ) -> None:
     """Phase 4: rewrite FILE (or stdin) through the trained styler.
 
@@ -1247,57 +1266,26 @@ def run_cmd(
     """
     from stylebot import infer
 
-    # max_tokens is fixed at backend construction, so scale it off the chunk
-    # budget here (a big --max-chunk-chars would otherwise truncate mid-rewrite).
-    chunk_chars = max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK
-    tokens = max_tokens if max_tokens is not None else infer.max_tokens_for(chunk_chars)
-    if backend == "tinker":
-        if not sampler_path or not base_model:
-            raise click.UsageError(
-                "--backend tinker needs --sampler-path and --base-model (see the training manifest)"
-            )
-        if not config.get_key("TINKER_API_KEY"):
-            raise click.ClickException("TINKER_API_KEY is not set")
-        try:
-            styler = infer.tinker_backend(
-                sampler_path,
-                base_model,
-                renderer_name=renderer_name,
-                temperature=temperature,
-                max_tokens=tokens,
-            )
-        except ImportError as exc:
-            raise click.ClickException(str(exc)) from exc
-    else:
-        if not base_url or not model:
-            raise click.UsageError("--backend openai needs --base-url and --model")
-        api_key = config.get_key(api_key_env) if api_key_env else None
-        if api_key_env and not api_key:
-            raise click.ClickException(f"{api_key_env} is not set")
-        styler = infer.openai_backend(
-            base_url,
-            model,
-            api_key=api_key,
-            temperature=temperature,
-            max_tokens=tokens,
-        )
+    opts: BackendOpts = bundles_from_kwargs(kw, BACKEND_PARAMS)["opts"]
+    styler = build_styler(opts)
 
     scorer = None
     if best_of > 1:
-        if detector_model is None:
+        if opts.detector_model is None:
             raise click.UsageError("--best-of needs --detector-model for the p_dan scoring")
         from stylebot.classify import sklearn_detector
 
-        scorer = infer.detector_scorer(sklearn_detector(detector_model))
+        scorer = infer.detector_scorer(sklearn_detector(opts.detector_model))
 
     text = file.read_text(encoding="utf-8") if file else click.get_text_stream("stdin").read()
     result = infer.rewrite_text(
         text,
         styler,
-        max_chunk_chars=chunk_chars,
+        max_chunk_chars=opts.chunk_chars(),
         best_of=best_of,
         scorer=scorer,
-        inline_headings=inline_headings,
+        inline_headings=opts.inline_headings,
+        inline_anchors=strict_anchors,
     )
     if scorer is not None:
         for line in result.decisions:
