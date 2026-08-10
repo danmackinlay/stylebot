@@ -22,9 +22,9 @@ import statistics
 from collections.abc import Sequence
 from pathlib import Path
 
-from stylebot.eval import FIELD_EXTRACTORS, load_scores, record_id, summarize_scores
-from stylebot.pairs import build_pair_content, iter_pairs
-from stylebot.synth import Target
+from stylebot.eval import load_scores, summarize_scores
+from stylebot.pairs import FIELD_EXTRACTORS, build_pair_content, iter_pairs, record_id
+from stylebot.targets import Target
 
 
 def sample_targets(targets: Sequence[Target], n: int, *, seed: int | None = None) -> list[Target]:

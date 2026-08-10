@@ -341,7 +341,7 @@ def test_score_pairs_file_leaves_an_orphan_free_file_alone(tmp_path, monkeypatch
     ev.score_pairs_file(pairs, out, judge=fake_judge)
 
     rewrites: list[object] = []
-    monkeypatch.setattr(ev, "write_pairs_atomic", lambda p, r: rewrites.append(p))
+    monkeypatch.setattr(ev, "write_jsonl_atomic", lambda p, r: rewrites.append(p))
     res = ev.score_pairs_file(pairs, out, judge=fake_judge)
     assert res.pruned_orphans == 0
     assert rewrites == []
@@ -367,7 +367,7 @@ def test_score_pairs_file_prune_orphans_off_is_the_wrong_corpus_escape_hatch(tmp
 
 def test_prune_orphan_scores_round_trips_undecodable_lines(tmp_path):
     """A corrupt line has no join key but must never be silently dropped by a
-    rewrite (same rule as `capture.write_pairs_atomic`)."""
+    rewrite (same rule as `jsonl.write_jsonl_atomic`)."""
     pairs = _make_pairs(tmp_path / "c", [
         ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
     ])

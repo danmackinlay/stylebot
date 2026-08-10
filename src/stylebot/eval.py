@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import csv
 import datetime as _dt
-import hashlib
 import json
 import os
 import re
@@ -52,9 +51,24 @@ from pathlib import Path
 from statistics import mean
 from typing import Protocol
 
-from stylebot.capture import write_pairs_atomic
-from stylebot.jsonl import iter_jsonl, read_jsonl
-from stylebot.pairs import GEN_FACET_KEYS, iter_pairs
+from stylebot.jsonl import dumps_line, iter_jsonl, read_jsonl, write_jsonl_atomic
+
+# The pair-text extractors and the score join key live in `stylebot.pairs` (they
+# are the inverse of `build_pair_content`). The ones this module does not itself
+# use are imported anyway and re-exported: callers outside this repo reach that
+# surface through `stylebot.eval`.
+from stylebot.pairs import (
+    FIELD_EXTRACTORS,
+    GEN_FACET_KEYS,
+    _recut_digest,  # noqa: F401
+    extract_output,  # noqa: F401
+    extract_slop,  # noqa: F401
+    extract_target,  # noqa: F401
+    iter_pairs,
+    pair_body,  # noqa: F401
+    record_id,
+)
+from stylebot.provenance import file_sha256
 
 SCHEMA_VERSION = 2
 
@@ -375,49 +389,6 @@ def _aggregate(records: list[dict]) -> dict:
 # verbatim; this layer is just batching + extraction + aggregation.
 
 
-def pair_body(content: str, context: str | None) -> str:
-    """The prose body of a pair message, with the heading-context prefix removed.
-
-    `stylebot.pairs.build_pair_content(context, body)` prepends ``f"{context}\\n\\n"``
-    *identically to both sides* of a pair when a heading context is present; this
-    is its inverse, so the judge scores the transform region (the body), not the
-    shared heading. No context (or content lacking the prefix) returns unchanged.
-    """
-    if not context:
-        return content
-    prefix = f"{context}\n\n"
-    return content[len(prefix):] if content.startswith(prefix) else content
-
-
-def extract_slop(record: dict) -> str:
-    """The slop-side body of a pair (messages[1], heading-context stripped).
-
-    Public API: the voice-classifier trainer (livingthing) assembles its training
-    texts through these extractors so eval and training read a pair identically.
-    """
-    return pair_body(record["messages"][1]["content"], (record.get("meta") or {}).get("context"))
-
-
-def extract_target(record: dict) -> str:
-    """The Dan-side body of a pair (messages[2], heading-context stripped)."""
-    return pair_body(record["messages"][2]["content"], (record.get("meta") or {}).get("context"))
-
-
-def extract_output(record: dict) -> str:
-    """The styler-output body (top-level `"output"` of a Phase-4 rewrite
-    JSONL — `stylebot.infer.rewrite_pairs_file` — heading-context stripped)."""
-    return pair_body(record.get("output") or "", (record.get("meta") or {}).get("context"))
-
-
-# Field name -> (record -> body text). Defaults cover the pairs schema
-# (messages[1]=slop/user, messages[2]=Dan/assistant); "output" is the Phase-4
-# styler rewrite, present only on infer.rewrite_pairs_file output JSONLs.
-FIELD_EXTRACTORS: dict[str, Callable[[dict], str]] = {
-    "slop": extract_slop,
-    "target": extract_target,
-    "output": extract_output,
-}
-
 # meta keys carried onto each score record, so scores group / filter / join
 # downstream without re-reading the corpus.
 _CARRIED_META = ("source", "synthetic", "generator", "slop_strategy", "chunk_index", "transform_sim")
@@ -426,74 +397,6 @@ _CARRIED_META = ("source", "synthetic", "generator", "slop_strategy", "chunk_ind
 # facet by them directly; real pairs lack `meta.gen` and simply omit these (null bucket).
 # The list itself is the shared schema constant in stylebot.pairs.
 _CARRIED_GEN = GEN_FACET_KEYS
-
-
-def _recut_digest(recut: object) -> str:
-    """A short, stable digest of one re-cut's gap policy (`meta.recut`).
-
-    Canonical JSON (sorted keys, no whitespace) so the digest keys off the
-    policy's VALUES, not off dict insertion order — and so any key a future
-    `recut_archives` adds to the stamp participates automatically. Eight hex
-    chars: this discriminates a handful of hand-chosen cut policies, not a
-    corpus, so collision pressure is nil and the id stays readable.
-    """
-    try:
-        canon = json.dumps(recut, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    except TypeError:  # a stamp JSON can't encode — degrade to repr, never raise
-        canon = repr(recut)
-    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:8]
-
-
-def record_id(record: dict) -> str:
-    """A stable join key linking a pair's score back to the corpus.
-
-    Prefers `meta.synth_key` (synthetic pairs); else `capture_id:chunk_index`
-    (real captures group by `capture_id`); else a hash of `source` + chunk index.
-
-    **Re-cut records additionally carry the cut policy in the key.**
-    `capture.recut_archives` deliberately REUSES the archive's `capture_id` and
-    renumbers `chunk_index` from 0 — that is exactly what makes a re-cut
-    idempotent *in `pairs.jsonl`* (the re-cut replaces the old cut for that
-    capture instead of stacking duplicates). The cost is that
-    `capture_id:chunk_index` alone is NOT stable across a re-cut: after
-    coalescing, `<cap>:0` names a merged multi-paragraph pair where it used to
-    name a single paragraph. That is a correctness bug downstream, not
-    cosmetics — everything that joins or resumes on this key would silently
-    mismatch:
-
-    - `score_pairs_file` resumes by skipping ids already in `scores.jsonl`, so
-      a re-cut pair reads as "already scored" and STALE scores stay attached to
-      materially changed prose;
-    - `report.render_scores_report` joins `pairs_by_id`, so the pair browser
-      renders new text under old judge/detector numbers;
-    - `infer.rewrite_pairs_file` skips it on resume for the same reason.
-
-    So fold `meta.recut` — the gap policy `recut_archives` stamps on every
-    record it emits, and the only discriminator available — into the key. A
-    re-cut id then differs from the original cut's and from another policy's,
-    while staying byte-identical when the SAME policy is re-run: a re-cut has
-    to remain idempotent end to end, not just inside `pairs.jsonl`.
-
-    Records with no `meta.recut` keep their key byte-for-byte. That is
-    load-bearing: a committed `scores.jsonl` lives blog-side and must keep
-    joining for the never-re-cut captures that are most of the corpus.
-    """
-    meta = record.get("meta") or {}
-    if meta.get("synth_key"):
-        return str(meta["synth_key"])
-    recut = meta.get("recut")
-    # Empty for the overwhelmingly common non-re-cut record — which is what
-    # preserves the historical id shape exactly.
-    policy = f":r{_recut_digest(recut)}" if recut else ""
-    capture_id = meta.get("capture_id")
-    chunk_index = meta.get("chunk_index")
-    if capture_id is not None:
-        return f"{capture_id}{policy}:{chunk_index}"
-    # No capture_id (hand-built / pre-capture_id records). Same reasoning, so
-    # the policy joins the hashed material rather than the visible key; with no
-    # re-cut stamp the hashed string is unchanged and so is the digest.
-    h = hashlib.sha256(f"{meta.get('source')}\x00{chunk_index}{policy}".encode("utf-8"))
-    return h.hexdigest()[:16]
 
 
 def existing_scored_ids(out_path: str | Path) -> set[str]:
@@ -520,7 +423,7 @@ def prune_orphan_scores(pairs_path: str | Path, out_path: str | Path) -> int:
     each of them the join.
 
     Undecodable lines are round-tripped verbatim rather than dropped (see
-    `capture.write_pairs_atomic`); a decodable record with no `id` has no join
+    `jsonl.write_jsonl_atomic`); a decodable record with no `id` has no join
     key and is pruned. Rewrites `out_path` atomically, and ONLY when something
     is actually dropped — an already-clean file is left untouched.
     """
@@ -534,7 +437,7 @@ def prune_orphan_scores(pairs_path: str | Path, out_path: str | Path) -> int:
     ]
     pruned = len(records) - len(kept)
     if pruned:
-        write_pairs_atomic(Path(out_path), kept)
+        write_jsonl_atomic(Path(out_path), kept)
     return pruned
 
 
@@ -652,7 +555,7 @@ def score_pairs_file(
             except Exception as exc:  # a field/judge error on one record — record and continue
                 result.errors.append((record_id(rec), f"{type(exc).__name__}: {exc}"))
                 continue
-            fp.write(json.dumps(line, ensure_ascii=False) + "\n")
+            fp.write(dumps_line(line) + "\n")
             fp.flush()
             result.written += 1
     return result
@@ -770,9 +673,10 @@ def covariate_table(
             if len(values) == 1 and len(rows) > 1:
                 constants[col] = values.pop()
                 ordered.remove(col)
-        rows = [{k: row.get(k) for k in ordered} for row in rows]
-    else:
-        rows = [{k: row.get(k) for k in ordered} for row in rows]
+
+    # Project every row onto the same column list either way, so a row missing a
+    # key still carries it as an explicit None (a rectangular CSV, not a ragged one).
+    rows = [{k: row.get(k) for k in ordered} for row in rows]
     return rows, constants
 
 
@@ -802,7 +706,7 @@ def write_covariate_table(
         writer.writeheader()
         writer.writerows(rows)
 
-    digest = hashlib.sha256(Path(scores).read_bytes()).hexdigest()[:16] if Path(scores).exists() else None
+    digest = file_sha256(scores) if Path(scores).exists() else None
     sidecar = {
         "schema_version": SCHEMA_VERSION,
         "exported_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),

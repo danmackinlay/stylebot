@@ -20,26 +20,15 @@ import os
 import re
 import shutil
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 from stylebot.ai_core import STYLE_SYSTEM
-from stylebot.jsonl import read_jsonl
+from stylebot.jsonl import append_jsonl, read_jsonl, write_jsonl_atomic
 from stylebot.lib import read_w_frontmatter_text, split_paragraphs
 from stylebot.pairs import build_pair_content
+from stylebot.provenance import now_iso  # `ai-style log` binds capture.now_iso
 
 logger = logging.getLogger(__name__)
-
-
-def now_iso() -> str:
-    """UTC now as ISO-8601 with microseconds.
-
-    Microsecond precision so sessions opened close together (e.g. via scripts)
-    get distinct ``snapped_at`` values — the smart-default matcher in the CLI's
-    `save` keys on ``snapped_at``, and second-resolution collisions used to
-    make two adjacent `open` calls indistinguishable.
-    """
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def new_capture_id() -> str:
@@ -47,13 +36,22 @@ def new_capture_id() -> str:
     return uuid.uuid4().hex[:8]
 
 
-def split_frontmatter(text: str) -> tuple[dict, str]:
-    """Best-effort split; returns ({}, text) for non-.qmd or plain prose."""
+def split_frontmatter_meta(text: str) -> tuple[dict, str]:
+    """Best-effort split into (parsed YAML frontmatter, body).
+
+    Returns ``({}, text)`` for non-.qmd or plain prose. The `_meta` suffix is
+    load-bearing: `stylebot.infer.split_frontmatter` splits the same text into
+    ``(raw frontmatter string, body)``, and the two are not interchangeable.
+    """
     try:
         meta, body = read_w_frontmatter_text(text)
         return (meta or {}), body
     except Exception:
         return {}, text
+
+
+# `stylebot.bin.ai_style_log` binds the old name.
+split_frontmatter = split_frontmatter_meta
 
 
 # ---- Paragraph-level diffing ----
@@ -275,27 +273,13 @@ def build_pair_record(
 
 def append_pair(pairs_path: Path, record: dict) -> None:
     """Append one record to `pairs_path` (parent dirs created)."""
-    pairs_path.parent.mkdir(parents=True, exist_ok=True)
-    with pairs_path.open("a", encoding="utf-8") as fp:
-        fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+    append_jsonl(pairs_path, record)
 
 
-def write_pairs_atomic(pairs_path: Path, records: list[dict]) -> None:
-    """Atomic rewrite of `pairs_path` from the given record list.
-
-    Records that are pure ``{"_raw": line}`` wrappers (unparseable lines kept
-    by `stylebot.jsonl.read_jsonl(keep_undecodable=True)`) are written back
-    verbatim, so a rewrite never silently drops a corrupt line.
-    """
-    pairs_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = pairs_path.with_suffix(".jsonl.tmp")
-    with tmp.open("w", encoding="utf-8") as fp:
-        for rec in records:
-            if "_raw" in rec and set(rec.keys()) == {"_raw"}:
-                fp.write(rec["_raw"] + "\n")
-            else:
-                fp.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    tmp.replace(pairs_path)
+# The atomic rewrite is a JSONL-level operation, not a pair-level one, so it
+# lives in `stylebot.jsonl`. The old name stays bound for callers that reach it
+# through this module (`stylebot.bin.ai_style_log`).
+write_pairs_atomic = write_jsonl_atomic
 
 
 def remove_pairs_for_source(pairs_path: Path, source: str) -> int:
@@ -349,8 +333,8 @@ def capture_pairs(
     multi-paragraph pairs, discourse context) without re-capturing. Captures
     saved before 2026-07-22 predate the archive and are chunk-scale forever.
     """
-    before_meta, before_body = split_frontmatter(before_text)
-    after_meta, after_body = split_frontmatter(after_text)
+    before_meta, before_body = split_frontmatter_meta(before_text)
+    after_meta, after_body = split_frontmatter_meta(after_text)
 
     if whole:
         # A whole-file pair spans many headings — no single heading applies,
@@ -562,8 +546,8 @@ def recut_archives(
         cap_id = arch.get("capture_id")
         if not cap_id or arch.get("whole"):
             continue  # whole-file captures are already unchunked
-        _, before_body = split_frontmatter(arch.get("before_text") or "")
-        _, after_body = split_frontmatter(arch.get("after_text") or "")
+        _, before_body = split_frontmatter_meta(arch.get("before_text") or "")
+        _, after_body = split_frontmatter_meta(arch.get("after_text") or "")
         triples = diff_chunks(
             before_body,
             after_body,

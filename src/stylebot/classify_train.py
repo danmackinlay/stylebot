@@ -58,8 +58,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from stylebot import classify
-from stylebot.eval import extract_slop, extract_target
-from stylebot.pairs import iter_pairs
+from stylebot.pairs import extract_slop, extract_target, iter_pairs
 from stylebot.provenance import git_sha
 
 logger = logging.getLogger(__name__)
@@ -179,7 +178,7 @@ def assemble_dataset(
 
     Each pair contributes its slop side (`messages[1]`, label slop) and its
     author side (`messages[2]`, label author), heading-context stripped (via
-    `eval.extract_slop`/`extract_target`), grouped by `meta.source` (the POST).
+    `pairs.extract_slop`/`extract_target`), grouped by `meta.source` (the POST).
     `meta.synthetic` (truthy on `ai-style synth` output, absent on real edit
     captures) is carried into `pair_synth` so metrics can facet by provenance.
 

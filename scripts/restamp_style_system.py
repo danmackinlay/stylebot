@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 from stylebot.ai_core import STYLE_SYSTEM
-from stylebot.capture import write_pairs_atomic
+from stylebot.jsonl import write_jsonl_atomic
 
 
 def restamp(path: Path, *, dry_run: bool = False) -> tuple[int, int]:
@@ -60,7 +60,7 @@ def restamp(path: Path, *, dry_run: bool = False) -> tuple[int, int]:
         # The loop above `sys.exit`s on any unparseable line, so `records` is
         # always fully-decoded dicts — the writer's `_raw` passthrough branch is
         # unreachable from here.
-        write_pairs_atomic(path, records)
+        write_jsonl_atomic(path, records)
     return len(records), changed
 
 

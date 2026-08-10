@@ -26,6 +26,7 @@ import click
 from stylebot import config, synth
 from stylebot.bin import synth_cli
 from stylebot.bin.ai_style_log import main as _log
+from stylebot.jsonl import append_jsonl
 from stylebot.lib import is_human_authored
 
 
@@ -390,9 +391,7 @@ def serve_cmd(
                 "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 **decision,
             }
-            preferences_path.parent.mkdir(parents=True, exist_ok=True)
-            with preferences_path.open("a", encoding="utf-8") as fp:
-                fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+            append_jsonl(preferences_path, record)
 
         prefer = prefer_op
 
