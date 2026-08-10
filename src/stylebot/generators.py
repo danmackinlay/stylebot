@@ -5,7 +5,7 @@ The slop-prompt registry (`STRATEGIES`, `resolve_strategy`, `prompt_id_of`), the
 and `openrouter_generator`, built on it) with their wire-level helpers.
 `stylebot.synth` re-exports the subset the CLI kit reaches through it — not
 everything here. Import from this module directly unless you specifically need
-`synth.<name>` attribute lookup (which is how `bin/synth_cli.py` resolves the
+`synth.<name>` attribute lookup (which is how `stylebot.synth_cli` resolves the
 generator factories, and therefore how tests monkeypatch them).
 """
 

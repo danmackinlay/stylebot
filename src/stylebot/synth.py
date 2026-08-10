@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # --- re-exports ---------------------------------------------------------------
 # The surface this module publishes on behalf of its implementation homes
 # (`stylebot.generators`, `stylebot.targets`). Load-bearing, not convenience:
-# `bin/synth_cli.py` and `bin/ai_style.py` import ONLY `stylebot.synth` and reach
+# `stylebot.synth_cli` and `bin/ai_style.py` import ONLY `stylebot.synth` and reach
 # every name below by attribute lookup (`synth.openrouter_generator`,
 # `synth.MIN_CHUNK_CHARS`, …); livingthing reaches `iter_targets`, `STRATEGIES`
 # and `openrouter_generator` the same way. Tests monkeypatch the factories HERE
