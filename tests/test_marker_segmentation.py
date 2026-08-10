@@ -79,6 +79,7 @@ def test_fixture_exercises_every_protected_kind():
     protected = "".join(seg for seg, editable in segment_for_edit(content) if not editable)
     assert "```python" in protected
     assert "```sh" in protected  # fence adjacent to prose, no blank line
+    assert "~~~yaml" in protected  # tilde fence (defect A2 — was a training target)
     assert "\\int_0^1" in protected  # $$math$$ with {#eq-...} attributes
     assert "> A blockquote" in protected
     assert "callout-tip" in protected  # nested ::: div

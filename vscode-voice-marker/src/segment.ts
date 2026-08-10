@@ -8,7 +8,7 @@
  * frontmatter and heading lines. The classifier trained on bare prose bodies,
  * so scoring anything else would be off-distribution.
  *
- * Keep behaviour in sync with stylebot/src/stylebot/lib.py — the shared
+ * Keep behaviour in sync with stylebot/src/stylebot/markdown.py — the shared
  * fixture (`stylebot/tests/fixtures/segmentation.qmd` +
  * `expected_segments.json`) is asserted by BOTH pytest and this package's
  * tests. No `vscode` import here, so tests run under plain `node --test`.
@@ -23,16 +23,18 @@ export interface Paragraph {
   end: number;
 }
 
-// Protected-span regexes — transliterations of stylebot.lib's patterns.
+// Protected-span regexes — transliterations of stylebot.markdown's patterns.
 // Python re.MULTILINE|re.DOTALL becomes /gm with [\s\S] standing in for
 // DOTALL-dot; Python's (?:\n|\Z) trailing-newline consumption becomes \n?.
-const CODE_FENCE_RE = /^[ \t]*```.*?$[\s\S]*?^[ \t]*```[ \t]*$\n?/gm;
+// Opener and closer alternate independently — deliberately NOT a backreference
+// (see stylebot.markdown.CODE_FENCE_RE for the measurement).
+const CODE_FENCE_RE = /^[ \t]*(?:```|~~~).*?$[\s\S]*?^[ \t]*(?:```|~~~)[ \t]*$\n?/gm;
 const MATH_BLOCK_RE = /\$\$[\s\S]*?\$\$[ \t]*(?:\{[^}\n]*\})?/g;
 const BLOCKQUOTE_RE = /^(?:[ \t]{0,3}>[^\n]*\n?)+/gm;
 
 type Span = [number, number];
 
-/** Nesting-aware ::: div/callout spans — port of stylebot.lib._find_div_blocks. */
+/** Nesting-aware ::: div/callout spans — port of stylebot.markdown.find_div_blocks. */
 function findDivBlocks(content: string): Span[] {
   const spans: Span[] = [];
   const lines = content.split(/(?<=\n)/); // keepends=True equivalent
