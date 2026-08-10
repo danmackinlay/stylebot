@@ -6,7 +6,7 @@ the override/exclude machinery and the drift-prone body behaviors (dry-run
 stubs, the non-zero exit on generation errors).
 
 The "-- the drift guard --" block below is the structural half: `synth` is a
-54-option command whose surface used to be restated in three hand-maintained
+50-option command whose surface used to be restated in three hand-maintained
 lists (the spec table, `CHUNK_PARAM_NAMES`, and `run_synth`'s 42-keyword
 signature). Those tests fail if a flag ever stops reaching a consumer, or if a
 default drifts between the flag and the library entry point — the latter
@@ -42,20 +42,23 @@ def test_synth_options_overrides_defaults():
 
 
 def test_synth_options_exclude_removes_option():
+    # Two names the blog wrapper really excludes (it pins both as policy) —
+    # this test used to exclude --gpt-model/--local-model, which no longer
+    # exist (the preset path was retired 2026-08-10).
     @click.command()
-    @synth_cli.synth_options(exclude=("gpt_model", "local_model"))
+    @synth_cli.synth_options(exclude=("max_chars", "prose_only"))
     def cmd(**kw):
         click.echo(",".join(sorted(kw)))
 
     runner = CliRunner()
     help_out = runner.invoke(cmd, ["--help"]).output
-    assert "--gpt-model" not in help_out
+    assert "--max-chars" not in help_out
     assert "--merge" in help_out  # the rest of the surface survives
-    assert runner.invoke(cmd, ["--gpt-model", "x"]).exit_code != 0
+    assert runner.invoke(cmd, ["--max-chars", "10"]).exit_code != 0
     # And the callback never receives the excluded params.
     ok = runner.invoke(cmd, [])
     assert ok.exit_code == 0
-    assert "gpt_model" not in ok.output
+    assert "prose_only" not in ok.output
 
 
 def test_synth_options_rejects_unknown_names():
@@ -169,18 +172,23 @@ def test_chunk_opts_agree_with_chunk_policy():
 # and passes overrides by name, so every one of these must keep working —
 # frozen here deliberately: this list is the compatibility contract, not a
 # derived value, and shrinking it is a breaking change to be made on purpose.
+#
+# Shrunk once, deliberately: `generator_names` / `gpt_model` / `local_model` /
+# `context_window` left with the gpt/local preset path (2026-08-10) — a
+# breaking change made on purpose, and the blog wrapper was updated in the
+# same change.
 _LEGACY_RUN_SYNTH_KEYWORDS = {
-    "data_dir": None, "generator_names": (), "openrouter_models": (),
+    "data_dir": None, "openrouter_models": (),
     "provider_sort": "throughput", "sticky_provider": True, "prompt_cache": True,
     "slop_strategies": (synth.DEFAULT_STRATEGY,), "slop_system_file": None,
-    "gpt_model": "gpt-4o", "local_model": "", "max_tokens": synth.DEFAULT_SLOP_MAX_TOKENS,
+    "max_tokens": synth.DEFAULT_SLOP_MAX_TOKENS,
     "timeout": synth.DEFAULT_GEN_TIMEOUT, "capture_reasoning": False,
     "reasoning_efforts": (synth.DEFAULT_REASONING_EFFORT,), "temperature": None,
     "top_p": None, "per_generator": False, "assign_seed": "", "context_dropout": 0.0,
     "max_workers": 0, "session_turns": 1,
     "session_max_tokens": synth.DEFAULT_SESSION_MAX_TOKENS, "replicate": "",
     "skip_covered": False, "max_transform_sim": None, "max_length_ratio": None,
-    "context_window": None, "session_budgets": None, "splits_path": None,
+    "session_budgets": None, "splits_path": None,
     "role": None, "sample_frac": None, "sample_salt": "", "limit": None,
     "dry_run": False, "sample_n": None, "report_path": None, "report_max_rows": 2000,
     "report_title": None, "count_note": "", "extra_tags": (), "generators": None,
@@ -207,11 +215,12 @@ def test_run_synth_rejects_unknown_keywords():
 
 
 def test_synth_command_surface_is_exactly_the_spec_table_plus_its_own():
-    # Pins the 54: the shared surface is _OPTION_SPECS and nothing else, and
-    # `synth` adds only its own selection/provenance flags.
+    # Pins the 50 (54 until the gpt/local preset path went, 2026-08-10): the
+    # shared surface is _OPTION_SPECS and nothing else, and `synth` adds only
+    # its own selection/provenance flags.
     params = [p for p in ai_style_main.commands["synth"].params if isinstance(p, click.Option)]
     own = {"blog_root", "data_dir", "field", "max_level", "select_all", "glob", "tags"}
-    assert len(params) == 54
+    assert len(params) == 50
     assert {p.name for p in params} - own == set(synth_cli._OPTION_SPECS)
 
 
@@ -222,18 +231,14 @@ def test_dry_run_stub_names_match_real_generator_names(monkeypatch):
     # The property the old duplicated loops maintained by hand: a dry-run
     # stub's synth_key covariates (name, strategy, effort, prompt id/version)
     # must equal the real factory generator's, or dry-run resume counts lie.
-    # The env-supplied local model was the latent divergence: the old stub was
-    # named local-local while the real run generated as local-<env-model>.
-    monkeypatch.setenv("LOCAL_LLM_MODEL", "qwen-local-x")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    # Also the standing proof that the real factory still CONSTRUCTS off a
+    # dummy key (no network, no request) — the only provider path left after
+    # the gpt/local presets went (2026-08-10).
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     arms = synth_cli.iter_arms(
         [synth.resolve_strategy("polish"), synth.resolve_strategy("casual")],
         ["off", "high"],
-        ["gpt", "local"],
-        ["a/b"],
-        gpt_model="gpt-4o",
-        local_model="",
+        ["a/b", "c/d"],
     )
     kw = dict(
         custom_system=None, max_tokens=1000, timeout=5.0, capture_reasoning=False,
@@ -248,9 +253,10 @@ def test_dry_run_stub_names_match_real_generator_names(monkeypatch):
     assert key_covariates == [
         (g.name, g.strategy, g.reasoning_effort, g.prompt_id, g.prompt_version) for g in real
     ]
-    assert "local-qwen-local-x" in {g.name for g in stubs}
-    # 2 strategies x 2 efforts x 3 models, strategies outermost.
-    assert len(stubs) == 12
+    # The name spelling is the synth_key input: unchanged by the retirement.
+    assert {g.name for g in stubs} == {"openrouter/a/b", "openrouter/c/d"}
+    # 2 strategies x 2 efforts x 2 models, strategies outermost.
+    assert len(stubs) == 8
 
 
 # -- end-to-end through the rebuilt ai-style synth --
@@ -399,25 +405,28 @@ def test_max_workers_auto_rule(tmp_path, monkeypatch, make_blog):
         synth, "openrouter_generator",
         lambda *, model, **kw: synth.Generator(name=f"openrouter/{model}", generate=lambda t, history=None: "s"),
     )
-    monkeypatch.setattr(
-        synth, "local_generator",
-        lambda **kw: synth.Generator(name="local-x", generate=lambda t, history=None: "s"),
-    )
     runner = CliRunner()
     base = ["synth", "--blog-root", str(root), "--data-dir", str(tmp_path / "c")]
 
     # OpenRouter-only -> auto 16.
     assert runner.invoke(ai_style_main, [*base, "--openrouter-model", "x/y"]).exit_code == 0
     assert captured["max_workers"] == 16
-    # A local preset in the mix -> auto 1 (local endpoints want sequential).
-    assert runner.invoke(ai_style_main, [*base, "--generator", "local"]).exit_code == 0
-    assert captured["max_workers"] == 1
     # Explicit always wins.
     assert runner.invoke(ai_style_main, [*base, "--openrouter-model", "x/y", "--max-workers", "3"]).exit_code == 0
     assert captured["max_workers"] == 3
+    # Injected generators — a library caller's own endpoint, which we know
+    # nothing about — still get sequential. That is all that is left of the
+    # rule now that the gpt/local presets are gone (2026-08-10); the CLI can no
+    # longer put a non-OpenRouter generator in the mix.
+    synth_cli.run_synth(
+        synth.iter_targets(blog_root=root),
+        data_dir=tmp_path / "c",
+        generators=[synth.Generator("injected", generate=lambda t, history=None: "s")],
+    )
+    assert captured["max_workers"] == 1
 
 
-def test_run_synth_sessions_end_to_end(tmp_path, make_blog):
+def test_run_synth_sessions_end_to_end(tmp_path, monkeypatch, make_blog):
     import json
 
     targets = synth.iter_targets(blog_root=make_blog(ai=False))
@@ -427,12 +436,15 @@ def test_run_synth_sessions_end_to_end(tmp_path, make_blog):
         hist_lens.append(len(history or []))
         return synth.GenOutput("[slop] " + text, {"prompt_tokens": 200 * (len(hist_lens))})
 
+    # Session windows come from the OpenRouter models registry and nowhere else
+    # now: the --context-window manual fallback retired with the presets
+    # (2026-08-10), so a generator only gets a window if it is OpenRouter-named.
+    monkeypatch.setattr(synth, "openrouter_context_windows", lambda: {"x/y": 8000})
     result = synth_cli.run_synth(
         targets,
         data_dir=tmp_path / "corpus",
-        generators=[synth.Generator("fake", generate=gen)],
+        generators=[synth.Generator("openrouter/x/y", generate=gen)],
         session_turns=2,
-        context_window=8000,  # injected generator: window comes from the flag
     )
     assert result is not None and result.written == 2
     assert hist_lens == [0, 2]

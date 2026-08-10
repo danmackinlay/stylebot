@@ -1,9 +1,11 @@
 """Generators — the slop producers: strategy prompts + provider factories.
 
 The slop-prompt registry (`STRATEGIES`, `resolve_strategy`, `prompt_id_of`),
-the `Generator`/`GenOutput` contract, and the three provider factories
-(`openai_generator`, `local_generator`, `openrouter_generator`) with their
-wire-level helpers (reasoning mapping, the OpenRouter models registry).
+the `Generator`/`GenOutput` contract, and the two provider factories
+(`openai_generator` and `openrouter_generator`, which is built on it) with
+their wire-level helpers (reasoning mapping, the OpenRouter models registry).
+A third, `local_generator`, was removed 2026-08-10 with the `--generator`
+preset path it existed to serve: it had never produced a corpus pair.
 
 `stylebot.synth` re-exports every public name here — external callers keep
 importing via `stylebot.synth`, and tests monkeypatch the factories on that
@@ -371,8 +373,8 @@ def openai_generator(
 ) -> Generator:
     """OpenAI-compatible slop generator (`openai` SDK; key `OPENAI_API_KEY`).
 
-    `base_url` repoints at any OpenAI-compatible endpoint — `local_generator` and
-    `openrouter_generator` use that to drive a base model / OpenRouter. `extra_body`
+    `base_url` repoints at any OpenAI-compatible endpoint — `openrouter_generator`
+    uses that to drive OpenRouter, and it is the seam for any other. `extra_body`
     passes provider-specific knobs through (e.g. OpenRouter's `reasoning` field, set
     by `openrouter_generator`). `reasoning_effort` is recorded verbatim as the
     *requested* covariate regardless of whether/how the provider honors it; sampling
@@ -508,51 +510,9 @@ def openai_generator(
         prompt_version=prompt_version,
         prompt_system=system,
         # Multi-turn sessions get a per-session closure whose pin_state makes
-        # routing sticky after turn 1 (only when requested — presets/local have
-        # no provider routing to pin).
+        # routing sticky after turn 1 (only when requested — a plain OpenAI
+        # endpoint has no provider routing to pin).
         begin_session=(lambda: _make_generate({})) if sticky_provider else None,
-    )
-
-
-def local_generator(
-    *,
-    model: str | None = None,
-    strategy: str = DEFAULT_STRATEGY,
-    base_url: str | None = None,
-    api_key: str | None = None,
-    system: str | None = None,
-    max_tokens: int = DEFAULT_SLOP_MAX_TOKENS,
-    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
-    temperature: float | None = None,
-    top_p: float | None = None,
-    timeout: float | None = DEFAULT_GEN_TIMEOUT,
-    capture_reasoning: bool = False,
-) -> Generator:
-    """Local/utility base-model generator via an OpenAI-compatible endpoint.
-
-    Reads `LOCAL_LLM_BASE_URL` / `LOCAL_LLM_MODEL` / `LOCAL_LLM_API_KEY` from the
-    environment when not passed explicitly. Tagged `local-<model>` so its pairs
-    are distinguishable in `meta.generator`. `reasoning_effort` is recorded but no
-    reasoning wire-param is sent (local OpenAI-compatible servers vary).
-    """
-    from stylebot import config
-
-    base_url = base_url or config.get_key("LOCAL_LLM_BASE_URL") or "http://localhost:8080/v1"
-    model = model or config.get_key("LOCAL_LLM_MODEL") or "local"
-    api_key = api_key or config.get_key("LOCAL_LLM_API_KEY") or "not-needed"
-    return openai_generator(
-        model=model,
-        strategy=strategy,
-        system=system,
-        max_tokens=max_tokens,
-        reasoning_effort=reasoning_effort,
-        temperature=temperature,
-        top_p=top_p,
-        api_key=api_key,
-        base_url=base_url,
-        name=f"local-{model}",
-        timeout=timeout,
-        capture_reasoning=capture_reasoning,
     )
 
 

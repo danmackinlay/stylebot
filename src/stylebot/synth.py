@@ -22,7 +22,7 @@ policy"): `iter_targets` takes a `selector` defaulting to
 own, or hand in a pre-selected file list and skip the walk entirely.
 
 The generators are injected, not hardcoded: tests pass plain callables; the
-`openai_generator` / `local_generator` / `openrouter_generator` factories build
+`openai_generator` / `openrouter_generator` factories build
 real provider-backed ones (multi-source by design — rotate ≥2 so the styler
 learns to undo AI writing broadly, not one model's tics; OpenRouter reaches many
 upstream models off a single key, so hosted models like Claude/GPT go through it).
@@ -76,7 +76,6 @@ from stylebot.generators import (  # noqa: E402, F401
     ResolvedStrategy,
     SlopStrategy,
     _normalize_gen_output,
-    local_generator,
     openai_generator,
     openrouter_context_windows,
     openrouter_generator,

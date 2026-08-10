@@ -59,11 +59,13 @@ from stylebot.splits import ROLES as SPLIT_ROLES
 # Progress heartbeat cadence for generation (seconds of wall-clock silence).
 _HEARTBEAT_SECS = 20.0
 
-# Direct-API slop-generator presets selectable on the CLI (each needs that
-# provider's own key). OpenRouter models are selected separately via
-# --openrouter-model (one key, many upstream models). Library callers inject
-# their own `synth.Generator`s.
-PRESETS = ("gpt", "local")
+# Slop models are selected by `--openrouter-model` alone (one key, many upstream
+# models). The direct-API `gpt`/`local` presets were retired 2026-08-10: across
+# the blog's 4169 synthetic pairs every single one was OpenRouter-served, so the
+# preset path carried an `Arm.kind` branch, four flags (`--generator`,
+# `--gpt-model`, `--local-model`, `--context-window`) and a whole generator
+# factory that had never produced a corpus pair. Library callers that want a
+# different provider inject their own `synth.Generator`s.
 
 
 def sort_key(name: str):
@@ -100,15 +102,12 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "report_max_rows": (("--report-max-rows",), dict(default=2000, show_default=True, type=int, help="Cap table rows in the HTML report (0 = all).")),
     "sample_n": (("--sample", "sample_n"), dict(type=int, default=None, help="Print N random targets to stdout and exit (no generation).")),
     # -- generation --
-    "generator_names": (("--generator", "generator_names"), dict(type=click.Choice(PRESETS), multiple=True, default=(), show_default=True, help="Direct-API slop generators to rotate across (repeatable; each needs that provider's key). Combine with or replace by --openrouter-model.")),
     "openrouter_models": (("--openrouter-model", "openrouter_models"), dict(multiple=True, help="OpenRouter model id to generate slop with (repeatable), e.g. anthropic/claude-opus-4-8. One key ($OPENROUTER_API_KEY) reaches many upstream models — ideal for multi-source rotation.")),
     "provider_sort": (("--provider-sort",), dict(type=click.Choice(["throughput", "price", "latency", "none"]), default="throughput", show_default=True, help="OpenRouter provider-routing preference (default load-balancing favours price and can land on ~10 tok/s upstreams; 'none' restores it). OpenRouter models only; recorded in meta.gen next to the served provider.")),
     "sticky_provider": (("--sticky-provider/--no-sticky-provider",), dict(default=True, show_default=True, help="Pin each live session to the provider that served its first turn — keeps its prefix cache hot AND the serving stack constant, so window-position covariates aren't confounded by provider hops. OpenRouter models only; no effect on stateless runs.")),
     "prompt_cache": (("--prompt-cache/--no-prompt-cache",), dict(default=True, show_default=True, help="Anthropic models: mark session history with a moving cache_control breakpoint (cache reads at 0.1x after a 1.25x write; inert under ~1024-token prefixes and for other model families). Verify via meta.gen cached_tokens/cost.")),
     "slop_strategies": (("--slop-strategy", "slop_strategies"), dict(multiple=True, default=(synth.DEFAULT_STRATEGY,), show_default=True, help=f"Slop-prompt flavour ({', '.join(synth.STRATEGIES)}); repeatable — the rotation becomes models x strategies, so one run diversifies prompts like it already diversifies models. Recorded as meta.slop_strategy and folded into synth_key. With --slop-system-file, pass exactly one label for the custom prompt.")),
     "slop_system_file": (("--slop-system-file",), dict(type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="Override the slop system prompt with this file's contents (e.g. an author's own slop catalogue), labelled by --slop-strategy. Keeps blog-specific prompts out of stylebot.")),
-    "gpt_model": (("--gpt-model",), dict(default="gpt-4o", show_default=True)),
-    "local_model": (("--local-model",), dict(default="", help="Local model id (else $LOCAL_LLM_MODEL).")),
     "max_tokens": (("--max-tokens",), dict(default=synth.DEFAULT_SLOP_MAX_TOKENS, show_default=True, type=int, help="Max completion tokens per slop generation. Raise if a model truncates.")),
     "timeout": (("--timeout",), dict(default=synth.DEFAULT_GEN_TIMEOUT, show_default=True, type=float, help="Per-request HTTP timeout (seconds) for slop generation. A timed-out pair is reported immediately and recorded as an error; it ends its own session (remaining turns defer to the next run) while other sessions continue.")),
     "reasoning_efforts": (("--reasoning-effort", "reasoning_efforts"), dict(type=click.Choice(["high", "medium", "low", "off"]), multiple=True, default=(synth.DEFAULT_REASONING_EFFORT,), show_default=True, help="Reasoning effort for the slop generator ('off' disables reasoning); repeatable — the rotation becomes models x strategies x efforts, so effort joins the sweep (facet eval by reasoning_effort). Recorded in meta.gen and folded into synth_key; the requested effort is recorded regardless of what the provider honors.")),
@@ -117,14 +116,13 @@ _OPTION_SPECS: dict[str, tuple[tuple[str, ...], dict]] = {
     "top_p": (("--top-p", "top_p"), dict(type=float, default=None, help="Nucleus top_p, sent to the API and recorded (provider default if unset).")),
     "per_generator": (("--per-generator",), dict(is_flag=True, help="Emit a pair from EVERY generator per target (n× cost) — the fully-crossed within-target design for experiments; default assigns each target ONE arm by content hash.")),
     "assign_seed": (("--assign-seed",), dict(default="", help="Salt for the content-hash arm assignment. Change it to re-randomize which (model, strategy, effort) arm each target gets — a fresh replicate of the design (changed assignments regenerate on resume).")),
-    "max_workers": (("--max-workers",), dict(default=0, show_default="auto", type=int, help="Concurrent sessions (asyncio). 0 = auto: 16 when all generators are OpenRouter-backed, 1 when a gpt/local preset is in the mix (a local server wants sequential).")),
+    "max_workers": (("--max-workers",), dict(default=0, show_default="auto", type=int, help="Concurrent sessions (asyncio). 0 = auto: 16 for the OpenRouter rotation this CLI builds, 1 for a library caller's injected generators (an unknown endpoint may want sequential).")),
     "session_turns": (("--session-turns",), dict(default=1, show_default=True, type=int, help="Session mode switch + backstop: 1 = stateless; >1 groups turns into live sessions (each turn sees the real prior passage->slop exchanges, meta.gen session_turn / window_fill). Depth is controlled by --session-max-tokens, NOT this number — sessions end when the token budget binds and leftover turns reflow into fresh sessions; the value only caps turns per session as a runaway guard.")),
     "session_max_tokens": (("--session-max-tokens",), dict(default=synth.DEFAULT_SESSION_MAX_TOKENS, show_default=True, type=int, help="THE session depth control: per-session prompt-token budget (absolute; input cost grows ~quadratically with it). Also capped at 80% of each model's context window. Turns beyond the budget reflow into fresh sessions, never dropped.")),
     "replicate": (("--replicate",), dict(default="", show_default=True, help="Deliberate-resample label folded into synth_key: the same substrate under a new label mints new cells without colliding with the base corpus (e.g. 'deep128k' for a deep-window arm, 'draw2' for a second sample). Recorded as meta.gen.replicate. Empty = the base corpus.")),
     "skip_covered": (("--skip-covered/--no-skip-covered",), dict(default=False, show_default=True, help="Corpus-building coverage mode: skip any target whose text already has >=1 pair in the data-dir under ANY config or epoch (cell-level dedup still applies to the rest). Use when the goal is one pair per passage — without it, a re-key epoch (e.g. an effort-default change) regenerates already-covered targets and doubles their training weight.")),
     "max_transform_sim": (("--max-transform-sim",), dict(type=float, default=None, help="Identity gate: drop (don't write) any generated pair whose transform_sim exceeds this — the model returned (nearly) the input, which would teach the styler to copy. Dropped pairs are counted loudly (skipped_degenerate) and their cells retry next run. Unset = record everything (the covariate is always stored).")),
     "max_length_ratio": (("--max-length-ratio",), dict(type=float, default=None, help="Inflation gate: drop any generated pair whose slop/target length ratio exceeds this — a manically inflating model (qwen3-32b ran 4-7x) teaches manic deletion. Counted as skipped_inflated; cells retry next run. Unset = record everything.")),
-    "context_window": (("--context-window",), dict(type=int, default=None, help="Context window (tokens) for gpt/local preset generators when sweeping sessions — OpenRouter models resolve theirs from the models registry automatically.")),
     # -- substrate selection: WHICH population this run measures (before --limit) --
     "splits_path": (("--splits", "splits_path"), dict(type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="splits.json of by-post roles (see ai-style make-splits). Required by --role.")),
     "role": (("--role",), dict(type=click.Choice(SPLIT_ROLES), default=None, help="Keep only chunks whose post holds this role. Measurement runs want 'styler': disjoint from the detector's training pool, so the voice classifier stays an unbiased instrument.")),
@@ -201,15 +199,12 @@ class GenOpts:
     downstream too (concurrency, windows, reporting).
     """
 
-    generator_names: Sequence[str] = ()
     openrouter_models: Sequence[str] = ()
     provider_sort: str = "throughput"
     sticky_provider: bool = True
     prompt_cache: bool = True
     slop_strategies: Sequence[str] = (synth.DEFAULT_STRATEGY,)
     slop_system_file: Path | None = None
-    gpt_model: str = "gpt-4o"
-    local_model: str = ""
     max_tokens: int = synth.DEFAULT_SLOP_MAX_TOKENS
     timeout: float | None = synth.DEFAULT_GEN_TIMEOUT
     reasoning_efforts: Sequence[str] = (synth.DEFAULT_REASONING_EFFORT,)
@@ -230,8 +225,7 @@ class SessionOpts:
 
     session_turns: int = 1
     session_max_tokens: int = synth.DEFAULT_SESSION_MAX_TOKENS
-    context_window: int | None = None
-    max_workers: int = 0  # 0 = auto, decided from the generator mix
+    max_workers: int = 0  # 0 = auto (16; see run_synth)
     session_budgets: Mapping[str, int] | None = None
 
 
@@ -367,56 +361,38 @@ class Arm:
     (previously "arm" existed only in comments). ``name`` is the single
     computation of the generator name that feeds ``synth_key`` — dry-run stubs
     and real factory generators both take it from here, so the two paths
-    cannot drift apart.
+    cannot drift apart. Every arm is OpenRouter-served since the preset path
+    was retired (2026-08-10), so ``name`` no longer branches on a ``kind``;
+    the spelling is unchanged, which is why retiring the presets did not re-key
+    a single cell.
     """
 
-    kind: str  # "gpt" | "local" | "openrouter"
-    model: str  # resolved model id (env fallbacks already applied)
+    model: str  # OpenRouter model id
     strategy: synth.ResolvedStrategy
     effort: str
 
     @property
     def name(self) -> str:
-        if self.kind == "openrouter":
-            return f"openrouter/{self.model}"
-        if self.kind == "local":
-            return f"local-{self.model}"
-        return self.model  # gpt preset: the raw model id
+        return f"openrouter/{self.model}"
 
 
 def iter_arms(
     resolved_strategies: Sequence[synth.ResolvedStrategy],
     efforts: Sequence[str],
-    generator_names: Sequence[str],
     openrouter_models: Sequence[str],
-    *,
-    gpt_model: str,
-    local_model: str,
 ) -> list[Arm]:
     """The rotation cross product, in corpus-affecting enumeration order.
 
-    Strategies (outer) × efforts × [presets in flag order, then OpenRouter
-    models in flag order]. `synth._assign` picks ``generators[digest % n]``,
-    so this enumeration order decides which arm owns which target — reordering
-    it reassigns the corpus on resume. The local model id is resolved here
-    (flag, else ``$LOCAL_LLM_MODEL``, else ``"local"`` — mirroring
-    `synth.local_generator`) so dry-run stub names match a real run's even
-    when the env var supplies the model.
+    Strategies (outer) × efforts × OpenRouter models in flag order.
+    `synth._assign` picks ``generators[digest % n]``, so this enumeration order
+    decides which arm owns which target — reordering it reassigns the corpus on
+    resume.
     """
-    from stylebot import config
-
-    models: list[tuple[str, str]] = []
-    for g in generator_names:
-        if g == "gpt":
-            models.append(("gpt", gpt_model))
-        else:
-            models.append(("local", local_model or config.get_key("LOCAL_LLM_MODEL") or "local"))
-    models += [("openrouter", m) for m in openrouter_models]
     return [
-        Arm(kind=kind, model=model, strategy=rs, effort=effort)
+        Arm(model=model, strategy=rs, effort=effort)
         for rs in resolved_strategies
         for effort in efforts
-        for kind, model in models
+        for model in openrouter_models
     ]
 
 
@@ -439,8 +415,8 @@ def build_generators(
     Dry-run stubs (name-only, no API clients, no keys) and real factory
     generators share ``arm.name`` and the key covariates, so their synth_keys
     are identical by construction — dry-run resume counts are the real run's.
-    Factories are reached as ``synth.<factory>`` attribute lookups on purpose:
-    tests monkeypatch them on the synth module.
+    The factory is reached as ``synth.openrouter_generator`` (attribute lookup
+    on purpose: tests monkeypatch it on the synth module).
     """
     out: list[synth.Generator] = []
     for arm in arms:
@@ -455,21 +431,14 @@ def build_generators(
                 )
             )
             continue
-        gen_kw = dict(
+        out.append(synth.openrouter_generator(
+            model=arm.model,
             strategy=arm.strategy.label, system=custom_system, max_tokens=max_tokens,
             reasoning_effort=arm.effort, temperature=temperature, top_p=top_p,
             timeout=timeout, capture_reasoning=capture_reasoning,
-        )
-        if arm.kind == "gpt":
-            out.append(synth.openai_generator(model=arm.model, **gen_kw))
-        elif arm.kind == "local":
-            out.append(synth.local_generator(model=arm.model, **gen_kw))
-        else:
-            out.append(synth.openrouter_generator(
-                model=arm.model,
-                provider_sort=None if provider_sort == "none" else provider_sort,
-                sticky_provider=sticky_provider, prompt_cache=prompt_cache, **gen_kw,
-            ))
+            provider_sort=None if provider_sort == "none" else provider_sort,
+            sticky_provider=sticky_provider, prompt_cache=prompt_cache,
+        ))
     return out
 
 
@@ -542,12 +511,15 @@ def _resolve_windows(
     *,
     session_turns: int,
     dry_run: bool,
-    context_window: int | None,
 ) -> dict[str, int]:
     """Per-generator context-window sizes — live sessions only (the overflow
-    guard + the window_fill covariate). OpenRouter models resolve from the
-    models registry (ground truth); presets / injected generators take
-    --context-window."""
+    guard + the window_fill covariate). Resolved from the OpenRouter models
+    registry, which is ground truth; the `--context-window` flag that used to
+    supply a manual fallback was retired with the presets (2026-08-10) — all
+    5 window values ever recorded on the corpus came from the registry. An
+    injected generator with a non-OpenRouter name simply gets no window (no
+    overflow guard, no window_fill); a library caller that needs one passes
+    `context_windows=` to `synth.synthesize_pairs` directly."""
     windows: dict[str, int] = {}
     if session_turns <= 1 or dry_run:
         return windows
@@ -563,9 +535,6 @@ def _resolve_windows(
             w = registry.get(n.removeprefix("openrouter/"))
             if w:
                 windows[n] = w
-    if context_window:
-        for g in generators:
-            windows.setdefault(g.name, context_window)
     return windows
 
 
@@ -691,8 +660,8 @@ def run_synth(
     nothing and need no corpus location or API keys: the caller decides
     whether to resolve it (and owns its own "no silent default" message)
     before calling, having seen `--sample`/`--report` first. Library callers
-    may inject ready-made `generators`, bypassing the preset/OpenRouter
-    construction. Returns the SynthResult, or None when an inspection mode
+    may inject ready-made `generators`, bypassing the OpenRouter construction
+    entirely. Returns the SynthResult, or None when an inspection mode
     short-circuited. Exits 1 on generation errors.
     """
     routed = split_bundle_kwargs(flat)
@@ -757,7 +726,7 @@ def run_synth(
             inspection,
             data_dir=data_dir,
             generation_flags_set=bool(
-                gen.generator_names or gen.openrouter_models
+                gen.openrouter_models
                 or tuple(gen.slop_strategies) != (synth.DEFAULT_STRATEGY,)
             ),
         )
@@ -766,10 +735,10 @@ def run_synth(
     if generators is None:
         # At least one slop source is required (no silent default — synth spends money
         # and may hit a provider key the operator hasn't configured).
-        if not gen.generator_names and not gen.openrouter_models:
+        if not gen.openrouter_models:
             raise click.UsageError(
-                "no generators selected: pass --generator {gpt,local} and/or "
-                "--openrouter-model MODEL (synth needs at least one slop source)"
+                "no generators selected: pass --openrouter-model MODEL "
+                "(synth needs at least one slop source)"
             )
         # Resolve every requested slop prompt up front (fail fast on a bad name;
         # dedupe repeats, order-preserving). For a registry strategy the *name*
@@ -794,10 +763,7 @@ def run_synth(
         # so one run diversifies prompts and reasoning depth the same way it
         # diversifies models (same cost — still one generation per target, just
         # a finer rotation).
-        arms = iter_arms(
-            resolved_strategies, efforts, gen.generator_names, gen.openrouter_models,
-            gpt_model=gen.gpt_model, local_model=gen.local_model,
-        )
+        arms = iter_arms(resolved_strategies, efforts, gen.openrouter_models)
         try:
             generators = build_generators(
                 arms,
@@ -824,16 +790,16 @@ def run_synth(
             if budget:
                 generator.session_budget = budget
 
-    # auto concurrency: OpenRouter multiplexes fine; a local/preset endpoint
-    # (or injected generators we know nothing about) gets sequential.
+    # auto concurrency: OpenRouter multiplexes fine, so a run we built ourselves
+    # gets 16. Injected generators (a library caller's own endpoint, which we
+    # know nothing about) still get sequential. The `and not generator_names`
+    # half of this test went with the presets (2026-08-10).
     max_workers = session.max_workers
     if max_workers <= 0:
-        openrouter_only = bool(gen.openrouter_models) and not gen.generator_names
-        max_workers = 16 if (openrouter_only and not gen.dry_run) else 1
+        max_workers = 16 if (gen.openrouter_models and not gen.dry_run) else 1
 
     windows = _resolve_windows(
         generators, session_turns=session.session_turns, dry_run=gen.dry_run,
-        context_window=session.context_window,
     )
 
     # Everything below writes: a data-dir is mandatory from here on. The

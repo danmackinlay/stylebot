@@ -1,22 +1,54 @@
-# `ai-style synth` flag audit — a proposal, not a change
+# `ai-style synth` flag audit — the proposal, and what was decided
 
-`ai-style synth` exposes **54 click options** (47 from the shared
-`synth_cli._OPTION_SPECS` table + 7 declared on `synth_cmd` itself, plus the
-`FILES` argument, which is not counted here). The next-largest subcommand has
-19. This document classifies all 54 against evidence so the repo owner can
-decide what to retire.
+At the time of the audit `ai-style synth` exposed **54 click options** (47 from
+the shared `synth_cli._OPTION_SPECS` table + 7 declared on `synth_cmd` itself,
+plus the `FILES` argument, which is not counted here). The next-largest
+subcommand has 19. This document classifies all 54 against evidence so the repo
+owner can decide what to retire.
 
-**Nothing here has been applied.** No flag was removed, deprecated or
-re-defaulted. This is a shopping list awaiting approval.
+The classification below is **as-audited** and left that way on purpose — it is
+the evidence, and rewriting it to match today's surface would destroy the record
+of what the evidence actually said. What was acted on is in Decisions.
 
-## Summary
+## Decisions — 2026-08-10
+
+One decision taken, one deferred; everything else in class C stands as an open
+proposal.
+
+- **Retired: the `gpt`/`local` direct-API preset path** — cluster 3, 4, 5, 10
+  (`--generator`, `--gpt-model`, `--local-model`, `--context-window`). All 4169
+  synthetic pairs were OpenRouter-served and every recorded `gen.context_window`
+  came from the OpenRouter models registry, so the path had never produced a
+  pair. Gone with them: the `PRESETS` tuple, `Arm.kind` and its branch in
+  `build_generators`, the preset arms in `iter_arms`, `_resolve_windows`'
+  manual-window fallback, the `and not generator_names` half of the
+  `--max-workers` auto rule, and `generators.local_generator` (plus its
+  `stylebot.synth` re-export). `openai_generator` **stays** — it is what
+  `openrouter_generator` is built on. Dan: *"let us not bother with the local
+  path if it adds complexity."*
+  **Resume identity is untouched.** OpenRouter arms are named
+  `openrouter/<model>` exactly as before, and `iter_arms` enumerated presets
+  *before* OpenRouter models, so with no presets the arm list and its order are
+  bit-identical. No cell re-keys; no paid corpus regenerates.
+  Downstream: livingthing's `bin/train_targets.py` dropped `gpt_model` /
+  `local_model` from its `synth_options(exclude=…)` tuple — `synth_options`
+  validates exclude names at import, so `dan-style synth` would otherwise have
+  failed to import. That was the only downstream consumer.
+  `ai-style synth` is now a **50**-option command.
+- **Kept: `--temperature` and `--top-p`** (items 7 and 8). Both are `None` on
+  all 4169 pairs, so the audit filed them as retirement candidates — but their
+  importance is *untested*, not disproven, and they were designed as
+  recorded-but-unkeyed covariates precisely so sampling can be swept without
+  re-keying. Dan's explicit call: not retiring on an absence of evidence.
+
+## Summary (as audited)
 
 | Class | Count | What it means |
 | --- | ---: | --- |
 | **A — Load-bearing** | 14 | Swept across runs, folded into `synth_key`, recorded as a `meta.gen` covariate with ≥2 observed values, or typed in the blog RUNBOOK's command lines. Removing or re-defaulting these breaks resume or loses analysis covariates. |
 | **B — Policy constants** | 24 | Set once by the blog wrapper (`synth_options` override or `exclude`) or left at their default and never varied. Real, but the value is pinned; the *flag* is optional, the *value* often is not. |
-| **C — Retirement candidates** | 16 | No usage found in either repo beyond the option definition and its own tests. |
-| **Total** | **54** | |
+| **C — Retirement candidates** | 16 | No usage found in either repo beyond the option definition and its own tests. **4 of these have since been retired** (see Decisions); 12 remain proposals. |
+| **Total** | **54** | 50 today. |
 
 Two cross-cutting caveats before the tables:
 
@@ -67,7 +99,7 @@ Two cross-cutting caveats before the tables:
 | `meta.context_mode` | `immediate` 3212, unset 957 (`--context-dropout` working) |
 | `gen.temperature`, `gen.top_p` | **1 each — always `None`** |
 | `gen.provider_sort` | **1 — always `throughput`** (the default) |
-| `gen.context_window` | 5, **all resolved from the OpenRouter registry** — never from `--context-window` |
+| `gen.context_window` | 5, **all resolved from the OpenRouter registry** — never from `--context-window` (which is why the flag went; the registry is now the only source) |
 | `meta.merge_max_chars`, `meta.chunk_mode` | **`None` on all 4624** — the v2 scale curriculum has not been run |
 | `meta.tags` | **1 — `["synthetic","paraphrase","livingthing"]` on every pair** |
 
@@ -151,33 +183,38 @@ One line of rationale and the risk of removing each. "No usage found" is the
 finding; none of these is provably *unused* — absence of evidence in two repos
 is the strongest claim available.
 
-| # | Flag | Rationale | Risk |
-| --: | --- | --- | --- |
-| 1 | `--sort` | No occurrence in either repo. Arm assignment is by content hash, so target *order* cannot change the corpus. | **Low** — affects only which chunks `--limit` takes and report row order. |
-| 2 | `--report-max-rows` | No occurrence; the 2000 default has never been raised or zeroed. | **Low** — a huge selection would render every row. |
-| 3 | `--generator` | The `gpt`/`local` direct-API preset path. **All 4169 synthetic pairs were OpenRouter-served**; no corpus pair has ever come from a preset. | **Medium** — with 4 and 5, deletes the only non-OpenRouter generation path. |
-| 4 | `--gpt-model` | Excluded by the blog wrapper; only test hits. Dead unless `--generator gpt` returns. | **Medium** — cluster with 3. |
-| 5 | `--local-model` | **Zero occurrences anywhere in either repo** outside `_OPTION_SPECS`. | **Medium** — cluster with 3; local-model experiments are a live interest elsewhere in the blog. |
-| 6 | `--capture-reasoning` | No `reasoning.jsonl` exists in the blog data-dir — never run against the real corpus. | **Low-Medium** — the only way to read what a model deliberated; costs nothing extra when on. |
-| 7 | `--temperature` | `None` on all 4169 pairs. Never varied. | **Medium** — designed as a recorded-but-unkeyed covariate precisely so sampling can be swept without re-keying; removing forecloses that. |
-| 8 | `--top-p` | `None` on all 4169 pairs. Never varied. | **Medium** — cluster with 7. |
-| 9 | `--assign-seed` | No occurrence in either repo. `--replicate` covers the fresh-draw story and **is** used (460 pairs). | **Low-Medium** — loses re-randomizing arm assignment without a new replicate label. |
-| 10 | `--context-window` | Every pair's `context_window` came from the OpenRouter registry (5 distinct values); the flag only serves preset/injected generators. | **Low** — but coupled to cluster 3-5: it exists *for* the preset path. |
-| 11 | `--splits` | Substrate block: no synth-side occurrence in either repo. (`--splits` appears only for `train-clf`.) | **Medium** — cluster with 12-14. |
-| 12 | `--role` | No occurrence. The designed way to keep measurement runs disjoint from the detector's training pool. | **Medium** — the splits contract is live for `train-clf`/`eval`; only the synth-side filter is unused. |
-| 13 | `--sample-frac` | No occurrence. The growth-stable alternative to `--limit`, which is what actually gets typed. | **Medium** — cluster with 11-12. |
-| 14 | `--sample-salt` | No occurrence; inert without `--sample-frac`. | **Low** — cluster with 13. |
-| 15 | `--all` | No occurrence. `--field`/`--max-level` can already relax the selector, and `FILES` bypasses it entirely. | **Low**. |
-| 16 | `--tag` | Every synthetic pair carries exactly `["synthetic","paraphrase","livingthing"]`, and `livingthing` comes from `extra_tags=` in the **library** call, not this flag. | **Low** — the library parameter is what is actually used and would stay. |
+The **Verdict** column records what was decided (2026-08-10); blank = still an
+open proposal, nothing done.
+
+| # | Flag | Rationale | Risk | Verdict |
+| --: | --- | --- | --- | --- |
+| 1 | `--sort` | No occurrence in either repo. Arm assignment is by content hash, so target *order* cannot change the corpus. | **Low** — affects only which chunks `--limit` takes and report row order. |  |
+| 2 | `--report-max-rows` | No occurrence; the 2000 default has never been raised or zeroed. | **Low** — a huge selection would render every row. |  |
+| 3 | `--generator` | The `gpt`/`local` direct-API preset path. **All 4169 synthetic pairs were OpenRouter-served**; no corpus pair has ever come from a preset. | **Medium** — with 4 and 5, deletes the only non-OpenRouter generation path. | **RETIRED** 2026-08-10 |
+| 4 | `--gpt-model` | Excluded by the blog wrapper; only test hits. Dead unless `--generator gpt` returns. | **Medium** — cluster with 3. | **RETIRED** 2026-08-10 |
+| 5 | `--local-model` | **Zero occurrences anywhere in either repo** outside `_OPTION_SPECS`. | **Medium** — cluster with 3; local-model experiments are a live interest elsewhere in the blog. | **RETIRED** 2026-08-10 |
+| 6 | `--capture-reasoning` | No `reasoning.jsonl` exists in the blog data-dir — never run against the real corpus. | **Low-Medium** — the only way to read what a model deliberated; costs nothing extra when on. |  |
+| 7 | `--temperature` | `None` on all 4169 pairs. Never varied. | **Medium** — designed as a recorded-but-unkeyed covariate precisely so sampling can be swept without re-keying; removing forecloses that. | **KEPT** — importance untested, not disproven |
+| 8 | `--top-p` | `None` on all 4169 pairs. Never varied. | **Medium** — cluster with 7. | **KEPT** — cluster with 7 |
+| 9 | `--assign-seed` | No occurrence in either repo. `--replicate` covers the fresh-draw story and **is** used (460 pairs). | **Low-Medium** — loses re-randomizing arm assignment without a new replicate label. |  |
+| 10 | `--context-window` | Every pair's `context_window` came from the OpenRouter registry (5 distinct values); the flag only serves preset/injected generators. | **Low** — but coupled to cluster 3-5: it exists *for* the preset path. | **RETIRED** 2026-08-10 |
+| 11 | `--splits` | Substrate block: no synth-side occurrence in either repo. (`--splits` appears only for `train-clf`.) | **Medium** — cluster with 12-14. |  |
+| 12 | `--role` | No occurrence. The designed way to keep measurement runs disjoint from the detector's training pool. | **Medium** — the splits contract is live for `train-clf`/`eval`; only the synth-side filter is unused. |  |
+| 13 | `--sample-frac` | No occurrence. The growth-stable alternative to `--limit`, which is what actually gets typed. | **Medium** — cluster with 11-12. |  |
+| 14 | `--sample-salt` | No occurrence; inert without `--sample-frac`. | **Low** — cluster with 13. |  |
+| 15 | `--all` | No occurrence. `--field`/`--max-level` can already relax the selector, and `FILES` bypasses it entirely. | **Low**. |  |
+| 16 | `--tag` | Every synthetic pair carries exactly `["synthetic","paraphrase","livingthing"]`, and `livingthing` comes from `extra_tags=` in the **library** call, not this flag. | **Low** — the library parameter is what is actually used and would stay. |  |
 
 ### If you want the biggest single win
 
 Items **3, 4, 5, 10** are one decision, not four: retiring the `gpt`/`local`
 preset path removes 4 flags, the `PRESETS` tuple, two generator factories'
 CLI reachability, and the `Arm.kind` branch in `build_generators` — and the
-corpus says it has never produced a pair. Items **11-14** are a second
-one-decision cluster (5 flags with `--sample-salt`), but that one is a bet
-that measurement runs will never need a disjoint substrate.
+corpus says it has never produced a pair. **Taken, 2026-08-10 — see Decisions.**
+(In the event `local_generator` was deleted outright and `openai_generator`
+kept, since `openrouter_generator` is built on it.) Items **11-14** are a
+second one-decision cluster (5 flags with `--sample-salt`), still open: that
+one is a bet that measurement runs will never need a disjoint substrate.
 
 ## Known documentation drift spotted in passing
 
