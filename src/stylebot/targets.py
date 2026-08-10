@@ -5,8 +5,9 @@ extraction, section-aware splitting and merge-packing, and the chunk-hygiene
 gates. All generic — policy arrives via the caller's `selector`, markers and
 header names.
 
-`stylebot.synth` re-exports the public names; this module is the implementation
-home.
+`stylebot.synth` re-exports the subset its CLI kit needs (`iter_targets`, the
+chunk-size constants); this module is the implementation home and the import
+site to prefer.
 """
 
 from __future__ import annotations

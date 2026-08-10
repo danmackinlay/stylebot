@@ -3,7 +3,10 @@
 The slop-prompt registry (`STRATEGIES`, `resolve_strategy`, `prompt_id_of`), the
 `Generator`/`GenOutput` contract, and the provider factories (`openai_generator`
 and `openrouter_generator`, built on it) with their wire-level helpers.
-`stylebot.synth` re-exports every public name here.
+`stylebot.synth` re-exports the subset the CLI kit reaches through it — not
+everything here. Import from this module directly unless you specifically need
+`synth.<name>` attribute lookup (which is how `bin/synth_cli.py` resolves the
+generator factories, and therefore how tests monkeypatch them).
 """
 
 from __future__ import annotations
