@@ -3,7 +3,7 @@
 Library-first: `synthesize_pairs` is a typed function over explicit paths/params;
 `ai-style synth` (`stylebot.bin.ai_style`) is a thin CLI wrapper.
 
-Method (see `_plans/phase-2-synthetic-pairs.md`): human-authored prose is the
+Method (see `_plans/decisions.md` D9, D11-D13): human-authored prose is the
 **target** (`messages[2]`); an LLM paraphrases it into "more polished" prose, the
 **slop source** (`messages[1]`), and the styler learns to undo that transform.
 Output is the Phase-1 `pairs.jsonl` schema chunked the same way, so real and

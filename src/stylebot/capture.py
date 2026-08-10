@@ -4,7 +4,7 @@ The `ai-style log` CLI is a thin wrapper keeping the path policy and the
 interactive session-snapshot workflow. Everything here takes explicit paths and
 strings, so a non-CLI producer can capture pairs without the logger's globals.
 Records follow the shared `pairs.jsonl` contract
-(`stylebot.pairs.validate_pair_record`); see `_plans/heading-context.md`.
+(`stylebot.pairs.validate_pair_record`); see `_plans/decisions.md` D14.
 """
 
 from __future__ import annotations

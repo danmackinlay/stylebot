@@ -5,7 +5,7 @@ The corpus schema is the seam between Phase 1 (real edit pairs), Phase 2
 here as a done-criteria gate, and Phase 3 should validate its input before
 spending money on a training run.
 
-The schema is defined in `_plans/phase-1-pair-capture.md` and produced by
+The schema is enforced by `validate_pair_record` below and produced by
 `stylebot.bin.ai_style_log`. Keep this in sync with that producer.
 """
 
@@ -106,7 +106,7 @@ def build_pair_content(context: str, body: str) -> str:
 
     Both producers MUST build message content through this one function, and
     record the same `context` under `meta.context`, so real and synthetic pairs
-    stay shape-compatible. See `_plans/heading-context.md`.
+    stay shape-compatible. See `_plans/decisions.md` D14.
     """
     context = (context or "").strip()
     body = body or ""

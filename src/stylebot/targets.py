@@ -51,7 +51,7 @@ class Target:
 
     `context` is the section heading this passage sits under (verbatim, possibly
     empty), prepended identically to both sides of the pair at synthesis time.
-    See `_plans/heading-context.md`.
+    See `_plans/decisions.md` D14.
     """
 
     text: str

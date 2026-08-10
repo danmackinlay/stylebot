@@ -15,7 +15,7 @@ The protocol is deliberately minimal (NDJSON, not LSP or JSON-RPC framing):
     <- {"id": 2, "scores": [0.72, 0.31]}
 
 Two further ops arm only when their seam is injected; an unarmed op errors
-politely. They are the editor rewrite loop (`_plans/slice-vscode-rewrite.md`):
+politely. They are the editor rewrite loop (`_plans/decisions.md` D20):
 
     -> {"id": 3, "op": "rewrite", "text": "...", "context": "## Heading",
         "best_of": 4}

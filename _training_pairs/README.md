@@ -12,7 +12,7 @@ portability) — the never-commit rule is about this repo, not the data.
 
 This file is the user-facing manual for `ai-style log`, the Phase 1 capture
 tool. The schema contract is in
-[`../_plans/phase-1-pair-capture.md`](../_plans/phase-1-pair-capture.md).
+[`../_plans/OVERVIEW.md`](../_plans/OVERVIEW.md).
 
 ## Layout
 

@@ -1,7 +1,7 @@
 """
 ai-style log: capture (slop -> Dan rewrite) training pairs for the fine-tune.
 
-Phase 1 of the plan at `_plans/ai-style-fine-tune.md`. Every time Dan rewrites
+Phase 1 of the plan at `_plans/OVERVIEW.md`. Every time Dan rewrites
 an AI draft, we want the (before, after) so it can go into the corpus. The
 capture is deliberately manual — invoked by hand, no automation, no git hook,
 no surprise side effects.

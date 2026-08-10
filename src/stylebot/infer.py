@@ -266,7 +266,7 @@ def rewrite_candidates(
     returns the full slate for a human to choose from: anchor violations FLAG
     (`anchors_lost`) rather than disqualify, and the input's own score rides
     along so the caller can show the delta. Serves the `rewrite` op of
-    `stylebot.serve` (see `_plans/slice-vscode-rewrite.md`).
+    `stylebot.serve` (see `_plans/decisions.md` D20).
 
     Single-chunk contract: `text` must be prose at training chunk scale —
     frontmatter, headings, or fences in the selection, or prose over

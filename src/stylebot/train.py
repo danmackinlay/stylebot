@@ -8,7 +8,7 @@ apply caller policy hooks, cut a deterministic by-POST validation split);
 are lazy; the module imports free.
 
 **Data policy this module deliberately encodes** (pinned in
-`_plans/phase-3-training.md` — do not "fix" these):
+`_plans/decisions.md` D17/D18 — do not "fix" these):
 
 - Near-copy pairs (`meta.transform_sim > 0.85`) are KEPT. They are label noise
   for the *detector* (`classify_train.assemble_dataset` drops them) but good

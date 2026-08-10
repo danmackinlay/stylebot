@@ -3,7 +3,7 @@
 Covers the `diff_chunks` heading resolution, the context prefix on captured
 pairs (gated through the shared `validate_pair_record`), the
 `--no-heading-context` / `--whole` opt-outs, and back-compat for heading-less
-(preamble) regions. See `_plans/heading-context.md`.
+(preamble) regions. See `_plans/decisions.md` D14.
 """
 
 from __future__ import annotations
