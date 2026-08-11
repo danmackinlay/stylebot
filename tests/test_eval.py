@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 
 import pytest
 
@@ -110,6 +111,154 @@ def test_vale_score_applies_glob_scoped_styles(tmp_path):
     clean = ev.vale_score("A short, plain sentence about nothing in particular.", config_path=ini)
     assert clean["available"] is True
     assert clean["alerts"] == 0
+
+
+# --- batched Vale ----------------------------------------------------------
+#
+# `vale_score` costs a whole process, and a corpus run scores ~2 texts per pair
+# (~9k processes on the live corpus), where startup dominates. `vale_score_many`
+# hands many `*.md` files to one invocation and splits the one
+# `{filename: [alerts]}` map back apart. These pin the contract that makes that
+# safe: input order, result-to-input mapping, and every degradation path
+# producing a FULL-LENGTH list of `available: False` rather than a short one.
+
+_SLOP = "In today's world you can leverage this to delve into new opportunities."
+_CLEAN = "A short, plain sentence about nothing in particular."
+
+
+def _fake_completed(stdout="", stderr="", returncode=0):
+    return subprocess.CompletedProcess(
+        args=["vale"], returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+def test_vale_score_many_empty_input_is_empty_output():
+    assert ev.vale_score_many([]) == []
+
+
+def test_vale_score_many_short_circuits_when_vale_is_absent(monkeypatch):
+    """No binary => no processes, and still one result per input text."""
+    monkeypatch.setattr(ev.shutil, "which", lambda name: None)
+    spawned = []
+    monkeypatch.setattr(ev.subprocess, "run", lambda *a, **k: spawned.append(a))
+
+    results = ev.vale_score_many([_SLOP, _CLEAN, _SLOP])
+    assert spawned == []  # short-circuit: not even one process
+    assert len(results) == 3
+    assert all(r["available"] is False and r["alerts"] == 0 for r in results)
+    assert all("PATH" in r["reason"] for r in results)
+    # Distinct objects, not one dict aliased three times — callers mutate these.
+    results[0]["by_severity"]["error"] = 99
+    assert results[1]["by_severity"]["error"] == 0
+
+
+@pytest.mark.parametrize(
+    ("proc_kwargs", "expect_reason"),
+    [
+        ({"stdout": "", "stderr": "E100 boom"}, "E100 boom"),  # empty stdout
+        ({"stdout": "not json at all"}, "not JSON"),  # non-JSON stdout
+        ({"stdout": '{"Code": "E100", "Text": "no config file found"}'}, "no config"),
+    ],
+)
+def test_vale_score_many_degrades_whole_batch_with_the_right_length(
+    monkeypatch, proc_kwargs, expect_reason
+):
+    """A whole-run failure marks EVERY text unavailable — never a short list."""
+    monkeypatch.setattr(ev.shutil, "which", lambda name: "/usr/bin/vale")
+    monkeypatch.setattr(ev.subprocess, "run", lambda *a, **k: _fake_completed(**proc_kwargs))
+
+    results = ev.vale_score_many([_SLOP] * 5)
+    assert len(results) == 5
+    assert all(r["available"] is False for r in results)
+    assert all(expect_reason in r["reason"] for r in results)
+    assert all(r["by_severity"] == {"error": 0, "warning": 0, "suggestion": 0} for r in results)
+
+
+def test_vale_score_many_degrades_when_vale_is_unexecutable(monkeypatch):
+    """Present on PATH but `subprocess.run` raises OSError — still no exception."""
+    monkeypatch.setattr(ev.shutil, "which", lambda name: "/usr/bin/vale")
+
+    def boom(*a, **k):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(ev.subprocess, "run", boom)
+    results = ev.vale_score_many([_SLOP, _CLEAN])
+    assert len(results) == 2
+    assert all(r["available"] is False and "failed to run" in r["reason"] for r in results)
+
+
+def test_vale_score_many_preserves_order_across_a_mixed_batch(tmp_path):
+    """The join back from vale's filename-keyed map must land on the right text."""
+    if shutil.which("vale") is None:
+        pytest.skip("vale binary not on PATH")
+    ini = _write_glob_scoped_vale_config(tmp_path)
+    # Alternating clean / one-token / two-token, plus a duplicate of the slop
+    # text to prove two identical inputs cannot collide onto one key.
+    texts = [
+        _CLEAN,
+        "We should delve into it.",
+        _SLOP,  # both `leverage` and `delve`
+        _CLEAN,
+        _SLOP,  # byte-identical to index 2
+    ]
+    results = ev.vale_score_many(texts, config_path=ini)
+    assert len(results) == len(texts)
+    assert all(r["available"] is True for r in results), results
+    assert [r["alerts"] for r in results] == [0, 1, 2, 0, 2]
+    # The alert text landed on the right element, not merely the right count.
+    assert results[1]["raw"][0]["Match"].lower() == "delve"
+    assert {a["Match"].lower() for a in results[2]["raw"]} == {"leverage", "delve"}
+
+
+def test_vale_score_many_chunks_across_invocations_without_losing_order(tmp_path, monkeypatch):
+    """More texts than fit one argv: several runs, one flat in-order result list."""
+    if shutil.which("vale") is None:
+        pytest.skip("vale binary not on PATH")
+    ini = _write_glob_scoped_vale_config(tmp_path)
+    monkeypatch.setattr(ev, "_VALE_FILES_PER_RUN", 3)
+
+    real_run = ev.subprocess.run
+    calls = []
+
+    def counting_run(cmd, **kwargs):
+        calls.append(cmd)
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(ev.subprocess, "run", counting_run)
+
+    # 8 texts, alternating alert counts, over a chunk size of 3.
+    texts = [_SLOP if i % 2 else _CLEAN for i in range(8)]
+    results = ev.vale_score_many(texts, config_path=ini)
+    assert len(calls) == 3  # ceil(8 / 3)
+    assert [r["alerts"] for r in results] == [0, 2, 0, 2, 0, 2, 0, 2]
+
+
+def test_vale_score_agrees_with_a_batch_of_one(tmp_path):
+    """`vale_score` is a thin wrapper; the two must not drift."""
+    if shutil.which("vale") is None:
+        pytest.skip("vale binary not on PATH")
+    ini = _write_glob_scoped_vale_config(tmp_path)
+    for text in (_SLOP, _CLEAN):
+        single = ev.vale_score(text, config_path=ini)
+        batched = ev.vale_score_many([text], config_path=ini)[0]
+        assert single == batched, text
+
+
+def test_vale_score_many_writes_md_files_so_glob_scoped_styles_still_fire(monkeypatch):
+    """The batch keeps the reason `vale_score` never used stdin: styles scoped
+    `[*.{md,qmd}]` match on FILENAME, so every scratch file needs the suffix."""
+    monkeypatch.setattr(ev.shutil, "which", lambda name: "/usr/bin/vale")
+    seen: list[list[str]] = []
+
+    def capture(cmd, **kwargs):
+        seen.append(list(cmd))
+        return _fake_completed(stdout="{}")
+
+    monkeypatch.setattr(ev.subprocess, "run", capture)
+    ev.vale_score_many([_SLOP, _CLEAN])
+    paths = [arg for arg in seen[0] if arg.endswith(".md")]
+    assert len(paths) == 2, seen
+    assert len(set(paths)) == 2  # distinct names — no two texts share a key
 
 
 def test_judge_reply_parser_extracts_score_from_surrounding_prose():
@@ -327,6 +476,107 @@ def test_score_pairs_file_concurrency_same_ids(tmp_path):
     ids1 = {json.loads(line)["id"] for line in out1.read_text().splitlines() if line.strip()}
     ids8 = {json.loads(line)["id"] for line in out8.read_text().splitlines() if line.strip()}
     assert ids1 == ids8 and len(ids1) == 6  # order-free: same ids regardless of worker count
+
+
+# --- the batched Vale pre-pass inside score_pairs_file ----------------------
+
+
+def _count_vale_spawns(monkeypatch):
+    """Pretend vale exists, count invocations, and report every file clean."""
+    monkeypatch.setattr(ev.shutil, "which", lambda name: "/usr/bin/vale")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return _fake_completed(stdout="{}")
+
+    monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    return calls
+
+
+def test_score_candidate_accepts_a_precomputed_vale_result(monkeypatch):
+    """The injection point: `vale=` given => no process, value passed through."""
+    calls = _count_vale_spawns(monkeypatch)
+    precomputed = {"available": True, "alerts": 7, "by_severity": {}, "raw": []}
+    rec = ev.score_candidate("prose", judge=None, vale=precomputed)
+    assert rec["vale"] is precomputed
+    assert calls == []
+    # Default is unchanged for every existing caller: it still scores inline.
+    ev.score_candidate("prose", judge=None)
+    assert len(calls) == 1
+
+
+def test_score_pairs_file_batches_vale_into_one_process_per_slice(tmp_path, monkeypatch):
+    """6 pairs x 2 fields used to be 12 `vale` processes; it is now one."""
+    specs = [
+        (f"Paragraph number {i}, long enough to be scored as a candidate here.", None, "polish")
+        for i in range(6)
+    ]
+    pairs = _make_pairs(tmp_path / "c", specs)
+    calls = _count_vale_spawns(monkeypatch)
+
+    res = ev.score_pairs_file(pairs, tmp_path / "scores.jsonl", judge=fake_judge, max_workers=4)
+    assert res.written == 6
+    assert len(calls) == 1, calls
+    # One scratch `.md` per (record, field) — 6 pairs x {slop, target}.
+    assert len([a for a in calls[0] if a.endswith(".md")]) == 12
+
+
+def test_score_pairs_file_still_streams_across_batches(tmp_path, monkeypatch):
+    """Crash-safety: results reach the file per line, not once at the end.
+
+    The pre-pass slices the corpus rather than swallowing it whole, so a run
+    that dies partway leaves everything before the current slice on disk and
+    the resume path picks up from there.
+    """
+    specs = [
+        (f"Paragraph number {i}, long enough to be scored as a candidate here.", None, "polish")
+        for i in range(5)
+    ]
+    pairs = _make_pairs(tmp_path / "c", specs)
+    monkeypatch.setattr(ev, "_SCORE_BATCH_RECORDS", 2)
+    calls = _count_vale_spawns(monkeypatch)
+
+    out = tmp_path / "scores.jsonl"
+    # A judge that reads the file back mid-run sees earlier records already there.
+    lines_seen: list[int] = []
+
+    def peeking_judge(prose: str) -> dict:
+        lines_seen.append(len([ln for ln in out.read_text().splitlines() if ln.strip()]))
+        return {"score": 4, "rationale": "x"}
+
+    res = ev.score_pairs_file(pairs, out, judge=peeking_judge, max_workers=1)
+    assert res.written == 5
+    assert len(calls) == 3  # ceil(5 / 2) slices, one vale run each
+    assert max(lines_seen) >= 2  # the file grew during the run, not after it
+
+    # And the run is still resumable from that partial state.
+    assert ev.score_pairs_file(pairs, out, judge=fake_judge).skipped_existing == 5
+
+
+def test_score_pairs_file_survives_a_vale_batch_failure(tmp_path, monkeypatch):
+    """Vale is a signal, not a run-ender: a batch blow-up degrades to
+    `available: False` on every text and still writes every record."""
+    specs = [
+        (f"Paragraph number {i}, long enough to be scored as a candidate here.", None, "polish")
+        for i in range(3)
+    ]
+    pairs = _make_pairs(tmp_path / "c", specs)
+
+    def exploding(*a, **k):
+        raise RuntimeError("vale batch exploded")
+
+    monkeypatch.setattr(ev, "vale_score_many", exploding)
+
+    out = tmp_path / "scores.jsonl"
+    res = ev.score_pairs_file(pairs, out, judge=fake_judge)
+    assert res.written == 3
+    assert res.errors == []  # not a per-record failure
+    for rec in _read_scores(out):
+        for name in ("slop", "target"):
+            assert rec["scores"][name]["vale"]["available"] is False
+            assert "vale batch failed" in rec["scores"][name]["vale"]["reason"]
+            assert rec["scores"][name]["judge"]["score"] == 4  # other signals unharmed
 
 
 # --- orphan score records --------------------------------------------------

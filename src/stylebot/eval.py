@@ -27,11 +27,9 @@ detector.
 
 from __future__ import annotations
 
-import contextlib
 import csv
 import datetime as _dt
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -62,6 +60,138 @@ SCHEMA_VERSION = 2
 # ---------------------------------------------------------------------------
 
 
+# Files handed to a single `vale` invocation. Vale takes many paths at once and
+# returns one {filename: [alerts]} map, so batching turns "one process per scored
+# text" into "one process per this many". Capped rather than unbounded: the paths
+# all land on one argv, and ARG_MAX is the wall.
+_VALE_FILES_PER_RUN = 256
+
+
+def _vale_unavailable(reason: str) -> dict:
+    """The graceful-degradation record. Fresh dicts per call — callers mutate."""
+    return {
+        "available": False,
+        "alerts": 0,
+        "by_severity": {"error": 0, "warning": 0, "suggestion": 0},
+        "raw": [],
+        "reason": reason,
+    }
+
+
+def _vale_summarize(alerts: list[dict]) -> dict:
+    by_severity = {"error": 0, "warning": 0, "suggestion": 0}
+    for alert in alerts:
+        sev = str(alert.get("Severity", "")).lower()
+        if sev in by_severity:
+            by_severity[sev] += 1
+    return {
+        "available": True,
+        "alerts": len(alerts),
+        "by_severity": by_severity,
+        "raw": alerts,
+    }
+
+
+def _basename(key: str) -> str:
+    """Last path segment of a vale JSON key, whichever separator it used.
+
+    Vale keys its output map by the path it was *handed*: absolute when we pass
+    absolute paths, relative when relative. We always pass absolute paths inside
+    one temp directory whose filenames are unique by construction, so the last
+    segment is an unambiguous join key either way.
+    """
+    return str(key).replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _vale_run(texts: Sequence[str], *, config_path: str | Path | None) -> list[dict]:
+    """One `vale` invocation over `texts`; one result dict per text, in order."""
+    cmd = ["vale", "--output=JSON"]
+    if config_path is not None:
+        cmd.append(f"--config={Path(config_path)}")
+
+    # Index-derived filenames inside one scratch directory: unique by
+    # construction, so no two texts can collide on a key even if two carry
+    # identical prose.
+    names = [f"{i:08d}.md" for i in range(len(texts))]
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="stylebot-vale-", ignore_cleanup_errors=True
+        ) as tmpdir:
+            paths = []
+            for name, text in zip(names, texts, strict=True):
+                path = Path(tmpdir) / name
+                path.write_text(text, encoding="utf-8")
+                paths.append(str(path))
+            proc = subprocess.run(
+                [*cmd, *paths],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+    except OSError as exc:  # vale present but unexecutable, or the scratch dir failed
+        return [_vale_unavailable(f"vale failed to run: {exc}") for _ in texts]
+
+    out = (proc.stdout or "").strip()
+    if not out:
+        # No JSON at all — usually a config/runtime error printed on stderr.
+        reason = (proc.stderr or "vale produced no output").strip()
+        return [_vale_unavailable(reason) for _ in texts]
+
+    try:
+        parsed = json.loads(out)
+    except json.JSONDecodeError:
+        return [_vale_unavailable("vale output was not JSON") for _ in texts]
+
+    # Vale emits a runtime-error *object* (e.g. E100 "no config file found")
+    # instead of the normal {filename: [alerts]} map. Treat that as unavailable —
+    # it is a whole-run failure, so every text in the batch degrades.
+    if isinstance(parsed, dict) and parsed.get("Code"):
+        reason = str(parsed.get("Text", parsed["Code"])).strip()
+        return [_vale_unavailable(reason) for _ in texts]
+
+    by_name: dict[str, list[dict]] = {}
+    if isinstance(parsed, dict):
+        for key, file_alerts in parsed.items():
+            if isinstance(file_alerts, list):
+                by_name.setdefault(_basename(key), []).extend(
+                    a for a in file_alerts if isinstance(a, dict)
+                )
+    # A clean file is OMITTED from vale's map, not present with an empty list —
+    # so a missing key means zero alerts, not a missing result.
+    return [_vale_summarize(by_name.get(name, [])) for name in names]
+
+
+def vale_score_many(texts: Sequence[str], *, config_path: str | Path | None = None) -> list[dict]:
+    """Score many texts with as few `vale` processes as possible.
+
+    The batch form of `vale_score`, and the one the corpus scorer uses: process
+    startup dominates a per-text shell-out, and a full corpus run scores ~2 texts
+    per pair. Vale accepts many paths per invocation and answers with one
+    ``{filename: [alerts]}`` map, so this writes the batch into a single scratch
+    directory (index-derived ``*.md`` names — unique by construction, so no two
+    texts collide on a key) and chunks it across invocations of at most
+    `_VALE_FILES_PER_RUN` files.
+
+    Returns one dict per input text, **in input order**, each shaped exactly as
+    `vale_score` returns. Never raises: a whole-run failure (vale absent,
+    unexecutable, silent, non-JSON, or reporting its own ``E100``) degrades every
+    text in that chunk to ``{"available": False, "reason": …}`` — the list is
+    always as long as `texts`.
+    """
+    texts = list(texts)
+    if not texts:
+        return []
+    if shutil.which("vale") is None:
+        return [_vale_unavailable("vale not on PATH") for _ in texts]
+
+    results: list[dict] = []
+    for start in range(0, len(texts), _VALE_FILES_PER_RUN):
+        results.extend(
+            _vale_run(texts[start : start + _VALE_FILES_PER_RUN], config_path=config_path)
+        )
+    return results
+
+
 def vale_score(text: str, *, config_path: str | Path | None = None) -> dict:
     """Score `text` with the `vale` binary; return a JSON-able alert summary.
 
@@ -77,76 +207,11 @@ def vale_score(text: str, *, config_path: str | Path | None = None) -> dict:
 
     Returns ``{"available", "alerts", "by_severity", "raw"}``, where `alerts` is
     the total (0 when unavailable) and `raw` is vale's per-alert objects.
+
+    A batch of one, over `vale_score_many` — which is what you want whenever you
+    have more than one text, since this costs a whole process.
     """
-    empty = {
-        "available": False,
-        "alerts": 0,
-        "by_severity": {"error": 0, "warning": 0, "suggestion": 0},
-        "raw": [],
-    }
-    if shutil.which("vale") is None:
-        return {**empty, "reason": "vale not on PATH"}
-
-    cmd = ["vale", "--output=JSON"]
-    if config_path is not None:
-        cmd.append(f"--config={Path(config_path)}")
-
-    # Write the prose to a real `.md` file so glob-scoped styles (`[*.{md,qmd}]`)
-    # match by filename; close it before invoking Vale (cross-platform), and
-    # always remove it afterwards.
-    tmp_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False, encoding="utf-8"
-        ) as tmp:
-            tmp.write(text)
-            tmp_path = tmp.name
-        proc = subprocess.run(
-            [*cmd, tmp_path],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError as exc:  # pragma: no cover - vale present but unexecutable
-        return {**empty, "reason": f"vale failed to run: {exc}"}
-    finally:
-        if tmp_path is not None:
-            with contextlib.suppress(OSError):  # best-effort cleanup
-                os.unlink(tmp_path)
-
-    out = (proc.stdout or "").strip()
-    if not out:
-        # No JSON at all — usually a config/runtime error printed on stderr.
-        return {**empty, "reason": (proc.stderr or "vale produced no output").strip()}
-
-    try:
-        parsed = json.loads(out)
-    except json.JSONDecodeError:
-        return {**empty, "reason": "vale output was not JSON"}
-
-    # Vale emits a runtime-error *object* (e.g. E100 "no config file found")
-    # instead of the normal {filename: [alerts]} map. Treat that as unavailable.
-    if isinstance(parsed, dict) and parsed.get("Code"):
-        return {**empty, "reason": str(parsed.get("Text", parsed["Code"])).strip()}
-
-    alerts: list[dict] = []
-    if isinstance(parsed, dict):
-        for file_alerts in parsed.values():
-            if isinstance(file_alerts, list):
-                alerts.extend(a for a in file_alerts if isinstance(a, dict))
-
-    by_severity = {"error": 0, "warning": 0, "suggestion": 0}
-    for alert in alerts:
-        sev = str(alert.get("Severity", "")).lower()
-        if sev in by_severity:
-            by_severity[sev] += 1
-
-    return {
-        "available": True,
-        "alerts": len(alerts),
-        "by_severity": by_severity,
-        "raw": alerts,
-    }
+    return vale_score_many([text], config_path=config_path)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +367,7 @@ def score_candidate(
     detector: Detector = null_detector,
     vale_config: str | Path | None = None,
     eyeball: str | None = None,
+    vale: dict | None = None,
 ) -> dict:
     """Score one candidate passage across the available signals.
 
@@ -309,12 +375,16 @@ def score_candidate(
     its field comes back ``None``. `eyeball` is an optional human note carried
     verbatim into the record.
 
+    `vale` injects an already-computed Vale result (from `vale_score_many`)
+    instead of spending a process here; leave it `None` — the default — and this
+    calls `vale_score` itself exactly as before.
+
     Returns a stable, JSON-able record keyed
     ``text_chars`` / ``vale`` / ``judge`` / ``detector`` / ``eyeball``.
     """
     return {
         "text_chars": len(text),
-        "vale": vale_score(text, config_path=vale_config),
+        "vale": vale if vale is not None else vale_score(text, config_path=vale_config),
         "judge": judge(text) if judge is not None else None,
         "detector": detector(text),
         "eyeball": eyeball,
@@ -422,6 +492,13 @@ class ScoreResult:
     errors: list[tuple[str, str]] = field(default_factory=list)  # (id, message)
 
 
+# Records per slice of the scoring loop. Each slice takes one batched Vale
+# pre-pass then one thread-pool drain, so this is the granularity at which
+# results reach the file: bigger amortises `vale` startup further, smaller keeps
+# a crashed run's lost work smaller. `fields` multiplies it into texts per batch.
+_SCORE_BATCH_RECORDS = 128
+
+
 def _score_record(
     record: dict,
     *,
@@ -429,14 +506,23 @@ def _score_record(
     judge: Judge | None,
     detector: Detector,
     vale_config: str | Path | None,
+    vale_by_field: dict[str, dict] | None = None,
 ) -> dict:
-    """Score the requested fields of one pair record -> a `scores.jsonl` line."""
+    """Score the requested fields of one pair record -> a `scores.jsonl` line.
+
+    `vale_by_field` carries the batched pre-pass's results (field name -> Vale
+    record); a field missing from it falls back to scoring Vale inline.
+    """
     meta = record.get("meta") or {}
     scores: dict[str, dict] = {}
     for name in fields:
         text = FIELD_EXTRACTORS[name](record)
         scores[name] = score_candidate(
-            text, judge=judge, detector=detector, vale_config=vale_config
+            text,
+            judge=judge,
+            detector=detector,
+            vale_config=vale_config,
+            vale=(vale_by_field or {}).get(name),
         )
     gen = meta.get("gen") or {}
     carried = {k: meta.get(k) for k in _CARRIED_META if k in meta}
@@ -446,6 +532,44 @@ def _score_record(
         "meta": carried,
         "scores": scores,
     }
+
+
+def _vale_prepass(
+    records: Sequence[dict],
+    *,
+    fields: Sequence[str],
+    vale_config: str | Path | None,
+) -> list[dict[str, dict]]:
+    """Batch-score every (record, field) text with Vale -> per-record results.
+
+    Returns one ``{field: vale_record}`` dict per input record, aligned to
+    `records`. Never raises and never fails a record: an extraction that blows up
+    is simply left out (the worker thread hits the same error and `ScoreResult`
+    captures it per record, as it always did), and a Vale batch failure degrades
+    the affected texts to ``available: False``.
+    """
+    texts: list[str] = []
+    slots: list[tuple[int, str]] = []
+    for i, record in enumerate(records):
+        for name in fields:
+            try:
+                text = FIELD_EXTRACTORS[name](record)
+            except Exception:  # noqa: BLE001 - the worker re-hits this and reports it per record
+                continue
+            slots.append((i, name))
+            texts.append(text)
+
+    per_record: list[dict[str, dict]] = [{} for _ in records]
+    if not texts:
+        return per_record
+    try:
+        results = vale_score_many(texts, config_path=vale_config)
+    except Exception as exc:  # noqa: BLE001 - Vale is a signal, never a run-ender
+        reason = f"vale batch failed: {type(exc).__name__}: {exc}"
+        results = [_vale_unavailable(reason) for _ in texts]
+    for (i, name), result in zip(slots, results, strict=True):
+        per_record[i][name] = result
+    return per_record
 
 
 def score_pairs_file(
@@ -467,10 +591,16 @@ def score_pairs_file(
     append one score record keyed by `record_id`, so scores join back to the
     corpus. Idempotent + resumable: ids already in `out_path` are skipped.
 
-    Scoring is concurrent (`max_workers` threads — the judge / Vale are blocking
-    IO); a single writer appends results as they complete and flushes per line
-    (crash-safe). A field/judge error on one record is captured in
-    `ScoreResult.errors` and never aborts the run.
+    Records are processed in slices of `_SCORE_BATCH_RECORDS`. Each slice runs a
+    single batched **Vale pre-pass** (`vale_score_many` — one `vale` process per
+    ~256 texts rather than one per text, which used to be ~9k processes on the
+    live corpus and was dominated by process startup), then fans the judge /
+    detector out over `max_workers` threads with each record's Vale result
+    injected. A single writer appends results as they complete and flushes per
+    line, so the file still grows during the run and a crash still costs at most
+    the slice in flight. A field/judge error on one record is captured in
+    `ScoreResult.errors` and never aborts the run; a Vale batch failure degrades
+    to ``available: False`` rather than failing the records.
 
     On entry, `out_path` is pruned of records whose pair no longer exists
     (`prune_orphan_scores`; count in `ScoreResult.pruned_orphans` — surface it,
@@ -508,34 +638,38 @@ def score_pairs_file(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     total = len(todo)
     done = 0
-    with (
-        out_path.open("a", encoding="utf-8") as fp,
-        ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool,
-    ):
-        futures = {
-            pool.submit(
-                _score_record,
-                rec,
-                fields=fields,
-                judge=judge,
-                detector=detector,
-                vale_config=vale_config,
-            ): rec
-            for rec in todo
-        }
-        for fut in as_completed(futures):
-            done += 1
-            if on_progress is not None:
-                on_progress(done, total)
-            rec = futures[fut]
-            try:
-                line = fut.result()
-            except Exception as exc:  # a field/judge error on one record — record and continue
-                result.errors.append((record_id(rec), f"{type(exc).__name__}: {exc}"))
-                continue
-            fp.write(dumps_line(line) + "\n")
-            fp.flush()
-            result.written += 1
+    batch_size = max(1, _SCORE_BATCH_RECORDS)
+    with out_path.open("a", encoding="utf-8") as fp:
+        for start in range(0, total, batch_size):
+            batch = todo[start : start + batch_size]
+            # One `vale` run for the whole slice, up front, on this thread.
+            vale_results = _vale_prepass(batch, fields=fields, vale_config=vale_config)
+            with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
+                futures = {
+                    pool.submit(
+                        _score_record,
+                        rec,
+                        fields=fields,
+                        judge=judge,
+                        detector=detector,
+                        vale_config=vale_config,
+                        vale_by_field=vale_results[i],
+                    ): rec
+                    for i, rec in enumerate(batch)
+                }
+                for fut in as_completed(futures):
+                    done += 1
+                    if on_progress is not None:
+                        on_progress(done, total)
+                    rec = futures[fut]
+                    try:
+                        line = fut.result()
+                    except Exception as exc:  # a field/judge error on one record — log, continue
+                        result.errors.append((record_id(rec), f"{type(exc).__name__}: {exc}"))
+                        continue
+                    fp.write(dumps_line(line) + "\n")
+                    fp.flush()
+                    result.written += 1
     return result
 
 
