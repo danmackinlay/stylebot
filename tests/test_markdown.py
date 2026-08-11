@@ -88,6 +88,65 @@ def test_segment_spans_roundtrip_is_lossless():
     assert "".join(seg for seg, _ in md.segment_spans(doc)) == doc
 
 
+# -- raw HTML (opt-in) ------------------------------------------------------
+
+SCRIPT = 'before\n\n<script src="x.js">\nconst a = 1;\n\nconst b = 2;\n</script>\n\nafter\n'
+
+
+def test_raw_html_is_off_by_default():
+    assert _kinds(SCRIPT) == []
+    assert "const a = 1;" in "".join(s for s, e in md.segment_spans(SCRIPT) if e)
+
+
+def test_raw_html_protects_script_blocks_when_enabled():
+    assert _kinds(SCRIPT, raw_html=True) == [md.RAW_HTML]
+    prose = "".join(s for s, e in md.segment_spans(SCRIPT, raw_html=True) if e)
+    assert "const a = 1;" not in prose
+    assert "const b = 2;" not in prose  # the blank line inside must not end it
+    assert "before" in prose and "after" in prose
+
+
+def test_raw_html_protects_style_blocks_and_ignores_case():
+    doc = "p\n\n<STYLE>\nbody { color: red }\n</Style>\n\nq\n"
+    assert _kinds(doc, raw_html=True) == [md.RAW_HTML]
+
+
+def test_raw_html_leaves_other_elements_alone():
+    # Every other element's content IS markup, so prose inside it stays prose.
+    doc = "p\n\n<div class='x'>\nOrdinary prose inside a raw div.\n</div>\n\nq\n"
+    assert _kinds(doc, raw_html=True) == []
+
+
+def test_unclosed_script_yields_no_span():
+    assert md.protected_spans("p\n\n<script>\nnever closed\n", raw_html=True) == []
+
+
+def test_raw_html_requires_the_opener_to_start_a_line():
+    doc = "Prose mentioning <script>inline()</script> mid-sentence.\n"
+    assert _kinds(doc, raw_html=True) == []
+
+
+def test_raw_html_does_not_span_two_separate_blocks():
+    doc = "<script>\na\n</script>\n\ntext between\n\n<script>\nb\n</script>\n"
+    assert _kinds(doc, raw_html=True) == [md.RAW_HTML, md.RAW_HTML]
+    assert "text between" in "".join(s for s, e in md.segment_spans(doc, raw_html=True) if e)
+
+
+def test_protected_kinds_gains_raw_html_only_when_enabled():
+    assert md.protected_kinds() == md.PROTECTED_KINDS
+    assert md.RAW_HTML not in md.PROTECTED_KINDS
+    assert md.protected_kinds(raw_html=True) == md.PROTECTED_KINDS | {md.RAW_HTML}
+
+
+def test_raw_html_stays_lossless_and_reaches_line_kinds():
+    assert "".join(s for s, _ in md.segment_spans(SCRIPT, raw_html=True)) == SCRIPT
+    kinds = md.line_kinds(SCRIPT, raw_html=True)
+    got = dict(zip(SCRIPT.split("\n"), kinds, strict=True))
+    assert got["const a = 1;"] == md.RAW_HTML
+    assert got["before"] is None
+    assert md.line_kinds(SCRIPT)[3] is None  # default off, all the way down
+
+
 # -- div policy -------------------------------------------------------------
 
 CALLOUT = (

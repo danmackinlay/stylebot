@@ -24,10 +24,21 @@ stylebot's blog/generic boundary keeps Quarto policy out of here), so callers
 opt in through the ``div_is_prose`` hook. Its default — ``None``, every div
 protected wholesale — is the conservative behaviour this package shipped with.
 
+**Raw HTML is the same shape of policy.** ``<script>``/``<style>`` contents are
+ground 2 (not prose — they are JavaScript or CSS, and line structure is load-
+bearing), but only a caller that reflows whole documents needs the protection.
+stylebot's own callers cut *targets*, never touch raw HTML, and enabling it
+would move a corpus already generated without it — so ``raw_html`` defaults to
+False and the sibling below turns it on.
+
 Generic markdown tooling only: no frontmatter, no blog knowledge.
-SIBLING: ``livingthing/src/livingthing/qmd_core.py::segment_for_edit`` — keep
-behaviour in sync; the segmenter tests in ``tests/test_segment.py`` and the
-cross-language fixture in ``tests/test_marker_segmentation.py`` pin it.
+SIBLING: ``livingthing/src/livingthing/qmd_core.py::segment_for_edit`` — a
+deliberate, permanent second implementation (livingthing must segment markdown
+with stylebot uninstalled). Since it cannot be deleted, it is pinned instead:
+``tests/fixtures/segmenter_conformance.{qmd,json}`` is the shared spec both
+sides assert against, under the two named configurations recorded there. The
+segmenter tests in ``tests/test_segment.py`` and the cross-language fixture in
+``tests/test_marker_segmentation.py`` pin stylebot's own behaviour.
 """
 
 from __future__ import annotations
@@ -44,11 +55,20 @@ FENCE = "fence"
 MATH = "math"
 DIV = "div"
 BLOCKQUOTE = "blockquote"
+RAW_HTML = "raw_html"
 
-#: Kinds a rewrite must never be handed. `HEADING` is deliberately absent: a
-#: heading is protected *as a line* but rides along as chunk context (or, under
-#: the cross-heading diet, as chunk content), so callers treat it separately.
+#: Kinds a rewrite must never be handed, in the default configuration.
+#: `HEADING` is deliberately absent: a heading is protected *as a line* but
+#: rides along as chunk context (or, under the cross-heading diet, as chunk
+#: content), so callers treat it separately. `RAW_HTML` is absent because it is
+#: opt-in — use `protected_kinds` when the option is not fixed at the call site.
 PROTECTED_KINDS = frozenset({FENCE, MATH, DIV, BLOCKQUOTE})
+
+
+def protected_kinds(*, raw_html: bool = False) -> frozenset[str]:
+    """The kinds `protected_spans` can emit under a given configuration."""
+    return (PROTECTED_KINDS | {RAW_HTML}) if raw_html else PROTECTED_KINDS
+
 
 #: CommonMark ATX heading: up to 3 *spaces* of indent, 1-6 hashes, then either
 #: end-of-line (a bare `##` is a legal empty heading) or a space/tab and the
@@ -78,6 +98,23 @@ CODE_FENCE_RE = re.compile(
 )
 MATH_BLOCK_RE = re.compile(r"\$\$.*?\$\$[ \t]*(?:\{[^}\n]*\})?", re.DOTALL)
 BLOCKQUOTE_RE = re.compile(r"^(?:[ \t]{0,3}>[^\n]*\n?)+", re.MULTILINE)
+
+#: ``<script>``/``<style>`` blocks — opener at line start, closer ending a line.
+#: These two are the elements whose content HTML defines as *raw text* rather
+#: than markup, so reflowing them is never right: join the line after a ``//``
+#: comment onto it and that line is now commented out. Not hypothetical — the
+#: blog shipped an ``Uncaught SyntaxError`` on its front page in 2026-05 when a
+#: reflow collapsed a topic-map ``<script>``. Every other element's content *is*
+#: markup, so prose inside a raw ``<div>`` should still be rewritable.
+#:
+#: DOTALL so a blank line inside the block cannot end the match; an unclosed
+#: opener yields no span, exactly as `CODE_FENCE_RE` and `_div_spans` do. Ported
+#: from ``livingthing.qmd_core`` with its numbered backreference made a named
+#: one, so the pattern survives being composed into a larger alternation.
+RAW_HTML_BLOCK_RE = re.compile(
+    r"^[ \t]*<(?P<tag>script|style)\b[^>]*>.*?</(?P=tag)[ \t]*>[ \t]*$(?:\n|\Z)",
+    re.MULTILINE | re.DOTALL | re.IGNORECASE,
+)
 
 #: Receives a div opener's attribute text (e.g. ``{.callout-note}``) and says
 #: whether the div's *contents* are prose. Policy, supplied by the caller.
@@ -189,20 +226,25 @@ def protected_spans(
     *,
     block_only: bool = False,
     div_is_prose: DivIsProse | None = None,
+    raw_html: bool = False,
 ) -> list[Span]:
     """Merged, sorted, non-overlapping protected spans of `text`.
 
     `block_only` restricts ``$$…$$`` to line-anchored display math; an inline
-    ``$$k$$`` then stays in the prose the styler rewrites. Overlapping spans of
+    ``$$k$$`` then stays in the prose the styler rewrites. `raw_html` adds
+    ``<script>``/``<style>`` blocks (`RAW_HTML_BLOCK_RE`), which nothing in
+    stylebot wants but a whole-document reflower does. Overlapping spans of
     different kinds merge under the kind that starts first.
 
     Public on purpose, though every caller today is in this module: this IS the
     module's central question — what a rewrite must never be handed — and it is
     the entry point a second implementation should consume rather than re-port.
-    `livingthing.qmd_core` still carries its own copy of this logic and has
-    already drifted from it (`~~~` fences, inline ``$$``); harmonising it means
-    calling this. Contrast `_find_div_blocks`, private because nothing outside
-    wants divs alone.
+    `livingthing.qmd_core` carries a permanent second copy of this logic (it
+    must run with stylebot uninstalled) and has drifted from it (`~~~` fences,
+    inline ``$$``). The two keyword arguments here are what makes both sides'
+    policies reachable from one implementation, so the conformance fixture can
+    record them as named configurations. Contrast `_find_div_blocks`, private
+    because nothing outside wants divs alone.
     """
     spans: list[Span] = []
     for m in CODE_FENCE_RE.finditer(text):
@@ -213,6 +255,9 @@ def protected_spans(
         spans.append((m.start(), m.end(), MATH))
     for m in BLOCKQUOTE_RE.finditer(text):
         spans.append((m.start(), m.end(), BLOCKQUOTE))
+    if raw_html:
+        for m in RAW_HTML_BLOCK_RE.finditer(text):
+            spans.append((m.start(), m.end(), RAW_HTML))
     spans.extend(_find_div_blocks(text, div_is_prose=div_is_prose))
     spans.sort(key=lambda sp: (sp[0], sp[1]))
 
@@ -225,11 +270,16 @@ def protected_spans(
     return merged
 
 
-def segment_spans(text: str, *, div_is_prose: DivIsProse | None = None) -> list[tuple[str, bool]]:
+def segment_spans(
+    text: str,
+    *,
+    div_is_prose: DivIsProse | None = None,
+    raw_html: bool = False,
+) -> list[tuple[str, bool]]:
     """Split `text` into ``(chunk, editable)`` spans, losslessly.
 
     Concatenating every chunk reproduces `text` exactly; `editable` is False for
-    every protected span.
+    every protected span. `raw_html` is passed to `protected_spans`.
 
     Display math is **block-anchored** here (`block_only=True`), matching what
     `line_kinds` — and therefore inference — can see. Excising a mid-sentence
@@ -241,7 +291,9 @@ def segment_spans(text: str, *, div_is_prose: DivIsProse | None = None) -> list[
     """
     out: list[tuple[str, bool]] = []
     i = 0
-    for start, end, _kind in protected_spans(text, block_only=True, div_is_prose=div_is_prose):
+    for start, end, _kind in protected_spans(
+        text, block_only=True, div_is_prose=div_is_prose, raw_html=raw_html
+    ):
         if i < start:
             out.append((text[i:start], True))
         out.append((text[start:end], False))
@@ -256,6 +308,7 @@ def line_kinds(
     *,
     headings: bool = True,
     div_is_prose: DivIsProse | None = None,
+    raw_html: bool = False,
 ) -> list[str | None]:
     """One kind label per line of ``text.split("\\n")`` — `None` means prose.
 
@@ -274,7 +327,7 @@ def line_kinds(
         pos += len(line) + 1
 
     for span_start, span_end, kind in protected_spans(
-        text, block_only=True, div_is_prose=div_is_prose
+        text, block_only=True, div_is_prose=div_is_prose, raw_html=raw_html
     ):
         for i, line in enumerate(lines):
             if starts[i] >= span_end:
