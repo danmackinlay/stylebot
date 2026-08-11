@@ -323,7 +323,9 @@ def rewrite_candidates(
     frontmatter, headings, or a protected block in the selection, or prose over
     `max_chunk_chars` (which `_segment` would split), raise ValueError with a
     message fit to surface in an editor, naming the construct
-    ("selection contains a blockquote — select prose only").
+    ("selection contains a blockquote — select prose only"). An empty or
+    whitespace-only selection gets its own message rather than the budget one:
+    nothing selected is not too much selected.
 
     Under `inline_headings` (the cross-heading diet) a selection MAY span
     headings. Protected blocks still raise: they are absent from the corpus in
@@ -350,6 +352,10 @@ def rewrite_candidates(
         div_is_prose=div_is_prose,
     )
     kinds = [kind for kind, chunk in items if chunk.strip()]
+    # Nothing selected is its own failure: it is not an over-budget selection,
+    # and saying so (the old fall-through) told the user something false.
+    if not kinds:
+        raise ValueError("selection is empty — select some prose")
     # Headings are content under the cross-heading diet; fences never are.
     allowed = {"prose", "heading"} if inline_headings else {"prose"}
     if any(k not in allowed for k in kinds):

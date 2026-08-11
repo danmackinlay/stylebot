@@ -480,6 +480,23 @@ def test_rewrite_candidates_enforces_the_single_prose_chunk_contract():
         infer.rewrite_candidates("one two\n\nthree four", _identity_styler, max_chunk_chars=5)
 
 
+def test_rewrite_candidates_names_an_empty_selection_as_empty():
+    """Nothing selected must not be reported as over the chunk budget."""
+    import pytest
+
+    for blank in ("", "   \n\n  ", "\n"):
+        with pytest.raises(ValueError, match="selection is empty") as excinfo:
+            infer.rewrite_candidates(blank, _identity_styler)
+        assert "budget" not in str(excinfo.value)
+
+
+def test_rewrite_candidates_still_reports_a_real_overrun_as_over_budget():
+    import pytest
+
+    with pytest.raises(ValueError, match="over the 5-char chunk budget"):
+        infer.rewrite_candidates("one two\n\nthree four", _identity_styler, max_chunk_chars=5)
+
+
 # --- inline headings (v2 cross-heading diet) ------------------------------
 
 _DOC = (
