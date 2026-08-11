@@ -1,6 +1,6 @@
 [project]
 name = "stylebot"
-version = "0.2.0"
+version = "0.3.0"
 description = "Tooling to fine-tune a small LLM that rewrites AI-flavoured prose into Dan Mackinlay's voice: pair capture, synthetic-pair generation, LoRA training, and a multi-signal eval harness."
 readme = "README.md"
 license = "MIT"
