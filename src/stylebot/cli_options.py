@@ -16,18 +16,81 @@ it gets no flag and is set by callers in code.
 `bundles_from_kwargs()` folds a callback's `**kw` back into instances, and
 `SectionedCommand` groups `--help` by bundle. A downstream repo extends a
 surface with `bundle_options([*SOME_BUNDLES, MyOpts], defaults=[GenOpts(...)])`.
+
+`Emitter` / `click_emitter()` are the other half of the same seam, for output
+rather than input: a library takes an emitter and defaults it to silence, the
+CLI hands it `click_emitter()`. One adapter, so two front-ends (here and
+livingthing's `dan-style`) cannot drift in how they render the same run.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import Field, field, fields
-from typing import Any
+from typing import Any, Protocol
 
 import click
 
 # Metadata key under which a field carries its click declaration.
 CLI = "cli"
+
+
+# ---------------------------------------------------------------------------
+# The output sink.
+#
+# A library entry point must not decide where its progress and summary lines
+# go: a non-CLI caller cannot capture, redirect or silence a `click.echo`. So
+# the library takes an *emitter* and defaults it to `silent`; the CLI passes
+# `click_emitter()`, and the stream/colour routing is written down exactly once
+# — here.
+#
+# A level names a (stream, emphasis) pair, not a syslog severity. That is why
+# `note` is yellow on *stdout*: the hygiene-drop counts are part of the run's
+# report, which stays on stdout with the rest of the summary, and only the
+# emphasis marks them as needing attention. `status` and `error` render
+# identically today and stay apart anyway — they differ in meaning, so errors
+# could be coloured later without auditing every progress tick.
+# ---------------------------------------------------------------------------
+
+
+class Emitter(Protocol):
+    """A sink for a library's human-facing output lines."""
+
+    def __call__(self, message: str, /, *, level: str = "info") -> None: ...
+
+
+#: level -> (write to stderr?, click colour)
+EMIT_LEVELS: dict[str, tuple[bool, str | None]] = {
+    "info": (False, None),  # the run's report — what you would pipe to a file
+    "note": (False, "yellow"),  # a report line that must be noticed
+    "status": (True, None),  # progress, banners — narration, not the report
+    "error": (True, None),  # the detail of a failure
+    "warn": (True, "yellow"),  # an invariant broke
+}
+
+
+def silent(message: str, /, *, level: str = "info") -> None:
+    """The default emitter: called as a library, a library says nothing."""
+
+
+def click_emitter() -> Emitter:
+    """An `Emitter` rendering to click's stdout/stderr, per `EMIT_LEVELS`."""
+
+    def emit(message: str, /, *, level: str = "info") -> None:
+        try:
+            err, fg = EMIT_LEVELS[level]
+        except KeyError:
+            raise ValueError(
+                f"unknown emit level {level!r}; expected one of {sorted(EMIT_LEVELS)}"
+            ) from None
+        if fg is None:
+            # Not `secho(fg=None)`: `click.style` appends a reset sequence even
+            # with no styles set, which a tty would show and a pipe would not.
+            click.echo(message, err=err)
+        else:
+            click.secho(message, err=err, fg=fg)
+
+    return emit
 
 
 def opt(default: Any, /, *decls: str, **click_kw: Any) -> Any:

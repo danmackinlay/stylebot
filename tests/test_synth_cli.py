@@ -26,7 +26,7 @@ from click.testing import CliRunner
 
 from stylebot import synth, synth_cli
 from stylebot.bin.ai_style import main as ai_style_main
-from stylebot.cli_options import cli_fields, field_owners
+from stylebot.cli_options import EMIT_LEVELS, cli_fields, field_owners
 
 
 def test_synth_options_repins_defaults():
@@ -105,6 +105,7 @@ def test_bundle_field_names_are_unambiguous():
             "targets",
             "data_dir",
             "count_note",
+            "emit",
             "extra_tags",
             "generators",
         },
@@ -315,7 +316,12 @@ def test_run_synth_raises_on_generation_errors(tmp_path, capsys, make_blog):
 
     bad = synth.Generator(name="boom", generate=_boom)
     with pytest.raises(synth_cli.SynthGenerationError) as excinfo:
-        synth_cli.run_synth(targets, data_dir=tmp_path / "corpus", generators=[bad])
+        synth_cli.run_synth(
+            targets,
+            data_dir=tmp_path / "corpus",
+            generators=[bad],
+            emit=synth_cli.click_emitter(),
+        )
     assert excinfo.value.result.errors  # the result survives the failure
     err = capsys.readouterr().err
     assert "generation error(s)" in err  # exit summary
@@ -432,6 +438,116 @@ def test_role_without_splits_is_a_config_error(make_blog):
         synth_cli.run_synth(
             targets, data_dir=None, substrate=synth_cli.SubstrateOpts(role="styler")
         )
+
+
+# -- the output sink: run_synth prints nothing it was not asked to print --
+
+
+def test_run_synth_without_a_sink_is_silent(tmp_path, capsys, make_blog):
+    # The point of the emit seam: a library caller gets a clean stdout and
+    # stderr. Not "quieter" — silent, on the paths that used to echo most
+    # (substrate line, count, heartbeat, per-error lines, exit summary).
+    targets = synth.iter_targets(blog_root=make_blog(ai=False))
+    ok = synth.Generator(name="quiet", generate=lambda t, history=None: f"[slop] {t}")
+    result = synth_cli.run_synth(targets, data_dir=tmp_path / "corpus", generators=[ok])
+    assert result is not None and result.written == 2
+
+    def _boom(_text: str) -> str:
+        raise RuntimeError("api down")
+
+    with pytest.raises(synth_cli.SynthGenerationError):
+        synth_cli.run_synth(
+            targets,
+            data_dir=tmp_path / "corpus2",
+            generators=[synth.Generator(name="boom", generate=_boom)],
+        )
+    # And the inspection path, which writes its banner to stderr.
+    synth_cli.run_synth(targets, data_dir=None, inspection=synth_cli.InspectOpts(sample_n=1))
+
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
+
+
+def test_run_synth_emits_every_line_through_the_sink(tmp_path, make_blog):
+    # The other half: nothing bypasses the sink. A recording emitter sees the
+    # count line and the summary, and no text reaches the real streams.
+    targets = synth.iter_targets(blog_root=make_blog(ai=False))
+    seen: list[tuple[str, str]] = []
+
+    def record(message: str, /, *, level: str = "info") -> None:
+        seen.append((level, message))
+
+    synth_cli.run_synth(
+        targets,
+        data_dir=tmp_path / "corpus",
+        generators=[synth.Generator(name="quiet", generate=lambda t, history=None: f"[slop] {t}")],
+        emit=record,
+    )
+    levels = {level for level, _ in seen}
+    assert levels <= set(EMIT_LEVELS), f"undeclared level(s): {levels - set(EMIT_LEVELS)}"
+    text = "\n".join(m for _, m in seen)
+    assert "2 target chunk(s) from 1 source(s)" in text
+    assert "wrote 2 pair(s)" in text
+    # The heartbeat is narration, not the report: it must not land on stdout.
+    assert [level for level, m in seen if m.startswith("  ... ")] == ["status", "status"]
+
+
+def test_click_emitter_routes_streams_and_colour(capsys, monkeypatch):
+    emit = synth_cli.click_emitter()
+    for level in EMIT_LEVELS:
+        emit(f"line-{level}", level=level)
+    captured = capsys.readouterr()
+    # stdout carries the report (plain + the noticed lines); stderr carries
+    # narration, failures and the alarms.
+    assert captured.out.split() == ["line-info", "line-note"]
+    assert captured.err.split() == ["line-status", "line-error", "line-warn"]
+
+    # The colouring click strips on a pipe, pinned at the call it makes.
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(click, "secho", lambda msg, **kw: calls.append((msg, kw)))
+    monkeypatch.setattr(click, "echo", lambda msg, **kw: calls.append((msg, kw)))
+    for level in EMIT_LEVELS:
+        emit(f"line-{level}", level=level)
+    assert calls == [
+        ("line-info", {"err": False}),
+        ("line-note", {"err": False, "fg": "yellow"}),
+        ("line-status", {"err": True}),
+        ("line-error", {"err": True}),
+        ("line-warn", {"err": True, "fg": "yellow"}),
+    ]
+    with pytest.raises(ValueError, match="unknown emit level"):
+        emit("nope", level="critical")
+
+
+def test_hygiene_drop_lines_are_yellow_on_stdout(tmp_path, capsys):
+    # Regression (a paid run once crashed here on a name not in scope), plus
+    # the routing that byte-identity depends on: the drop counts are part of
+    # the *report*, so they stay on stdout — only the colour marks them.
+    result = synth.SynthResult(planned=3, skipped_degenerate=2, skipped_inflated=1)
+    synth_cli._report_result(
+        result,
+        tmp_path / "pairs.jsonl",
+        dry_run=False,
+        session_turns=1,
+        emit=synth_cli.click_emitter(),
+        max_transform_sim=0.95,
+        max_length_ratio=3.0,
+    )
+    captured = capsys.readouterr()
+    assert "2 identity pair(s) DROPPED" in captured.out and "0.95" in captured.out
+    assert "1 inflated pair(s) DROPPED" in captured.out and "3.0" in captured.out
+    # The unattempted-turns alarm is the one warning on stderr.
+    assert "never attempted" not in captured.out
+    assert "WARNING: 0 planned turn(s)" not in captured.err
+
+    synth_cli._report_result(
+        synth.SynthResult(planned=5),
+        tmp_path / "pairs.jsonl",
+        dry_run=False,
+        session_turns=1,
+        emit=synth_cli.click_emitter(),
+    )
+    assert "5 planned turn(s) were never attempted" in capsys.readouterr().err
 
 
 # -- parallelism + sessions through the shared surface --

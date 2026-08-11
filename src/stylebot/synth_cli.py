@@ -26,11 +26,15 @@ default" message stays in its own command), and provenance tags. A callback's
 knobs, plus `--sort`, which `iter_targets` takes as a `sort_key` callable); it
 feeds `iter_targets` on the *selection* side, the other five feed `run_synth`.
 
-**click declares this module's options; it does not decide its control flow.**
-The option bundles carry `click.Choice`/`click.Path` types because they exist to
-become flags, but the library entry points raise the `SynthError` family below
-and never exit the process. `bin/ai_style.py` translates them at the CLI
-boundary, which is where the exit codes scripts branch on are decided.
+**click declares this module's options; it does not decide its control flow,
+and it does not own its output.** The option bundles carry
+`click.Choice`/`click.Path` types because they exist to become flags, but the
+library entry points raise the `SynthError` family below and never exit the
+process, and they write their progress and summary lines to a caller-supplied
+`emit` sink (`stylebot.cli_options.Emitter`) that defaults to silence.
+`bin/ai_style.py` translates the errors into exit codes and passes
+`click_emitter()` for the rendering; both consequences are decided at the CLI
+boundary, not here.
 """
 
 from __future__ import annotations
@@ -44,11 +48,14 @@ import click
 
 from stylebot import synth
 from stylebot.cli_options import (
+    Emitter,
     SectionedCommand,
     bundle_options,
     bundles_from_kwargs,
+    click_emitter,
     field_owners,
     opt,
+    silent,
 )
 from stylebot.splits import ROLES as SPLIT_ROLES
 
@@ -58,6 +65,7 @@ __all__ = [
     "ChunkOpts",
     "CorpusOpts",
     "DEFAULT_BUNDLES",
+    "Emitter",
     "GenOpts",
     "InspectOpts",
     "SectionedCommand",
@@ -68,6 +76,7 @@ __all__ = [
     "SynthGenerationError",
     "SynthRunError",
     "build_generators",
+    "click_emitter",
     "iter_arms",
     "pop_bundles",
     "run_synth",
@@ -609,6 +618,7 @@ field_owners(
         "targets",
         "data_dir",
         "count_note",
+        "emit",
         "extra_tags",
         "generators",
     },
@@ -745,26 +755,30 @@ def _inspect_targets(
     *,
     data_dir: Path | None,
     generation_flags_set: bool,
+    emit: Emitter,
 ) -> None:
     """The read-only --sample/--report modes: print/write and return, before
     any generation — no API keys, and `data_dir` may be None (the caller skips
-    resolving it when nothing will be written)."""
+    resolving it when nothing will be written).
+
+    `emit` is required (not defaulted): a helper whose whole job is output must
+    never guess where it goes — see the module docstring."""
     from stylebot import report
 
-    click.echo("[inspection] targets only — nothing generated.", err=True)
+    emit("[inspection] targets only — nothing generated.", level="status")
     # Generation flags alongside --report/--sample are a classic trap: the
     # run exits before any generator fires. Say so, and point at the pair
     # browser (the eval scores report) that DOES show generated slop.
     if generation_flags_set:
         pairs_hint = f"{data_dir}/pairs.jsonl" if data_dir is not None else "<data-dir>/pairs.jsonl"
-        click.echo(
+        emit(
             "[inspection] generation flags ignored; to generate then browse pairs: "
             "re-run without --report/--sample, then: "
             f"ai-style eval --pairs {pairs_hint} --report FILE.html --facet-by generator",
-            err=True,
+            level="status",
         )
     if opts.sample_n is not None:
-        click.echo(report.format_sample(report.sample_targets(targets, opts.sample_n)))
+        emit(report.format_sample(report.sample_targets(targets, opts.sample_n)))
     if opts.report_path is not None:
         title_kw = {"title": opts.report_title} if opts.report_title else {}
         written = report.render_targets_report(
@@ -773,7 +787,7 @@ def _inspect_targets(
             max_rows=(None if opts.report_max_rows == 0 else opts.report_max_rows),
             **title_kw,
         )
-        click.echo(f"wrote report -> {written}")
+        emit(f"wrote report -> {written}")
 
 
 def _resolve_windows(
@@ -835,58 +849,56 @@ def _report_result(
     *,
     dry_run: bool,
     session_turns: int,
+    emit: Emitter,
     max_transform_sim: float | None = None,
     max_length_ratio: float | None = None,
 ) -> None:
-    """Echo the run summary — reporting only.
+    """Render the run summary to `emit` — reporting only.
 
     It used to `raise SystemExit(1)` on generation errors, which a library
     function must not do; deciding the run failed is now `run_synth`'s (it
     raises `SynthGenerationError`), and deciding what that costs the process is
-    the CLI's.
+    the CLI's. `emit` is required for the same reason the exceptions are: a
+    reporting helper decides *what* to say, never *where* it lands.
     """
     if dry_run:
-        click.echo(
+        emit(
             f"[dry-run] would write {result.planned - result.skipped_existing} new pair(s) "
             f"({result.skipped_existing} already present) to {pairs_path}"
         )
         if result.skipped_covered:
-            click.echo(
-                f"  {result.skipped_covered} target(s) already covered, skipped (--skip-covered)"
-            )
+            emit(f"  {result.skipped_covered} target(s) already covered, skipped (--skip-covered)")
         if session_turns > 1:
-            click.echo(f"  {result.planned_sessions} live session(s) of <= {session_turns} turn(s)")
+            emit(f"  {result.planned_sessions} live session(s) of <= {session_turns} turn(s)")
         for name, count in sorted(result.per_generator.items()):
-            click.echo(f"  {name}: {count}")
+            emit(f"  {name}: {count}")
         return
-    click.echo(
+    emit(
         f"wrote {result.written} pair(s) "
         f"({result.skipped_existing} already present, skipped) -> {pairs_path}"
     )
     if result.skipped_covered:
-        click.echo(
-            f"  {result.skipped_covered} target(s) already covered, skipped (--skip-covered)"
-        )
+        emit(f"  {result.skipped_covered} target(s) already covered, skipped (--skip-covered)")
     if result.skipped_degenerate:
-        click.secho(
+        emit(
             f"  {result.skipped_degenerate} identity pair(s) DROPPED "
             f"(transform_sim > {max_transform_sim}) — paid for, not written; "
             "a persistently degenerate model should leave the roster",
-            fg="yellow",
+            level="note",
         )
     if result.skipped_inflated:
-        click.secho(
+        emit(
             f"  {result.skipped_inflated} inflated pair(s) DROPPED "
             f"(length ratio > {max_length_ratio}) — paid for, not written; "
             "a persistently inflating model should leave the roster",
-            fg="yellow",
+            level="note",
         )
     for name, count in sorted(result.per_generator.items()):
-        click.echo(f"  {name}: {count}{_model_economics(result.model_stats.get(name))}")
+        emit(f"  {name}: {count}{_model_economics(result.model_stats.get(name))}")
     if result.total_cost:
-        click.echo(f"  total cost: ${result.total_cost:.2f}")
+        emit(f"  total cost: ${result.total_cost:.2f}")
     if result.budget_bound_sessions or result.reflow_sessions:
-        click.echo(
+        emit(
             f"  {result.budget_bound_sessions} session(s) ended on the token budget; "
             f"{result.reflowed_turns} leftover turn(s) reflowed into "
             f"{result.reflow_sessions} fresh session(s)"
@@ -903,16 +915,15 @@ def _report_result(
         - len(result.errors)
     )
     if unattempted > 0:
-        click.secho(
+        emit(
             f"WARNING: {unattempted} planned turn(s) were never attempted — "
             "this should be impossible now that leftover turns reflow; report it.",
-            fg="yellow",
-            err=True,
+            level="warn",
         )
     if result.errors:
-        click.echo(f"{len(result.errors)} generation error(s):", err=True)
+        emit(f"{len(result.errors)} generation error(s):", level="error")
         for key, msg in result.errors[:10]:
-            click.echo(f"  {key}: {msg}", err=True)
+            emit(f"  {key}: {msg}", level="error")
 
 
 def run_synth(
@@ -925,6 +936,7 @@ def run_synth(
     inspection: InspectOpts | None = None,
     corpus: CorpusOpts | None = None,
     count_note: str = "",
+    emit: Emitter | None = None,
     extra_tags: Sequence[str] = (),
     generators: Sequence[synth.Generator] | None = None,
 ) -> synth.SynthResult | None:
@@ -943,11 +955,22 @@ def run_synth(
     entirely. Returns the SynthResult, or None when an inspection mode
     short-circuited.
 
+    `emit` is where the substrate/count lines, the progress heartbeat, the
+    per-error lines and the run summary go — an `Emitter`
+    (`emit(message, level=…)`). **The default is silence**: a library caller
+    that asks for none gets a clean stdout and stderr, and everything the run
+    would have said is either in the returned `SynthResult` or on the raised
+    `SynthGenerationError`. A CLI passes `click_emitter()` (re-exported here),
+    which is the single place the stream-and-colour routing lives, so this
+    module's twin front-ends — `ai-style synth` and livingthing's `dan-style
+    synth` — cannot render the same run two different ways.
+
     Raises `SynthConfigError` for an unusable configuration, `SynthRunError`
     when the environment can't serve the run, and `SynthGenerationError` (which
     carries the result) when pairs failed to generate. It does not exit the
     process — see the note at the top of the module.
     """
+    say: Emitter = emit if emit is not None else silent
     gen = gen if gen is not None else GenOpts()
     session = session if session is not None else SessionOpts()
     substrate = substrate if substrate is not None else SubstrateOpts()
@@ -981,16 +1004,16 @@ def run_synth(
             )
             if p
         )
-        click.echo(f"substrate: {before} -> {len(targets)} target chunk(s) ({detail})")
+        say(f"substrate: {before} -> {len(targets)} target chunk(s) ({detail})")
 
     if substrate.limit is not None:
         targets = targets[: substrate.limit]
 
     n_sources = len({t.source for t in targets})
     suffix = f" {count_note}" if count_note else ""
-    click.echo(f"{len(targets)} target chunk(s) from {n_sources} source(s){suffix}")
+    say(f"{len(targets)} target chunk(s) from {n_sources} source(s){suffix}")
     if not targets:
-        click.echo("nothing to synthesize", err=True)
+        say("nothing to synthesize", level="status")
         return None
 
     # Read-only inspection modes — print/write and exit before any generation,
@@ -1003,6 +1026,7 @@ def run_synth(
             generation_flags_set=bool(
                 gen.openrouter_models or tuple(gen.slop_strategies) != (synth.DEFAULT_STRATEGY,)
             ),
+            emit=say,
         )
         return None
 
@@ -1101,11 +1125,11 @@ def run_synth(
             # Billed credits so far (OpenRouter usage.include ground truth);
             # silent for generators that report no cost.
             spent = f"  ≈${live.total_cost:.2f}" if live.total_cost else ""
-            click.echo(f"  ... {i}/{total} pairs{spent}", err=True)
+            say(f"  ... {i}/{total} pairs{spent}", level="status")
 
     def _on_error(key: str, msg: str) -> None:
         # Surface failures the moment they happen, not just in the exit summary.
-        click.echo(f"  !! {key[:12]}: {msg}", err=True)
+        say(f"  !! {key[:12]}: {msg}", level="error")
 
     result = synth.synthesize_pairs(
         targets,
@@ -1133,6 +1157,7 @@ def run_synth(
         resolved_dir / "pairs.jsonl",
         dry_run=gen.dry_run,
         session_turns=session.session_turns,
+        emit=say,
         max_transform_sim=corpus.max_transform_sim,
         max_length_ratio=corpus.max_length_ratio,
     )
