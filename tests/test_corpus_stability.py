@@ -50,11 +50,23 @@ from stylebot.targets import iter_targets
 # only 401/3710, which would make this harness a null instrument. So the live
 # policy is read from the blog but the chunk *mode* is pinned to the corpus's
 # own — that is what a stability floor has to compare against.
-FLOOR_SECTION_BOUNDED = 3503
+# Re-baselined 2026-08-11: 3503 -> 3479. Cause verified BENIGN before lowering,
+# which is the only way a floor may ever move — an `ai-preen` pass that morning
+# copy-edited 16 notebook posts (livingthing 5345a8456e), and prose drift in a
+# generated-from post orphans its cells by construction. stylebot's segmenter
+# was unchanged across the same window.
+#
+# NOTE the treadmill this exposes: an absolute floor only ever erodes, one
+# ai-preen run at a time, and each re-baseline could absorb a real regression
+# under cover of drift. Distinguishing them properly means asking whether a lost
+# cell's SOURCE POST changed since the pair was generated — drift if it did, a
+# regression if it did not. Until that lands, every move of this number must
+# name the commit that caused it, as above.
+FLOOR_SECTION_BOUNDED = 3479
 # The same corpus under today's live cross-heading policy: a much weaker signal
 # (the cells barely overlap), but it exercises the cross-heading path over real
 # prose, which no fixture does.
-FLOOR_CROSS_HEADING = 396
+FLOOR_CROSS_HEADING = 395  # same 2026-08-11 re-baseline; see above
 
 
 CORPUS = Path("_training_pairs") / "pairs.jsonl"
