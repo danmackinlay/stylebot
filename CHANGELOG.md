@@ -81,7 +81,7 @@ are untouched.
   (livingthing `1aa290e463`, 2026-07-22) instead of HEAD. Reading HEAD
   conflated a segmentation regression — the bug this file exists to catch —
   with an ordinary prose edit, so the number sagged on a schedule set by the
-  blog's own churn (a single bulk `ai-preen` pass cost 45 cells), the floor had
+  blog's own churn (a single bulk `ai-preen` pass cost 24 cells), the floor had
   to be hand-lowered to absorb it, and each lowering bought less teeth. The
   revision was chosen by sweeping 244 commits and taking the plateau that spans
   the corpus's generation window. Reproducibility against it is 3681/3686

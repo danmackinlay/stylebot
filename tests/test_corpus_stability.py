@@ -12,7 +12,7 @@ many distinct corpus target bodies come back.
 conflates two unrelated events — segmentation regressing, which is the bug this
 file exists to catch, and Dan editing a post, which is expected and constant.
 Against HEAD the number therefore sags on a schedule set by Dan's writing (a
-single bulk `ai-preen` pass on 2026-08-11 cost 45 cells), the floor has to be
+single bulk `ai-preen` pass on 2026-08-11 cost 24 cells), the floor has to be
 hand-lowered to absorb it, and each lowering buys the guard less teeth. Pinning
 removes prose drift from the measurement entirely: the input is a frozen git
 blob, so the only things that can move the number are the segmenter and the
