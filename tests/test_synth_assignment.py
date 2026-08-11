@@ -55,6 +55,14 @@ def test_hash_assignment_roughly_balances():
     counts = {}
     for _, g, _ in synth._assign(targets, gens, per_generator=False):
         counts[g.name] = counts.get(g.name, 0) + 1
+    # Membership FIRST, and separately: a starved arm contributes no key, so it
+    # is invisible to the range check below — which only notices starvation
+    # because the survivors then overshoot 140. That is incidental, not a
+    # guard: the bounds are sized for exactly this 300/3 shape, so the first
+    # time someone widens them for a bigger roster (6 arms would land at ~50
+    # and fail the floor) starvation stops being caught at all. Same assertion
+    # as `test_no_arm_starves_across_a_realistic_rotation`, for the same reason.
+    assert len(counts) == len(gens), counts
     assert all(60 <= c <= 140 for c in counts.values()), counts  # ~100 each
 
 
