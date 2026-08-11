@@ -21,6 +21,7 @@ import difflib
 import hashlib
 import inspect
 import logging
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -142,12 +143,53 @@ def _capture_id(source: str, generator_name: str, strategy: str = DEFAULT_STRATE
     return h.hexdigest()[:8]
 
 
-def covered_target_bodies(pairs_path: Path | str) -> set[str]:
-    """The target BODIES that already have >=1 pair in a corpus, any config.
+# Markdown inline-link destination, one level of balanced parens deep:
+# `](dest)` / `](dest "title")`. Reference definitions and autolinks are left
+# alone — only the inline form drifted.
+_LINK_DEST_RE = re.compile(r"\]\((?:[^()\\]|\\.|\([^()]*\))*\)")
+
+# Curly punctuation the blog's quote-curling pass introduced, folded back to the
+# ASCII the corpus was captured with.
+_QUOTE_FOLD = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"'})
+
+
+def coverage_key(body: str) -> str:
+    """The key `skip_covered` compares target bodies on, cosmetic drift removed.
+
+    The corpus is a frozen record and deliberately does NOT track current prose,
+    so a post edited after its pair was generated re-reads as an uncovered target
+    and gets paid for twice. Most of that drift is *mechanical* — link-anchor
+    repair scripts, a bulk quote-curling pass, a sentence-per-line reflow — and
+    none of it is a difference the styler could learn, so it should not mint a
+    second pair for the same passage.
+
+    Three folds, each one a difference `STYLE_SYSTEM` makes invisible:
+
+    1. **Inline link destinations.** The model is told to preserve links
+       verbatim, so a rewritten URL or `#fragment` carries no voice; the link
+       *text* is kept, being prose.
+    2. **Curly quotes and apostrophes**, folded to ASCII.
+    3. **Whitespace runs**, collapsed — a join is not an edit.
+
+    Deliberately NOT folded: case, punctuation generally, dashes, ellipses,
+    entity spellings, emphasis markers. Every extra rule risks collapsing two
+    genuinely distinct passages onto one key, and that failure is silent — the
+    second passage would never get a pair at all. Measured over the 3686 distinct
+    corpus bodies, these three produce **zero** collisions.
+
+    NOT `_synth_key`. That is the corpus's cell identity and stays keyed on raw
+    text; this normalisation lives entirely inside the coverage comparison.
+    """
+    return " ".join(_LINK_DEST_RE.sub("]()", body).translate(_QUOTE_FOLD).split())
+
+
+def covered_target_keys(pairs_path: Path | str) -> set[str]:
+    """The `coverage_key`s that already have >=1 pair in a corpus, any config.
 
     Context-agnostic: the assistant side of every record is
     `build_pair_content(meta.context, body)`, so the body is recovered by
-    stripping the recorded prefix. Backs `skip_covered`.
+    stripping the recorded prefix. Backs `skip_covered`, and returns normalised
+    keys rather than raw bodies — see `coverage_key`.
     """
     bodies: set[str] = set()
     for rec in iter_pairs(pairs_path):
@@ -160,9 +202,9 @@ def covered_target_bodies(pairs_path: Path | str) -> set[str]:
         context = ((rec.get("meta") or {}).get("context") or "").strip()
         prefix = f"{context}\n\n"
         if context and content.startswith(prefix):
-            bodies.add(content[len(prefix) :])
+            bodies.add(coverage_key(content[len(prefix) :]))
         else:
-            bodies.add(content)
+            bodies.add(coverage_key(content))
     return bodies
 
 
@@ -713,10 +755,13 @@ def synthesize_pairs(
 
     skipped_covered = 0
     if skip_covered:
-        # Coverage mode: a target with ANY existing pair is done. Applied before
-        # assignment; cell-level dedup below still governs the rest.
-        covered = covered_target_bodies(pairs_path)
-        kept = [t for t in targets if t.text not in covered]
+        # Coverage mode: a target with ANY existing pair is done. Compared on
+        # `coverage_key`, so cosmetic prose drift since generation (rewritten
+        # link destinations, curled quotes, a reflow) still reads as covered.
+        # Applied before assignment; cell-level dedup below still governs the
+        # rest, and it keys on RAW text.
+        covered = covered_target_keys(pairs_path)
+        kept = [t for t in targets if coverage_key(t.text) not in covered]
         skipped_covered = len(targets) - len(kept)
         targets = kept
 

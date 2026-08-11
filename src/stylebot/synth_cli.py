@@ -574,8 +574,11 @@ class CorpusOpts:
         show_default=True,
         help="Corpus-building coverage mode: skip any target whose text already has >=1 pair in "
         "the data-dir under ANY config or epoch (cell-level dedup still applies to the "
-        "rest). Use when the goal is one pair per passage — without it, a re-key epoch (e.g. "
-        "an effort-default change) regenerates already-covered targets and doubles their "
+        "rest). Matching ignores cosmetic drift the styler cannot see — rewritten link "
+        "destinations, curly-vs-straight quotes, whitespace runs — so a passage edited by a "
+        "link-repair or reflow pass since it was generated still reads as covered. Use when "
+        "the goal is one pair per passage — without it, a re-key epoch (e.g. an "
+        "effort-default change) regenerates already-covered targets and doubles their "
         "training weight.",
     )
     max_transform_sim: float | None = opt(

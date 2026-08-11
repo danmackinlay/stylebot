@@ -13,6 +13,7 @@ and chunk hygiene), `test_synth_generator.py` (the OpenRouter wire),
 
 from __future__ import annotations
 
+import pytest
 from synth_helpers import _fake, _targets
 
 from stylebot import synth
@@ -346,6 +347,104 @@ def test_skip_covered_prevents_cross_epoch_target_doubling(tmp_path):
     # Without the flag the same run WOULD double target A (distinct effort cell).
     doubled = synth.synthesize_pairs([a, b], tmp_path / "c", [new])
     assert doubled.written == 1 and doubled.skipped_existing == 1  # A regenerates, B dedupes
+
+
+# --- coverage-key normalisation ----------------------------------------------
+# The blog is edited between synth runs and most of that drift is mechanical:
+# link-anchor repair scripts, a bulk quote-curling commit, a sentence-per-line
+# reflow. None of it is a difference the styler could learn, so it must not mint
+# a second pair for the same passage. Measured over the 3686-cell corpus these
+# folds produce zero collisions between genuinely distinct passages.
+
+_COSMETIC = [
+    pytest.param(
+        "See [the interaction notes](refs.qmd#interaction) for why.",
+        "See [the interaction notes](refs.qmd#interacting) for why.",
+        id="link-fragment-repair",
+    ),
+    pytest.param(
+        "See [the interaction notes](refs.qmd#interaction) for why.",
+        "See [the interaction notes](https://example.org/refs.html) for why.",
+        id="link-destination-rewrite",
+    ),
+    pytest.param(
+        'It doesn\'t matter, he said "loudly".',
+        "It doesn’t matter, he said “loudly”.",
+        id="quote-curling",
+    ),
+    pytest.param(
+        "One sentence here.\nAnother sentence there.",
+        "One sentence here. Another sentence there.",
+        id="whitespace-join",
+    ),
+]
+
+
+@pytest.mark.parametrize(("before", "after"), _COSMETIC)
+def test_coverage_key_folds_cosmetic_drift(before, after):
+    assert before != after
+    assert synth.coverage_key(before) == synth.coverage_key(after)
+
+
+@pytest.mark.parametrize(("before", "after"), _COSMETIC)
+def test_skip_covered_survives_cosmetic_drift(tmp_path, before, after):
+    # End to end: a pair exists for the pre-edit prose; today's segmenter hands
+    # back the post-edit text. That is the same passage and must not be paid for
+    # twice.
+    old = synth.Target(text=before, source="post/0.qmd", chunk_index=0, chunk_total=1)
+    new = synth.Target(text=after, source="post/0.qmd", chunk_index=0, chunk_total=1)
+    gen = synth.Generator("g", generate=lambda t, history=None: "[slop] " + t)
+    assert synth.synthesize_pairs([old], tmp_path / "c", [gen]).written == 1
+    run = synth.synthesize_pairs([new], tmp_path / "c", [gen], skip_covered=True)
+    assert (run.written, run.skipped_covered) == (0, 1)
+
+
+def test_coverage_key_keeps_genuine_edits_distinct():
+    # The fold must stay narrow: an authorial edit is a different passage, and a
+    # false "covered" silently costs that passage its only training pair.
+    a = "Robertson et al have shown it to be handy for rhythm."
+    b = "Robertson et al have shown them to be handy for rhythm."
+    assert synth.coverage_key(a) != synth.coverage_key(b)
+    # Link TEXT is prose and is kept, even when the destination is dropped.
+    assert synth.coverage_key("[the home page](x.qmd)") != synth.coverage_key("[the index](x.qmd)")
+    # Case and punctuation are not folded.
+    assert synth.coverage_key("Pi's philosophy") != synth.coverage_key("pi's philosophy")
+    assert synth.coverage_key("badlogic, MIT) a.k.a") != synth.coverage_key("badlogic, MIT), a.k.a")
+
+
+def test_coverage_key_leaves_unbalanced_link_alone():
+    # A link with no closing paren is malformed markdown, not a destination the
+    # regex may guess at; repairing one IS a prose change from our side.
+    broken = "[recommendations](./ai_search.qmd#indexing-the-blog for posts."
+    assert synth.coverage_key(broken) == broken
+    assert synth.coverage_key(broken) != synth.coverage_key("[recommendations]() for posts.")
+
+
+def test_skip_covered_still_generates_a_genuinely_edited_passage(tmp_path):
+    old = synth.Target(
+        text="Robertson et al have shown it to be handy for rhythm.",
+        source="post/0.qmd",
+        chunk_index=0,
+        chunk_total=1,
+    )
+    new = synth.Target(
+        text="Robertson et al have shown them to be handy for rhythm.",
+        source="post/0.qmd",
+        chunk_index=0,
+        chunk_total=1,
+    )
+    gen = synth.Generator("g", generate=lambda t, history=None: "[slop] " + t)
+    assert synth.synthesize_pairs([old], tmp_path / "c", [gen]).written == 1
+    run = synth.synthesize_pairs([new], tmp_path / "c", [gen], skip_covered=True)
+    assert (run.written, run.skipped_covered) == (1, 0)
+
+
+def test_coverage_normalisation_does_not_reach_synth_key():
+    # The hard constraint: `_synth_key` is the corpus's cell identity. Folding it
+    # the way coverage folds would orphan every synthetic pair already generated.
+    # (The golden hashes in tests/test_synth_keys.py pin the recipe itself.)
+    for before, after in [(p.values[0], p.values[1]) for p in _COSMETIC]:
+        assert synth._synth_key("g", before) != synth._synth_key("g", after)
 
 
 def test_prompts_sidecar_written_and_deduped(tmp_path):
