@@ -240,11 +240,16 @@ def protected_spans(
     module's central question — what a rewrite must never be handed — and it is
     the entry point a second implementation should consume rather than re-port.
     `livingthing.qmd_core` carries a permanent second copy of this logic (it
-    must run with stylebot uninstalled) and has drifted from it (`~~~` fences,
-    inline ``$$``). The two keyword arguments here are what makes both sides'
-    policies reachable from one implementation, so the conformance fixture can
-    record them as named configurations. Contrast `_find_div_blocks`, private
-    because nothing outside wants divs alone.
+    must run with stylebot uninstalled). It no longer *drifts* from this one:
+    its `~~~`-fence gap was closed once the conformance fixture exposed it, and
+    the remaining difference — whether an inline ``$$k$$`` is protected — is a
+    declared policy choice, not an accident. livingthing reassembles protected
+    spans, so it can afford to protect inline math; stylebot deletes them, so
+    it cannot (see `block_only`). The two keyword arguments here are what make
+    both sides' policies reachable from one implementation, which is what lets
+    the fixture record them as named configurations rather than force false
+    agreement. Contrast `_find_div_blocks`, private because nothing outside
+    wants divs alone.
     """
     spans: list[Span] = []
     for m in CODE_FENCE_RE.finditer(text):
