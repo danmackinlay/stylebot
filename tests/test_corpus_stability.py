@@ -64,7 +64,18 @@ def _live_policy(root: Path) -> dict:
     try:
         import livingthing.training_targets as tt
     except Exception as exc:  # pragma: no cover - depends on the sibling checkout
-        pytest.skip(f"cannot import livingthing.training_targets: {exc}")
+        # FAIL, do not skip. Setting LIVINGTHING_ROOT is an explicit request to
+        # measure the corpus; skipping turns that into two green skips that read
+        # as "measured, fine". That is exactly what happened on 2026-08-10: the
+        # (correct) removal of stylebot's unused python-dateutil dependency also
+        # removed it from the env, `livingthing.training_targets` imports it
+        # transitively, and this harness quietly stopped running for hours.
+        pytest.fail(
+            f"LIVINGTHING_ROOT is set but livingthing.training_targets will not "
+            f"import, so nothing was measured: {exc}. Install the sibling's "
+            f"import deps (`uv run --with python-dateutil pytest …`) or unset "
+            f"LIVINGTHING_ROOT to opt out deliberately."
+        )
     return dict(
         min_chars=tt.MIN_CHARS,
         merge=tt.MERGE,

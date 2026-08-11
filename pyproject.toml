@@ -37,6 +37,10 @@ dev = [
     # deliberately NOT here; no model downloads in the test suite).
     "scikit-learn>=1.4",
     "numpy>=1.26",
+    # Only so tests/test_corpus_stability.py can import the sibling blog's
+    # training_targets (which uses it) to read the live chunk policy. Not used
+    # by stylebot itself — see the removal in aa570f4.
+    "python-dateutil>=2.9.0",
 ]
 
 [build-system]
