@@ -15,41 +15,16 @@ import pytest
 from stylebot import provenance
 from stylebot import splits as sp
 from stylebot import train as tr
-from stylebot.ai_core import STYLE_SYSTEM
+
+# The styler-corpus shape: contract-complete (assemble_training_corpus validates
+# by default), two chunks per post, the last two posts synthetic and carrying the
+# identity covariate. Passed explicitly so the counts asserted below are visible
+# at the call site; `n_posts` is the only knob that varies.
+CORPUS = {"chunks": 2, "n_synth_posts": 2, "transform_sim": True}
 
 
-def _write_corpus(path, n_posts: int = 6, chunks: int = 2, n_synth_posts: int = 2):
-    """A contract-complete pairs.jsonl (passes `validate_pairs_file`)."""
-    with path.open("w", encoding="utf-8") as fp:
-        for p in range(n_posts):
-            for c in range(chunks):
-                meta = {
-                    "source": f"post/p{p}.qmd",
-                    "captured_at": "2026-07-21T00:00:00+00:00",
-                    "capture_id": f"cap{p:04x}",
-                    "chunk_index": c,
-                    "chunk_total": chunks,
-                }
-                if p >= n_posts - n_synth_posts:
-                    meta["synthetic"] = True
-                    meta["transform_sim"] = 0.95 if c == 0 else 0.4
-                rec = {
-                    "messages": [
-                        {"role": "system", "content": STYLE_SYSTEM},
-                        {
-                            "role": "user",
-                            "content": f"It is worth noting that post {p} chunk {c} delves deeply.",
-                        },
-                        {"role": "assistant", "content": f"Post {p} chunk {c}: the tight version."},
-                    ],
-                    "meta": meta,
-                }
-                fp.write(json.dumps(rec) + "\n")
-    return path
-
-
-def test_assemble_keeps_all_without_splits(tmp_path):
-    corpus_path = _write_corpus(tmp_path / "pairs.jsonl")
+def test_assemble_keeps_all_without_splits(write_pairs_corpus):
+    corpus_path = write_pairs_corpus(n_posts=6, **CORPUS)
     corpus = tr.assemble_training_corpus(corpus_path, val_frac=0)
     assert corpus.n_train == 12 and corpus.n_val == 0
     assert corpus.n_source_records == 12
@@ -57,16 +32,16 @@ def test_assemble_keeps_all_without_splits(tmp_path):
     assert corpus.pairs_sha256 and len(corpus.pairs_sha256) == 16
 
 
-def test_assemble_keeps_near_copy_pairs(tmp_path):
+def test_assemble_keeps_near_copy_pairs(write_pairs_corpus):
     """Pinned data policy: transform_sim > 0.85 pairs are styler data, not noise."""
-    corpus_path = _write_corpus(tmp_path / "pairs.jsonl")
+    corpus_path = write_pairs_corpus(n_posts=6, **CORPUS)
     corpus = tr.assemble_training_corpus(corpus_path, val_frac=0)
     sims = [(rec.get("meta") or {}).get("transform_sim") for rec in corpus.train]
     assert 0.95 in sims  # the near-copy survived
 
 
-def test_assemble_filters_to_styler_role(tmp_path):
-    corpus_path = _write_corpus(tmp_path / "pairs.jsonl", n_posts=8)
+def test_assemble_filters_to_styler_role(write_pairs_corpus):
+    corpus_path = write_pairs_corpus(n_posts=8, **CORPUS)
     posts = [f"post/p{p}.qmd" for p in range(8)]
     splits_doc = sp.make_splits(posts, eval_frac=0.25, detector_frac=0.5, seed=0)
     corpus = tr.assemble_training_corpus(corpus_path, splits=splits_doc, val_frac=0)
@@ -77,8 +52,8 @@ def test_assemble_filters_to_styler_role(tmp_path):
     assert corpus.dropped["role"] == corpus.n_source_records - corpus.n_train
 
 
-def test_selector_and_per_target_hooks(tmp_path):
-    corpus_path = _write_corpus(tmp_path / "pairs.jsonl")
+def test_selector_and_per_target_hooks(write_pairs_corpus):
+    corpus_path = write_pairs_corpus(n_posts=6, **CORPUS)
 
     def drop_synth(rec):
         return not (rec.get("meta") or {}).get("synthetic")
@@ -97,8 +72,8 @@ def test_selector_and_per_target_hooks(tmp_path):
     assert corpus.n_train == 0 and corpus.dropped["per_target"] == 12
 
 
-def test_val_split_deterministic_and_by_post(tmp_path):
-    corpus_path = _write_corpus(tmp_path / "pairs.jsonl", n_posts=10)
+def test_val_split_deterministic_and_by_post(write_pairs_corpus):
+    corpus_path = write_pairs_corpus(n_posts=10, **CORPUS)
     c1 = tr.assemble_training_corpus(corpus_path, val_frac=0.2, seed=3)
     c2 = tr.assemble_training_corpus(corpus_path, val_frac=0.2, seed=3)
     assert c1.val_posts == c2.val_posts and len(c1.val_posts) == 2
@@ -120,8 +95,8 @@ def test_validation_gate_refuses_malformed_corpus(tmp_path):
         tr.assemble_training_corpus(bad)
 
 
-def test_dry_run_writes_manifest_without_spending(tmp_path):
-    corpus_path = _write_corpus(tmp_path / "pairs.jsonl")
+def test_dry_run_writes_manifest_without_spending(tmp_path, write_pairs_corpus):
+    corpus_path = write_pairs_corpus(n_posts=6, **CORPUS)
     manifest_out = tmp_path / "runs" / "test.json"
     calls = []
 
@@ -144,8 +119,8 @@ def test_dry_run_writes_manifest_without_spending(tmp_path):
     assert manifest["hyperparameters"]["base_model"] == tr.DEFAULT_BASE_MODEL
 
 
-def test_run_training_records_result_via_runner_seam(tmp_path):
-    corpus_path = _write_corpus(tmp_path / "pairs.jsonl")
+def test_run_training_records_result_via_runner_seam(tmp_path, write_pairs_corpus):
+    corpus_path = write_pairs_corpus(n_posts=6, **CORPUS)
     manifest_out = tmp_path / "runs" / "run.json"
     seen = {}
 
