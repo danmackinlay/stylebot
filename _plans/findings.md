@@ -46,7 +46,42 @@ section wall long before the byte budget, and two runs differing only in
 
 **Corpus composition over time.** 254 records (2026-06-27, all real) → 331 real
 / 3,231 synthetic (2026-07-21) → 4,169 of 4,500 pairs synthetic (2026-07-22) →
-**4624 records, 4169 synthetic** (2026-08-10 audit).
+4624 records, 4169 synthetic (2026-08-10 audit) → **4595 records, 4140
+synthetic** (2026-08-11, after the A5 prune below). Distinct
+(source, target-body) cells among the synthetic pairs: 3710 → **3686**.
+
+**Inline markup is a fifth of the target side** (2026-08-11, over the
+then-4624-pair corpus): **749,629 of 3,649,320 target-side characters —
+20.5%** — is link syntax, inline code, citation keys and inline math. None of
+it carries style signal, which is what makes the symmetric-masking experiment
+(`decisions.md`) worth its ~$15. Per-pair incidence, same measurement: links
+**77.3%** of pairs, inline code **20.3%**, citations **17.9%**, inline math
+**15.8%** — against `〈MASKED_*〉` at **0.5%** (22 pairs, all on the slop side).
+Raw inline markdown is the distribution; sentinels are not.
+
+**`:::` div census** (2026-08-11, over 1751 `.qmd` files): **4139 blocks,
+535,609 chars**, 3.78% of blog bytes.
+
+| class | blocks | chars | verdict |
+|---|---|---|---|
+| figure | 2586 | 365,117 | markup — correctly excluded |
+| `{#refs}` | 1200 | 18,221 | markup — correctly excluded |
+| `callout-*` | 309 | 123,609 | **prose** — wrongly excluded |
+| `{.notes}` | 14 | 18,787 | **prose** — wrongly excluded |
+
+So ~27% of div bytes is Dan-voice prose being discarded by protecting the
+container rather than the marker. Opting the prose classes in (blog-side
+policy, via `div_is_prose`) would move section-bounded targets 3775 → 3824
+(139 new, 90 recut, ~120k new chars) and cross-heading 2451 → 2482 (250 new,
+219 recut, ~313k new chars).
+
+**Corpus-stability floor** (2026-08-11, `tests/test_corpus_stability.py` against
+the live blog): **3503 section-bounded / 396 cross-heading**, of 3686 distinct
+corpus target bodies. The ~5% section-bounded gap is ordinary blog prose drift
+since generation. Cross-heading is a **near-null instrument** — the corpus was
+generated entirely section-bounded and `CROSS_HEADING` was promoted afterwards,
+so the cells barely overlap; it earns its place only by exercising the
+cross-heading path over real prose, which no fixture does.
 
 **Real captured pairs are unbounded but few** (2026-07-22): observed median 693
 chars, p90 1866, max 4143 — across only 331 records.
@@ -145,6 +180,18 @@ by `--max-transform-sim 0.95`.
 synthetic pairs have `transform_sim > 0.85`. They are label noise for the
 *detector* (dropped there) but teach the styler restraint — leave alone prose
 that is already fine.
+
+**Unanchored `$$` mangled sentences inside training targets** (defect A5,
+2026-08-11). `MATH_BLOCK_RE` was not line-anchored, so a mid-sentence `$$k$$`
+was excised as if it were a display block and the remnants joined:
+`high-$$d$$ behaviour` → `high- behaviour` **in a training target**. **145 of
+1751** blog files contain a non-standalone `$$`. Blast radius: **24 target
+texts, 29 pairs (0.70% of 4169), 15 posts** — corpus 4624 → **4595** after
+`scripts/prune_stale_synth_pairs.py`. Stability floors moved with it,
+3527 → 3503 section-bounded and 401 → 396 cross-heading. (The plan predicted
+19 texts / 24 pairs; the measured text count matches the stability delta
+exactly, so the estimate was low.) The other four defects in the A-series
+(A1–A4) had **zero** corpus impact: all 6214 targets byte-identical.
 
 **Capture diffing loses almost nothing** (2026-08-04, across all 41 archives):
 the theory that `diff_chunks` was discarding paragraph-count-changing edits by
@@ -249,6 +296,22 @@ inference chunk budget is therefore pinned to the training chunk scale: raising
 `--max-chunk-chars` without retraining buys identity fallbacks, not longer
 rewrites.
 
+**Inline anchors would reject a fifth of good rewrites** (2026-08-11, all 4624
+pairs, run in the guard's inference direction). Share of pairs where a genuine
+Dan rewrite would be **disqualified** by the anchor guard:
+
+| anchors checked | disqualified | share |
+|---|---|---|
+| today (links, fences, headings) | 294 | 6.4% |
+| + inline code | 552 | 11.9% |
+| + inline math | 623 | 13.5% |
+| + both | 878 | **19.0%** |
+
+Tripling the rate at which every candidate is rejected and the input kept
+verbatim is a bad trade for `run`, which must pick one. Hence inline anchors
+default **off** in `rewrite_text` (`--strict-anchors` opts in) and are **always
+on** in `rewrite_candidates`, where they only flag and a human decides.
+
 **MLX local-serving parity** (2026-07-22, run 2, 20 val pairs @ temp 0.3):
 detector output means **tinker 0.4627 vs local 4-bit 0.4529**, Δ **−0.0098**,
 inside the 0.03 gate. Quantization drift stayed within the 0.05 gate, so no
@@ -263,8 +326,10 @@ The original plan budgeted **$180–290** for synthetic pair generation (model
 matrix, Sonnet-weighted; a cheaper Haiku variant at $100–170), inside a total
 upfront envelope of ~$200–330.
 
-Actual v1 corpus generation came in at **$15.27** — an order of magnitude under
-forecast. Training was likewise cheap: run 1 $1.97, run 2 $1.49 against a
+Actual v1 corpus generation came in at **$15.27** in billed credits for 4169
+synthetic pairs — **~$0.0037 a pair**, an order of magnitude under forecast.
+That unit rate is the number to size any re-synthesis against. Training was
+likewise cheap: run 1 $1.97, run 2 $1.49 against a
 $6–15 estimate. The v2 scale curriculum is sized at ~8.9M target chars over
 2426 / 1244 / 917 targets at 1500 / 3000 / 4500, ≈ **$39** of generation.
 
@@ -277,3 +342,23 @@ time, against **19** for the next-largest subcommand. Classified as 14
 load-bearing / 24 policy constants / 16 retirement candidates; retiring the
 `gpt`/`local` preset path removed 4, leaving **50**. The full classification and
 the remaining open proposals are in [`synth-flag-audit.md`](synth-flag-audit.md).
+
+**Segmenter implementations: 7 → 3** (2026-08-11). Five copies inside stylebot
+were merged into `stylebot.markdown`. The three that remain are all pinned:
+`stylebot.markdown` is the source of truth, and the TypeScript port
+(`tests/test_marker_segmentation.py`) and `livingthing.qmd_core`
+(`tests/fixtures/segmenter_conformance.*`) are each held to a golden fixture.
+Neither can be deleted — one is a different language, one must run with
+stylebot uninstalled (`decisions.md` D26/D28/D30).
+
+**Test count: 370 → 474** (2026-08-11, `uv run pytest -q`; 2 skipped, the
+corpus-stability pair, which need `LIVINGTHING_ROOT`).
+
+**The scores report's controls had never worked.** The page emits
+`<table class=headline>` *before* the data table, so the script's bare
+`querySelector('tbody')` bound every sort/filter/facet handler to the two-row
+summary: sorts silently reordered the headline and the text filter threw on its
+`.txt`-less cells. Pre-existing, found while consolidating `report.py`'s two
+drifted renderers into one; fixed by giving the data table `id=rows`. Worth
+recording because nothing failed loudly — a dead control looks like a control
+you did not click hard enough.

@@ -177,11 +177,14 @@ has a durable document, it is linked.
 > models go through OpenRouter now). The mechanism is lean — don't redo it; ship
 > functionality.
 
-**Where things stand (2026-07-22):** the whole pipeline runs end-to-end —
+**Where things stand (2026-08-11):** the whole pipeline runs end-to-end —
 capture → synth (gated) → train (Tinker LoRA, manifests committed blog-side)
 → `dan-style run` (guarded inference) → eval (detector + judge + Vale).
-Operations live in the blog's `_training_pairs/RUNBOOK.md`; durable decisions
-in [`decisions.md`](decisions.md), measurements in [`findings.md`](findings.md).
+Segmentation is now one implementation (`stylebot.markdown`) with training and
+inference held to the same protection contract; the corpus is 4595 pairs after
+the A5 prune, and neither trained run has been re-run against it. Operations
+live in the blog's `_training_pairs/RUNBOOK.md`; durable decisions in
+[`decisions.md`](decisions.md), measurements in [`findings.md`](findings.md).
 
 **Open slices** (each self-contained):
 
@@ -191,10 +194,10 @@ in [`decisions.md`](decisions.md), measurements in [`findings.md`](findings.md).
 - **Fireworks serving**: PEFT upload + scale-to-zero, retry on
   `503 DEPLOYMENT_SCALING_UP`; acceptance is the same chat-template parity test
   the MLX exit passed (D8 / `findings.md`).
-- **Blockquote integrity**: a reflowed `> quote` can lose its `>` prefix on
-  continuation lines — quotes aren't anchor-guarded. Candidate fix: add
-  blockquote-prefix counts to `content_anchors`, or protect quote blocks the way
-  fences are.
+- ~~**Blockquote integrity**~~ — **closed 2026-08-11** by the second candidate
+  fix: blockquotes are protected the way fences are, so `infer._segment` never
+  hands one to the styler and there is no reflow to lose the `>` prefix
+  (`decisions.md` D27, protection ground 1).
 - **v3 data**: deliberate moderate-compression pairs (Dan compresses 1.5–2× in
   real edits) now that generator-accident inflation is gated at 3×.
 - **Synthetic↔real distribution match**: the fifth eval capability — a

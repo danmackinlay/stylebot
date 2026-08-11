@@ -6,10 +6,10 @@ what we believed and got wrong. Git preserves what changed; it does not preserve
 why an alternative was rejected.
 
 Entries D1–D8 keep their original **decision → alternatives → deciding
-constraint → re-evaluate-if** shape. Entries D9 onward are compressed from the
+constraint → re-evaluate-if** shape. Entries D9–D25 are compressed from the
 per-phase design plans that were retired once their work shipped: what we
-thought, what happened, what we concluded. Measurements live in
-[`findings.md`](findings.md).
+thought, what happened, what we concluded. D26 onward return to the full shape.
+Measurements live in [`findings.md`](findings.md).
 
 Everything numbered `D…` was **decided and acted on**. A trailing
 [Open proposals](#open-proposals-not-decided) section holds `P…` entries that are
@@ -125,7 +125,7 @@ The old "galaxy-brained reframe" (Goodharting Pangram ≈ de-slopping toward Dan
 
 **Decision**: not v1. Revisit only as a Phase-7-ish detour if a specific failure mode appears.
 
-**DiffusionGemma context**: structure-preserving constrained rewrite is exactly what discrete-diffusion LMs are built for — bi-directional canvas attention conditions on both sides of a span, so "keep the markdown/identifiers, change the register" is the *native* operation rather than something coaxed out of an autoregressive model. Prior art for diffusion text style transfer: [Lyu et al. 2023, StylePTB](https://aclanthology.org/2023.repl4nlp-1.6); [DDOT infilling, arXiv:2506.13579](https://arxiv.org/abs/2506.13579). Tunable via [Unsloth's DiffusionGemma support](https://unsloth.ai/docs/models/diffusiongemma), Google's Hackable Diffusion (JAX), NVIDIA NeMo, and the `ddm-sft` mask-and-denoise + LoRA recipe. Dan already runs [`OsaurusAI/diffusiongemma-26B-A4B-it-MXFP8`](https://huggingface.co/OsaurusAI/diffusiongemma-26B-A4B-it-MXFP8) locally (see [`local_llm_mac.qmd#models-diffusion`](../notebook/local_llm_mac.qmd#models-diffusion)).
+**DiffusionGemma context**: structure-preserving constrained rewrite is exactly what discrete-diffusion LMs are built for — bi-directional canvas attention conditions on both sides of a span, so "keep the markdown/identifiers, change the register" is the *native* operation rather than something coaxed out of an autoregressive model. Prior art for diffusion text style transfer: [Lyu et al. 2023, StylePTB](https://aclanthology.org/2023.repl4nlp-1.6); [DDOT infilling, arXiv:2506.13579](https://arxiv.org/abs/2506.13579). Tunable via [Unsloth's DiffusionGemma support](https://unsloth.ai/docs/models/diffusiongemma), Google's Hackable Diffusion (JAX), NVIDIA NeMo, and the `ddm-sft` mask-and-denoise + LoRA recipe. Dan already runs [`OsaurusAI/diffusiongemma-26B-A4B-it-MXFP8`](https://huggingface.co/OsaurusAI/diffusiongemma-26B-A4B-it-MXFP8) locally (see [*Local LLMs on the Mac* §"Diffusion models"](https://danmackinlay.name/notebook/local_llm_mac.html#models-diffusion)).
 
 **Deciding constraints**:
 
@@ -344,6 +344,201 @@ UnknownIssuer` on the very first auth-token call, first hit 2026-07-22. There is
 no supported env or config knob, so `stylebot.tinker_tls` rebuilds the transport
 with system certs and patches the SDK's private transport factory. Best-effort by
 design: if the internals move it warns by name rather than failing the run.
+
+---
+
+D26–D30 come from the 2026-08-11 segmentation harmonisation, which found the
+same markdown segmenter written seven times and pulled the surviving copies into
+one contract. They use the full **decision → alternatives → deciding constraint
+→ re-evaluate-if** shape.
+
+## D26: no shared markdown package (yet) — `stylebot.markdown`, not an `mdcore` release
+
+**Decision (2026-08-11)**: merge the duplicated segmenters *inside* stylebot into
+`stylebot.markdown` and stop there. Do not extract a third repo.
+
+**Alternatives considered**:
+
+- **Extract `mdcore`** — a standalone package both stylebot and livingthing
+  depend on. The obvious end state, and the one the duplication argues for.
+- **Vendor a copy** into livingthing with a sync script. A build step, and it
+  fails silently when nobody runs it.
+
+**Deciding constraint**: of the **seven** implementations found — five inside
+stylebot, `livingthing.qmd_core` (which duplicated the scan locally as well),
+and the marker's TypeScript port — a Python package unifies **exactly one**.
+Five were merged into `stylebot.markdown` and needed no package to do it; the TS
+port cannot consume Python at all. So the release buys unifying ~130 lines
+between two sibling checkouts, against a third repo, a release cadence, a
+version to pin, and a new version-skew failure mode where the two repos are
+built against different `mdcore`s. The conformance fixture (D28) is needed
+*regardless*, because the TS port exists — so the package's marginal gain over
+the fixture is small. Extraction stays cheap if it ever earns its place:
+`markdown.py` is ~350 lines of stdlib-only code with no stylebot imports.
+
+**Re-evaluate if**: a **third** Python consumer appears; the surface passes
+~500 lines or grows inline parsing (emphasis, links, tables — where a real
+CommonMark dependency starts to look better than either option); or there is a
+reason to publish it for people who are not us.
+
+## D27: exclusion, not masking, for block constructs; the anchor guard for inline
+
+**Decision (2026-08-11)**: protected *blocks* are cut out of the text the styler
+sees (see the protection principle in `stylebot.markdown`). Protected *inline*
+constructs — code spans, inline math — stay in the prose and are defended after
+the fact by the anchor guard, not by sentinel masking.
+
+**Alternatives considered**:
+
+- **Sentinel masking at inference** — replace `` `x` ``/`$x$` with `〈MASKED_*〉`
+  before sending, restore after. This is what livingthing's opt-in `--mask`
+  does.
+- **Always-on inline anchors** — keep the constructs raw but disqualify any
+  candidate that loses one.
+
+**Deciding constraint**: *asymmetric* masking — masking at inference over an
+adapter trained on raw text — is out of distribution by measurement. Over the
+4624-pair corpus, raw inline markdown is thoroughly in-distribution (links
+77.3% of pairs, inline code 20.3%, citations 17.9%, inline math 15.8%) while
+`〈MASKED_*〉` occurs in **0.5%** — and in those, only on the slop side. The
+adapter has essentially never seen a sentinel as content. Always-on inline
+anchors fail on a different measurement: they would disqualify a genuine
+Dan-grade rewrite on **19.0%** of pairs against today's 6.4% (table in
+[`findings.md`](findings.md)), i.e. triple the rate at which `run` rejects every
+candidate and keeps the input verbatim. So inline anchors are **off by default
+in `rewrite_text`** (behind `--strict-anchors`) and **always on in
+`rewrite_candidates`**, where a human sees the flag and decides.
+
+This refutes asymmetric masking. It does **not** refute *symmetric* masking —
+masking both sides at training and at inference — which remains open; see the
+deferred experiment below. Note D4 already decided "raw markdown only"; this is
+the same call, now with numbers behind it.
+
+**Re-evaluate if**: the symmetric-masking experiment below is run and wins on
+the judge signal; or a future corpus is generated with masking on, which would
+move the distribution this decision rests on.
+
+## D28: a conformance fixture, not a shared import, pins the second implementation
+
+**Decision (2026-08-11)**: `livingthing.qmd_core`'s copy of the segmenter is
+**permanent**, and is pinned rather than deleted.
+`tests/fixtures/segmenter_conformance.{qmd,json}` is one document plus one
+checked-in expectation, asserted from both repos, with a
+`STYLEBOT_REGEN_SEGMENTS=1` regeneration hatch and a `fixture_sha256` so a stale
+copy of the document in the consuming repo cannot agree by accident.
+
+**Alternatives considered**:
+
+- **Delete the copy; `import stylebot.markdown`.** The strong guarantee — one
+  implementation cannot drift from itself.
+- **Leave it forked and unpinned.** The status quo ante, and how five copies
+  diverged in the first place.
+
+**Deciding constraint**: livingthing is making stylebot **optional** (D30), so
+its editing and publishing path must segment markdown with stylebot
+uninstalled. The import is therefore unavailable, not merely unattractive. Given
+that, the choice is between undetected drift and detected drift, and the fixture
+is the same instrument that already pins the TypeScript port
+(`tests/test_marker_segmentation.py`). It worked immediately: the fixture
+exposed livingthing's missing `~~~`-fence support, which was closed the same
+day.
+
+**This is a weaker guarantee than one implementation, and should be read as
+one.** A fixture pins the behaviours it happens to exercise; a construct absent
+from the document is unpinned, and both sides can drift on it freely. The
+document is the contract, so extending the contract means extending the
+document.
+
+**Re-evaluate if**: livingthing's editing path stops needing to run without
+stylebot (then delete the copy and import); or the two implementations diverge
+on something the fixture did not cover, which is the fixture's failure and an
+argument to grow the document rather than abandon the approach.
+
+## D29: policy differences are parameters — `block_only`, `raw_html`, `div_is_prose`
+
+**Decision (2026-08-11)**: where stylebot and livingthing legitimately want
+*different* protection, express the difference as a keyword argument on
+`protected_spans` rather than as two implementations or one forced compromise.
+The conformance fixture then records **named configurations** — `stylebot`
+(block-anchored math, no raw HTML) and `livingthing` (inline `$$` and
+`<script>`/`<style>` protected) — both produced by `stylebot.markdown` alone.
+
+**Alternatives considered**:
+
+- **Force agreement**: pick one behaviour and make both sides live with it.
+- **Let each side keep its own regex set** and only assert on the intersection.
+
+**Deciding constraint**: the differences are real and derive from what each side
+*does with* a protected span. livingthing **reassembles** them, so protecting an
+inline `$$k$$` costs it nothing and buys safety. stylebot **deletes** them, so
+protecting an inline `$$k$$` joins the remnants and mangles the sentence — the
+A5 defect, which reached the corpus (`findings.md`). Forcing agreement would
+have made one side wrong on purpose. Same shape for `raw_html`: only a
+whole-document reflower needs `<script>`/`<style>` protection, and turning it on
+in stylebot would move a corpus generated without it, so it defaults off.
+`div_is_prose` is the same again — which div classes bear prose is a Quarto
+convention, and CLAUDE.md's blog/generic boundary keeps it out of stylebot.
+
+Parameterising is what makes the fixture *able* to record both sides honestly
+instead of asserting a false agreement, and it is why one implementation can
+serve two policies without forking.
+
+**Re-evaluate if**: a parameter accumulates a third or fourth value, or the
+configurations stop being nameable — at that point the sides have genuinely
+different requirements and a shared implementation is fiction.
+
+## D30: stylebot is livingthing's *optional* `styler` extra
+
+**Decision**: livingthing declares `styler = ["stylebot[classifier,trainer]"]`
+as an optional extra (carried by a default-on `styler` dependency group, since
+uv 0.11 has no `default-extras`), not a hard dependency. `uv sync --no-group
+styler` gives the lean install.
+
+**Alternatives considered**:
+
+- **A hard dependency.** One install, one lockfile, nothing to explain.
+
+**Deciding constraint**: the blog's *editing and publishing* path — writing,
+rendering, `ai-preen`, format-sentences, Zotero, the search index — must not
+depend on ML tooling. Only `dan-style` and `bin/styler-mlx` reach for stylebot,
+and they say so when it is missing. A hard dependency would put torch, the
+tinker SDK and sentence-transformers in the way of rendering a blog post.
+
+**This is the constraint behind D28**: because the extra can be absent,
+livingthing's blog-core segmentation cannot `import stylebot`, so its copy of
+the segmenter is permanent.
+
+**Re-evaluate if**: the styler becomes part of the ordinary publish path rather
+than an editing-time tool.
+
+---
+
+## Deferred experiment: symmetric masking (D4's re-evaluation, still untested)
+
+**The experiment**: mask inline markup — code spans, inline math, link targets,
+citation keys — on **both** sides of every pair, train an adapter on the masked
+corpus, and mask at inference too. Symmetric, unlike the asymmetric variant D27
+refutes.
+
+**Hypothesis**: inline markup is **20.5%** of target-side characters
+(`findings.md`) and carries no style signal whatsoever — a URL is a URL in
+anyone's voice. Masking it should concentrate the training signal on the prose
+that does carry voice, and shorten the sequences into the bargain.
+
+**Cost**: ~**$15** — a post-hoc transform over the pairs already on disk, so no
+re-synthesis — plus one retrain (~$1.50 at run-2 scale).
+
+**How to decide it**: on the frozen eval stratum, and **adopt only on a
+judge-signal win**. A detector-only improvement is exactly the reward-hacking
+failure [`eval-harness.md`](eval-harness.md) warns about in its own guardrail
+section: the detector is a proxy, and masking changes the surface statistics the
+proxy reads.
+
+**Why it is written here and not built**: this is D4's stated re-evaluation
+trigger, and that trigger has never been tested in either direction. D4 deferred
+masking on the reasoning that mask preservation is strictly easier than markdown
+preservation — true, and irrelevant to whether masking helps the *style* signal,
+which is the question here.
 
 ---
 
