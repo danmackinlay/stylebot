@@ -9,7 +9,7 @@ from __future__ import annotations
 from stylebot import synth
 
 
-def test_selector_keeps_only_human_authored(tmp_path, make_blog):
+def test_selector_keeps_only_human_authored(make_blog):
     root = make_blog()
     targets = synth.iter_targets(blog_root=root)
     assert targets, "expected human-authored chunks"

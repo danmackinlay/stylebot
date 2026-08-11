@@ -148,23 +148,30 @@ def test_session_resume_packs_only_missing_cells(tmp_path):
 
 
 def test_turn_error_reflows_remainder(tmp_path):
-    # Needs a 2/2 split so `bad` fills exactly one 2-turn session. Rendezvous
-    # assignment is multinomial, so pick the four targets that land that way
-    # rather than assuming the first four do (bad: 0,2 / good: 1,5).
-    targets = [t for i, t in enumerate(_targets(6)) if i in (0, 1, 2, 5)]
-
     def bad(text, history=None):
         raise RuntimeError("api down")
 
-    result = synth.synthesize_pairs(
-        targets,
-        tmp_path / "c",
-        [
-            synth.Generator("bad", generate=bad),
-            synth.Generator("good", generate=lambda t, history=None: "[slop] " + t),
-        ],
-        session_turns=2,
+    gens = [
+        synth.Generator("bad", generate=bad),
+        synth.Generator("good", generate=lambda t, history=None: "[slop] " + t),
+    ]
+    # `bad` must fill exactly one 2-turn session, so each arm needs exactly two
+    # targets. DERIVE that split from `_assign` rather than hardcoding the
+    # indices that happen to land 2/2 under today's hash: hardcoding couples
+    # this test to the rendezvous recipe, and when the recipe moved it would
+    # fail as an opaque count mismatch instead of naming the cause. Assignment
+    # is per-target and set-independent, so the split survives the narrowing.
+    by_arm: dict[str, list] = {}
+    for target, gen, _ in synth._assign(_targets(12), gens, per_generator=False):
+        by_arm.setdefault(gen.name, []).append(target)
+    shortfall = {name: len(by_arm.get(name, ())) for name in ("bad", "good")}
+    assert all(n >= 2 for n in shortfall.values()), (
+        f"need >=2 targets per arm to build the 2/2 split, got {shortfall} — "
+        "the assignment recipe moved, or the pool is too small"
     )
+    targets = by_arm["bad"][:2] + by_arm["good"][:2]
+
+    result = synth.synthesize_pairs(targets, tmp_path / "c", gens, session_turns=2)
     assert result.per_generator.get("good") == 2
     assert "bad" not in result.per_generator
     # The failed turn is shed, the REST of its session reflows and is attempted

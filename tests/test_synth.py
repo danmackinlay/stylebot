@@ -108,7 +108,7 @@ def test_heading_context_prepended_both_sides(tmp_path):
     assert rec["meta"]["context_mode"] == "immediate"
 
 
-def test_context_changes_synth_key(tmp_path):
+def test_context_changes_synth_key():
     # Same body, different context -> different synth_key (regenerates).
     from stylebot.synth import _synth_key
 
@@ -471,7 +471,16 @@ def test_max_transform_sim_gate_drops_identity_outputs(tmp_path):
     assert result.written == 6 and result.skipped_degenerate == 0
 
     # Unset gate (default): even identity output is written — covariate only.
-    result = synth.synthesize_pairs(_targets(3), data_dir, [echo])
+    #
+    # Deliberately the SAME data_dir, generator and texts as the gated run
+    # above, because that pins a second property: a dropped cell is never
+    # keyed, so it must be RE-ATTEMPTED rather than counted as already
+    # present. `skipped_existing == 0` is what actually says so — without it
+    # `written == 3` would also pass if the gate had (wrongly) written and
+    # something else had changed the key.
+    retried = targets[:3]
+    result = synth.synthesize_pairs(retried, data_dir, [echo])
+    assert result.skipped_existing == 0, "a gated-and-dropped cell must not count as present"
     assert result.skipped_degenerate == 0 and result.written == 3
 
 
@@ -490,7 +499,10 @@ def test_report_result_echoes_degenerate_count(capsys, tmp_path):
         emit=synth_cli.click_emitter(),
     )
     out = capsys.readouterr().out
-    assert "3 identity pair(s) DROPPED" in out and "0.95" in out
+    # The whole line, not "0.95" loose in the summary: a bare substring passes
+    # if the threshold happens to appear anywhere, including in a line that
+    # never mentions the drop.
+    assert "3 identity pair(s) DROPPED (transform_sim > 0.95)" in out
 
 
 def test_max_length_ratio_gate_drops_inflated_outputs(tmp_path):
