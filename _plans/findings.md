@@ -363,3 +363,61 @@ summary: sorts silently reordered the headline and the text filter threw on its
 drifted renderers into one; fixed by giving the data table `id=rows`. Worth
 recording because nothing failed loudly — a dead control looks like a control
 you did not click hard enough.
+
+## Placeholder retention across models (why shape matters, and where)
+
+Measured 2026-08-11 in **livingthing**, during a model-roster bench for
+`ai-preen`; full write-up in
+[`placeholder-design-2026-08.md`](placeholder-design-2026-08.md). Different task
+(copy-edit, not restyle) and different code (livingthing's `pandoc_mask`), so
+these are **not** stylebot measurements — but the question is ours the moment
+the deferred symmetric-masking experiment is run, because placeholder *shape* is
+a free parameter of that experiment.
+
+12 link-bearing chunks, ~122 placeholders per cell; retention = returned verbatim:
+
+| scheme | gemini-3.1-flash-lite | qwen3.6-35b-a3b | glm-4.7-flash |
+|---|---|---|---|
+| `〈URL_0000〉` Unicode brackets | 100% | 45.9% | 0% |
+| `https://example.com/u/<sha1>` URL-shaped | 100% | **68.9%** | 6.0% |
+| `[[URL_0000]]` plain ASCII | 100% | 37.3% | 12.9% |
+
+**The mechanism is not character exoticism.** The ASCII variant — the obvious
+"fix" for weird Unicode — came *last*, worse than the Unicode it was meant to
+replace. What predicts survival is whether the token looks like the kind of
+thing that belongs in that slot: a URL-shaped string between `](` and `)` reads
+as a URL and gets copied; `〈URL_0000〉` and `[[URL_0000]]` both read as an
+identifier the editor has been handed, and editing models treat identifiers as
+fair game. Distinctiveness helps your regex and hurts the model's copying.
+
+**Why this lands hardest on us: retention is a model property, and we ship open
+weights.** The spread is 100% / 37–69% / 0–13% across three models on identical
+inputs. The closed frontier model was insensitive to scheme — for it, shape
+design is wasted effort. The failing model was beyond saving by any sigil. The
+band where scheme choice *changes the outcome* is the middle one, and that is
+where open models sit: `qwen3.6-35b-a3b` moved 31 points on shape alone, and our
+own styler is a Qwen fine-tune served through MLX/Fireworks. A masking scheme
+validated against a frontier API would tell us nothing about the thing we ship.
+
+**Our fine-tune has no learned affinity to fall back on.** D27 measured
+`〈MASKED_*〉` at **0.5%** of corpus pairs, slop-side only — the adapter has
+essentially never seen a sentinel as content, so it has learned no special
+handling for that shape. The general finding therefore transfers to it rather
+than being overridden by fine-tuning, which is the optimistic reading; the
+pessimistic one is that it has learned nothing that would *help* either.
+
+**Length-ratio distribution of a real rewrite** (measured here, 2026-08-11, over
+the live 4,595-pair corpus; `len(target)/len(slop)` where the slop side exceeds
+40 chars, n=4,590):
+
+| p0.1 | p1 | p5 | p25 | p50 | p75 | p95 | p99 | max |
+|---|---|---|---|---|---|---|---|---|
+| 0.31 | 0.34 | 0.39 | 0.61 | 0.79 | 0.93 | 1.25 | 2.16 | 9.76 |
+
+Mean 0.81, min 0.18. The transform leans compressive **on average only**: 13.6%
+of real rewrites are longer than their input and 1.5% more than half again. This
+is what sets `infer.MIN_REWRITE_LENGTH_RATIO = 0.3` (below the 0.1th percentile;
+flags 2 of 4,590) and why the truncation guard is a floor with no ceiling —
+length cannot distinguish an expansive rewrite from a rambling one. The source
+document's 0.9 threshold, correct for a copy-edit task, would have called 70% of
+genuine rewrites truncated.

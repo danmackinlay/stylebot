@@ -429,6 +429,13 @@ the same call, now with numbers behind it.
 the judge signal; or a future corpus is generated with masking on, which would
 move the distribution this decision rests on.
 
+**Reinforced 2026-08-11** by an independent measurement (see the shape
+constraints on the deferred experiment below, and `findings.md`): placeholder
+retention is strongly model-dependent, and weakest in exactly the open-weight
+band we serve from. That raises the cost of any masking scheme relative to
+exclusion, which cannot be got wrong by a model at all — an excluded block is
+never in the model's hands to mangle.
+
 ## D28: a conformance fixture, not a shared import, pins the second implementation
 
 **Decision (2026-08-11)**: `livingthing.qmd_core`'s copy of the segmenter is
@@ -550,6 +557,42 @@ trigger, and that trigger has never been tested in either direction. D4 deferred
 masking on the reasoning that mask preservation is strictly easier than markdown
 preservation — true, and irrelevant to whether masking helps the *style* signal,
 which is the question here.
+
+**If it is ever run, the placeholder SHAPE is a parameter, not a detail**
+(2026-08-11, evidence in [`findings.md`](findings.md) "Placeholder retention
+across models"). Three constraints the experiment inherits:
+
+1. **Make the token plausible in its slot, not distinctive.** A URL-shaped
+   stand-in retained 68.9% where `〈URL_0000〉` got 45.9% and plain-ASCII
+   `[[URL_0000]]` got 37.3% — the ASCII "fix" for exotic characters came last.
+   That implies *different shapes per protected class* (a URL for a link target,
+   a plausible identifier in backticks for a code span), not one uniform sigil,
+   and a reserved-but-plausible content domain such as `example.invalid`.
+   Note this cuts against `〈MASKED_*〉`, the shape the frozen `STYLE_SYSTEM`
+   names — which is a reason to settle the shape *before* any masked corpus is
+   generated, since the prompt cannot be changed afterwards without invalidating
+   it (D2).
+2. **Validate on the model we ship, not a frontier API.** Retention ranged
+   100% / 37–69% / 0–13% across three models on identical inputs. Scheme choice
+   only moves the outcome in the middle band, which is where open weights sit;
+   a scheme tuned against a model that retains everything measures nothing.
+3. **Give every placeholder a position component and a stable digest.** A
+   content-addressed token collapses duplicate occurrences of the same URL,
+   destroying the bijection and making reordering undetectable — observed as
+   spurious duplicates in the source bench. `<hash>-<n>`, and never Python's
+   salted `hash()`, which would mask the same input differently per process and
+   break resume.
+
+**What the same evidence does NOT change**: stylebot's block-level exclusion
+(D27) and the anchor guard stand. Neither is a masking scheme — stylebot
+substitutes nothing and has no restoration map — so the findings about sigil
+shape have no surface here today. Two of the source document's warnings were
+checked against our code and found already satisfied: `missing_anchors` compares
+multisets, never a positional `zip()` (the diff bug that produced a wrong
+conclusion there is structurally impossible here), and anchor failure fails
+*closed*, keeping the input verbatim, where the source pipeline failed open. The
+one warning that did land was truncation-vs-damage attribution, now fixed in
+`infer.rewrite_text`.
 
 ---
 
