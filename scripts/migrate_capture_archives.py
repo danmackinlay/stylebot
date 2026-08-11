@@ -26,8 +26,12 @@ Usage:
 
 Dry-run by default. Each conversion writes the new directory first and unlinks
 the legacy file only once the directory reads back with byte-identical text, so
-an interrupted run leaves both forms rather than neither — and `iter_archives`
-reads both, so a half-migrated corpus still works (loudly, with a warning).
+an interrupted run leaves both forms rather than neither — nothing is lost, but
+re-run it until `captures/` holds no `*.json`: since 0.3 `iter_archives` reads
+only directories and REFUSES (rather than silently skipping) a leftover blob.
+
+This script is the only remaining reader of the old format. It parses the blobs
+itself, so it keeps working after the library branch is gone.
 """
 
 from __future__ import annotations

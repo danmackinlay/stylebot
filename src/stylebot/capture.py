@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import difflib
 import json
-import logging
 import os
 import shutil
 import uuid
@@ -23,8 +22,6 @@ from stylebot.lib import read_w_frontmatter_text, split_paragraphs
 from stylebot.markdown import is_heading_line
 from stylebot.pairs import build_pair_content
 from stylebot.provenance import now_iso  # `ai-style log` binds capture.now_iso
-
-logger = logging.getLogger(__name__)
 
 
 def new_capture_id() -> str:
@@ -234,12 +231,6 @@ def append_pair(pairs_path: Path, record: dict) -> None:
     append_jsonl(pairs_path, record)
 
 
-# The atomic rewrite is a JSONL-level operation, not a pair-level one, so it
-# lives in `stylebot.jsonl`; this alias serves callers that reach it through
-# this module (`stylebot.bin.ai_style_log`).
-write_pairs_atomic = write_jsonl_atomic
-
-
 def remove_pairs_for_source(pairs_path: Path, source: str) -> int:
     """Drop every record whose meta.source matches. Returns count removed."""
     records = read_jsonl(pairs_path, keep_undecodable=True)
@@ -252,7 +243,7 @@ def remove_pairs_for_source(pairs_path: Path, source: str) -> int:
         else:
             kept.append(rec)
     if removed:
-        write_pairs_atomic(pairs_path, kept)
+        write_jsonl_atomic(pairs_path, kept)
     return removed
 
 
@@ -425,30 +416,33 @@ def iter_archives(pairs_path: Path):
     """Yield each capture archive dict beside `pairs_path`, oldest first.
 
     Sorted by `snapped_at` so a re-cut is deterministic, and flattened to the
-    shape `recut_archives` consumes whichever on-disk layout it came from.
+    shape `recut_archives` consumes.
 
-    Legacy `captures/<capture_id>.json` blobs are still read, and warned about —
-    a silent skip would look exactly like "that capture had no changed regions",
-    so the caller would never learn an archive had dropped out of the corpus.
+    Directories only. Support for the superseded `captures/<capture_id>.json`
+    blobs was dropped in 0.3, but they are REFUSED rather than skipped: a silent
+    skip would look exactly like "that capture had no changed regions", so the
+    caller would never learn an archive had dropped out of the corpus. Migrate
+    with `scripts/migrate_capture_archives.py`, which still reads the old form.
     """
     cap_dir = pairs_path.parent / "captures"
     if not cap_dir.is_dir():
         return
     archives = []
+    legacy: list[Path] = []
     for path in sorted(cap_dir.iterdir()):
         if path.is_dir() and not path.name.endswith(".tmp"):
             arch = read_archive(path)
             if arch is not None:
                 archives.append(arch)
         elif path.suffix == ".json":
-            logger.warning(
-                "legacy JSON capture archive %s — migrate with scripts/migrate_capture_archives.py",
-                path,
-            )
-            try:
-                archives.append(json.loads(path.read_text(encoding="utf-8")))
-            except (OSError, json.JSONDecodeError):
-                continue
+            legacy.append(path)
+    if legacy:
+        raise ValueError(
+            f"{len(legacy)} legacy JSON capture archive(s) in {cap_dir} "
+            f"(e.g. {legacy[0].name}). Support was removed in stylebot 0.3; "
+            "migrate them with:\n"
+            f"  uv run python scripts/migrate_capture_archives.py {pairs_path.parent} --apply"
+        )
     archives.sort(key=lambda d: (d.get("snapped_at") or "", d.get("capture_id") or ""))
     yield from archives
 
@@ -519,5 +513,5 @@ def recut_archives(
             if (rec.get("meta", {}) if isinstance(rec, dict) else {}).get("capture_id")
             not in recut_ids
         ]
-        write_pairs_atomic(pairs_path, kept + records)
+        write_jsonl_atomic(pairs_path, kept + records)
     return records

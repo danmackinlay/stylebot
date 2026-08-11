@@ -3,7 +3,9 @@
 # fine-tune training data, and the ai-style inference CLI. Touch with care:
 # changing this string after training pairs are logged invalidates them, and
 # `stylebot.pairs.validate_pair_record` will fail the whole corpus until every
-# record's system message is re-stamped (`scripts/restamp_style_system.py`).
+# record's system message is re-stamped. There is no re-stamping script in the
+# tree: the 2026-08-04 amendment's one-off was deleted once it had run. Moving
+# this string again means writing a fresh one-off migration for the corpus.
 #
 # "headings" is deliberately absent from the preserve list: cross-heading
 # chunking packs heading lines into the chunk as rewritable CONTENT, so a prompt

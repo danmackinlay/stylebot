@@ -43,7 +43,7 @@ import click
 
 from stylebot import capture, config
 from stylebot.capture import diff_chunks  # noqa: F401 — callers/tests reach it as log.diff_chunks
-from stylebot.jsonl import read_jsonl
+from stylebot.jsonl import read_jsonl, write_jsonl_atomic
 
 
 # Root for all logged state (the corpus), resolved through `stylebot.config` —
@@ -171,7 +171,7 @@ def _iter_pairs() -> list[dict]:
     """Read pairs.jsonl into memory. Returns [] if file is missing.
 
     Unparseable lines come back as ``{"_raw": line}`` so the rewrite path
-    (`capture.write_pairs_atomic`) round-trips them instead of silently dropping.
+    (`stylebot.jsonl.write_jsonl_atomic`) round-trips them instead of silently dropping.
     """
     return read_jsonl(_pairs_path(), keep_undecodable=True)
 
@@ -508,7 +508,7 @@ def save_session(
         disposition = "smart"
 
     if len(records_to_keep) != len(all_records):
-        capture.write_pairs_atomic(_pairs_path(), records_to_keep)
+        write_jsonl_atomic(_pairs_path(), records_to_keep)
 
     # Report disposition before the save line
     if disposition == "smart" and same_session:
@@ -713,7 +713,7 @@ def tidy_pairs(ctx: click.Context, source: str | None, dry_run: bool):
 
     click.echo(f"{'would remove' if dry_run else 'removed'} {removed} pair(s), keeping {len(kept)}")
     if not dry_run:
-        capture.write_pairs_atomic(_pairs_path(), kept)
+        write_jsonl_atomic(_pairs_path(), kept)
     _remind_open_sessions(ctx)
 
 
@@ -762,14 +762,19 @@ def recut_pairs(ctx, gap_paras, gap_chars, max_chars, min_chars, dry_run):
     stacked. Captures with no archive keep their native cut.
     """
     before = len(_iter_pairs())
-    records = capture.recut_archives(
-        _pairs_path(),
-        coalesce_gap_paras=gap_paras,
-        coalesce_gap_chars=gap_chars,
-        max_chars=max_chars or None,
-        min_chars=min_chars,
-        dry_run=dry_run,
-    )
+    try:
+        records = capture.recut_archives(
+            _pairs_path(),
+            coalesce_gap_paras=gap_paras,
+            coalesce_gap_chars=gap_chars,
+            max_chars=max_chars or None,
+            min_chars=min_chars,
+            dry_run=dry_run,
+        )
+    except ValueError as exc:
+        # e.g. unmigrated legacy JSON archives — a legible instruction, not a
+        # traceback, since the fix is a command the user has to run.
+        raise click.ClickException(str(exc)) from exc
     if not records:
         click.echo("no archives to re-cut (captures/ is empty or holds only --whole captures)")
         return

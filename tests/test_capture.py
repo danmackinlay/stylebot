@@ -279,9 +279,11 @@ def test_archive_write_is_atomic(tmp_path):
     assert len(got) == 1 and got[0]["before_text"] == "B"
 
 
-def test_iter_archives_still_reads_legacy_json(tmp_path, caplog):
-    """An unmigrated blob must not vanish silently — a silent skip looks exactly
-    like 'that capture had no changed regions'."""
+def test_iter_archives_refuses_legacy_json(tmp_path):
+    """The legacy blob reader went away in 0.3, but an unmigrated blob must not
+    vanish SILENTLY — a silent skip looks exactly like 'that capture had no
+    changed regions', so the corpus would quietly shrink. It raises, naming the
+    migration script, and it raises even when good archives sit beside it."""
     cap_dir = tmp_path / "captures"
     cap_dir.mkdir()
     (cap_dir / "deadbeef.json").write_text(
@@ -297,11 +299,20 @@ def test_iter_archives_still_reads_legacy_json(tmp_path, caplog):
         ),
         encoding="utf-8",
     )
+    pairs_path = tmp_path / "pairs.jsonl"
+    _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")  # a valid archive alongside
 
-    with caplog.at_level("WARNING"):
-        got = list(capture.iter_archives(tmp_path / "pairs.jsonl"))
-    assert len(got) == 1 and got[0]["after_text"] == "We dig in."
-    assert "legacy JSON capture archive" in caplog.text
+    with pytest.raises(ValueError) as excinfo:
+        list(capture.iter_archives(pairs_path))
+    msg = str(excinfo.value)
+    assert "1 legacy JSON capture archive" in msg
+    assert "deadbeef.json" in msg
+    assert "scripts/migrate_capture_archives.py" in msg
+
+    # And the same refusal reaches the caller through recut, which is how a user
+    # would actually hit it.
+    with pytest.raises(ValueError, match="migrate_capture_archives"):
+        capture.recut_archives(pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800)
 
 
 def test_hand_edited_archive_changes_what_recut_emits(tmp_path):

@@ -41,8 +41,9 @@ Consequence, and the reason `STYLE_SYSTEM` changed: an inline heading is
 text the styler rewrites, so the frozen prompt's "preserve … headings …
 verbatim" clause contradicted the data. It now says headings may be
 restyled but must keep their level and meaning. Every v1 record was
-re-stamped (`scripts/restamp_style_system.py`, system message only — user
-and assistant sides untouched, verified). A restyled heading changes its
+re-stamped by a one-off `scripts/restamp_style_system.py` (system message
+only — user and assistant sides untouched, verified; the script was deleted
+in 0.3 once the only corpus that exists had been through it). A restyled heading changes its
 slug and can break inbound `other.qmd#slug` links, which the per-chunk
 anchor guard cannot see; `workflow_style.check_heading_anchors` warns.
 
@@ -96,9 +97,14 @@ blog repo: `*.qmd` there is reformatted by the pre-commit hook (which would
 destroy the verbatim record the archive exists to keep), indexed by `qmd`
 search, and sampled by `iter_targets` as a synthesis target — and a
 verbatim frontmatter copy passes every selector gate, so captured slop
-would be trained on as human prose. `iter_archives` still reads legacy
-blobs, warning each time; `scripts/migrate_capture_archives.py` converts
-them (verified byte-identical `recut` output across the migration).
+would be trained on as human prose. `scripts/migrate_capture_archives.py`
+converts the old blobs (verified byte-identical `recut` output across the
+migration). **Compatibility dropped in 0.3:** `iter_archives` read legacy
+blobs — warning each time — for one release; it now reads directories only
+and *raises* on a leftover `captures/*.json`, naming the migration script.
+Raising, not skipping: a silent skip is indistinguishable from "that
+capture had no changed regions", so an archive could drop out of the corpus
+unnoticed. The migration script parses the blobs itself and still works.
 
 **Groundwork shipped same day — preference records:** editor decisions
 (voice-marker ≥0.0.4) now log `offsets` plus `para_before`/`para_after`

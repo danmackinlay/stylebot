@@ -8,6 +8,7 @@ pairs (gated through the shared `validate_pair_record`), the
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -526,3 +527,36 @@ def test_unready_world_is_a_click_exception(session_repo, tmp_path):
     code, out = _err("pair", "--before", str(same), "--after", str(same))
     assert code == 1
     assert "refusing to log" in out
+
+
+def test_recut_reports_legacy_archives_as_an_error_not_a_traceback(temp_corpus):
+    """`recut` is how a user actually meets an unmigrated capture archive.
+
+    `capture.iter_archives` refuses the legacy `captures/<id>.json` blobs rather
+    than skipping them (a silent skip would look like "no changed regions" and
+    shrink the corpus unnoticed). That refusal is a `ValueError` from a library,
+    so the CLI has to translate it: exit 1 with a legible `Error:` line naming
+    the migration command, never a raw traceback the user has to read past.
+    """
+    cap_dir = temp_corpus / "captures"
+    cap_dir.mkdir(parents=True)
+    (cap_dir / "deadbeef.json").write_text(
+        json.dumps(
+            {
+                "capture_id": "deadbeef",
+                "source": "post/legacy.qmd",
+                "snapped_at": "2026-07-01T00:00:00+00:00",
+                "whole": False,
+                "before_text": "It is worth noting the rich tapestry.",
+                "after_text": "We dig in.",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(log.main, ["-q", "recut"])
+    assert result.exit_code == 1, result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "Error:" in result.output
+    assert "1 legacy JSON capture archive" in result.output
+    assert "scripts/migrate_capture_archives.py" in result.output

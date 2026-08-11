@@ -186,8 +186,9 @@ that is already fine.
 was excised as if it were a display block and the remnants joined:
 `high-$$d$$ behaviour` → `high- behaviour` **in a training target**. **145 of
 1751** blog files contain a non-standalone `$$`. Blast radius: **24 target
-texts, 29 pairs (0.70% of 4169), 15 posts** — corpus 4624 → **4595** after
-`scripts/prune_stale_synth_pairs.py`. Stability floors moved with it,
+texts, 29 pairs (0.70% of 4169), 15 posts** — corpus 4624 → **4595** after a
+one-off `scripts/prune_stale_synth_pairs.py` (deleted in 0.3; it had run
+against the only corpus that exists). Stability floors moved with it,
 3527 → 3503 section-bounded and 401 → 396 cross-heading. (The plan predicted
 19 texts / 24 pairs; the measured text count matches the stability delta
 exactly, so the estimate was low.) The other four defects in the A-series

@@ -50,15 +50,19 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
   eval|export-table|log|make-splits|run|serve|synth|train|train-clf`). Not a
   scatter of loose scripts: Phase 1's logger shipped as a standalone
   `ai-style-log` script until 2026-07-20, and was folded in. One console script,
-  one `--help` tree. **One carve-out: one-off data migrations** — currently
-  `scripts/migrate_capture_archives.py`, `scripts/restamp_style_system.py` and
-  `scripts/prune_stale_synth_pairs.py` (2026-08-11: drops synth pairs whose
-  target the segmenter can no longer produce, but *only* where it was producible
-  under the superseded segmentation — ordinary blog drift is reported and left
-  alone). They rewrite data already on disk to a new schema, are typed once per schema
-  change (the code that needs them names them in its warning), and would only
-  clutter the `--help` tree of a tool nobody should be migrating with twice.
-  Anything a user runs as part of the pipeline is a subcommand, no exceptions.
+  one `--help` tree. **One carve-out: one-off data migrations** — currently a
+  membership of one, `scripts/migrate_capture_archives.py` (converts the
+  superseded `captures/<id>.json` blobs to the `captures/<id>/` directory
+  layout). It rewrites data already on disk to a new schema, is typed once per
+  schema change, and would only clutter the `--help` tree of a tool nobody
+  should be migrating with twice. The code that needs it names it in the error:
+  `capture.iter_archives` refuses a legacy archive and prints the command. A
+  migration script is deleted once the only corpus that exists has been through
+  it — `restamp_style_system.py` (the 2026-08-04 `STYLE_SYSTEM` amendment) and
+  `prune_stale_synth_pairs.py` (the 2026-08-10 segmentation change) went that
+  way in 0.3; users migrate on version increment rather than carrying spent
+  code. Anything a user runs as part of the pipeline is a subcommand, no
+  exceptions.
 - **Explicit paths, precedence `--flag` > `$STYLEBOT_DATA_DIR` > default**,
   resolved in `stylebot.config`. Two distinct inputs, never collapsed:
   `--blog-root` (read source) vs `--data-dir` (read/write state).
