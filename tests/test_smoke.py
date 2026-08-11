@@ -4,6 +4,7 @@ subagent breaking the pairs.jsonl contract should fail here."""
 
 from __future__ import annotations
 
+import importlib
 import json
 
 import pytest
@@ -102,6 +103,68 @@ def test_backend_defaults_differ_where_they_are_meant_to():
     result = CliRunner().invoke(ai_style.main, ["serve"])
     assert result.exit_code == 2
     assert "--detector-model" in result.output
+
+
+# --- CLI defaults are the library constants, not copies of them -----------
+#
+# Four commands used to declare each default three times: `default=None`, a
+# hand-written `[default: X]` in the help string, and an `x if x is not None
+# else DEFAULT_X` translation at the call site. Nothing tied the three
+# together, so a library constant could move and `--help` would keep lying.
+# click owns them now; this is the test that keeps it that way.
+
+
+@pytest.mark.parametrize(
+    ("command", "param", "constant"),
+    [
+        ("train", "base_model", "stylebot.train:DEFAULT_BASE_MODEL"),
+        ("train", "lora_rank", "stylebot.train:DEFAULT_LORA_RANK"),
+        ("train", "num_epochs", "stylebot.train:DEFAULT_NUM_EPOCHS"),
+        ("train", "batch_size", "stylebot.train:DEFAULT_BATCH_SIZE"),
+        ("train", "max_length", "stylebot.train:DEFAULT_MAX_LENGTH"),
+        ("train", "val_frac", "stylebot.train:DEFAULT_VAL_FRAC"),
+        ("train-clf", "embed_model", "stylebot.classify_train:DEFAULT_EMBED_MODEL"),
+        ("train-clf", "test_size", "stylebot.classify_train:DEFAULT_TEST_SIZE"),
+        ("train-clf", "n_splits", "stylebot.classify_train:DEFAULT_N_SPLITS"),
+        ("make-splits", "eval_frac", "stylebot.splits:DEFAULT_EVAL_FRAC"),
+        ("make-splits", "detector_frac", "stylebot.splits:DEFAULT_DETECTOR_FRAC"),
+    ],
+)
+def test_cli_default_is_the_library_constant(command, param, constant):
+    module_name, attr = constant.split(":")
+    module = importlib.import_module(module_name)
+    assert _params(command)[param].default is getattr(module, attr)
+
+
+@pytest.mark.parametrize("command", ["train", "train-clf", "make-splits"])
+def test_no_hand_written_default_strings(command):
+    """A `[default: …]` in a help string is click's job, and a second copy to
+    drift. The survivors name a *computed* default in prose ("Default: …")."""
+    result = CliRunner().invoke(ai_style.main, [command, "--help"])
+    assert result.exit_code == 0, result.output
+    for p in ai_style.main.commands[command].params:
+        assert "[default:" not in (getattr(p, "help", None) or ""), p.name
+
+
+def test_computed_defaults_stay_none_and_say_so():
+    """`--max-tokens`/`--max-chunk-chars` resolve against `infer` at backend
+    construction (BackendOpts.tokens/chunk_chars), `--run-id` at launch, `--lr`
+    and `--renderer` inside the trainer against the chosen base model. None is
+    the sentinel that means "compute me", so it must survive — but the help has
+    to keep saying what gets computed."""
+    from stylebot import infer
+
+    run = _params("run")
+    for name in ("max_tokens", "max_chunk_chars"):
+        assert run[name].default is None
+    # The two numbers the backend help quotes ARE these constants.
+    assert str(infer.STYLE_CHARS_PER_CHUNK) in run["max_chunk_chars"].help
+    assert str(infer.DEFAULT_MAX_TOKENS) in run["max_tokens"].help
+
+    train = _params("train")
+    for name in ("run_id", "learning_rate", "renderer_name"):
+        assert train[name].default is None
+        assert "efault" in train[name].help
 
 
 @pytest.mark.parametrize(

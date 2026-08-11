@@ -25,7 +25,17 @@ from pathlib import Path
 
 import click
 
+# `classify_train`, `splits` and `train` are imported at module scope so click
+# can own their defaults directly (`default=tr.DEFAULT_LORA_RANK`), replacing a
+# triple declaration: `default=None`, a hand-written `[default: X]` in the help
+# string, and an `x if x is not None else DEFAULT_X` at the call site. All three
+# import free (tinker/sklearn/sentence-transformers stay lazy) and reuse the
+# substrate `synth` already pulls in: 344 µs measured, against 9 ms for asyncio
+# and 4.5 ms for click. `infer` stays lazy — it owns no default declared here.
+from stylebot import classify_train as ct
 from stylebot import config, synth, synth_cli
+from stylebot import splits as sp
+from stylebot import train as tr
 from stylebot.bin.ai_style_log import main as _log
 from stylebot.cli_options import SectionedCommand, bundle_options, bundles_from_kwargs, opt
 from stylebot.jsonl import append_jsonl
@@ -332,8 +342,16 @@ def synth_cmd(
 
         # Still resolved for inspection runs when it IS available, so the inspection
         # hints can name the real pairs path.
+        # `run_synth` is silent unless handed a sink — this is the CLI, so it
+        # gets the click one (stream + colour routing lives in
+        # `cli_options.EMIT_LEVELS`, shared with livingthing's `dan-style synth`
+        # so the two front-ends cannot render a run differently).
         synth_cli.run_synth(
-            targets, data_dir=_data_dir(required=not inspecting), extra_tags=tags, **opts
+            targets,
+            data_dir=_data_dir(required=not inspecting),
+            emit=synth_cli.click_emitter(),
+            extra_tags=tags,
+            **opts,
         )
 
 
@@ -770,16 +788,17 @@ def _echo_clf_metrics(metrics: dict, indent: str = "") -> None:
 )
 @click.option(
     "--eval-frac",
-    default=None,
+    default=sp.DEFAULT_EVAL_FRAC,
+    show_default=True,
     type=float,
-    help="Fraction of posts pinned as the frozen eval stratum. [default: 0.2]",
+    help="Fraction of posts pinned as the frozen eval stratum.",
 )
 @click.option(
     "--detector-frac",
-    default=None,
+    default=sp.DEFAULT_DETECTOR_FRAC,
+    show_default=True,
     type=float,
-    help="Hash-rule share of NON-eval posts routed to the detector pool (rest -> styler). "
-    "[default: 0.4]",
+    help="Hash-rule share of NON-eval posts routed to the detector pool (rest -> styler).",
 )
 @click.option(
     "--seed",
@@ -803,8 +822,8 @@ def _echo_clf_metrics(metrics: dict, indent: str = "") -> None:
 def make_splits_cmd(
     pairs_path: Path,
     out_path: Path,
-    eval_frac: float | None,
-    detector_frac: float | None,
+    eval_frac: float,
+    detector_frac: float,
     seed: int,
     allow_synthetic_eval: bool,
     force: bool,
@@ -817,9 +836,6 @@ def make_splits_cmd(
     the frozen eval) must consume this one file. Prints the role table and the
     danger report (dangerously small strata). Needs no ML deps.
     """
-    from stylebot import classify_train as ct
-    from stylebot import splits as sp
-
     if out_path.exists() and not force:
         raise click.ClickException(
             f"{out_path} exists — the eval stratum is FROZEN by design. "
@@ -845,8 +861,8 @@ def make_splits_cmd(
         )
     splits_doc = sp.make_splits(
         posts,
-        eval_frac=eval_frac if eval_frac is not None else sp.DEFAULT_EVAL_FRAC,
-        detector_frac=detector_frac if detector_frac is not None else sp.DEFAULT_DETECTOR_FRAC,
+        eval_frac=eval_frac,
+        detector_frac=detector_frac,
         seed=seed,
         eval_candidates=candidates,
     )
@@ -890,14 +906,14 @@ def make_splits_cmd(
 )
 @click.option(
     "--test-size",
-    default=0.25,
+    default=ct.DEFAULT_TEST_SIZE,
     show_default=True,
     type=float,
     help="Held-out POST fraction per CV split.",
 )
 @click.option(
     "--n-splits",
-    default=8,
+    default=ct.DEFAULT_N_SPLITS,
     show_default=True,
     type=int,
     help="GroupShuffleSplit folds for the CV metric.",
@@ -912,9 +928,9 @@ def make_splits_cmd(
 )
 @click.option(
     "--embed-model",
-    default=None,
-    help="Style backbone (sentence-transformers id); pinned into meta.json. [default: "
-    "StyleDistance/styledistance]",
+    default=ct.DEFAULT_EMBED_MODEL,
+    show_default=True,
+    help="Style backbone (sentence-transformers id); pinned into meta.json.",
 )
 @click.option(
     "--holdout-frac",
@@ -949,7 +965,7 @@ def train_clf_cmd(
     test_size: float,
     n_splits: int,
     C: float | None,
-    embed_model: str | None,
+    embed_model: str,
     holdout_frac: float,
     holdout_seed: int,
     holdout_posts: Path | None,
@@ -967,8 +983,6 @@ def train_clf_cmd(
     (`classify_train.train(extra_positives=…)`) — callers with a corpus policy
     wrap this, as livingthing's train-voice-clf does.
     """
-    from stylebot import classify_train as ct
-
     if splits_path is not None and (holdout_frac or holdout_posts is not None):
         raise click.UsageError("--splits is mutually exclusive with --holdout-frac/--holdout-posts")
 
@@ -988,8 +1002,6 @@ def train_clf_cmd(
         raise click.ClickException(f"no content-matched pairs in {pairs_path}")
     if dry_run:
         if splits_path is not None:
-            from stylebot import splits as sp
-
             splits_doc = sp.load_splits(splits_path)
             for role, entry in sp.summarize_roles(splits_doc, ds).items():
                 click.echo(
@@ -1005,8 +1017,7 @@ def train_clf_cmd(
     if holdout_posts is not None:
         holdout_list = [ln.strip() for ln in holdout_posts.read_text().splitlines() if ln.strip()]
 
-    model_id = embed_model or ct.DEFAULT_EMBED_MODEL
-    click.echo(f"embedding with {model_id} (downloads on first use) ...")
+    click.echo(f"embedding with {embed_model} (downloads on first use) ...")
     try:
         out, metrics = ct.train(
             pairs_path,
@@ -1014,7 +1025,7 @@ def train_clf_cmd(
             test_size=test_size,
             n_splits=n_splits,
             C=C,
-            embed_model=model_id,
+            embed_model=embed_model,
             holdout_frac=holdout_frac,
             holdout_seed=holdout_seed,
             holdout_posts=holdout_list,
@@ -1071,8 +1082,19 @@ def train_clf_cmd(
     help="The shared splits.json: train on STYLER-role posts only (the contract; see "
     "make-splits). Omit only for fixture/experiment corpora.",
 )
-@click.option("--base-model", default=None, help="Tinker base model id. [default: Qwen/Qwen3.5-9B]")
-@click.option("--lora-rank", default=None, type=int, help="LoRA rank. [default: 32]")
+@click.option(
+    "--base-model",
+    default=tr.DEFAULT_BASE_MODEL,
+    show_default=True,
+    help="Tinker base model id.",
+)
+@click.option(
+    "--lora-rank",
+    default=tr.DEFAULT_LORA_RANK,
+    show_default=True,
+    type=int,
+    help="LoRA rank.",
+)
 @click.option(
     "--lr",
     "learning_rate",
@@ -1090,21 +1112,24 @@ def train_clf_cmd(
 @click.option(
     "--epochs",
     "num_epochs",
-    default=None,
+    default=tr.DEFAULT_NUM_EPOCHS,
+    show_default=True,
     type=int,
-    help="Training epochs. [default: 1]",
+    help="Training epochs.",
 )
 @click.option(
     "--batch-size",
-    default=None,
+    default=tr.DEFAULT_BATCH_SIZE,
+    show_default=True,
     type=int,
-    help="Examples per training batch. [default: 64]",
+    help="Examples per training batch.",
 )
 @click.option(
     "--max-length",
-    default=None,
+    default=tr.DEFAULT_MAX_LENGTH,
+    show_default=True,
     type=int,
-    help="Max sequence length after tokenisation. [default: 8192]",
+    help="Max sequence length after tokenisation.",
 )
 @click.option(
     "--renderer",
@@ -1115,9 +1140,10 @@ def train_clf_cmd(
 )
 @click.option(
     "--val-frac",
-    default=None,
+    default=tr.DEFAULT_VAL_FRAC,
+    show_default=True,
     type=float,
-    help="Fraction of POSTs held out for val loss (by-post, deterministic). [default: 0.1]",
+    help="Fraction of POSTs held out for val loss (by-post, deterministic).",
 )
 @click.option(
     "--seed",
@@ -1126,7 +1152,12 @@ def train_clf_cmd(
     type=int,
     help="Seed for the val split and epoch shuffling.",
 )
-@click.option("--run-id", default=None, help="Run id for the manifest. [default: UTC timestamp]")
+@click.option(
+    "--run-id",
+    default=None,
+    help="Run id for the manifest. Default: a UTC timestamp minted at launch "
+    "(train._default_run_id).",
+)
 @click.option(
     "--price-per-mtok",
     "train_price_per_mtok",
@@ -1152,15 +1183,15 @@ def train_cmd(
     manifest_out: Path,
     work_dir: Path,
     splits_path: Path | None,
-    base_model: str | None,
-    lora_rank: int | None,
+    base_model: str,
+    lora_rank: int,
     learning_rate: float | None,
     lr_schedule: str,
-    num_epochs: int | None,
-    batch_size: int | None,
-    max_length: int | None,
+    num_epochs: int,
+    batch_size: int,
+    max_length: int,
     renderer_name: str | None,
-    val_frac: float | None,
+    val_frac: float,
     seed: int,
     run_id: str | None,
     train_price_per_mtok: float | None,
@@ -1176,23 +1207,21 @@ def train_cmd(
     Needs the `trainer` extra (`uv add 'stylebot[trainer]'`) and
     TINKER_API_KEY for the paid step; --dry-run needs neither.
     """
-    from stylebot import train as tr
-
     pairs_path = data_dir / "pairs.jsonl"
     if not pairs_path.exists():
         raise click.ClickException(f"no pairs.jsonl in {data_dir}")
 
     kwargs = dict(
-        base_model=base_model or tr.DEFAULT_BASE_MODEL,
-        lora_rank=lora_rank if lora_rank is not None else tr.DEFAULT_LORA_RANK,
+        base_model=base_model,
+        lora_rank=lora_rank,
         learning_rate=learning_rate,
         lr_schedule=lr_schedule,
-        num_epochs=num_epochs if num_epochs is not None else tr.DEFAULT_NUM_EPOCHS,
-        batch_size=batch_size if batch_size is not None else tr.DEFAULT_BATCH_SIZE,
-        max_length=max_length if max_length is not None else tr.DEFAULT_MAX_LENGTH,
+        num_epochs=num_epochs,
+        batch_size=batch_size,
+        max_length=max_length,
         renderer_name=renderer_name,
         splits_path=splits_path,
-        val_frac=val_frac if val_frac is not None else tr.DEFAULT_VAL_FRAC,
+        val_frac=val_frac,
         seed=seed,
         run_id=run_id,
         train_price_per_mtok=train_price_per_mtok,
