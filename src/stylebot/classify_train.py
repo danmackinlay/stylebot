@@ -281,6 +281,10 @@ def _pairwise_score(p_slop, pairs, test_set: set) -> tuple[float, float]:
     """(correct, total) over the content-matched twins fully inside `test_set`.
 
     Correct = P(slop|slop_side) > P(slop|author_side); ties score 0.5.
+
+    `p_slop` is indexed by ABSOLUTE row, but only at positions in `test_set` —
+    so callers may hand in a full-length vector scored on the test rows alone
+    (`select_C` does, to keep the grid search off the whole embedding matrix).
     """
     correct = total = 0.0
     for s_row, a_row in pairs:
@@ -323,7 +327,7 @@ def select_C(X, ds: Dataset, rows, *, grid=C_GRID, n_inner: int = 4) -> tuple[fl
     n_folds = min(n_inner, n_posts)
     gkf = GroupKFold(n_splits=n_folds)
     folds = [
-        (rows_arr[tr], set(rows_arr[va].tolist()))
+        (rows_arr[tr], rows_arr[va], set(rows_arr[va].tolist()))
         for tr, va in gkf.split(X[rows_arr], y[rows_arr], groups[rows_arr])
     ]
 
@@ -331,10 +335,20 @@ def select_C(X, ds: Dataset, rows, *, grid=C_GRID, n_inner: int = 4) -> tuple[fl
     best_C, best_score = DEFAULT_C, -1.0
     for C in grid:  # ascending grid + strict '>' ⇒ ties resolve to the smallest C
         fold_accs = []
-        for fit_rows, val_set in folds:
+        for fit_rows, val_rows, val_set in folds:
             clf = _make_logreg(C)
             clf.fit(X[fit_rows], y[fit_rows])
-            p_slop = clf.predict_proba(X)[:, list(clf.classes_).index(LABEL_SLOP)]
+            # Score the VALIDATION rows only. `_pairwise_score` reads nothing
+            # else, and this loop runs |grid| x n_folds times per call (and once
+            # per outer fold in `evaluate`), so scoring the whole corpus here
+            # meant embedding-matrix-sized work per grid point for a slice's
+            # worth of answers. It still indexes by absolute row, so keep a
+            # full-length vector and populate only the positions it may read —
+            # the untouched NaNs are unreachable by construction.
+            p_slop = np.full(len(y), np.nan)
+            p_slop[val_rows] = clf.predict_proba(X[val_rows])[
+                :, list(clf.classes_).index(LABEL_SLOP)
+            ]
             correct, total = _pairwise_score(p_slop, ds.pair_rows, val_set)
             if total:
                 fold_accs.append(correct / total)

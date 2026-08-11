@@ -21,40 +21,18 @@ np = pytest.importorskip("numpy")
 pytest.importorskip("sklearn")
 
 from stylebot import classify_train as ct  # noqa: E402
-from stylebot.ai_core import STYLE_SYSTEM  # noqa: E402
 from stylebot.synth import Target  # noqa: E402
 
-
-def _write_fake_corpus(path, n_posts: int = 4, chunks: int = 3, n_synth_posts: int = 0) -> None:
-    """A minimal pairs.jsonl: per (post, chunk) a slop user-turn + an author assistant-turn.
-
-    The last `n_synth_posts` posts are marked `meta.synthetic` (the `ai-style
-    synth` stratum); the rest look like real edit captures (no key).
-    """
-    with path.open("w", encoding="utf-8") as fp:
-        for p in range(n_posts):
-            for c in range(chunks):
-                meta = {"source": f"post/p{p}.qmd", "chunk_index": c, "capture_id": f"cap{p}"}
-                if p >= n_posts - n_synth_posts:
-                    meta["synthetic"] = True
-                rec = {
-                    "messages": [
-                        {"role": "system", "content": STYLE_SYSTEM},
-                        {
-                            "role": "user",
-                            "content": f"It is worth noting that post {p} chunk {c} "
-                            "delves into the tapestry.",
-                        },
-                        {"role": "assistant", "content": f"Post {p} chunk {c}: the tight version."},
-                    ],
-                    "meta": meta,
-                }
-                fp.write(json.dumps(rec) + "\n")
+# These corpora are deliberately NOT contract-complete (no captured_at, no
+# chunk_total): the classifier assembles from whatever meta a record carries, and
+# that tolerance is part of what these tests pin. `transform_sim` stays unstamped
+# for the same reason — assemble_dataset gates on it, so stamping it would move
+# the pair counts asserted below.
+MINIMAL = {"contract_complete": False}
 
 
-def test_assemble_dataset_labels_and_groups(tmp_path):
-    corpus = tmp_path / "pairs.jsonl"
-    _write_fake_corpus(corpus, n_posts=4, chunks=3)
+def test_assemble_dataset_labels_and_groups(write_pairs_corpus):
+    corpus = write_pairs_corpus(n_posts=4, chunks=3, **MINIMAL)
     ds = ct.assemble_dataset(corpus)
 
     assert ds.n_pairs == 12
@@ -72,10 +50,9 @@ def test_assemble_dataset_labels_and_groups(tmp_path):
     assert ds.n_pairs_real == 12 and ds.n_pairs_synthetic == 0
 
 
-def test_assemble_dataset_records_synthetic_provenance(tmp_path):
+def test_assemble_dataset_records_synthetic_provenance(write_pairs_corpus):
     """`meta.synthetic` is carried into pair_synth so metrics can facet by it."""
-    corpus = tmp_path / "pairs.jsonl"
-    _write_fake_corpus(corpus, n_posts=4, chunks=2, n_synth_posts=1)
+    corpus = write_pairs_corpus(n_posts=4, chunks=2, n_synth_posts=1, **MINIMAL)
     ds = ct.assemble_dataset(corpus)
     assert ds.n_pairs == 8
     assert ds.n_pairs_synthetic == 2 and ds.n_pairs_real == 6
@@ -84,10 +61,9 @@ def test_assemble_dataset_records_synthetic_provenance(tmp_path):
         assert ds.pair_is_synthetic(k) == (ds.groups[s_row] == "post/p3.qmd")
 
 
-def test_assemble_dataset_extra_positives_are_injected_and_flagged(tmp_path):
+def test_assemble_dataset_extra_positives_are_injected_and_flagged(write_pairs_corpus):
     """Free positives are caller-supplied (Targets or tuples), flagged, metric-excluded."""
-    corpus = tmp_path / "pairs.jsonl"
-    _write_fake_corpus(corpus, n_posts=2, chunks=1)
+    corpus = write_pairs_corpus(n_posts=2, chunks=1, **MINIMAL)
     extra = [
         Target(
             text="A free-standing authored paragraph.",
@@ -177,6 +153,42 @@ def test_select_C_nested_and_fallback():
     C2, info2 = ct.select_C(np.asarray(Xt, dtype=np.float32), tiny, list(range(len(tiny.texts))))
     assert C2 == ct.DEFAULT_C
     assert info2["mode"] == "fallback"
+
+
+def test_select_C_scores_only_the_validation_rows(monkeypatch):
+    """The C grid search must not score the whole embedding matrix.
+
+    `_pairwise_score` reads P(slop) only at rows in the fold's validation set, but
+    the loop runs |C_GRID| x n_inner times per call and once per outer fold — so a
+    full-matrix `predict_proba` here is embedding-matrix-sized work for a slice's
+    worth of answers. Spy on every scoring call and pin it to the fold's own rows.
+    """
+    ds, X = _separable_dataset()  # 6 posts, 36 rows
+    n_rows = len(ds.texts)
+    scored_sizes: list[int] = []
+    real_make_logreg = ct._make_logreg
+
+    def spying_make_logreg(C=ct.DEFAULT_C):
+        clf = real_make_logreg(C)
+        real_predict_proba = clf.predict_proba
+
+        def predict_proba(Xq):
+            scored_sizes.append(len(Xq))
+            return real_predict_proba(Xq)
+
+        clf.predict_proba = predict_proba
+        return clf
+
+    monkeypatch.setattr(ct, "_make_logreg", spying_make_logreg)
+    C, info = ct.select_C(X, ds, list(range(n_rows)), n_inner=3)
+
+    assert info["mode"] == "nested_cv" and C in ct.C_GRID
+    # 7 grid points x 3 inner folds, each scoring its validation slice only.
+    assert len(scored_sizes) == len(ct.C_GRID) * 3
+    assert all(0 < n < n_rows for n in scored_sizes), scored_sizes
+    # Each grid point sees the same fold partition: the slices tile the fit pool.
+    per_grid_point = [scored_sizes[i : i + 3] for i in range(0, len(scored_sizes), 3)]
+    assert all(sum(sizes) == n_rows for sizes in per_grid_point), per_grid_point
 
 
 def test_subset_dataset_remaps_pairs_and_aligns_rows():
@@ -287,15 +299,14 @@ def test_holdout_eval_and_subset_fit_are_leakage_safe():
     )
 
 
-def test_train_with_splits_contract(tmp_path, monkeypatch):
+def test_train_with_splits_contract(tmp_path, monkeypatch, write_pairs_corpus):
     """End-to-end splits mode: eval posts never embedded, styler holdout reported,
     the contract + danger report recorded in meta, artifact serves via the runtime."""
     import hashlib
 
     from stylebot import splits as sp
 
-    corpus = tmp_path / "pairs.jsonl"
-    _write_fake_corpus(corpus, n_posts=12, chunks=2, n_synth_posts=4)
+    corpus = write_pairs_corpus(n_posts=12, chunks=2, n_synth_posts=4, **MINIMAL)
     ds_all = ct.assemble_dataset(corpus)
     posts = sorted(set(ds_all.groups))
     real_posts = sorted(
@@ -361,9 +372,8 @@ def test_train_with_splits_contract(tmp_path, monkeypatch):
     )
 
 
-def test_train_splits_mutually_exclusive_with_holdout(tmp_path):
-    corpus = tmp_path / "pairs.jsonl"
-    _write_fake_corpus(corpus, n_posts=3, chunks=1)
+def test_train_splits_mutually_exclusive_with_holdout(tmp_path, write_pairs_corpus):
+    corpus = write_pairs_corpus(n_posts=3, chunks=1, **MINIMAL)
     with pytest.raises(ValueError, match="mutually exclusive"):
         ct.train(corpus, tmp_path / "clf", splits_path=tmp_path / "splits.json", holdout_frac=0.25)
 
