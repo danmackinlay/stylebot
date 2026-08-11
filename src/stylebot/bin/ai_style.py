@@ -1352,6 +1352,11 @@ def run_cmd(
             if result.n_anchor_rejected
             else ""
         )
+        + (
+            # Reported apart from anchor loss on purpose: this one usually means
+            # the token budget, not the sample.
+            f", {result.n_truncated} truncated (raise --max-tokens?)" if result.n_truncated else ""
+        )
         + "]",
         err=True,
     )

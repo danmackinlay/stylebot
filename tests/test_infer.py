@@ -438,6 +438,7 @@ def test_rewrite_candidates_scores_and_flags_anchors():
         "text": "See [that](./a.qmd). Fine.",
         "score": 0.2,
         "anchors_lost": [],
+        "truncated": False,
         "identity": False,
     }
     # Anchor loss FLAGS, never disqualifies — the human decides.
@@ -617,3 +618,87 @@ def test_run_cli_threads_inline_headings_into_rewrite_text(tmp_path, monkeypatch
     result = CliRunner().invoke(main, args + ([flag] if flag else []))
     assert result.exit_code == 0, result.output
     assert seen["inline_headings"] is expected
+
+
+# --- truncation, told apart from anchor damage -----------------------------
+#
+# `_plans/placeholder-design-2026-08.md`: a model that runs out of budget looks
+# exactly like a model that deletes your links, and conflating them contaminates
+# every span-damage number. The floor is ours, not that document's: a style
+# rewrite's length ratio spans 0.18-9.76 over the corpus and leans compressive
+# only on average (median 0.79; 13.6% of real rewrites expand), so its 0.9 would
+# call 70% of genuine rewrites truncated. Hence a floor, never a band.
+
+
+def _truncating_styler(messages, num_samples=1):
+    """A model that stopped a fifth of the way through."""
+    body = messages[-1]["content"]
+    return [body[: max(1, len(body) // 5)]] * num_samples
+
+
+def test_truncation_is_reported_as_truncation_not_anchor_loss():
+    chunk = (
+        "Some prose about [the paper](https://example.com/a) and a good deal more "
+        "discussion besides, which continues for a while before it finally reaches "
+        "[a second link](https://example.com/b) at the very end of the passage."
+    )
+    result = infer.rewrite_text(chunk, _truncating_styler, best_of=1)
+    assert result.n_truncated == 1
+    assert result.n_anchor_rejected == 0  # NOT filed as anchor damage
+    assert result.n_kept_input == 1
+    (decision,) = result.decisions
+    assert "truncated" in decision and "max-tokens" in decision
+    assert "anchor" not in decision
+    assert result.text == chunk  # do no harm: the input survives
+
+
+def test_truncation_is_caught_even_with_no_anchors_to_lose():
+    """The case the anchor guard cannot see: no link, so nothing to lose."""
+    chunk = (
+        "A paragraph of entirely ordinary prose carrying no links, no citation "
+        "keys and no inline code whatsoever, long enough to be a real chunk."
+    )
+    assert infer.content_anchors(chunk) == {}  # nothing for anchors to protect
+    result = infer.rewrite_text(chunk, _truncating_styler, best_of=1)
+    assert result.n_truncated == 1
+    assert result.text == chunk  # would have shipped a fifth of the prose
+
+
+def test_legitimate_compression_is_not_truncation():
+    """Real rewrites compress hard at the low end; the floor must not eat them."""
+    chunk = "This is a passage that a good rewrite would tighten considerably indeed."
+
+    def compressing_styler(messages, num_samples=1):
+        # ~0.45 of input: past the corpus's 10th percentile, well above the floor.
+        return ["A passage a good rewrite would tighten."] * num_samples
+
+    result = infer.rewrite_text(chunk, compressing_styler, best_of=1)
+    assert result.n_truncated == 0
+    assert result.text.strip() == "A passage a good rewrite would tighten."
+
+
+def test_expansion_is_never_truncation():
+    """13.6% of real rewrites are LONGER than their input. A floor-only guard
+    must be silent on all of them — there is no ceiling, deliberately."""
+    chunk = "A terse claim."
+
+    def expanding_styler(messages, num_samples=1):
+        return ["A claim, unpacked at considerably greater length than the original."]
+
+    result = infer.rewrite_text(chunk, expanding_styler, best_of=1)
+    assert result.n_truncated == 0
+    assert result.text.strip().startswith("A claim, unpacked")
+
+
+def test_is_truncated_boundary():
+    src = "x" * 100
+    assert infer.is_truncated(src, "y" * 29)
+    assert not infer.is_truncated(src, "y" * 31)
+    assert not infer.is_truncated("", "")  # nothing to collapse from
+
+
+def test_rewrite_candidates_flags_truncation_without_filtering():
+    chunk = "A passage of prose long enough that a fifth of it is plainly a cut-off."
+    out = infer.rewrite_candidates(chunk, _truncating_styler, best_of=1, scorer=None)
+    assert len(out["candidates"]) == 1  # flagged, not filtered
+    assert out["candidates"][0]["truncated"] is True

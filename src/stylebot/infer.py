@@ -230,8 +230,40 @@ class RewriteResult:
     n_candidates: int = 0  # total samples drawn (n_chunks * best_of)
     n_kept_input: int = 0  # chunks where no candidate beat the input (guard)
     n_anchor_rejected: int = 0  # samples disqualified for losing links/citations
+    n_truncated: int = 0  # samples disqualified for collapsing in length
     chunk_chars: list[tuple[int, int]] = field(default_factory=list)  # (in, out)
     decisions: list[str] = field(default_factory=list)  # one human line per chunk
+
+
+# A rewrite shorter than this fraction of its input did not compress — it
+# stopped. Checked BEFORE the anchor guard, because a truncated sample loses
+# whatever anchors sat past the cut and would otherwise be filed as anchor
+# damage, contaminating every "which constructs does this model break" number
+# with "this model ran out of budget" (`_plans/placeholder-design-2026-08.md`,
+# "Truncation, misattributed to the mask").
+#
+# 0.3, not the 0.9 that finding used: that was a copy-edit task, where output
+# length tracks input closely enough for a 10% drop to be suspicious. A style
+# rewrite is not that. Measured over the corpus, len(target)/len(slop) spans
+# 0.18 to 9.76 — it leans compressive only ON AVERAGE (mean 0.81, median 0.79),
+# and 13.6% of real rewrites EXPAND, 1.5% by more than half again. A 0.9 floor
+# would call 70% of genuine Dan rewrites truncated.
+#
+# That two-sidedness is also why this is a floor and not a band: length alone
+# cannot tell an expansive rewrite from a rambling one, so a ceiling here would
+# be guessing. Collapse is the only end where length is diagnostic on its own.
+# 0.3 sits below the 0.1th percentile — it flags 2 of 4,590 real rewrites.
+MIN_REWRITE_LENGTH_RATIO = 0.3
+
+
+def is_truncated(
+    source: str, candidate: str, *, min_ratio: float = MIN_REWRITE_LENGTH_RATIO
+) -> bool:
+    """True if `candidate` is too short to be a rewrite of `source` rather than
+    a cut-off one. Empty source is never truncated (nothing to collapse from)."""
+    if not source.strip():
+        return False
+    return len(candidate.strip()) < min_ratio * len(source.strip())
 
 
 # Content anchors — the mechanically-checkable information a style rewrite
@@ -334,7 +366,8 @@ def rewrite_candidates(
     words is the worst outcome this package has.
 
     Returns `{"input_score": float|None, "n_sampled": int,
-              "candidates": [{"text", "score", "anchors_lost", "identity"}, ...]}`
+              "candidates": [{"text", "score", "anchors_lost", "truncated",
+                              "identity"}, ...]}`
     in sampled order (the caller owns presentation order — and should log it;
     see the presentation-bias note in the plan). Duplicate sample texts are
     collapsed, so `n_sampled` keeps the draw count honest, and a candidate
@@ -382,6 +415,10 @@ def rewrite_candidates(
             # Always inline here: this seam only FLAGS, and a human picks. It is
             # precisely where a strict mask-preservation check earns its keep.
             "anchors_lost": missing_anchors(chunk, c, inline=True),
+            # Flagged, not filtered, like anchors_lost: a human picking from the
+            # slate should be told "this one is cut off" in those words rather
+            # than left to read it as a very terse rewrite.
+            "truncated": is_truncated(chunk, c),
             "identity": c == chunk,
         }
         for c in deduped
@@ -421,6 +458,12 @@ def rewrite_text(
     content (rewritable, and no longer emitted as `context`), so chunks span
     sections. Set it to match the promoted adapter's training diet — the
     manifest records that under `data.chunk_scale`.
+
+    A sample that collapsed below `MIN_REWRITE_LENGTH_RATIO` of the input is
+    disqualified as TRUNCATED before anchors are consulted, and counted
+    separately (`n_truncated`). Truncation causes anchor loss, so checking it
+    second would file every cut-off sample as anchor damage; and it is the
+    failure anchors cannot see at all when a chunk carries no link to lose.
 
     `inline_anchors` widens the anchor-integrity guard to inline code spans and
     inline math. Default off: measured across the 4624-pair corpus it triples
@@ -480,13 +523,27 @@ def rewrite_text(
         result.n_candidates += len(candidates)
         raw = [pair_body(c, context).strip() for c in candidates if c and c.strip()]
         raw = [c for c in raw if c]
-        # Anchor integrity: a candidate that lost a link/URL/citation the
-        # input had is disqualified BEFORE any voice scoring — style rewrites
-        # must not delete information, however Dan they sound.
+        # Two disqualifications, in this order, both BEFORE any voice scoring.
+        #
+        # 1. TRUNCATION. A sample that collapsed in length did not compress, it
+        #    stopped. It is checked first because it *causes* the second: a cut
+        #    sample loses whatever anchors sat past the cut, so testing anchors
+        #    first would file every truncation as anchor damage and make the
+        #    anchor counts mean nothing. Truncation is also the case anchors
+        #    CANNOT catch on their own — a chunk carrying no link or citation
+        #    has no anchor to lose, so a 30%-length sample of it would sail
+        #    through the guard and ship.
+        # 2. ANCHOR INTEGRITY. A candidate that lost a link/URL/citation the
+        #    input had must not ship, however Dan it sounds.
         lost: list[str] = []
+        cut: list[float] = []  # length ratios of the truncated samples
         keep = []
         keep_idx: list[int] = []  # positions of `keep` entries within `raw`
         for i, c in enumerate(raw):
+            if is_truncated(chunk, c):
+                cut.append(len(c.strip()) / max(1, len(chunk.strip())))
+                result.n_truncated += 1
+                continue
             gone = missing_anchors(chunk, c, inline=inline_anchors)
             if gone:
                 lost.extend(gone)
@@ -499,11 +556,20 @@ def rewrite_text(
         if not keep:
             out = chunk
             result.n_kept_input += 1
-            if lost:
-                uniq = sorted(set(lost))
+            if cut and not lost:
+                # Say truncation plainly rather than dressing it as anchor loss —
+                # the two want different fixes (a bigger --max-tokens vs a better
+                # sample), and conflating them sends the operator after the wrong one.
                 result.decisions.append(
-                    f"chunk {n}: kept input (all {len(raw)} sample(s) lost anchors: "
-                    f"{', '.join(uniq[:3])}{'…' if len(uniq) > 3 else ''})"
+                    f"chunk {n}: kept input (all {len(raw)} sample(s) truncated, "
+                    f"shortest {min(cut):.0%} of input — raise --max-tokens?)"
+                )
+            elif lost:
+                uniq = sorted(set(lost))
+                also = f", {len(cut)} truncated" if cut else ""
+                result.decisions.append(
+                    f"chunk {n}: kept input ({len(lost)} sample(s) lost anchors: "
+                    f"{', '.join(uniq[:3])}{'…' if len(uniq) > 3 else ''}{also})"
                 )
             else:
                 logger.warning(
