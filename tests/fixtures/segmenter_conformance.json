@@ -1,0 +1,261 @@
+{
+  "fixture": "segmenter_conformance.qmd",
+  "fixture_sha256": "8c7c74579e97a78337c938a7be98399fb503230497e0bbd3c3433bbde06d273a",
+  "configurations": {
+    "stylebot": {
+      "block_only": true,
+      "raw_html": false,
+      "div_is_prose": null
+    },
+    "livingthing": {
+      "block_only": false,
+      "raw_html": true,
+      "div_is_prose": null
+    }
+  },
+  "cases": [
+    {
+      "name": "backtick_fence",
+      "needle": "return \"a backtick fence\"",
+      "start": 99,
+      "end": 124,
+      "protected_in": [
+        "stylebot",
+        "livingthing"
+      ]
+    },
+    {
+      "name": "tilde_fence",
+      "needle": "key: a tilde fence",
+      "start": 138,
+      "end": 156,
+      "protected_in": [
+        "stylebot",
+        "livingthing"
+      ]
+    },
+    {
+      "name": "indented_heading",
+      "needle": "  ## An indented heading",
+      "start": 162,
+      "end": 186,
+      "protected_in": []
+    },
+    {
+      "name": "glued_heading",
+      "needle": "## A heading glued to prose",
+      "start": 223,
+      "end": 250,
+      "protected_in": []
+    },
+    {
+      "name": "display_math_with_attrs",
+      "needle": "\\int_0^1",
+      "start": 317,
+      "end": 325,
+      "protected_in": [
+        "stylebot",
+        "livingthing"
+      ]
+    },
+    {
+      "name": "midline_math",
+      "needle": "$$d$$",
+      "start": 381,
+      "end": 386,
+      "protected_in": [
+        "livingthing"
+      ]
+    },
+    {
+      "name": "blockquote",
+      "needle": "somebody else's voice",
+      "start": 532,
+      "end": 553,
+      "protected_in": [
+        "stylebot",
+        "livingthing"
+      ]
+    },
+    {
+      "name": "blockquote_glued_to_prose",
+      "needle": "no blank line after it",
+      "start": 624,
+      "end": 646,
+      "protected_in": [
+        "stylebot",
+        "livingthing"
+      ]
+    },
+    {
+      "name": "refs_div",
+      "needle": "{#refs}",
+      "start": 702,
+      "end": 709,
+      "protected_in": [
+        "stylebot",
+        "livingthing"
+      ]
+    },
+    {
+      "name": "figure_div",
+      "needle": "fig-conformance",
+      "start": 721,
+      "end": 736,
+      "protected_in": [
+        "stylebot",
+        "livingthing"
+      ]
+    },
+    {
+      "name": "callout_div",
+      "needle": "callout-note",
+      "start": 837,
+      "end": 849,
+      "protected_in": [
+        "stylebot",
+        "livingthing"
+      ]
+    },
+    {
+      "name": "nested_div",
+      "needle": "fig-nested",
+      "start": 968,
+      "end": 978,
+      "protected_in": [
+        "stylebot",
+        "livingthing"
+      ]
+    },
+    {
+      "name": "raw_html_script",
+      "needle": "const conformance = 1;",
+      "start": 1147,
+      "end": 1169,
+      "protected_in": [
+        "livingthing"
+      ]
+    },
+    {
+      "name": "unclosed_div",
+      "needle": "an-opener-that-is-never-closed",
+      "start": 1253,
+      "end": 1283,
+      "protected_in": []
+    }
+  ],
+  "spans": {
+    "stylebot": [
+      {
+        "start": 71,
+        "end": 129,
+        "kind": "fence",
+        "text": "```python\ndef fenced():\n    return \"a backtick fence\"\n```\n"
+      },
+      {
+        "start": 130,
+        "end": 161,
+        "kind": "fence",
+        "text": "~~~yaml\nkey: a tilde fence\n~~~\n"
+      },
+      {
+        "start": 314,
+        "end": 370,
+        "kind": "math",
+        "text": "$$\n\\int_0^1 x^2 \\, dx = \\frac{1}{3}\n$$ {#eq-conformance}"
+      },
+      {
+        "start": 514,
+        "end": 603,
+        "kind": "blockquote",
+        "text": "> A blockquote is somebody else's voice, not a style to apply.\n> It runs over two lines.\n"
+      },
+      {
+        "start": 604,
+        "end": 648,
+        "kind": "blockquote",
+        "text": "> A blockquote with no blank line after it.\n"
+      },
+      {
+        "start": 698,
+        "end": 714,
+        "kind": "div",
+        "text": "::: {#refs}\n:::\n"
+      },
+      {
+        "start": 715,
+        "end": 830,
+        "kind": "div",
+        "text": "::: {#fig-conformance}\n![](conformance.png)\n\nA figure caption, which is markup rather than a passage of prose.\n:::\n"
+      },
+      {
+        "start": 831,
+        "end": 1053,
+        "kind": "div",
+        "text": "::: {.callout-note}\nCallout prose paragraph one: the author's own voice, sitting inside a container\nthat carries class semantics.\n\n::: {#fig-nested}\n![](nested.png)\n:::\n\nTrailing callout prose after the nested figure.\n:::\n"
+      }
+    ],
+    "livingthing": [
+      {
+        "start": 71,
+        "end": 129,
+        "kind": "fence",
+        "text": "```python\ndef fenced():\n    return \"a backtick fence\"\n```\n"
+      },
+      {
+        "start": 130,
+        "end": 161,
+        "kind": "fence",
+        "text": "~~~yaml\nkey: a tilde fence\n~~~\n"
+      },
+      {
+        "start": 314,
+        "end": 370,
+        "kind": "math",
+        "text": "$$\n\\int_0^1 x^2 \\, dx = \\frac{1}{3}\n$$ {#eq-conformance}"
+      },
+      {
+        "start": 381,
+        "end": 387,
+        "kind": "math",
+        "text": "$$d$$ "
+      },
+      {
+        "start": 514,
+        "end": 603,
+        "kind": "blockquote",
+        "text": "> A blockquote is somebody else's voice, not a style to apply.\n> It runs over two lines.\n"
+      },
+      {
+        "start": 604,
+        "end": 648,
+        "kind": "blockquote",
+        "text": "> A blockquote with no blank line after it.\n"
+      },
+      {
+        "start": 698,
+        "end": 714,
+        "kind": "div",
+        "text": "::: {#refs}\n:::\n"
+      },
+      {
+        "start": 715,
+        "end": 830,
+        "kind": "div",
+        "text": "::: {#fig-conformance}\n![](conformance.png)\n\nA figure caption, which is markup rather than a passage of prose.\n:::\n"
+      },
+      {
+        "start": 831,
+        "end": 1053,
+        "kind": "div",
+        "text": "::: {.callout-note}\nCallout prose paragraph one: the author's own voice, sitting inside a container\nthat carries class semantics.\n\n::: {#fig-nested}\n![](nested.png)\n:::\n\nTrailing callout prose after the nested figure.\n:::\n"
+      },
+      {
+        "start": 1054,
+        "end": 1208,
+        "kind": "raw_html",
+        "text": "<script type=\"text/javascript\">\n// A raw-text element, where line structure is load-bearing.\nconst conformance = 1;\n\nconst afterABlankLine = 2;\n</script>\n"
+      }
+    ]
+  }
+}

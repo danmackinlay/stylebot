@@ -1,0 +1,61 @@
+Opening prose, plain and rewritable, so a leak has somewhere to show.
+
+```python
+def fenced():
+    return "a backtick fence"
+```
+
+~~~yaml
+key: a tilde fence
+~~~
+
+  ## An indented heading
+
+Prose under the indented heading.
+
+## A heading glued to prose
+This line sits directly under it, with no blank line between.
+
+$$
+\int_0^1 x^2 \, dx = \frac{1}{3}
+$$ {#eq-conformance}
+
+The high-$$d$$ behaviour is the mid-line case, and the one place the two
+configurations deliberately disagree about a run of ordinary prose.
+
+> A blockquote is somebody else's voice, not a style to apply.
+> It runs over two lines.
+
+> A blockquote with no blank line after it.
+Prose glued straight onto the end of that quote.
+
+::: {#refs}
+:::
+
+::: {#fig-conformance}
+![](conformance.png)
+
+A figure caption, which is markup rather than a passage of prose.
+:::
+
+::: {.callout-note}
+Callout prose paragraph one: the author's own voice, sitting inside a container
+that carries class semantics.
+
+::: {#fig-nested}
+![](nested.png)
+:::
+
+Trailing callout prose after the nested figure.
+:::
+
+<script type="text/javascript">
+// A raw-text element, where line structure is load-bearing.
+const conformance = 1;
+
+const afterABlankLine = 2;
+</script>
+
+The closing paragraph of the document.
+
+::: an-opener-that-is-never-closed
