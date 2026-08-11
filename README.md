@@ -131,13 +131,16 @@ until the `info` handshake, capped-backoff restart on crash, kill on window
 close. You never launch the sidecar by hand.
 
 Segmentation in the extension (`src/segment.ts`) is a **parity port** of
-`stylebot.lib.segment_for_edit` + `split_paragraphs`: paragraphs split on
-blank lines after dropping code fences, `$$math$$`, `:::` divs, blockquotes,
-frontmatter, and heading lines — so the classifier sees the same prose shape
-it was trained and evaluated on. A shared fixture
-(`tests/fixtures/segmentation.qmd` + `expected_segments.json`) is asserted by
-both pytest and the extension's `npm test`; if either side's segmentation
-changes, the other's test breaks.
+`stylebot.lib.segment_for_edit` + `split_paragraphs` — and since 2026-08-11 the
+primitives behind those live in one place, `stylebot.markdown`. Paragraphs split
+on blank lines after dropping code fences (both ``` and `~~~`), display
+`$$math$$`, `:::` divs, blockquotes, frontmatter, and heading lines — so the
+classifier sees the same prose shape it was trained and evaluated on. A shared
+fixture (`tests/fixtures/segmentation.qmd` + `expected_segments.json`) is
+asserted by both pytest and the extension's `npm test`; if either side's
+segmentation changes, the other's test breaks. TypeScript cannot import Python,
+so the fixture *is* the contract — the same instrument now pins
+`livingthing.qmd_core` (`tests/fixtures/segmenter_conformance.*`).
 
 ### Install & configure
 
@@ -195,8 +198,8 @@ the extension:
    Threshold changes apply live, no restart.
 
 Rebuilding/reinstalling the `.vsix` is needed only when the **segmentation
-contract** (`stylebot.lib`) or the **wire protocol** (`stylebot.serve`)
-changes — regenerate the shared fixture with
+contract** (`stylebot.markdown`, via `stylebot.lib`) or the **wire protocol**
+(`stylebot.serve`) changes — regenerate the shared fixture with
 `STYLEBOT_REGEN_SEGMENTS=1 uv run pytest tests/test_marker_segmentation.py`,
 confirm `npm test` passes, then `npm run package` and reinstall.
 
