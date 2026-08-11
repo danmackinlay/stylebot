@@ -102,7 +102,13 @@ def role_of(source: str, splits: dict) -> str:
     Deterministic and open-world: any post, including ones that did not exist
     when the file was created, gets a stable role.
     """
-    if source in set(splits["eval_posts"]):
+    # Scan the pinned list directly. It holds a handful of posts and this runs
+    # per-pair/per-chunk, so `set(...)` was building a set per call to answer one
+    # question — strictly more work than the scan it replaced. A *memoised* set
+    # was tried and reverted (870d030): a module-global cache made `role_of`
+    # non-reentrant and went stale on in-place edits to `eval_posts`, which
+    # `test_role_of_memo_does_not_leak_between_splits_docs` still guards against.
+    if source in splits["eval_posts"]:
         return "eval"
     rule = splits["rest_rule"]
     if rule["kind"] != "hash":  # future-proof the schema

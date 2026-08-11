@@ -112,7 +112,13 @@ def test_role_of_is_a_frozen_contract():
 
 
 def test_role_of_memo_does_not_leak_between_splits_docs():
-    """The pinned-list memo must never answer for the wrong splits doc."""
+    """No cached pinned-list may answer for the wrong splits doc.
+
+    `role_of` scans `eval_posts` directly and holds no state, so this passes
+    trivially today. It stays as the guard on that: a memo was tried and
+    reverted (870d030) for making `role_of` non-reentrant and going stale on an
+    in-place edit — the last assertion here is the case that broke.
+    """
     rule = {"kind": "hash", "detector_frac": 0.4, "salt": "0"}
     a = {"schema_version": 1, "eval_posts": ["post/only_in_a.qmd"], "rest_rule": rule}
     b = {"schema_version": 1, "eval_posts": ["post/only_in_b.qmd"], "rest_rule": rule}

@@ -244,8 +244,14 @@ def _pack_paragraphs(paras: Sequence[str], *, merge_max_chars: int) -> list[str]
     return blocks
 
 
-def _post_targets(path: Path, source: str, policy: ChunkPolicy) -> list[Target]:
-    _, body = _load_meta_body(path)
+def _post_targets(body: str, source: str, policy: ChunkPolicy) -> list[Target]:
+    """Chunk one post's **already-loaded** body into targets.
+
+    Takes the body rather than a path so every caller loads and YAML-parses a
+    post exactly once: the `blog_root` walk needs the frontmatter for its
+    `selector`, and re-reading here would parse the same file twice (and warn
+    twice about an unparseable one).
+    """
     # Cut trailing dump sections (e.g. "## Incoming") before anything else.
     body = _truncate_at_headers(body, policy.stop_at_headers)
     # Drop protected blocks before splitting, so they never become targets and
@@ -418,13 +424,14 @@ def iter_targets(
             path = Path(f)
             if not path.is_file():
                 continue
-            targets.extend(_post_targets(path, _source_label(path, root), policy))
+            _, body = _load_meta_body(path)
+            targets.extend(_post_targets(body, _source_label(path, root), policy))
     else:
         for path in gather_qmd_files([], base=root, default_glob=glob):
-            meta, _ = _load_meta_body(path)
+            meta, body = _load_meta_body(path)
             if not selector(meta):
                 continue
-            targets.extend(_post_targets(path, _source_label(path, root), policy))
+            targets.extend(_post_targets(body, _source_label(path, root), policy))
 
     if sort_key is not None:
         targets.sort(key=sort_key)

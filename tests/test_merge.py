@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from stylebot import synth
+import logging
+
+from stylebot import synth, targets
 from stylebot.targets import _is_link_list, _is_list_item, _pack_paragraphs, _split_sections
 
 
@@ -245,3 +247,51 @@ def test_cross_heading_is_what_buys_length_not_the_budget(tmp_path):
     crossed = synth.iter_targets(**kw, merge_max_chars=4500, cross_heading=True)
     assert len(crossed) < len(small)
     assert max(len(t.text) for t in crossed) > max(len(t.text) for t in small)
+
+
+# --- one load per post ----------------------------------------------------
+
+
+def test_each_post_is_parsed_once(tmp_path, monkeypatch):
+    """Both input modes load and YAML-parse each post exactly once.
+
+    The walk needs the frontmatter for its `selector` and the body for chunking;
+    taking them from one load is worth ~1.8s on a 1771-post blog. The `files=`
+    mode skips the selector and must not pay for a parse it ignores either.
+    """
+    root = tmp_path / "blog"
+    body = f"---\ntitle: t\nautomation: 0\n---\n\n{P1}\n\n{P2}\n"
+    _write(root, "post/a.qmd", body)
+    _write(root, "post/b.qmd", body)
+
+    parses: list[str] = []
+    real = targets.read_w_frontmatter_text
+    monkeypatch.setattr(
+        targets,
+        "read_w_frontmatter_text",
+        lambda text: (parses.append(text), real(text))[1],
+    )
+
+    assert len(synth.iter_targets(blog_root=root, min_chars=50)) == 4  # 2 posts x 2 paragraphs
+    assert len(parses) == 2
+
+    parses.clear()
+    preselected = [root / "post/a.qmd", root / "post/b.qmd"]
+    assert len(synth.iter_targets(files=preselected, min_chars=50)) == 4
+    assert len(parses) == 2
+
+
+def test_unparseable_frontmatter_warns_once_per_post(tmp_path, caplog):
+    """Garbage frontmatter is warned about once per post, whatever the selector says.
+
+    `_load_meta_body` degrades to `({}, text)`, so the default selector drops the
+    post — but a permissive one keeps it, and the post must not be warned about
+    twice on the way through.
+    """
+    root = tmp_path / "blog"
+    _write(root, "post/bad.qmd", f"---\ntitle: t\nno closing delimiter\n\n{P1}\n")
+    with caplog.at_level(logging.WARNING, logger="stylebot.targets"):
+        got = synth.iter_targets(blog_root=root, selector=lambda meta: True, min_chars=50)
+    warned = [r for r in caplog.records if "unparseable frontmatter" in r.getMessage()]
+    assert len(warned) == 1
+    assert [t.text for t in got] == [P1]  # empty meta, but the body still chunks
