@@ -22,6 +22,7 @@ are untouched.
 | `scripts/restamp_style_system.py` and `scripts/prune_stale_synth_pairs.py` deleted | each was written for one schema event (the 2026-08-04 `STYLE_SYSTEM` amendment; the 2026-08-10 segmentation change) and each has run against the only corpus that exists. If a future change needs one, write a fresh one-off — that is what the `scripts/` carve-out is for. `migrate_capture_archives.py` stays: it is the only path off the legacy archive format. |
 | `capture.write_pairs_atomic` removed | import `write_jsonl_atomic` from `stylebot.jsonl`. It was a bare re-export that hid where the function lives; the atomic rewrite is a JSONL-level operation, not a pair-level one. |
 | `stylebot.tinker_tls` removed, and the `train._patch_pyqwest_tls_trust` alias with it | nothing to do — delete any call. The `trainer` extra's floor is now `tinker>=0.25.0`, which carries the fix upstream. |
+| `synth.covered_target_bodies` → `covered_target_keys` | it returns normalised coverage keys now, so the old name lied. See the `--skip-covered` note below. No consumer outside this repo. |
 | `synth_cli.run_synth` no longer prints — it is **silent without a sink** | pass `emit=synth_cli.click_emitter()` to keep CLI output, or read the returned `SynthResult`. A click wrapper that does neither goes mute *and still exits 0*, so this is worth grepping for: livingthing's `dan-style synth` needed exactly this change. |
 
 ### Removed
@@ -52,6 +53,22 @@ are untouched.
 
 ### Changed
 
+- **`--skip-covered` matches on a normalised coverage key, not exact text.**
+  The corpus is a frozen record, so cosmetic drift since a pair was generated
+  should not buy that passage a second pair — and two-thirds of measured blog
+  drift is mechanical rather than authorial (one link-anchor repair script
+  orphaned 71 cells by rewriting `#fragment`s; quote-curling 19 more).
+  `synth.coverage_key` folds three things, each invisible to what the styler
+  learns: inline markdown link destinations (`STYLE_SYSTEM` has the model
+  preserve links verbatim, so a rewritten URL carries no voice — the link
+  *text* is kept), curly quotes to ASCII, and whitespace runs. Measured against
+  blog HEAD, **92 of the 207 drifted cells now read as covered** (~44% of the
+  drift), with **zero** collisions between distinct passages across all 3,685
+  corpus bodies — the single collision found is the same passage recorded twice
+  either side of a sentence-per-line reflow. Case, punctuation, dashes and
+  emphasis are deliberately **not** folded: a false "covered" silently costs a
+  passage its only training pair, so each extra rule would trade real risk for
+  a smaller saving. `_synth_key` is untouched, so no existing pair is re-keyed.
 - **`synth_cli.run_synth` no longer owns its output.** It takes an `emit` sink
   (`emit(message, *, level=…)`) and defaults to silence, so a library caller
   gets a clean stdout/stderr and reads the run off the returned `SynthResult`
