@@ -191,6 +191,12 @@ live in the blog's `_training_pairs/RUNBOOK.md`; durable decisions in
 - **v2 scale curriculum** — the mechanism shipped, the generation has not run:
   mixed 1500/3000/4500 pairs, one adapter, then a scale-mixed training run.
   The full state is [`v2-longer-rewrites.md`](v2-longer-rewrites.md).
+  **The scale ablation is blocked on data, not code** (2026-08-11):
+  `meta.merge_max_chars` / `meta.chunk_mode` are absent from all 4140 synthetic
+  pairs — the stamping postdates the corpus — so there is no labelled arm to
+  contrast against, and no way to back-fill one. Generating the v2 batches is
+  itself the unblock; consider re-synthesising a labelled 1500 slice so the
+  baseline arm is stamped rather than assumed (`findings.md`).
 - **Fireworks serving**: PEFT upload + scale-to-zero, retry on
   `503 DEPLOYMENT_SCALING_UP`; acceptance is the same chat-template parity test
   the MLX exit passed (D8 / `findings.md`).

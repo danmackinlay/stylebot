@@ -107,8 +107,42 @@ at the top of that observed range.
 | `gen.temperature`, `gen.top_p` | **1 each — always `None`** |
 | `gen.provider_sort` | **1 — always `throughput`** |
 | `gen.context_window` | 5, all from the OpenRouter registry, never from a flag |
-| `meta.merge_max_chars`, `meta.chunk_mode` | **`None` on all 4624** — v2 scale curriculum not yet run |
+| `meta.merge_max_chars`, `meta.chunk_mode` | **absent from all 4624** — the keys, not just the values; corrected 2026-08-11, next entry |
 | `meta.tags` | 1 — `["synthetic","paraphrase","livingthing"]` on every pair |
+
+**The chunk-scale facet is absent from the corpus** (2026-08-11, `iter_pairs`
+over the live `_training_pairs/pairs.jsonl`; 4595 records, 4140 synthetic):
+
+| `meta` key | present on synthetic pairs |
+|---|---|
+| `merge_max_chars` | **0 / 4140** |
+| `chunk_mode` | **0 / 4140** |
+| `context`, `context_mode` | 3186 / 4140 |
+| `synth_key`, `gen` | 4140 / 4140 |
+
+**Absent, not null** — the keys were never written, so this is not a chunker
+that returned `None`. `synth._build_record` does stamp both (the "Chunk-scale
+facet" comment), but that code postdates the whole corpus: `merge_max_chars`
+landed 2026-07-23 and `chunk_mode` 2026-08-04, while every synthetic pair is
+stamped `captured_at` **2026-07-21 (2870) or 2026-07-22 (1270)** — one two-day
+batch, generated before the facet existed.
+
+**Consequence: the v2 chunk-scale ablation cannot be run on this corpus.** The
+plan in [`v2-longer-rewrites.md`](v2-longer-rewrites.md) groups by exactly the
+covariate that is missing, so a mixed-scale run has nothing to contrast against
+— only pairs generated from now on carry it. Nothing is damaged and no pair is
+wrong; a covariate is simply not there, and it cannot be back-filled, because
+the target text alone does not say what budget produced it.
+
+**What the corpus was generated under is inferred, not recorded.** The live
+blog policy re-derives **3681 of 3686** distinct corpus cells (99.86%) from the
+blog at the pinned generation-time revision, which is strong evidence that the
+policy — section-bounded at 1500 — has not materially moved since. That is an
+inference from agreement, not provenance: label it as such wherever it is used.
+
+The same shape of gap, smaller: **954 of 4140** synthetic pairs predate heading
+context (D14, forward-only by decision), so any analysis faceting on
+`meta.context` covers **77%** of the synthetic corpus, not all of it.
 
 ---
 

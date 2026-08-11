@@ -16,6 +16,32 @@ path to a v2 run.
 > manifest, `inline_headings` through inference and the editor seam. What
 > does not: any v2 pair has yet been generated, and no v2 adapter trained.
 
+> **Blocked 2026-08-11 — the ablation has no labelled baseline arm.** Measured
+> over the live 4595-pair corpus: `meta.merge_max_chars` and `meta.chunk_mode`
+> are present on **0 of 4140** synthetic pairs — *absent*, not `None`.
+> `_build_record` stamps them, but that code landed 2026-07-23 and 2026-08-04
+> while the whole synthetic corpus was generated 2026-07-21/22. So "did scale
+> help" cannot be answered by faceting this corpus: the v1 arm carries no scale
+> label to contrast a v2 arm against. Nothing below is wrong and no pair is
+> damaged — a covariate is missing, not data. Counts and method in
+> [`findings.md`](findings.md).
+>
+> **Unblocked by** any synthesis batch generated from now on: the stamping
+> already ships, so a v2 run labels itself and needs no new mechanism. What is
+> *not* available is retrofitting. An un-stamped pair cannot be assigned to a
+> scale after the fact, because the target text alone does not say what budget
+> produced it — a 600-char target is equally consistent with a 1500 and a 4500
+> budget, both hitting the section wall. Mixing pre- and post-facet pairs
+> therefore yields a corpus with an unlabelled stratum, not a three-way
+> comparison.
+>
+> What v1 *was* generated under is **inferred**, not recorded: today's live
+> policy re-derives 3681 of 3686 distinct corpus cells (99.86%) from the blog at
+> the pinned generation-time revision, so section-bounded @ 1500 is near-certain
+> — but that is agreement, not provenance, and any write-up should label it so.
+> The cheapest way to make v1 a real arm is to re-synthesise a labelled slice at
+> 1500 alongside the 3000/4500 batches rather than to assert the label.
+
 ## The section wall (the actual blocker)
 
 **Raising `MERGE_MAX_CHARS` does almost nothing**, because `_split_sections`
@@ -120,7 +146,9 @@ coherence-aware objectives when we get there.
    the chunk scale was not RECORDED per pair, so a mixed-scale corpus
    would have been un-ablatable — shipped 2026-07-22: `Target` carries
    `merge_max_chars` and synth stamps it into `meta.merge_max_chars`
-   (None = unmerged; pre-facet records lack the key and were all 1500).
+   (None = unmerged; pre-facet records lack the key — that is *every* record
+   in today's corpus, and "they were all 1500" is inference from re-derivation,
+   not a stamp: see the blocked note at the top).
    A v2 batch is now `dan-style synth --merge-max-chars 4500` (cross-heading
    is blog-policy default; `meta.chunk_mode` joins `meta.merge_max_chars` as
    the second facet, and mode matters more than budget so the ablation needs
