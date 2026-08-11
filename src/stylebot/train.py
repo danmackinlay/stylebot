@@ -40,10 +40,6 @@ from pathlib import Path
 from stylebot.jsonl import dumps_line
 from stylebot.pairs import iter_pairs, validate_pairs_file
 from stylebot.provenance import file_sha256, git_sha  # file_sha256 re-exported: public here
-from stylebot.tinker_tls import patch_pyqwest_tls_trust
-
-# Back-compat alias for callers that reach the TLS patch through the trainer.
-_patch_pyqwest_tls_trust = patch_pyqwest_tls_trust
 
 logger = logging.getLogger(__name__)
 
@@ -570,8 +566,6 @@ def _tinker_runner(corpus: TrainCorpus, manifest: dict, work_dir: Path, **cfg) -
         from tinker_cookbook.supervised.types import ChatDatasetBuilderCommonConfig
     except ImportError as exc:
         raise ImportError(_EXTRA_HINT) from exc
-
-    patch_pyqwest_tls_trust()
 
     base_model = cfg["base_model"]
     renderer_name = cfg["renderer_name"] or model_info.get_recommended_renderer_name(base_model)

@@ -626,9 +626,6 @@ def tinker_backend(
             "tinker_backend needs the 'trainer' extra: uv add 'stylebot[trainer]'"
         ) from exc
 
-    from stylebot.tinker_tls import patch_pyqwest_tls_trust
-
-    patch_pyqwest_tls_trust()
     tokenizer = get_tokenizer(base_model)
     renderer = renderers.get_renderer(
         renderer_name or model_info.get_recommended_renderer_name(base_model), tokenizer

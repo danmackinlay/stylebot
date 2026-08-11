@@ -345,6 +345,17 @@ no supported env or config knob, so `stylebot.tinker_tls` rebuilds the transport
 with system certs and patches the SDK's private transport factory. Best-effort by
 design: if the internals move it warns by name rather than failing the run.
 
+**Retired 2026-08-11**: tinker 0.25.0 ships the same fix upstream — its
+`_default_pyqwest_transport` passes `tls_include_system_certs=True` itself, and
+guards the *call* in `try/except TypeError` so an older pyqwest that rejects the
+kwarg still constructs. That guard is the one thing our version lacked. The floor
+moved to `tinker>=0.25.0` and `stylebot.tinker_tls` was deleted along with its
+call sites in `train.py`, `infer.py` and livingthing's `bin/styler-mlx`. Verified
+by rebuilding the SDK's own default transport with no patch applied and getting a
+live handshake against `tinker.thinkingmachines.dev` — the same probe that
+demonstrated the bug at 0.23.2, now returning HTTP 200. Re-open only if the floor
+is ever walked back below 0.25.0.
+
 ---
 
 D26–D30 come from the 2026-08-11 segmentation harmonisation, which found the

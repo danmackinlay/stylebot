@@ -22,7 +22,7 @@ classifier = [
     "sentence-transformers>=3.0",
 ]
 trainer = [
-    "tinker>=0.23.2",
+    "tinker>=0.25.0",
     "tinker-cookbook>=0.5.2",
 ]
 
