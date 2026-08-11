@@ -65,15 +65,29 @@ are untouched.
   the hygiene-drop counts are yellow on *stdout*: they are part of the run's
   report, not a diagnostic. Rendered CLI output is byte-identical to 0.2.0,
   streams and ANSI colour included (diffed through a pty).
-- **`tests/test_corpus_stability.py` runs by default wherever the blog is.**
-  With `LIVINGTHING_ROOT` unset it probes the conventional locations instead of
-  skipping, so a bare `uv run pytest` actually exercises the corpus guard. It
-  skips only when no checkout exists anywhere, naming every path it looked in;
-  a checkout that is named or found but unusable now **fails**. That includes
-  the set-but-missing-corpus case, which 0.2.0's note claimed already failed
-  and which in fact skipped — so both the unset path and the explicitly-broken
-  path had been reading as "measured, fine". Opting out is now
-  `LIVINGTHING_ROOT=` (empty), since unsetting means "go and look".
+- **`tests/test_corpus_stability.py` runs by default, and now measures
+  segmentation rather than Dan's editing.** Two changes.
+
+  It used to skip whenever `LIVINGTHING_ROOT` was unset, so a bare
+  `uv run pytest` never exercised the corpus guard. Unset now means *go and
+  look*: it probes the conventional locations, skips only when no checkout
+  exists anywhere (naming every path it tried), and **fails** when a checkout
+  is named or found but unusable. That includes the set-but-missing-corpus
+  case, which 0.2.0's note claimed already failed and which in fact skipped —
+  so both the unset path and the explicitly-broken path had been reading as
+  "measured, fine". Opting out is now `LIVINGTHING_ROOT=` (empty).
+
+  More importantly it re-derives targets at a **pinned blog revision**
+  (livingthing `1aa290e463`, 2026-07-22) instead of HEAD. Reading HEAD
+  conflated a segmentation regression — the bug this file exists to catch —
+  with an ordinary prose edit, so the number sagged on a schedule set by the
+  blog's own churn (a single bulk `ai-preen` pass cost 45 cells), the floor had
+  to be hand-lowered to absorb it, and each lowering bought less teeth. The
+  revision was chosen by sweeping 244 commits and taking the plateau that spans
+  the corpus's generation window. Reproducibility against it is 3681/3686
+  (99.86%), so the floors become **equalities**: with the prose frozen, nothing
+  benign can move the number. A two-cell regression now fails, where the old
+  HEAD-relative floor had a two-hundred-cell noise band.
 - **Vale runs batched.** `vale_score_many` hands many `*.md` files to one `vale`
   invocation and splits the filename-keyed JSON back apart; `score_pairs_file`
   runs it as a per-slice pre-pass instead of one process per scored text
