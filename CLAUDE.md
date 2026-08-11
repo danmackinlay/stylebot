@@ -38,14 +38,24 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
 
 - **Library-first, CLI second.** Each phase is a module with a typed function
   over explicit paths/params; the `click` CLI is a thin wrapper. The blog build
-  imports the function directly.
+  imports the function directly. Two seams worth knowing (both 2026-08-11):
+  `synth_cli` moved out of `bin/` to `stylebot.synth_cli` — 1000+ lines of
+  library that happened to sit in the executables package — and now raises its
+  own `SynthConfigError` / `SynthRunError` / `SynthGenerationError` instead of
+  `click` exceptions, which `bin/ai_style.py` translates into exit codes at the
+  boundary. And `BackendOpts` + `build_styler` (in `bin/ai_style.py`) are the
+  one backend-flag surface `run` and `serve` share; the sidecar's rewrite op is
+  `run` held open, so declaring those twelve flags twice had already drifted.
 - **One entry point, subcommands** (`ai-style
   eval|export-table|log|make-splits|run|serve|synth|train|train-clf`). Not a
   scatter of loose scripts: Phase 1's logger shipped as a standalone
   `ai-style-log` script until 2026-07-20, and was folded in. One console script,
   one `--help` tree. **One carve-out: one-off data migrations** — currently
-  `scripts/migrate_capture_archives.py` and `scripts/restamp_style_system.py`.
-  They rewrite data already on disk to a new schema, are typed once per schema
+  `scripts/migrate_capture_archives.py`, `scripts/restamp_style_system.py` and
+  `scripts/prune_stale_synth_pairs.py` (2026-08-11: drops synth pairs whose
+  target the segmenter can no longer produce, but *only* where it was producible
+  under the superseded segmentation — ordinary blog drift is reported and left
+  alone). They rewrite data already on disk to a new schema, are typed once per schema
   change (the code that needs them names them in its warning), and would only
   clutter the `--help` tree of a tool nobody should be migrating with twice.
   Anything a user runs as part of the pipeline is a subcommand, no exceptions.
@@ -69,6 +79,22 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
   removed from stylebot (2026-06-29) — it had been copied in but never used here,
   and lives only in the blog now. Don't reintroduce it: auxiliary/AI-touched
   filtering is the caller's `selector` policy.
+- **One segmenter: `stylebot.markdown`.** Markdown segmentation had been written
+  five times inside the package — seven counting `livingthing.qmd_core` and the
+  marker's TypeScript port — and the copies had silently diverged: what Phase 2
+  excluded from *training* targets was not what Phase 4 refused to send at
+  *inference*. Everything that needs to know "is this line prose?" now asks
+  here. **The protection principle**: a construct is protected — excluded from
+  training targets *and* inference chunks — when rewriting it would change
+  meaning rather than voice, or when there is no voice to apply. Three grounds:
+  (1) not the author's words (blockquotes); (2) not prose (fenced code, display
+  math, figure/reference divs); (3) structural markers (heading and `:::` fence
+  lines carry level/class semantics) — *though what they delimit may be prose*.
+  **Corollary: a container is not protected merely for being a container.** Which
+  div classes bear prose is policy — `.callout-note` is a Quarto convention — so
+  it enters through the caller-supplied `div_is_prose` hook rather than being
+  hardcoded here. That is the bullet above, and it is precisely the rule the
+  five-way duplication had been violating.
 
 ## Never commit
 
@@ -117,21 +143,26 @@ The data-heavy phases need the prose corpus. Wired in against Dan's live blog:
 - [x] `is_human_authored` defaults (`field="automation"`, `max_level=0`) match
       the real frontmatter exactly — no retarget needed.
 
-## Current status (as of 2026-07-22)
+## Current status (as of 2026-08-11)
 
 **The pipeline runs end-to-end**: capture → gated synth → Tinker LoRA train →
 guarded inference → multi-signal eval. Two trained runs exist (manifests in the
-blog's `_training_pairs/runs/`; run 2 is the serving default).
+blog's `_training_pairs/runs/`; run 2 is the serving default). The 2026-08-11
+pass harmonised segmentation across training and inference (defects A1–A5, see
+[`decisions.md`](_plans/decisions.md) D26–D28) and pruned the 29 pairs the
+unanchored `$$` rule had mangled; the corpus stands at **4595 pairs (4140
+synthetic)**, and neither trained run has been re-run against it.
 
 | Piece | State |
 | --- | --- |
 | Phase 0 scaffolding + Phase 1 `ai-style log` | done; daily-used; captures heading context (contract enforced in `stylebot.pairs`; mechanics in `_training_pairs/README.md`) |
-| Phase 2 `ai-style synth` / `dan-style synth` | shipped; corpus settled ~4k pairs with identity + inflation hygiene gates (`--max-transform-sim` / `--max-length-ratio`) |
+| Phase 2 `ai-style synth` / `dan-style synth` | shipped; corpus settled ~4.6k pairs with identity + inflation hygiene gates (`--max-transform-sim` / `--max-length-ratio`). `stylebot.synth_cli` is the library seam; the CLI translates its `Synth*Error`s |
+| Segmentation `stylebot.markdown` | one implementation, 2026-08-11; training and inference now agree, pinned by `tests/test_protection_parity.py`, `tests/test_corpus_stability.py` and the cross-implementation `tests/fixtures/segmenter_conformance.*` |
 | Eval harness `ai-style eval` | built: four signals (Vale, LLM judge, detector, eyeball) + the Phase-4 `output` field; JSONL-batched + resumable ([`_plans/eval-harness.md`](_plans/eval-harness.md)) |
 | Voice classifier (the detector signal) | built: StyleDistance embedding + logistic head; dep-free runtime `stylebot.classify`; artifact at livingthing `_models/voice-clf/` |
 | Splits contract | `stylebot.splits` → blog's committed `splits.json`: frozen eval posts, styler posts, hash-stable detector pool |
 | Phase 3 `ai-style train` / `dan-style train` | shipped: Tinker cookbook LoRA SFT behind the `[trainer]` extra; runs 1–2 trained (numbers in [`_plans/findings.md`](_plans/findings.md)) |
-| Phase 4 `ai-style run` / `dan-style run` | shipped: training-protocol-faithful chunking (headings/fences protected), do-no-harm + anchor-integrity guards, best-of-N; Tinker-sampling backend v1, MLX exit verified, Fireworks open |
+| Phase 4 `ai-style run` / `dan-style run` | shipped: training-protocol-faithful chunking — blockquotes, display math and `:::` divs are now protected at inference too, not just headings/fences — do-no-harm + anchor-integrity guards (inline anchors opt-in via `--strict-anchors`), best-of-N; Tinker-sampling backend v1, MLX exit verified, Fireworks open |
 
 **Naming rule:** `dan-style X` is the blog-policy mirror of `ai-style X` — same
 subcommand, swap the prefix. (The `train-targets` / `train-voice-clf` legacy
