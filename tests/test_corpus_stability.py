@@ -27,12 +27,16 @@ import pytest
 from stylebot.pairs import extract_target, iter_pairs
 from stylebot.targets import iter_targets
 
-# Measured 2026-08-10 against the 4624-pair corpus, 3710 distinct
+# Floors measured 2026-08-10 against the then-4624-pair corpus, 3710 distinct
 # (source, target-body) cells from the 4169 synthetic pairs. Both floors were
 # lowered by the block-anchored-math fix, which orphans 24 target texts (29
 # pairs) BY DESIGN: those are the ones a non-line-anchored `$$` had mangled
 # into truncated sentences. `scripts/prune_stale_synth_pairs.py` removes them.
 # Before that fix the floors were 3527 / 401.
+#
+# The prune has since run, so the live corpus is 4595 pairs / 4140 synthetic /
+# 3686 distinct cells. The floors below are unchanged by that — they count
+# cells still reproducible, and pruning removed only cells that no longer were.
 #
 # Section-bounded is the diet the corpus was GENERATED under: `CROSS_HEADING`
 # was promoted after it settled, and re-deriving under cross-heading reproduces
