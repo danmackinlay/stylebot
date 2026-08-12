@@ -294,6 +294,11 @@ class SynthResult:
     gate_redraws: int = 0  # extra paid draws spent clearing a gate
     redrawn_cells: int = 0  # cells that needed at least one redraw
     redraws_recovered: int = 0  # ... of those, ones that went on to be written
+    # Rejected draws per generator — the run-time face of `gate_drops.jsonl`.
+    # Against `per_generator` (written) this is an arm's rejection rate, which is
+    # what says whether an arm belongs on the roster: llama-3.3-70b left it on
+    # exactly this number, and no other gate could see the defect.
+    drops_by_generator: dict[str, int] = field(default_factory=dict)
     planned: int = 0  # (target, generator) assignments before dedup
     planned_sessions: int = 0  # sessions holding >=1 not-yet-generated turn
     errors: list[tuple[str, str]] = field(default_factory=list)  # (synth_key, message)
@@ -584,6 +589,59 @@ def _gate_verdict(slop: str, target_text: str, st: _RunState) -> tuple[str, str]
     return None
 
 
+def _record_gate_drop(
+    data_dir: Path,
+    turn: _Turn,
+    gen: Generator,
+    gen_meta: dict,
+    *,
+    gate: str,
+    reason: str,
+    attempt: int,
+    redrawn: bool,
+) -> None:
+    """Append one rejected draw to `<data-dir>/gate_drops.jsonl`.
+
+    **A gated draw is paid for and never written**, so without this its cost and
+    its very existence vanish when the run ends — the counters were computed,
+    printed to stderr and discarded. Two questions that matters for, both of
+    which came up the day the fabrication gate landed:
+
+    - *What is this arm's rejection rate?* Once a gate is on, every pair in the
+      corpus passed it, so the rate is no longer recoverable from `pairs.jsonl`
+      at all. The denominator is written pairs (which carry `meta.gen.cost`)
+      plus these lines; the numerator is these lines.
+    - *What is this arm really costing?* `meta.gen.cost` prices only surviving
+      draws, so an arm that fails half its draws looks half as expensive as it
+      is. `cost` here is the discarded spend.
+
+    Unconditional, like `prompts.jsonl` and unlike the reasoning sidecar: it is
+    one short line per rejection, carries no prose, and is the only record that
+    a paid draw happened. `attempt` is 0 for the first draw; `redrawn` says
+    whether a further draw followed, so `redrawn=false` marks the cell as
+    actually dropped rather than recovered.
+    """
+    append_jsonl(
+        data_dir / "gate_drops.jsonl",
+        {
+            "at": now_iso(),
+            "synth_key": turn.key,
+            "source": turn.target.source,
+            "generator": gen.name,
+            "slop_strategy": gen.strategy,
+            "reasoning_effort": gen.reasoning_effort,
+            "gate": gate,
+            "reason": reason,
+            "attempt": attempt,
+            "redrawn": redrawn,
+            "cost": gen_meta.get("cost"),
+            "prompt_tokens": gen_meta.get("prompt_tokens"),
+            "completion_tokens": gen_meta.get("completion_tokens"),
+            "target_chars": len(turn.target.text),
+        },
+    )
+
+
 def _pop_reasoning_to_sidecar(
     data_dir: Path, turn: _Turn, gen: Generator, gen_meta: dict, *, in_session: bool
 ) -> None:
@@ -699,6 +757,19 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
         verdict = _gate_verdict(slop, turn.target.text, st)
         redraws = 0
         while verdict is not None and redraws < st.gate_retries:
+            _record_gate_drop(
+                st.data_dir,
+                turn,
+                gen,
+                gen_meta,
+                gate=verdict[0],
+                reason=verdict[1],
+                attempt=redraws,
+                redrawn=True,
+            )
+            st.result.drops_by_generator[gen.name] = (
+                st.result.drops_by_generator.get(gen.name, 0) + 1
+            )
             redraws += 1
             st.result.gate_redraws += 1
             st.result.add_gen_stats(gen.name, gen_meta)  # the discarded draw was paid for
@@ -753,6 +824,19 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             # un-keyed, so a re-run retries it.
             counter, reason = verdict
             setattr(st.result, counter, getattr(st.result, counter) + 1)
+            _record_gate_drop(
+                st.data_dir,
+                turn,
+                gen,
+                gen_meta,
+                gate=counter,
+                reason=reason,
+                attempt=redraws,
+                redrawn=False,
+            )
+            st.result.drops_by_generator[gen.name] = (
+                st.result.drops_by_generator.get(gen.name, 0) + 1
+            )
             st.result.add_gen_stats(gen.name, gen_meta)
             # "gate dropped a draw", not "degenerate output": two of the three
             # gates catch a degenerate generator, but the anchor gate catches a

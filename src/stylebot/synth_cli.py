@@ -937,7 +937,23 @@ def _report_result(
             f"{result.redraws_recovered} recovered)"
         )
     for name, count in sorted(result.per_generator.items()):
-        emit(f"  {name}: {count}{_model_economics(result.model_stats.get(name))}")
+        # Written, then rejected-as-a-share-of-draws. The rate is the roster
+        # signal — an arm can be cheap per written pair and still be the most
+        # expensive one, because rejected draws are paid for and invisible in
+        # `pairs.jsonl` (llama-3.3-70b left the roster on exactly this number).
+        dropped = result.drops_by_generator.get(name, 0)
+        rate = (
+            f"  {dropped} dropped ({100 * dropped / (count + dropped):.0f}% of draws)"
+            if dropped
+            else ""
+        )
+        economics = _model_economics(result.model_stats.get(name))
+        emit(f"  {name}: {count}{rate}{economics}")
+    for name, dropped in sorted(result.drops_by_generator.items()):
+        # An arm that wrote NOTHING never reaches the loop above, which is the
+        # case most worth shouting about.
+        if name not in result.per_generator:
+            emit(f"  {name}: 0 written, {dropped} draw(s) all rejected", level="note")
     if result.total_cost:
         emit(f"  total cost: ${result.total_cost:.2f}")
     if result.budget_bound_sessions or result.reflow_sessions:

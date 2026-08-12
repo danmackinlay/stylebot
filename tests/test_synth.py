@@ -687,6 +687,39 @@ def test_gate_retries_redraw_and_recover(tmp_path):
     assert calls["n"] == 8  # four cells, two draws each — the redraws were paid for
 
 
+def test_gate_drops_sidecar_recovers_rate_and_wasted_spend(tmp_path):
+    """The two questions a gated corpus can no longer answer about itself: what
+    is this arm's rejection rate, and what did its failures cost? Both must be
+    joinable from `gate_drops.jsonl` after the run ends."""
+    import json
+
+    data_dir = tmp_path / "corpus"
+
+    def gen_out(text: str):
+        # A GenOutput carries the cost/token metadata a real backend reports.
+        return synth.GenOutput(
+            text="[dropper-slop] " + text.replace("[docs](./d.qmd)", "docs"),
+            meta={"cost": 0.004, "prompt_tokens": 300, "completion_tokens": 120},
+        )
+
+    gen = synth.Generator(name="dropper", generate=gen_out)
+    result = synth.synthesize_pairs(_linked_targets(3), data_dir, [gen], gate_retries=1)
+    assert result.written == 0 and result.skipped_invented_anchors == 3
+    assert result.drops_by_generator == {"dropper": 6}  # 3 cells x (1 draw + 1 redraw)
+
+    rows = [json.loads(x) for x in (data_dir / "gate_drops.jsonl").read_text().splitlines()]
+    assert len(rows) == 6
+    assert {r["gate"] for r in rows} == {"skipped_invented_anchors"}
+    assert {r["generator"] for r in rows} == {"dropper"}
+    # A redrawn draw is marked as such; the last attempt per cell is not.
+    assert sorted(r["redrawn"] for r in rows) == [False] * 3 + [True] * 3
+    assert sorted(r["attempt"] for r in rows) == [0, 0, 0, 1, 1, 1]
+    # The spend that `pairs.jsonl` cannot see, because nothing was written.
+    assert sum(r["cost"] for r in rows) == pytest.approx(0.024)
+    # And the reason blames the generator, not Dan's prose.
+    assert all(r["reason"].startswith("generator deleted") for r in rows)
+
+
 def test_gate_retries_give_up_and_still_drop(tmp_path):
     """A passage no draw clears is a real drop, not an infinite redraw loop —
     and the recovery count is how the operator tells the two apart."""
