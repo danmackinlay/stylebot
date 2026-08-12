@@ -5,7 +5,8 @@ scripts. Each subcommand is a thin `click` wrapper that parses flags and calls a
 typed library function: `log` (Phase 1 capture), `synth` (Phase 2), `make-splits`
 (the shared by-post splits contract), `train-clf` (the voice classifier),
 `train` (Phase 3 LoRA SFT), `run` (Phase 4 inference), `eval` (the offline
-scorer, `stylebot.eval`), `export-table` (scores -> tidy CSV) and `serve` (the
+scorer, `stylebot.eval`), `export-table` (scores -> tidy CSV), `merge-adapter`
+(adapter + base -> one merged checkpoint, `stylebot.export`) and `serve` (the
 NDJSON editor sidecar, `stylebot.serve`).
 
 Phase 1's capture logger is `ai-style log` — a subcommand like every other, not
@@ -1338,9 +1339,7 @@ def merge_adapter_cmd(
         if manifest_path is None:
             raise click.UsageError("pass --base-model, or --manifest to read it from")
         try:
-            base_model = export.base_model_of(
-                json.loads(manifest_path.read_text(encoding="utf-8"))
-            )
+            base_model = export.base_model_of(json.loads(manifest_path.read_text(encoding="utf-8")))
         except ValueError as exc:
             raise click.ClickException(f"{manifest_path}: {exc}") from exc
 
