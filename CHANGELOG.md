@@ -142,6 +142,19 @@ are untouched.
 
 ### Added
 
+- **`stylebot.export` / `ai-style merge-adapter`** — merges a trained LoRA
+  adapter back into its base weights, emitting one HF checkpoint a local
+  runtime can take from there (`mlx_lm.convert`, llama.cpp, vLLM, plain
+  transformers). It exists because stylebot emitted an artifact its own
+  documented next step could not consume: `train --download-adapter` writes a
+  *serving*-format PEFT export, while `tinker_cookbook.weights.build_hf_model`
+  expects *raw* Tinker keys and applies that remap itself, so feeding it our
+  own output doubled the `language_model` prefix and failed. Needs the
+  `trainer` extra. Refuses an adapter whose `lora_alpha != r`, since the key
+  inversion only preserves meaning while the scaling factor is 1. Quantization,
+  config-key surgery and chat-template edits are deliberately **not** included
+  — they are (model family × serving runtime) policy; see D31 in
+  [`_plans/decisions.md`](_plans/decisions.md).
 - A test asserting each CLI default **is** its library constant, and that no
   option help in those commands contains a hand-written `[default:`. Their
   absence is what made the duplication dangerous.
