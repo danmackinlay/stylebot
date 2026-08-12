@@ -39,12 +39,12 @@ The failure mode the data most encourages is the one nothing checks.
 
 ## Current state, verified 2026-08-11
 
-- `infer.missing_anchors` ([`infer.py:317`](../src/stylebot/infer.py)) returns
-  only anchors whose count **decreased** — `have.get(key, 0) < n`. Its
+- `infer.missing_anchors` ([`src/stylebot/infer.py`](../src/stylebot/infer.py))
+  returns only anchors whose count **decreased** — `have.get(key, 0) < n`. Its
   docstring says so explicitly. Gained anchors are invisible to it.
 - **No anchor gate exists in synthesis or training.** The write-gates are
   `--max-transform-sim` (identity) and `--max-length-ratio` (inflation), both
-  in `CorpusOpts` (`synth_cli.py:584`). Neither reads an anchor.
+  in `CorpusOpts` (`src/stylebot/synth_cli.py`). Neither reads an anchor.
 - **`STYLE_SYSTEM` promises something stylebot does not implement.** It says
   "Preserve any 〈MASKED_*〉 tokens verbatim if present" (`ai_core.py`), and the
   same clause is in every slop prompt (`generators.py`) — but there is no
