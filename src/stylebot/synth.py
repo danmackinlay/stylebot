@@ -115,6 +115,16 @@ def _synth_key(
     `replicate` label. NOT keyed: sampling params (continuous — they would
     explode the key space) and anything positional, session membership above all,
     being a runtime outcome that would make resume incoherent under drift.
+
+    **Also not keyed: the chunk budget.** Two budgets that cut a passage to
+    byte-identical text produce ONE cell, generated once and stamped
+    (`meta.merge_max_chars`) by whichever batch reached it first — so that field
+    records provenance, not the design cell a scale ablation would want, and an
+    interrupted batch shifts the labelling. Keying on the budget instead would
+    mint a duplicate pair per budget for identical text, multiplying the weight
+    of exactly the short passages the section wall already over-represents.
+    Measured overlap and what to do about it:
+    `_plans/v2-longer-rewrites.md`, "What `meta.merge_max_chars` actually means".
     """
     h = hashlib.sha256()
     for part in (generator_name, strategy, reasoning_effort, prompt_id, context, target_text):

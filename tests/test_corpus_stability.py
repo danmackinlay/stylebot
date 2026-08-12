@@ -99,10 +99,30 @@ PINNED_BLOG_REV = "1aa290e463fd5fc184e4be693ba149f5182659c7"
 # own — that is what a stability floor has to compare against. (`div_is_prose`
 # is likewise not passed: the blog's callout-divs-as-prose policy postdates the
 # corpus by three weeks, and applying it here costs 85 cells.)
-FLOOR_SECTION_BOUNDED = 3681
-# The same corpus under today's live cross-heading policy: a much weaker signal
-# (the cells barely overlap), but it exercises the cross-heading path over real
-# prose, which no fixture does. Peaks at the same pinned revision.
+#
+# **Re-measured 2026-08-12: 3681 -> 3023, of 3028 cells.** Not a regression —
+# the ratio is unchanged at 99.83% (was 99.86%, same five unreachable cells).
+# The corpus lost 658 distinct section-bounded cells to the anchor-invention
+# cull (`scripts/prune_anchor_inventing_pairs.py`, D32), which is exactly the
+# "someone pruned cells that were reproducible" case the paragraph above
+# anticipated: a deliberate corpus edit, deserving a failure and a re-measure.
+#
+# This subset is now FROZEN — `CROSS_HEADING` is live blog policy, so no future
+# batch adds a section-bounded cell — which is what makes re-pinning it safe
+# while a v2 run is still writing to the corpus.
+FLOOR_SECTION_BOUNDED = 3023
+# The same corpus under today's live cross-heading policy. Was a near-null
+# instrument (417 cells, generated section-bounded and re-cut); the v2 batches
+# make it the real one, at 1740/2818 and climbing as they land.
+#
+# **This floor is stale on purpose and wants a second pin.** The 61.7% is not
+# segmentation: the v2 cells were generated 2026-08-12 against blog HEAD, and
+# they are being re-derived here at a 2026-07-22 revision, so three weeks of
+# ordinary prose drift sits in the gap. The fix is one more constant — the
+# cross-heading arm needs `PINNED_BLOG_REV_V2` at its own generation revision,
+# exactly as this arm has one — and it cannot be measured until the v2 run
+# finishes writing. Until then this stays at the old value, where it still
+# catches a catastrophic break and nothing subtler.
 FLOOR_CROSS_HEADING = 417
 
 
@@ -208,19 +228,37 @@ def _live_policy(root: Path) -> dict:
     )
 
 
-def _synth_bodies(root: Path) -> dict[str, set[str]]:
-    """`{source: {target body, ...}}` over the synthetic pairs.
+def _synth_bodies(root: Path, mode: str | None = None) -> dict[str, set[str]]:
+    """`{source: {target body, ...}}` over the synthetic pairs cut in `mode`.
+
+    `mode=None` takes every mode — what the blob materialiser wants, since it
+    needs each source's prose once regardless of which test will read it.
 
     Read from the *live* corpus, not from the pinned revision: the question is
     whether today's segmenter still cuts today's corpus out of the prose that
     corpus was cut from. Real captures are excluded — they come from paragraph
     diffs of edit archives, not from `iter_targets`, so they were never
     reproducible by construction.
+
+    **Selecting on `meta.chunk_mode` is what keeps each floor a near-equality.**
+    Once the v2 batches landed (2026-08-12) the corpus held both modes, and a
+    cross-heading target is *by construction* unreproducible under
+    section-bounded policy — it spans a heading the section cutter stops at. So
+    the mixed corpus was silently charging each test for the other's cells, and
+    the section-bounded ratio would sag further with every v2 batch, for no
+    reason a reader could act on. Ask each policy only for the cells it cut.
+
+    Legacy pairs carry no `chunk_mode` at all (the stamp postdates them — see
+    `findings.md`), and count as section-bounded: the live policy re-derives
+    99.86% of them that way, which is inference rather than provenance but is
+    the best label available and is stated as such wherever it is used.
     """
     by_source: dict[str, set[str]] = {}
     for rec in iter_pairs(root / CORPUS):
         meta = rec.get("meta") or {}
         if not meta.get("synth_key") or not meta.get("source"):
+            continue
+        if mode is not None and (meta.get("chunk_mode") or "section-bounded") != mode:
             continue
         by_source.setdefault(meta["source"], set()).add(extract_target(rec))
     return by_source
@@ -300,13 +338,13 @@ def pinned_tree() -> Iterator[Callable[[Path], Path]]:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def reproducible(root: Path, tree: Path, policy: dict) -> tuple[int, int]:
-    """`(reproducible, total)` corpus target bodies under `policy`.
+def reproducible(root: Path, tree: Path, policy: dict, mode: str) -> tuple[int, int]:
+    """`(reproducible, total)` corpus target bodies cut in `mode`, under `policy`.
 
     Corpus from the live checkout at `root`; prose from `tree`, the pinned
     revision materialised.
     """
-    by_source = _synth_bodies(root)
+    by_source = _synth_bodies(root, mode)
     total = sum(len(v) for v in by_source.values())
     ok = 0
     for source, bodies in by_source.items():
@@ -327,7 +365,7 @@ def test_section_bounded_targets_still_reproduce(pinned_tree):
     blog_root = _blog_root()
     tree = pinned_tree(blog_root)
     policy = {**_live_policy(blog_root), "cross_heading": False}
-    ok, total = reproducible(blog_root, tree, policy)
+    ok, total = reproducible(blog_root, tree, policy, "section-bounded")
     print(f"\ncorpus stability (section-bounded): {ok}/{total} reproducible")
     assert ok >= FLOOR_SECTION_BOUNDED, (
         f"segmentation regressed: {ok} of {total} corpus targets reproducible "
@@ -342,7 +380,7 @@ def test_cross_heading_targets_still_reproduce(pinned_tree):
     tree = pinned_tree(blog_root)
     policy = _live_policy(blog_root)
     assert policy["cross_heading"] is True, "policy changed; re-measure FLOOR_CROSS_HEADING"
-    ok, total = reproducible(blog_root, tree, policy)
+    ok, total = reproducible(blog_root, tree, policy, "cross-heading")
     print(f"\ncorpus stability (cross-heading): {ok}/{total} reproducible")
     assert ok >= FLOOR_CROSS_HEADING, (
         f"segmentation regressed: {ok} of {total} corpus targets reproducible "

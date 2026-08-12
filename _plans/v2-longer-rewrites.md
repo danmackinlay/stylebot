@@ -54,6 +54,57 @@ path to a v2 run.
 > "Why this matters for the v2 scale curriculum") — the rejection curve
 > plateaus, so budget redraws, not a rewrite of the plan.
 
+## What `meta.merge_max_chars` actually means (read before faceting on it)
+
+Measured 2026-08-12, against the first real v2 batches. **The stamp records
+which batch first produced a target's text, not which design cell the pair
+belongs to.** Those differ, and the gap is order- and interruption-dependent.
+
+`_synth_key` hashes the target **text** (plus generator, strategy, effort,
+prompt id, heading context, replicate) and deliberately **not** the budget —
+"key on content, record circumstance". So when two budgets cut the same passage
+to byte-identical text, that is *one* cell, generated once, stamped by whichever
+batch reached it first. Which happens often, because of the section wall below:
+a section shorter than 1500 chars is packed identically at every budget.
+
+Measured over the live blog with the real chunker and selector:
+
+| | targets | unique to that budget |
+|---|---:|---:|
+| 1500 cross-heading | 2,491 | 2,366 (95.0%) |
+| 3000 cross-heading | 1,282 | 1,077 (84.0%) |
+| 4500 cross-heading | 937 | 761 (81.2%) |
+
+Overlaps: 1500∩3000 = 100, 1500∩4500 = 71, 3000∩4500 = 151, all three = 46. In
+the live corpus, of the pairs whose target text belongs to *both* the 1500 and
+4500 sets, **57 carry `merge_max_chars: 1500` and 2 carry `4500`** — the 1500
+batch ran first and claimed nearly all of them. The 2 exist only because that
+batch was interrupted (1,985 of 2,491) and a few coincident cells fell through
+to the next one. **So where a run stops changes the labelling.**
+
+**This is not a bug and must not be "fixed" by keying on the budget.** That
+would mint a separate pair per budget for identical text, multiplying the weight
+of exactly the short passages the section wall already over-represents — the
+failure `--skip-covered` exists to prevent. The dedup is right; only the label's
+meaning needs stating.
+
+**Consequences for the ablation:**
+
+- Faceting the corpus by `merge_max_chars` contrasts *short targets against long
+  ones*, which is adjacent to the scale question but is not a randomised
+  contrast, and it is contaminated by run order at the ~2–16% level.
+- For a clean contrast, restrict to targets **unique** to one budget (the third
+  column above): 2,366 / 1,077 / 761, disjoint by construction and immune to
+  ordering.
+- Or sidestep the faceting entirely — treat the corpus as one mixed-scale diet,
+  as the curriculum intends, and put the scale question to the *adapter* by
+  evaluating it on length-stratified inputs. That measures what the run is
+  actually for, and needs no clean strata in the training data at all.
+
+Whichever is chosen, say which in the write-up. The v1 arm's label was inferred
+rather than recorded (above); this one is recorded but means something narrower
+than its name suggests.
+
 ## The section wall (the actual blocker)
 
 **Raising `MERGE_MAX_CHARS` does almost nothing**, because `_split_sections`

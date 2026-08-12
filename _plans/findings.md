@@ -521,3 +521,18 @@ keys as `@X:` while a bare `[@X]` keys as `@X`, so a target adding a page number
 reads as invention — 22 of 2,062 instances, 19 pairs flagged solely by it. Kept
 as rejections deliberately: a page number the model cannot know is the same
 fabrication failure in miniature.
+
+**Chunk budgets overlap, so the scale arms are nested rather than disjoint**
+(measured 2026-08-12 against the first real v2 batches, live blog through the
+real chunker and selector). Targets per cross-heading budget, and how many are
+unique to it: 1500 → 2,491 / 2,366 (95.0%); 3000 → 1,282 / 1,077 (84.0%);
+4500 → 937 / 761 (81.2%). Pairwise overlaps 1500∩3000 = 100, 1500∩4500 = 71,
+3000∩4500 = 151, all three = 46 — a section shorter than the smallest budget is
+packed identically at every budget. Since `_synth_key` hashes target text and
+not the budget, such a passage is one cell stamped by whichever batch reached it
+first: of the corpus pairs whose target belongs to both the 1500 and 4500 sets,
+57 carry `merge_max_chars: 1500` and 2 carry `4500` (the 2 only because the 1500
+batch was interrupted at 1,985 of 2,491). Interpretation and the three ways to
+analyse it honestly:
+[`v2-longer-rewrites.md`](v2-longer-rewrites.md), "What `meta.merge_max_chars`
+actually means".
