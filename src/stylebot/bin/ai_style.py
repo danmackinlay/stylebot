@@ -1277,6 +1277,89 @@ def train_cmd(
     click.echo(f"manifest -> {result.manifest_path} (commit this)")
 
 
+@main.command("merge-adapter")
+@click.option(
+    "--adapter",
+    "adapter_dir",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="The PEFT adapter directory written by `train --download-adapter`.",
+)
+@click.option(
+    "--out",
+    "out_dir",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Where to write the merged HF checkpoint (never commit it — it is base-model sized).",
+)
+@click.option(
+    "--manifest",
+    "manifest_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Training-run manifest to read the base model from. Either this or --base-model.",
+)
+@click.option(
+    "--base-model",
+    default=None,
+    help="Base model the adapter was trained on; overrides the manifest's.",
+)
+@click.option(
+    "--work-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Scratch for the key-inverted adapter copy. [default: beside --out]",
+)
+def merge_adapter_cmd(
+    adapter_dir: Path,
+    out_dir: Path,
+    manifest_path: Path | None,
+    base_model: str | None,
+    work_dir: Path | None,
+) -> None:
+    """Merge a trained LoRA adapter into its base weights (stylebot.export).
+
+    The step between `train` and serving the styler off somebody else's
+    computer: emits one merged HF checkpoint that a local runtime takes from
+    there — `mlx_lm.convert` to quantize for MLX, llama.cpp, vLLM, or plain
+    transformers.
+
+    It exists because the adapter `train --download-adapter` writes is in
+    SERVING key format while the cookbook's merge expects RAW Tinker keys, so
+    feeding stylebot's own export to its own next step fails; this inverts the
+    keys first. Quantization, config surgery and chat-template edits are
+    deliberately not here — they are per-runtime policy, so wrap this.
+
+    Needs the `trainer` extra. Idempotent: an existing --out is left alone.
+    """
+    from stylebot import export
+
+    if base_model is None:
+        if manifest_path is None:
+            raise click.UsageError("pass --base-model, or --manifest to read it from")
+        try:
+            base_model = export.base_model_of(
+                json.loads(manifest_path.read_text(encoding="utf-8"))
+            )
+        except ValueError as exc:
+            raise click.ClickException(f"{manifest_path}: {exc}") from exc
+
+    click.echo(f"merging {adapter_dir} into {base_model} ...")
+    try:
+        out = export.merge_adapter(
+            adapter_dir,
+            out_dir,
+            base_model=base_model,
+            work_dir=work_dir,
+        )
+    except ImportError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"merged model -> {out} (never commit this)")
+    click.echo("quantize it for local serving with e.g. `mlx_lm.convert --hf-path <it> -q`")
+
+
 @main.command("run", cls=SectionedCommand)
 @click.argument(
     "file",

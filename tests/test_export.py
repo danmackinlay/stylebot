@@ -187,3 +187,67 @@ def test_merge_refuses_a_merge_that_produced_nothing(tmp_path):
         export.merge_adapter(src, tmp_path / "m", base_model="fake/model", merge_fn=silent_failure)
     # Nothing renamed into place, so a later run retries rather than serving a shell.
     assert not (tmp_path / "m").exists()
+
+
+# --- the CLI wrapper -------------------------------------------------------
+
+
+def _invoke(tmp_path, *args, **kw):
+    from click.testing import CliRunner
+
+    from stylebot.bin import ai_style
+
+    return CliRunner().invoke(ai_style.main, ["merge-adapter", *args], **kw)
+
+
+def test_cli_needs_a_base_model_from_somewhere(tmp_path):
+    src = _adapter(tmp_path, SERVING_KEYS)
+    res = _invoke(tmp_path, "--adapter", str(src), "--out", str(tmp_path / "m"))
+    assert res.exit_code == 2, res.output  # usage error, not a crash
+    assert "--base-model" in res.output and "--manifest" in res.output
+
+
+def test_cli_reads_the_base_model_from_a_manifest(tmp_path, monkeypatch):
+    from stylebot import export as export_mod
+
+    src = _adapter(tmp_path, SERVING_KEYS)
+    manifest = tmp_path / "run.json"
+    manifest.write_text(
+        json.dumps({"run_id": "r1", "hyperparameters": {"base_model": "Qwen/Qwen3.5-9B"}}),
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def fake_merge(adapter_dir, out_dir, *, base_model, work_dir=None):
+        seen.update(base_model=base_model, out_dir=Path(out_dir))
+        return Path(out_dir)
+
+    monkeypatch.setattr(export_mod, "merge_adapter", fake_merge)
+    res = _invoke(
+        tmp_path,
+        "--adapter",
+        str(src),
+        "--out",
+        str(tmp_path / "m"),
+        "--manifest",
+        str(manifest),
+    )
+    assert res.exit_code == 0, res.output
+    assert seen["base_model"] == "Qwen/Qwen3.5-9B"
+
+
+def test_cli_reports_a_manifest_with_no_base_model(tmp_path):
+    src = _adapter(tmp_path, SERVING_KEYS)
+    manifest = tmp_path / "run.json"
+    manifest.write_text(json.dumps({"run_id": "r1", "hyperparameters": {}}), encoding="utf-8")
+    res = _invoke(
+        tmp_path,
+        "--adapter",
+        str(src),
+        "--out",
+        str(tmp_path / "m"),
+        "--manifest",
+        str(manifest),
+    )
+    assert res.exit_code == 1, res.output  # world-is-wrong, not usage
+    assert "hyperparameters.base_model" in res.output

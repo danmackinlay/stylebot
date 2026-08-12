@@ -197,6 +197,16 @@ live in the blog's `_training_pairs/RUNBOOK.md`; durable decisions in
   contrast against, and no way to back-fill one. Generating the v2 batches is
   itself the unblock; consider re-synthesising a labelled 1500 slice so the
   baseline arm is stamped rather than assumed (`findings.md`).
+- **Anchor integrity** ([stylebot#1](https://github.com/danmackinlay/stylebot/issues/1)):
+  the reverse-edit swap teaches the styler to **invent** links — 876 pairs
+  (19.1%) have a target carrying anchors the source lacks, half of them
+  external URLs — while `infer.missing_anchors` only checks anchors that were
+  **lost**. The failure the data most encourages is the one nothing checks.
+  Hand-off briefing with verified code state, ordered work and acceptance
+  criteria: [`anchor-integrity.md`](anchor-integrity.md). Step 0 is persisting
+  `n_anchor_rejected`, which is computed and discarded on every run today and
+  would decide whether the masking work is needed at all
+  ([`placeholder-design-2026-08.md`](placeholder-design-2026-08.md)).
 - **Fireworks serving**: PEFT upload + scale-to-zero, retry on
   `503 DEPLOYMENT_SCALING_UP`; acceptance is the same chat-template parity test
   the MLX exit passed (D8 / `findings.md`).
