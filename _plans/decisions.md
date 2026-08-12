@@ -662,3 +662,47 @@ the SDK and remove the main objection.
 **Note for whoever accepts this**: the friendly-error half touches `eval.py`,
 `infer.py` and `generators.py`, so it cannot ship from a `pyproject.toml`-only
 change.
+
+## D31: stylebot merges the adapter; it does not quantize, patch configs, or bake templates
+
+`train --download-adapter` writes a PEFT adapter that
+`tinker_cookbook.weights.build_hf_model` — the merge it exists to feed —
+**cannot consume**. stylebot's export is in serving key format
+(`model.language_model.*`, `lm_head`); the cookbook expects raw Tinker keys and
+applies that remap itself, so passing our own output doubles the
+`language_model` prefix and the merge raises `WeightsMergeError`. The workaround
+lived as 40 lines in livingthing's `bin/styler-mlx` — invisible to anyone who
+installed stylebot and followed its own documented next step.
+
+`stylebot.export` (2026-08-12) takes the merge, and stops there.
+
+**Where the line falls, and why there.** The merge is mechanism: the key
+inversion is a property of *stylebot's own* two artifacts, the base-model
+resolution works around transformers not knowing a fresh architecture, and
+`.partial`-then-rename is the same idempotency the rest of the pipeline uses.
+None of that varies by who is running it.
+
+Everything after the merge does vary. `mlx_lm.convert` is Mac-only;
+`_VLM_MARKER_KEYS` is a Qwen3.5-config × vllm-mlx intersection; the no-think
+chat-template substitution is keyed to one template's exact shape. Those are
+*(model family × serving runtime)* facts, and hardcoding them here would put one
+server's quirks inside generic tooling — the blog/generic boundary this repo
+keeps (see D29, where the same argument made `block_only` / `div_is_prose`
+parameters rather than behaviour).
+
+**Rejected: port `styler-mlx` wholesale behind an `ai-style export-local`.** It
+reads better in a demo and is worse in every other respect. It would make MLX a
+first-class stylebot concern on a package that runs fine on Linux, and it would
+bake `image_token_id` and a Jinja fragment into a repo that has no opinion about
+either. The blog keeps its script; it now calls `merge_adapter` instead of
+carrying its own copy of the inversion.
+
+**Rejected: assume `lora_alpha == r` the way the script did.** True of every
+adapter `train.py` produces, and the script's comment says so. But the rename
+only preserves *meaning* while the scaling factor is 1, and an adapter from
+elsewhere merged at the wrong scale is subtly wrong rather than broken — the
+failure that does not announce itself. `check_adapter_scaling` refuses instead.
+
+**Re-evaluate if**: a second consumer wants the quantize/finalize stages, at
+which point they arrive as parameters (`strip_config_keys`,
+`chat_template_edit`) with the caller supplying the values — not as constants.
