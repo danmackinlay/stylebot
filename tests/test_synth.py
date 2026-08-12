@@ -618,3 +618,66 @@ def test_max_length_ratio_gate_drops_inflated_outputs(tmp_path):
     healthy = _fake("ok-model")
     result = synth.synthesize_pairs(targets, data_dir, [healthy], max_length_ratio=3.0)
     assert result.written == 4 and result.skipped_inflated == 0
+
+
+def _delinker(name: str) -> synth.Generator:
+    """A generator that strips the link while 'improving' the passage — the exact
+    move that, once the edit is reversed, makes the target look like it invented
+    one (`_plans/anchor-integrity.md`)."""
+    return synth.Generator(
+        name=name, generate=lambda text: f"[{name}-slop] " + text.replace("[docs](./d.qmd)", "docs")
+    )
+
+
+def _linked_targets(n: int) -> list[synth.Target]:
+    import dataclasses
+
+    return [
+        dataclasses.replace(t, text=t.text + " See the [docs](./d.qmd) for the rest.")
+        for t in _targets(n)
+    ]
+
+
+def test_invented_anchor_gate_drops_fabrication_lessons(tmp_path):
+    """The most-taught failure in the corpus (876 pairs, 19.1%) and the one no
+    gate saw until 0.3.0: a target carrying a link its slop never had."""
+    data_dir = tmp_path / "corpus"
+    targets = _linked_targets(4)
+
+    result = synth.synthesize_pairs(
+        targets, data_dir, [_delinker("dropper")], drop_invented_anchors=True
+    )
+    assert result.skipped_invented_anchors == 4 and result.written == 0
+
+    # Off by default — the gate is newer than the corpus, so a run that does not
+    # ask for it behaves exactly as it did before.
+    result = synth.synthesize_pairs(targets, data_dir, [_delinker("dropper")])
+    assert result.written == 4 and result.skipped_invented_anchors == 0
+
+
+def test_invented_anchor_gate_keeps_a_faithful_generator(tmp_path):
+    """The gate must not fire on a generator that carries the link through: it
+    reads the anchor multiset, not the amount of rewriting."""
+    data_dir = tmp_path / "corpus"
+    result = synth.synthesize_pairs(
+        _linked_targets(4), data_dir, [_fake("keeps-links")], drop_invented_anchors=True
+    )
+    assert result.written == 4 and result.skipped_invented_anchors == 0
+
+
+def test_is_anchor_faithful_selects_over_an_existing_corpus(tmp_path):
+    """Step 2's other half: the corpus is a frozen record, so pairs already
+    written are filtered out of the training SIGNAL rather than migrated away."""
+    from stylebot import infer
+    from stylebot.jsonl import iter_jsonl
+
+    data_dir = tmp_path / "corpus"
+    synth.synthesize_pairs(_linked_targets(2), data_dir, [_delinker("dropper")])
+    synth.synthesize_pairs(_linked_targets(2), data_dir, [_fake("keeps-links")])
+    records = list(iter_jsonl(data_dir / "pairs.jsonl"))
+    assert len(records) == 4
+    kept = [r for r in records if infer.is_anchor_faithful(r)]
+    assert len(kept) == 2
+    assert all(r["meta"]["generator"] == "keeps-links" for r in kept)
+    # The name lands in the training manifest, which a lambda could not do.
+    assert infer.is_anchor_faithful.__name__ == "is_anchor_faithful"

@@ -229,10 +229,16 @@ class RewriteResult:
     n_chunks: int = 0
     n_candidates: int = 0  # total samples drawn (n_chunks * best_of)
     n_kept_input: int = 0  # chunks where no candidate beat the input (guard)
-    n_anchor_rejected: int = 0  # samples disqualified for losing links/citations
+    n_anchor_rejected: int = 0  # samples disqualified for anchor damage, either cause
+    n_anchor_lost: int = 0  # ... of those, samples that DROPPED a link/citation
+    n_anchor_invented: int = 0  # ... of those, samples that CONJURED one (can overlap)
     n_truncated: int = 0  # samples disqualified for collapsing in length
     chunk_chars: list[tuple[int, int]] = field(default_factory=list)  # (in, out)
     decisions: list[str] = field(default_factory=list)  # one human line per chunk
+    # Per-chunk anchor accounting, one entry per prose chunk — see
+    # `write_anchor_audit`. Held rather than printed because the headline counts
+    # answer "did this run go wrong" and this answers "how does the model behave".
+    anchor_audit: list[dict] = field(default_factory=list)
 
 
 # A rewrite shorter than this fraction of its input did not compress — it
@@ -314,11 +320,109 @@ def content_anchors(text: str, *, inline: bool = False) -> dict[str, int]:
     return counts
 
 
-def missing_anchors(source: str, candidate: str, *, inline: bool = False) -> list[str]:
-    """Anchors present in `source` that `candidate` lost (count decreased)."""
+def anchor_delta(
+    source: str, candidate: str, *, inline: bool = False
+) -> tuple[list[str], list[str]]:
+    """`(lost, gained)` — anchors `candidate` dropped, and ones it conjured.
+
+    The guard was one-directional until 2026-08-12 and checked only the half the
+    corpus does NOT teach: measured over the 4,595-pair corpus, 115 pairs (3.0%
+    of the anchor-bearing ones) hand the styler a target that dropped an anchor,
+    while 876 (19.1% of the corpus) hand it a target carrying anchors its source
+    never had — half of those external URLs whose destination no model can know.
+    Reverse-edit synthesis produces that directly: a generator that drops a link
+    while "improving" a paragraph becomes, after the swap, an example reading
+    *given text without links, produce text with these links*
+    (`_plans/anchor-integrity.md`, stylebot#1).
+
+    The two halves use deliberately different rules, because the harms are not
+    mirror images:
+
+    - LOST is a count DECREASE. Each occurrence anchors a separate claim, so
+      dropping one of two citations of the same key still leaves a sentence
+      standing on nothing.
+    - GAINED is key ABSENCE, not a count increase. What this guards against is a
+      destination the model invented and cannot have verified; repeating a URL
+      the source supplied invents nothing, because it points somewhere the
+      source already vouched for. A rewrite that splits one sentence in two and
+      re-cites the same link is a legitimate edit, and a count rule would reject
+      it.
+    """
     have = content_anchors(candidate, inline=inline)
     want = content_anchors(source, inline=inline)
-    return [key for key, n in want.items() if have.get(key, 0) < n]
+    lost = [key for key, n in want.items() if have.get(key, 0) < n]
+    gained = [key for key in have if key not in want]
+    return lost, gained
+
+
+def missing_anchors(source: str, candidate: str, *, inline: bool = False) -> list[str]:
+    """Anchors present in `source` that `candidate` lost (count decreased)."""
+    return anchor_delta(source, candidate, inline=inline)[0]
+
+
+def invented_anchors(source: str, candidate: str, *, inline: bool = False) -> list[str]:
+    """Anchors `candidate` carries that `source` never had at all."""
+    return anchor_delta(source, candidate, inline=inline)[1]
+
+
+def invents_anchors(record: dict, *, inline: bool = False) -> bool:
+    """True if a pair record's Dan-side target conjures anchors its slop lacks.
+
+    The corpus-side face of `anchor_delta`: such a pair is an explicit lesson in
+    fabricating links, so it is what the synth write-gate drops
+    (`--drop-invented-anchors`) and what `is_anchor_faithful` filters out of a
+    training assembly.
+    """
+    from stylebot.pairs import extract_slop, extract_target
+
+    return bool(invented_anchors(extract_slop(record), extract_target(record), inline=inline))
+
+
+def is_anchor_faithful(record: dict) -> bool:
+    """Pair-level `selector` for `train.assemble_training_corpus`: keep pairs
+    whose target invents no anchor.
+
+    Named rather than a lambda because `assemble_training_corpus` records
+    `selector.__name__` in the run manifest — a run filtered this way should say
+    so. The corpus is a frozen record, so the 876 offending pairs stay on disk
+    as evidence and are excluded from the training SIGNAL here instead of being
+    migrated away (`_plans/anchor-integrity.md`, step 2).
+    """
+    return not invents_anchors(record)
+
+
+def _anchor_summary(keys: list[str]) -> str:
+    """The first three distinct anchors, elided — a decision line names enough
+    to recognise the damage, not enough to reproduce it."""
+    uniq = sorted(set(keys))
+    return f"{', '.join(uniq[:3])}{'…' if len(uniq) > 3 else ''}"
+
+
+def write_anchor_audit(
+    path: str | Path, result: RewriteResult, *, source: str | None = None
+) -> int:
+    """Append a run's per-chunk anchor accounting to a JSONL sidecar.
+
+    Step 0 of `_plans/anchor-integrity.md`, and the reason it comes first: the
+    anchor counters were computed, printed to stderr and then discarded on every
+    run, so the question the masking work is gated on — *how often does an
+    UNMASKED candidate lose or invent an anchor?* — could never be answered
+    without instrumenting a run specially. It is now answerable by joining these
+    lines: the denominator is every candidate not marked `truncated`, the
+    numerator is those with a non-empty `lost` or `gained`.
+
+    Append-only and in the idiom of the reasoning sidecar: one line per prose
+    chunk, carrying anchor KEYS and lengths but never candidate text, so the log
+    stays joinable without becoming a second copy of the draft. Returns the
+    number of lines written.
+    """
+    from stylebot.jsonl import append_jsonl
+    from stylebot.provenance import now_iso
+
+    stamp = now_iso()
+    for entry in result.anchor_audit:
+        append_jsonl(path, {"at": stamp, "source": source, **entry})
+    return len(result.anchor_audit)
 
 
 def detector_scorer(detector: Callable[[str], dict]) -> Callable[[str], float]:
@@ -347,9 +451,9 @@ def rewrite_candidates(
 
     Where `rewrite_text` decides (do-no-harm guard, anchors disqualify), this
     returns the full slate for a human to choose from: anchor violations FLAG
-    (`anchors_lost`) rather than disqualify, and the input's own score rides
-    along so the caller can show the delta. Serves the `rewrite` op of
-    `stylebot.serve` (see `_plans/decisions.md` D20).
+    (`anchors_lost`, `anchors_gained`) rather than disqualify, and the input's
+    own score rides along so the caller can show the delta. Serves the `rewrite`
+    op of `stylebot.serve` (see `_plans/decisions.md` D20).
 
     Single-chunk contract: `text` must be prose at training chunk scale —
     frontmatter, headings, or a protected block in the selection, or prose over
@@ -366,8 +470,8 @@ def rewrite_candidates(
     words is the worst outcome this package has.
 
     Returns `{"input_score": float|None, "n_sampled": int,
-              "candidates": [{"text", "score", "anchors_lost", "truncated",
-                              "identity"}, ...]}`
+              "candidates": [{"text", "score", "anchors_lost", "anchors_gained",
+                              "truncated", "identity"}, ...]}`
     in sampled order (the caller owns presentation order — and should log it;
     see the presentation-bias note in the plan). Duplicate sample texts are
     collapsed, so `n_sampled` keeps the draw count honest, and a candidate
@@ -408,21 +512,27 @@ def rewrite_candidates(
     cleaned = [pair_body(c, context).strip() for c in sampled if c and c.strip()]
     seen: set[str] = set()
     deduped = [c for c in cleaned if c and not (c in seen or seen.add(c))]
-    candidates = [
-        {
-            "text": c,
-            "score": scorer(c) if scorer is not None else None,
-            # Always inline here: this seam only FLAGS, and a human picks. It is
-            # precisely where a strict mask-preservation check earns its keep.
-            "anchors_lost": missing_anchors(chunk, c, inline=True),
-            # Flagged, not filtered, like anchors_lost: a human picking from the
-            # slate should be told "this one is cut off" in those words rather
-            # than left to read it as a very terse rewrite.
-            "truncated": is_truncated(chunk, c),
-            "identity": c == chunk,
-        }
-        for c in deduped
-    ]
+    candidates = []
+    for c in deduped:
+        # Always inline here: this seam only FLAGS, and a human picks. It is
+        # precisely where a strict mask-preservation check earns its keep.
+        lost, gained = anchor_delta(chunk, c, inline=True)
+        candidates.append(
+            {
+                "text": c,
+                "score": scorer(c) if scorer is not None else None,
+                "anchors_lost": lost,
+                # Invention is the likelier failure by ~6x in what the styler was
+                # trained on, and the one an editor is least able to catch by
+                # eye: a plausible URL reads exactly like a real one.
+                "anchors_gained": gained,
+                # Flagged, not filtered, like the anchor fields: a human picking
+                # from the slate should be told "this one is cut off" in those
+                # words rather than left to read it as a very terse rewrite.
+                "truncated": is_truncated(chunk, c),
+                "identity": c == chunk,
+            }
+        )
     return {
         "input_score": scorer(chunk) if scorer is not None else None,
         "n_sampled": len(sampled),
@@ -464,6 +574,13 @@ def rewrite_text(
     separately (`n_truncated`). Truncation causes anchor loss, so checking it
     second would file every cut-off sample as anchor damage; and it is the
     failure anchors cannot see at all when a chunk carries no link to lose.
+
+    The anchor guard runs in BOTH directions: a candidate is disqualified for
+    dropping a link/URL/citation the input had, and equally for inventing one
+    the input never named (`anchor_delta`). `n_anchor_rejected` counts the
+    disqualifications; `n_anchor_lost` / `n_anchor_invented` say which cause,
+    and can overlap when one sample does both. Per-chunk detail lands in
+    `result.anchor_audit` for `write_anchor_audit`.
 
     `inline_anchors` widens the anchor-integrity guard to inline code spans and
     inline math. Default off: measured across the 4624-pair corpus it triples
@@ -533,24 +650,50 @@ def rewrite_text(
         #    CANNOT catch on their own — a chunk carrying no link or citation
         #    has no anchor to lose, so a 30%-length sample of it would sail
         #    through the guard and ship.
-        # 2. ANCHOR INTEGRITY. A candidate that lost a link/URL/citation the
-        #    input had must not ship, however Dan it sounds.
+        # 2. ANCHOR INTEGRITY, in BOTH directions. A candidate that lost a
+        #    link/URL/citation the input had must not ship, however Dan it
+        #    sounds — and neither must one that invented a destination the input
+        #    never named, which is the failure the training corpus actively
+        #    teaches (see `anchor_delta`).
         lost: list[str] = []
+        invented: list[str] = []
+        n_lost = n_invented = 0  # SAMPLES, not anchors, for this chunk's decision line
         cut: list[float] = []  # length ratios of the truncated samples
         keep = []
         keep_idx: list[int] = []  # positions of `keep` entries within `raw`
+        audit: list[dict] = []
         for i, c in enumerate(raw):
             if is_truncated(chunk, c):
                 cut.append(len(c.strip()) / max(1, len(chunk.strip())))
                 result.n_truncated += 1
+                # Recorded as truncation with no anchor verdict at all: a cut
+                # sample's anchor delta measures the token budget, not the
+                # model's link handling, and averaging the two together is
+                # exactly what the audit exists to avoid.
+                audit.append({"truncated": True, "chars": len(c.strip())})
                 continue
-            gone = missing_anchors(chunk, c, inline=inline_anchors)
-            if gone:
+            gone, new = anchor_delta(chunk, c, inline=inline_anchors)
+            audit.append({"chars": len(c.strip()), "lost": gone, "gained": new})
+            if gone or new:
                 lost.extend(gone)
+                invented.extend(new)
+                n_lost += bool(gone)
+                n_invented += bool(new)
                 result.n_anchor_rejected += 1
+                result.n_anchor_lost += bool(gone)
+                result.n_anchor_invented += bool(new)
             else:
                 keep.append(c)
                 keep_idx.append(i)
+        result.anchor_audit.append(
+            {
+                "chunk": n,
+                "chunk_chars": len(chunk.strip()),
+                "inline": inline_anchors,
+                "source_anchors": sorted(content_anchors(chunk, inline=inline_anchors)),
+                "candidates": audit,
+            }
+        )
         raw_scores: list[float | None] = [None] * len(raw)
         chosen_idx: int | None = None
         if not keep:
@@ -564,13 +707,20 @@ def rewrite_text(
                     f"chunk {n}: kept input (all {len(raw)} sample(s) truncated, "
                     f"shortest {min(cut):.0%} of input — raise --max-tokens?)"
                 )
-            elif lost:
-                uniq = sorted(set(lost))
+            elif lost or invented:
+                # Loss and invention want different fixes (a better sample vs a
+                # model that stops making things up), and a chunk can suffer
+                # both, so they are reported side by side rather than merged
+                # into one "anchor damage" count.
+                bits = []
+                if lost:
+                    bits.append(f"{n_lost} sample(s) lost anchors: {_anchor_summary(lost)}")
+                if invented:
+                    bits.append(
+                        f"{n_invented} sample(s) invented anchors: {_anchor_summary(invented)}"
+                    )
                 also = f", {len(cut)} truncated" if cut else ""
-                result.decisions.append(
-                    f"chunk {n}: kept input ({len(lost)} sample(s) lost anchors: "
-                    f"{', '.join(uniq[:3])}{'…' if len(uniq) > 3 else ''}{also})"
-                )
+                result.decisions.append(f"chunk {n}: kept input ({'; '.join(bits)}{also})")
             else:
                 logger.warning(
                     "styler returned nothing for a %d-char chunk; kept input", len(chunk)

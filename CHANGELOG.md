@@ -46,6 +46,32 @@ are untouched.
 
 ### Fixed
 
+- **The anchor guard checked only half the failure, and the wrong half.**
+  `infer.missing_anchors` flagged a candidate that *dropped* a link, URL or
+  citation and said nothing about one that *invented* one — while the corpus
+  teaches invention ~7× more often. Measured over the 4,595 pairs through the
+  production path: 117 pairs (3.1% of the anchor-bearing ones) carry a target
+  that lost an anchor, **855 (18.6% of the corpus) carry one that gained an
+  anchor its source never had**, half of those external URLs whose destination
+  no model can know. Reverse-edit synthesis produces this directly — a generator
+  that drops a link while "improving" a paragraph becomes, after the swap, an
+  example reading *given text without links, produce text with these links*
+  ([stylebot#1](https://github.com/danmackinlay/stylebot/issues/1), D32).
+
+  `infer.anchor_delta(source, candidate)` now returns `(lost, gained)` and
+  `rewrite_text` disqualifies either. **The halves use different rules on
+  purpose**: loss is a count *decrease* (each occurrence anchors a separate
+  claim), invention is key *absence* (repeating a URL the source supplied
+  conjures nothing). `missing_anchors` and the new `invented_anchors` are thin
+  faces on it, so existing callers are unaffected.
+
+  **What to change if you read the counters:** `RewriteResult.n_anchor_rejected`
+  now counts disqualifications from *either* cause; `n_anchor_lost` and
+  `n_anchor_invented` say which, and overlap when one sample does both.
+  `rewrite_candidates` grew an `anchors_gained` key beside `anchors_lost` and
+  still flags rather than rejects — that seam hands a slate to a human, who is
+  the one able to tell a real URL from a plausible one.
+
 - **`infer.rewrite_candidates` blamed the chunk budget for an empty selection** —
   `""` reported as "selection is 0 chars — over the 1500-char chunk budget".
   Library-API only: `serve`'s rewrite op already rejects empty text, so the
@@ -141,6 +167,26 @@ are untouched.
   changed.**
 
 ### Added
+
+- **`ai-style run --anchor-log PATH`** — appends per-chunk anchor accounting to
+  a JSONL sidecar (`infer.write_anchor_audit`, populated from
+  `RewriteResult.anchor_audit`). Anchor keys and lengths only, never candidate
+  text, so it stays joinable without becoming a second copy of the draft. The
+  counters were computed, printed to stderr and discarded on every run, which
+  is why the question the masking work is gated on — *how often does an
+  unmasked candidate lose or invent an anchor?* — had never been answered.
+  Denominator: candidates not marked `truncated`. Numerator: those with a
+  non-empty `lost` or `gained`. A truncated sample gets no anchor verdict at
+  all, since its delta measures the token budget rather than the model.
+
+- **`ai-style synth --drop-invented-anchors`** — write-gate in the
+  `--max-transform-sim` idiom (count loudly as `skipped_invented_anchors`, write
+  nothing, leave the cell un-keyed so a re-run retries it) for pairs whose target
+  carries an anchor its slop never had. Off by default: the gate is newer than
+  the corpus. For the 855 pairs already written, `infer.is_anchor_faithful` is a
+  `selector` for `train.assemble_training_corpus` — the corpus is a frozen
+  record, so they are excluded from the training *signal* rather than migrated
+  away, and `_synth_key` is untouched.
 
 - **`stylebot.export` / `ai-style merge-adapter`** — merges a trained LoRA
   adapter back into its base weights, emitting one HF checkpoint a local

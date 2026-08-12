@@ -215,6 +215,99 @@ def test_anchor_guard_reverts_when_all_samples_lose_content():
     assert "example.org" in result.decisions[0]
 
 
+def test_anchor_guard_rejects_invention():
+    """The half the guard was blind to until 2026-08-12, and the half the
+    training corpus actively teaches: a candidate conjuring a URL the input
+    never named is disqualified however Dan it sounds (stylebot#1)."""
+    chunk = "The tinker cookbook merges the adapter back into the base weights."
+
+    def candidates(messages, num_samples=1):
+        return [
+            "The [tinker cookbook](https://not-a-real.example/docs) merges it back.",
+            "tinker-cookbook merges the adapter back into the base weights.",
+        ]
+
+    # The fabricating candidate would win on voice alone.
+    scores = {
+        "The [tinker cookbook](https://not-a-real.example/docs) merges it back.": 0.1,
+        "tinker-cookbook merges the adapter back into the base weights.": 0.3,
+        chunk: 0.6,
+    }
+    result = infer.rewrite_text(chunk, candidates, best_of=2, scorer=scores.__getitem__)
+    assert "not-a-real.example" not in result.text
+    assert result.n_anchor_rejected == 1
+    assert result.n_anchor_invented == 1 and result.n_anchor_lost == 0
+
+
+def test_anchor_guard_reverts_and_names_invention():
+    chunk = "Read the notes."
+    result = infer.rewrite_text(
+        chunk,
+        lambda m, num_samples=1: ["Read [the notes](https://made-up.example/n)."],
+    )
+    assert result.text == chunk
+    assert result.n_kept_input == 1 and result.n_anchor_rejected == 1
+    # Named as invention, not filed under loss: the two want different fixes.
+    assert "invented anchors" in result.decisions[0]
+    assert "made-up.example" in result.decisions[0]
+
+
+def test_repeating_a_source_anchor_is_not_invention():
+    """The case the one-directional check never had to answer. A count increase
+    on a key the source already carried points somewhere the source vouched for,
+    so splitting a sentence and re-citing the same link is a legitimate edit."""
+    chunk = "See [the notes](./n.qmd) for the argument and the numbers."
+    twice = "See [the notes](./n.qmd) for the argument. See [the notes](./n.qmd) for numbers."
+    assert infer.invented_anchors(chunk, twice) == []
+    result = infer.rewrite_text(chunk, lambda m, num_samples=1: [twice])
+    assert result.text == twice
+    assert result.n_anchor_rejected == 0
+
+
+def test_anchor_guard_counts_both_causes_for_one_sample():
+    """Loss and invention overlap rather than partition: a sample that swaps one
+    link for another did both, and `n_anchor_rejected` must not double-count."""
+    chunk = "Read [the notes](./real.qmd)."
+    result = infer.rewrite_text(
+        chunk,
+        lambda m, num_samples=1: ["Read [the notes](https://fake.example/x)."],
+    )
+    assert result.n_anchor_rejected == 1
+    assert result.n_anchor_lost == 1 and result.n_anchor_invented == 1
+    assert "lost anchors" in result.decisions[0] and "invented anchors" in result.decisions[0]
+
+
+def test_anchor_audit_records_every_candidate(tmp_path):
+    """Step 0 of `_plans/anchor-integrity.md`: the counters must survive the run.
+    The denominator is candidates not marked truncated; the numerator is those
+    with a non-empty lost/gained."""
+    chunk = "Read [the notes](./real.qmd) and think about it for a while, honestly."
+    result = infer.rewrite_text(
+        chunk,
+        lambda m, num_samples=3: [
+            "Read [the notes](./real.qmd); think.",  # clean
+            "Read [the notes](https://fake.example/x); think about it a while.",  # invented + lost
+            "Short.",  # truncated
+        ],
+        best_of=3,
+    )
+    (entry,) = result.anchor_audit
+    assert entry["chunk"] == 1 and entry["source_anchors"] == ["./real.qmd"]
+    clean, damaged, cut = entry["candidates"]
+    assert clean["lost"] == [] and clean["gained"] == []
+    assert damaged["gained"] == ["https://fake.example/x"] and damaged["lost"] == ["./real.qmd"]
+    # A truncated sample gets no anchor verdict at all: its delta measures the
+    # token budget, not the model's link handling.
+    assert cut == {"truncated": True, "chars": len("Short.")}
+
+    path = tmp_path / "anchors.jsonl"
+    assert infer.write_anchor_audit(path, result, source="draft.qmd") == 1
+    (line,) = [json.loads(x) for x in path.read_text().splitlines()]
+    assert line["source"] == "draft.qmd" and line["at"] and line["chunk"] == 1
+    # Anchor keys and lengths, never candidate text: joinable, not a second copy.
+    assert "text" not in json.dumps(line["candidates"])
+
+
 def test_on_decision_reports_candidates_scores_and_choice():
     """The preference seam: per prose chunk the hook sees the candidate
     texts, aligned scores, and which one shipped."""
@@ -438,11 +531,24 @@ def test_rewrite_candidates_scores_and_flags_anchors():
         "text": "See [that](./a.qmd). Fine.",
         "score": 0.2,
         "anchors_lost": [],
+        "anchors_gained": [],
         "truncated": False,
         "identity": False,
     }
     # Anchor loss FLAGS, never disqualifies — the human decides.
     assert dropped["anchors_lost"] == ["./a.qmd"]
+
+
+def test_rewrite_candidates_flags_invention_without_disqualifying():
+    """The editor seam flags BOTH directions and rejects neither: a human
+    picking from the slate is the one who can tell a real URL from a plausible
+    one, which is exactly why `rewrite_text` may not make this call itself."""
+    chunk = "See that page and slop besides."
+    styler = lambda m, num_samples=1: ["See [that page](https://invented.example/x)."]  # noqa: E731
+    out = infer.rewrite_candidates(chunk, styler, best_of=1)
+    (only,) = out["candidates"]
+    assert only["anchors_gained"] == ["https://invented.example/x"]
+    assert only["anchors_lost"] == []
 
 
 def test_rewrite_candidates_dedupes_and_flags_identity():

@@ -598,6 +598,17 @@ class CorpusOpts:
         "this — a manically inflating model (qwen3-32b ran 4-7x) teaches manic deletion. "
         "Counted as skipped_inflated; cells retry next run. Unset = record everything.",
     )
+    drop_invented_anchors: bool = opt(
+        False,
+        "--drop-invented-anchors/--keep-invented-anchors",
+        show_default=True,
+        help="Fabrication gate: drop any generated pair whose Dan-side target carries a link, "
+        "URL or citation key its slop side never had. The generator dropped the link while "
+        "'improving' the passage, and reversing the edit turns that into a lesson in "
+        "conjuring destinations the model cannot know — the most-taught failure in the "
+        "corpus (19.1% of pairs) and the one nothing checked until 0.3.0. Counted as "
+        "skipped_invented_anchors; cells retry next run.",
+    )
 
 
 # The shared surface, keyed by the parameter each bundle binds to downstream:
@@ -896,6 +907,13 @@ def _report_result(
             "a persistently inflating model should leave the roster",
             level="note",
         )
+    if result.skipped_invented_anchors:
+        emit(
+            f"  {result.skipped_invented_anchors} anchor-inventing pair(s) DROPPED "
+            "(target carries links the slop never had) — paid for, not written; "
+            "the reverse-edit swap would teach the styler to fabricate them",
+            level="note",
+        )
     for name, count in sorted(result.per_generator.items()):
         emit(f"  {name}: {count}{_model_economics(result.model_stats.get(name))}")
     if result.total_cost:
@@ -915,6 +933,7 @@ def _report_result(
         - result.written
         - result.skipped_degenerate
         - result.skipped_inflated
+        - result.skipped_invented_anchors
         - len(result.errors)
     )
     if unattempted > 0:
@@ -1153,6 +1172,7 @@ def run_synth(
         skip_covered=corpus.skip_covered,
         max_transform_sim=corpus.max_transform_sim,
         max_length_ratio=corpus.max_length_ratio,
+        drop_invented_anchors=corpus.drop_invented_anchors,
     )
 
     _report_result(

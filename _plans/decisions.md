@@ -706,3 +706,48 @@ failure that does not announce itself. `check_adapter_scaling` refuses instead.
 **Re-evaluate if**: a second consumer wants the quantize/finalize stages, at
 which point they arrive as parameters (`strip_config_keys`,
 `chat_template_edit`) with the caller supplying the values — not as constants.
+
+## D32: the anchor guard is symmetric, but its two halves use different rules
+
+**Decision**: `infer.anchor_delta` returns `(lost, gained)`, and `rewrite_text`
+disqualifies a candidate for either. **Loss is a count decrease; invention is
+key absence.** The asymmetry is deliberate, not an oversight.
+
+The guard checked only loss until 2026-08-12 — the half the training corpus does
+*not* teach. Measured over the 4,595-pair corpus through the production path:
+117 pairs (3.1% of the anchor-bearing ones) hand the styler a target that
+dropped an anchor, while 855 (18.6% of the corpus) hand it one carrying anchors
+its source never had, half of those external URLs. Reverse-edit synthesis
+produces that directly: a generator that drops a link while "improving" a
+paragraph becomes, after the swap, an example reading *given text without links,
+produce text with these links*. The failure the data most encourages was the one
+nothing checked (stylebot#1, `_plans/anchor-integrity.md`).
+
+**Why the halves differ.** Each occurrence of an anchor supports a separate
+claim, so dropping one of two citations of the same key leaves a sentence
+standing on nothing — loss must be a count rule. What invention guards against
+is different: a destination the model conjured and cannot have verified.
+Repeating a URL the source supplied conjures nothing; it points somewhere the
+source already vouched for.
+
+**Rejected: count-increase for invention too**, for symmetry's own sake. It
+condemns a rewrite that splits one sentence in two and re-cites the same link —
+a legitimate edit — and over the real corpus it flags 17 pairs whose entire
+offence is citing a source-supplied URL twice. Consistency of *form* between the
+two rules would have cost accuracy on both.
+
+**Rejected: making `rewrite_candidates` reject as well.** That seam returns a
+slate for a human to pick from, and a human is exactly who can tell a real URL
+from a plausible one. It gained an `anchors_gained` flag beside `anchors_lost`
+and still disqualifies nothing (D20).
+
+**Rejected: migrating the 855 offending pairs out of `pairs.jsonl`.** The corpus
+is a frozen record. `synth --drop-invented-anchors` stops new ones being written;
+`infer.is_anchor_faithful` is a `selector` for `train.assemble_training_corpus`,
+so a training run excludes them from the *signal* while they stay on disk as
+evidence. No migration script, no re-keying — `_synth_key` is the resume
+identity for 4,140 synthetic pairs and touching it orphans the corpus.
+
+**Re-evaluate if**: `--anchor-log` data from real runs shows the styler damaging
+anchors often enough to justify the masking scheme in
+`_plans/placeholder-design-2026-08.md`, which is deliberately still unbuilt.

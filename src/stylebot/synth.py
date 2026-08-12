@@ -33,6 +33,7 @@ from stylebot.generators import (
     Generator,
     _normalize_gen_output,
 )
+from stylebot.infer import invented_anchors
 from stylebot.jsonl import append_jsonl, dumps_line, iter_jsonl
 from stylebot.pairs import build_pair_content, iter_pairs
 from stylebot.provenance import now_iso
@@ -277,6 +278,7 @@ class SynthResult:
     # run until it leaves the roster — these counts are the signal to act on.
     skipped_degenerate: int = 0  # identity: transform_sim > max_transform_sim
     skipped_inflated: int = 0  # inflation: length ratio > max_length_ratio
+    skipped_invented_anchors: int = 0  # fabrication: target carries anchors the slop lacks
     planned: int = 0  # (target, generator) assignments before dedup
     planned_sessions: int = 0  # sessions holding >=1 not-yet-generated turn
     errors: list[tuple[str, str]] = field(default_factory=list)  # (synth_key, message)
@@ -488,6 +490,7 @@ class _RunState:
     total: int  # pairs this run will attempt (for progress)
     max_transform_sim: float | None = None  # identity gate (None = off)
     max_length_ratio: float | None = None  # inflation gate (None = off)
+    drop_invented_anchors: bool = False  # fabrication gate (see `_gate_drop`)
     replicate: str = ""  # deliberate-resample label, keyed AND recorded
     done: int = 0
     on_progress: Callable[[int, int, SynthResult], None] | None = None
@@ -655,6 +658,15 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             # teach manic deletion.
             st.result.skipped_inflated += 1
             drop = f"length_ratio={ratio:.2f} > {st.max_length_ratio}"
+        elif st.drop_invented_anchors and (invented := invented_anchors(slop, turn.target.text)):
+            # Fabricated anchors: the generator dropped a link while "improving"
+            # the passage, and the reverse-edit swap turned that into an example
+            # reading *given text without links, produce text with these links*.
+            # The most-taught failure in the corpus and the one nothing checked
+            # (`_plans/anchor-integrity.md`).
+            st.result.skipped_invented_anchors += 1
+            uniq = sorted(set(invented))
+            drop = f"target invents {len(uniq)} anchor(s) absent from the slop: {uniq[0]}"
         if drop is not None:
             # Count loudly, record the spend, write nothing — the cell stays
             # missing, so a re-run retries it.
@@ -722,6 +734,7 @@ def synthesize_pairs(
     skip_covered: bool = False,
     max_transform_sim: float | None = None,
     max_length_ratio: float | None = None,
+    drop_invented_anchors: bool = False,
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
@@ -743,6 +756,17 @@ def synthesize_pairs(
     `min(session_budget or session_max_tokens, SESSION_WINDOW_FILL_CAP × window)`
     estimated prompt tokens, and turns it couldn't run REFLOW into fresh sessions
     rather than being dropped.
+
+    **Hygiene gates** all share one shape: count loudly, write nothing, leave
+    the cell un-keyed so a re-run retries it and a consistently failing model
+    burns visible spend until it leaves the roster. `max_transform_sim` catches
+    identity output, `max_length_ratio` catches inflation, and
+    `drop_invented_anchors` catches fabrication — a target carrying a link, URL
+    or citation its slop never had, which after the reverse-edit swap teaches
+    the styler to conjure destinations it cannot know. Off by default because it
+    is the newest and the corpus predates it; `infer.is_anchor_faithful` is the
+    matching `selector` for filtering pairs already written
+    (`_plans/anchor-integrity.md`).
 
     Heading `context` is prepended verbatim to both sides of the pair while slop
     is generated from the body only, so the heading is never paraphrased;
@@ -813,6 +837,7 @@ def synthesize_pairs(
         total=len(missing),
         max_transform_sim=max_transform_sim,
         max_length_ratio=max_length_ratio,
+        drop_invented_anchors=drop_invented_anchors,
         replicate=replicate,
         on_progress=on_progress,
         on_error=on_error,

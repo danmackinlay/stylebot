@@ -20,7 +20,8 @@ politely. They are the editor rewrite loop (`_plans/decisions.md` D20):
     -> {"id": 3, "op": "rewrite", "text": "...", "context": "## Heading",
         "best_of": 4}
     <- {"id": 3, "input_score": 0.52,
-        "candidates": [{"text": ..., "score": 0.31, "anchors_lost": []}, ...]}
+        "candidates": [{"text": ..., "score": 0.31, "anchors_lost": [],
+                        "anchors_gained": []}, ...]}
     -> {"id": 4, "op": "prefer", "decision": {...}}
     <- {"id": 4, "ok": true}
 

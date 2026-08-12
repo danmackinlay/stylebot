@@ -219,6 +219,37 @@ def test_run_strict_anchors_reaches_rewrite_text(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
 
 
+def test_run_anchor_log_writes_a_joinable_sidecar(tmp_path, monkeypatch):
+    """`--anchor-log` is the CLI face of step 0: the counters must outlive the
+    run, or the question masking is gated on stays unanswerable."""
+    from stylebot import infer
+
+    monkeypatch.setattr(
+        infer,
+        "openai_backend",
+        lambda *a, **k: (
+            lambda messages, num_samples=1: (
+                ["Read the notes, invented [here](https://fake.example/x)."] * num_samples
+            )
+        ),
+    )
+    doc = tmp_path / "d.qmd"
+    doc.write_text("Read [the notes](./real.qmd) whenever you get the chance.\n", encoding="utf-8")
+    log = tmp_path / "anchors.jsonl"
+    args = ["run", str(doc), "--backend", "openai", "--base-url", "http://x/v1", "--model", "m"]
+    result = CliRunner().invoke(
+        ai_style.main, [*args, "--anchor-log", str(log)], catch_exceptions=False
+    )
+    assert result.exit_code == 0, result.output
+    (line,) = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
+    assert line["source"] == str(doc)
+    assert line["source_anchors"] == ["./real.qmd"]
+    (cand,) = line["candidates"]
+    assert cand["lost"] == ["./real.qmd"] and cand["gained"] == ["https://fake.example/x"]
+    # And the run said so, by cause.
+    assert "1 lost, 1 invented" in result.output
+
+
 def test_config_require_key_is_actionable(monkeypatch):
     monkeypatch.delenv("DEFINITELY_UNSET_KEY", raising=False)
     with pytest.raises(RuntimeError) as excinfo:

@@ -20,22 +20,51 @@ a generator drops a link while rewriting — which it does often — the swap
 produces a training example reading *given text without links, produce text
 with these links*.
 
-Measured over the 4,595-pair corpus with `infer.content_anchors`' production
-semantics:
+Measured over the 4,595-pair corpus through the production path
+(`pairs.extract_slop` / `extract_target` → `infer.anchor_delta`):
 
-| | pairs | share of the 3,772 anchor-bearing pairs |
+| | pairs | share of the 3,775 anchor-bearing pairs |
 | --- | ---: | ---: |
-| identical anchor multiset | 2,781 | 73.7% |
-| target **lost** anchors | 115 | 3.0% ← the only case anything checks |
-| target **gained** anchors | 698 | 18.5% ← unchecked |
-| both | 178 | 4.7% |
+| identical anchor multiset | 2,803 | 74.3% |
+| target **lost** anchors only | 117 | 3.1% ← the only case anything checked |
+| target **gained** anchors only | 678 | 18.0% ← unchecked |
+| both | 177 | 4.7% |
 
-876 pairs (19.1% of the corpus) carry invented anchors, 2,119 instances:
-49.4% external URLs, 37.1% internal site links, 13.3% citation keys. **Roughly
+855 pairs (18.6% of the corpus) carry invented anchors, 2,062 instances:
+49.9% external URLs, 37.1% internal site links, 12.9% citation keys. **Roughly
 half of what the model is taught to conjure is an external URL whose target it
 cannot know.**
 
 The failure mode the data most encourages is the one nothing checks.
+
+> **Correction (2026-08-12).** The first draft of this briefing said 876 pairs
+> and 2,119 instances, from an ad-hoc script rather than the shipped code. The
+> production path gives 872 under that script's count-increase rule, and 855
+> under the rule that shipped, which treats a *repeated* anchor as faithful
+> rather than invented (17 pairs; see `anchor_delta`). The conclusion is
+> untouched — invention still outnumbers loss ~7:1 — but the numbers above are
+> the reproducible ones.
+
+## Status: steps 0-2 shipped 2026-08-12
+
+Steps 0, 1 and 2 below are **done**; the "current state" section that follows
+describes the tree as it was *before* them and is kept because the reasoning
+still explains why each piece exists. What landed:
+
+- **Step 0** — `RewriteResult.anchor_audit` + `infer.write_anchor_audit`, behind
+  `ai-style run --anchor-log PATH`. One JSONL line per prose chunk, carrying
+  anchor keys and lengths but never candidate text.
+- **Step 1** — `infer.anchor_delta` returns `(lost, gained)`; `rewrite_text`
+  disqualifies either, counting causes apart (`n_anchor_lost`,
+  `n_anchor_invented`, overlapping inside `n_anchor_rejected`);
+  `rewrite_candidates` gained an `anchors_gained` flag and still rejects nothing.
+- **Step 2** — `ai-style synth --drop-invented-anchors` (off by default,
+  `SynthResult.skipped_invented_anchors`), and `infer.is_anchor_faithful` as the
+  `selector` for `train.assemble_training_corpus` over pairs already written.
+
+**Step 3 remains gated and unstarted**, which is the point: nothing about
+masking should be built until `--anchor-log` output from a real run says how
+often an unmasked candidate actually damages an anchor.
 
 ## Current state, verified 2026-08-11
 

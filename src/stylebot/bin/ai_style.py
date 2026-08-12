@@ -1380,6 +1380,14 @@ def merge_adapter_cmd(
     "candidate is rejected and the input is kept verbatim — hence off by default.",
 )
 @click.option(
+    "--anchor-log",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Append per-chunk anchor accounting to this JSONL (anchor keys and lengths, never "
+    "candidate text). The headline counts say whether a run went wrong; this says how the "
+    "model behaves, which is what decides whether masking is worth building at all "
+    "(`_plans/anchor-integrity.md`).",
+)
+@click.option(
     "--write",
     "write_in_place",
     is_flag=True,
@@ -1390,6 +1398,7 @@ def run_cmd(
     file: Path | None,
     best_of: int,
     strict_anchors: bool,
+    anchor_log: Path | None,
     write_in_place: bool,
     **kw,
 ) -> None:
@@ -1426,11 +1435,17 @@ def run_cmd(
     if scorer is not None:
         for line in result.decisions:
             click.echo(f"  {line}", err=True)
+    if anchor_log is not None:
+        n = infer.write_anchor_audit(anchor_log, result, source=str(file) if file else None)
+        click.echo(f"  {n} chunk(s) of anchor accounting -> {anchor_log}", err=True)
     click.echo(
         f"[{result.n_chunks} chunk(s), {result.n_candidates} sample(s)"
         + (f", {result.n_kept_input} kept as input" if result.n_kept_input else "")
         + (
-            f", {result.n_anchor_rejected} sample(s) rejected for anchor loss"
+            # Broken out by cause: losing a link wants a better sample, inventing
+            # one wants a model that stops making things up.
+            f", {result.n_anchor_rejected} sample(s) rejected for anchor damage "
+            f"({result.n_anchor_lost} lost, {result.n_anchor_invented} invented)"
             if result.n_anchor_rejected
             else ""
         )

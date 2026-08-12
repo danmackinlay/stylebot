@@ -181,13 +181,14 @@ def test_run_synth_takes_bundles_only():
 
 
 def test_synth_command_surface_is_exactly_the_bundles_plus_its_own():
-    # Pins the 50 (54 until the gpt/local preset path went, 2026-08-10): the
-    # shared surface is the bundles' flag-bearing fields and nothing else, and
-    # `synth` adds only its own selection/provenance flags.
+    # Pins the 51 (54 until the gpt/local preset path went, 2026-08-10; 50 until
+    # --drop-invented-anchors landed, 2026-08-12): the shared surface is the
+    # bundles' flag-bearing fields and nothing else, and `synth` adds only its
+    # own selection/provenance flags.
     params = [p for p in ai_style_main.commands["synth"].params if isinstance(p, click.Option)]
     own = {"blog_root", "data_dir", "field", "max_level", "select_all", "glob", "tags"}
     shared = {f.name for bundle in synth_cli.DEFAULT_BUNDLES for f, _, _ in cli_fields(bundle)}
-    assert len(params) == 50
+    assert len(params) == 51
     assert {p.name for p in params} - own == shared
     # Library-only fields stay off the CLI — that is what omitting opt() means.
     assert {"session_budgets", "report_title"} & {p.name for p in params} == set()

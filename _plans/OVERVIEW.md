@@ -197,16 +197,19 @@ live in the blog's `_training_pairs/RUNBOOK.md`; durable decisions in
   contrast against, and no way to back-fill one. Generating the v2 batches is
   itself the unblock; consider re-synthesising a labelled 1500 slice so the
   baseline arm is stamped rather than assumed (`findings.md`).
-- **Anchor integrity** ([stylebot#1](https://github.com/danmackinlay/stylebot/issues/1)):
-  the reverse-edit swap teaches the styler to **invent** links — 876 pairs
-  (19.1%) have a target carrying anchors the source lacks, half of them
-  external URLs — while `infer.missing_anchors` only checks anchors that were
-  **lost**. The failure the data most encourages is the one nothing checks.
-  Hand-off briefing with verified code state, ordered work and acceptance
-  criteria: [`anchor-integrity.md`](anchor-integrity.md). Step 0 is persisting
-  `n_anchor_rejected`, which is computed and discarded on every run today and
-  would decide whether the masking work is needed at all
-  ([`placeholder-design-2026-08.md`](placeholder-design-2026-08.md)).
+- **Anchor integrity, step 3 only** ([stylebot#1](https://github.com/danmackinlay/stylebot/issues/1)):
+  the guard, the write-gate and the run-level audit log shipped 2026-08-12
+  ([`anchor-integrity.md`](anchor-integrity.md), D32); what is left is
+  **masking, and it is deliberately gated on data that does not exist yet**.
+  Run `ai-style run --anchor-log` over real drafts and answer "how often does an
+  unmasked candidate lose or invent an anchor?" before building any of
+  [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md) — its own
+  conclusion was that a good enough decoder makes masking a vote of no
+  confidence the data may not justify. **That is a live outcome. Do not
+  pre-empt it.** Also open, and independent of masking: the blog-side masker in
+  `livingthing.workflow_style` is mechanism sitting outside the package whose
+  `STYLE_SYSTEM` promises `〈MASKED_*〉` preservation — the same generic/policy
+  inversion `merge_adapter` resolved for MLX export.
 - **Fireworks serving**: PEFT upload + scale-to-zero, retry on
   `503 DEPLOYMENT_SCALING_UP`; acceptance is the same chat-template parity test
   the MLX exit passed (D8 / `findings.md`).
