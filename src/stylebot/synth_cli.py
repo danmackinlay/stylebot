@@ -610,6 +610,16 @@ class CorpusOpts:
         "skipped_invented_anchors; cells retry next run. On by default (unlike the two "
         "threshold gates) because there is no number to tune and no defensible other side.",
     )
+    gen_retries: int = opt(
+        synth.DEFAULT_GEN_RETRIES,
+        "--gen-retries",
+        show_default=True,
+        type=int,
+        help="Extra draws after a TRANSIENT upstream failure (502/429/timeout), asking for a "
+        "fresh provider each time. Not the same as --gate-retries, which redraws a draw that "
+        "ARRIVED and was rejected on quality: an unreachable provider and a careless one want "
+        "different remedies, and pooling the counts hides which is eating a run. 0 disables.",
+    )
     gate_retries: int = opt(
         0,
         "--gate-retries",
@@ -927,6 +937,15 @@ def _report_result(
             "pairs would teach the styler to invent links",
             level="note",
         )
+    if result.gen_retries_spent or result.errors_by_generator:
+        # The split the printed-and-discarded errors could never show: how much
+        # of a run's shortfall is an unreachable provider versus a careless one.
+        lost = sum(result.errors_by_generator.values())
+        emit(
+            f"  {result.gen_retries_spent} transient upstream failure(s) survived by redrawing"
+            + (f"; {lost} cell(s) lost to one anyway" if lost else "")
+            + (" — see lost_draws.jsonl (kind=error)" if lost else "")
+        )
     if result.redrawn_cells:
         # The redraw budget's own report card: cells recovered vs draws spent.
         # A low recovery rate means the gate is finding something structural
@@ -1212,6 +1231,7 @@ def run_synth(
         max_length_ratio=corpus.max_length_ratio,
         drop_invented_anchors=corpus.drop_invented_anchors,
         gate_retries=corpus.gate_retries,
+        gen_retries=corpus.gen_retries,
     )
 
     _report_result(

@@ -707,9 +707,10 @@ def test_gate_drops_sidecar_recovers_rate_and_wasted_spend(tmp_path):
     assert result.written == 0 and result.skipped_invented_anchors == 3
     assert result.drops_by_generator == {"dropper": 6}  # 3 cells x (1 draw + 1 redraw)
 
-    rows = [json.loads(x) for x in (data_dir / "gate_drops.jsonl").read_text().splitlines()]
+    rows = [json.loads(x) for x in (data_dir / "lost_draws.jsonl").read_text().splitlines()]
     assert len(rows) == 6
     assert {r["gate"] for r in rows} == {"skipped_invented_anchors"}
+    assert {r["kind"] for r in rows} == {"gate"}
     assert {r["generator"] for r in rows} == {"dropper"}
     # A redrawn draw is marked as such; the last attempt per cell is not.
     assert sorted(r["redrawn"] for r in rows) == [False] * 3 + [True] * 3
@@ -718,6 +719,106 @@ def test_gate_drops_sidecar_recovers_rate_and_wasted_spend(tmp_path):
     assert sum(r["cost"] for r in rows) == pytest.approx(0.024)
     # And the reason blames the generator, not Dan's prose.
     assert all(r["reason"].startswith("generator deleted") for r in rows)
+
+
+class _Boom(Exception):
+    """Stands in for `openai.APIStatusError`, which `_is_transient` duck-types."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f"Error code: {status} - Provider returned error")
+        self.status_code = status
+
+
+def test_transient_provider_error_is_redrawn(tmp_path, monkeypatch):
+    """The 502-from-Cloudflare case. One flaky draw must not cost the cell —
+    that is the difference between finishing a run and re-running it."""
+    monkeypatch.setattr(synth.asyncio, "sleep", lambda _d: asyncio_noop())
+    calls = {"n": 0}
+
+    def flaky(text: str) -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _Boom(502)
+        return "[slop] " + text
+
+    result = synth.synthesize_pairs(
+        _targets(1), tmp_path / "c", [synth.Generator(name="flaky", generate=flaky)]
+    )
+    assert result.written == 1 and result.errors == []
+    assert result.gen_retries_spent == 1 and calls["n"] == 2
+
+
+def test_permanent_error_is_not_retried(tmp_path):
+    """A 400 is our bug or our config; retrying it just burns budget slower."""
+    calls = {"n": 0}
+
+    def broken(text: str) -> str:
+        calls["n"] += 1
+        raise _Boom(400)
+
+    result = synth.synthesize_pairs(
+        _targets(1), tmp_path / "c", [synth.Generator(name="broken", generate=broken)]
+    )
+    assert result.written == 0 and len(result.errors) == 1
+    assert calls["n"] == 1  # exactly one attempt
+    assert result.gen_retries_spent == 0
+
+
+def test_error_lands_in_the_lost_draws_sidecar(tmp_path):
+    """Answers 'is this run dying of QA or of provider errors?' — the question
+    that was unanswerable while both were printed to stderr and discarded."""
+    import json
+
+    data_dir = tmp_path / "c"
+
+    def broken(text: str) -> str:
+        raise _Boom(400)
+
+    synth.synthesize_pairs(_targets(2), data_dir, [synth.Generator(name="broken", generate=broken)])
+    rows = [json.loads(x) for x in (data_dir / "lost_draws.jsonl").read_text().splitlines()]
+    assert len(rows) == 2
+    assert {r["kind"] for r in rows} == {"error"}
+    assert all(r["gate"] is None for r in rows)
+    assert all("400" in r["reason"] for r in rows)
+
+
+def test_gate_redraw_failure_does_not_cost_the_session(tmp_path):
+    """Regression, 2026-08-12: a provider error DURING a gate redraw used to
+    abandon every remaining turn, turning one failure into a session-wide loss.
+    It must drop only the cell it was redrawing.
+
+    The redraw raises a PERMANENT error on purpose — a transient one would be
+    retried by `_draw` and never reach the give-up path this pins."""
+    seen = {"n": 0}
+
+    def gen(text: str, history=None) -> str:
+        seen["n"] += 1
+        if seen["n"] == 1:  # first cell: a gated draw, so a redraw is attempted
+            return "[slop] " + text.replace("[docs](./d.qmd)", "docs")
+        if seen["n"] == 2:  # ... and the redraw dies unrecoverably
+            raise _Boom(400)
+        return "[slop] " + text  # every later cell is fine
+
+    result = synth.synthesize_pairs(
+        _linked_targets(3),
+        tmp_path / "c",
+        [synth.Generator(name="flaky", generate=gen)],
+        gate_retries=1,
+        session_turns=8,
+    )
+    # The first cell is lost to the gate; the other two still get written.
+    assert result.written == 2
+    assert result.skipped_invented_anchors == 1
+    assert result.errors == []  # the session was not abandoned
+
+
+def asyncio_noop():
+    """An awaitable that returns immediately — keeps backoff out of test time."""
+
+    async def _noop():
+        return None
+
+    return _noop()
 
 
 def test_gate_retries_give_up_and_still_drop(tmp_path):

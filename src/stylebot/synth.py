@@ -89,6 +89,18 @@ def transform_similarity(a: str, b: str) -> float:
 # context window: end-of-window truncation and degraded attention are failure
 # modes, not covariates worth sampling.
 SESSION_WINDOW_FILL_CAP = 0.8
+# Extra draws after a TRANSIENT upstream failure (502/429/timeout), and the
+# first backoff between them — doubling thereafter. Distinct from
+# `gate_retries`, which redraws a draw that ARRIVED and was rejected on quality:
+# these two failures want different remedies and the counts must not be pooled.
+#
+# 2 (three attempts) because the fix that works is re-pinning the provider, not
+# waiting: the openai SDK already retries the same request, and a `502 Provider
+# returned error` means the upstream OpenRouter chose is sick, so attempts 2 and
+# 3 ask for a different one. Backoff starts short for the same reason — a synth
+# run is thousands of independent cells with other work to do.
+DEFAULT_GEN_RETRIES = 2
+_RETRY_BACKOFF_SECS = 2.0
 # Default per-session prompt-token budget, same for every model (cost grows
 # ~quadratically with it). Per-model overrides go on Generator.session_budget.
 DEFAULT_SESSION_MAX_TOKENS = 32_000
@@ -299,6 +311,12 @@ class SynthResult:
     # what says whether an arm belongs on the roster: llama-3.3-70b left it on
     # exactly this number, and no other gate could see the defect.
     drops_by_generator: dict[str, int] = field(default_factory=dict)
+    # Transient upstream failures survived, and cells lost to one anyway. A run
+    # that spends many retries and still errors is looking at a sick provider,
+    # not a sick config — the distinction the printed-and-discarded errors could
+    # never make (`lost_draws.jsonl`, kind="error").
+    gen_retries_spent: int = 0
+    errors_by_generator: dict[str, int] = field(default_factory=dict)
     planned: int = 0  # (target, generator) assignments before dedup
     planned_sessions: int = 0  # sessions holding >=1 not-yet-generated turn
     errors: list[tuple[str, str]] = field(default_factory=list)  # (synth_key, message)
@@ -512,6 +530,7 @@ class _RunState:
     max_length_ratio: float | None = None  # inflation gate (None = off)
     drop_invented_anchors: bool = True  # fabrication gate (see `_gate_verdict`)
     gate_retries: int = 0  # extra draws to spend clearing a gate before dropping
+    gen_retries: int = DEFAULT_GEN_RETRIES  # extra draws after a TRANSIENT upstream failure
     replicate: str = ""  # deliberate-resample label, keyed AND recorded
     done: int = 0
     on_progress: Callable[[int, int, SynthResult], None] | None = None
@@ -589,18 +608,59 @@ def _gate_verdict(slop: str, target_text: str, st: _RunState) -> tuple[str, str]
     return None
 
 
-def _record_gate_drop(
+class _EmptyDraw(RuntimeError):
+    """A provider answered a valid request with no content.
+
+    Its own type because it is a *transient upstream* failure wearing the
+    clothes of a programming error: retrying against a different provider
+    usually works, and `_is_transient` has to be able to tell it apart from a
+    genuine `RuntimeError`.
+    """
+
+
+# Upstream statuses worth another draw. Everything else (400/401/403/404 — a
+# malformed request, a bad key, a model that does not exist) is our bug or our
+# config, and retrying it just burns the budget more slowly.
+_TRANSIENT_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+_TRANSIENT_NAMES = frozenset(
+    {"APIConnectionError", "APITimeoutError", "ConnectionError", "TimeoutError"}
+)
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """Is this failure worth redrawing, or is it ours to fix?
+
+    Duck-typed on `status_code` rather than catching `openai.APIStatusError`:
+    the SDK is a lazy dependency here, and generators are an injected seam that
+    any backend may implement.
+    """
+    if isinstance(exc, _EmptyDraw):
+        return True
+    status = getattr(exc, "status_code", None)
+    if not isinstance(status, int):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int):
+        return status in _TRANSIENT_STATUS
+    return type(exc).__name__ in _TRANSIENT_NAMES
+
+
+def _record_lost_draw(
     data_dir: Path,
     turn: _Turn,
     gen: Generator,
     gen_meta: dict,
     *,
-    gate: str,
+    kind: str,
+    gate: str | None = None,
     reason: str,
     attempt: int,
     redrawn: bool,
 ) -> None:
-    """Append one rejected draw to `<data-dir>/gate_drops.jsonl`.
+    """Append one draw that produced no pair to `<data-dir>/lost_draws.jsonl`.
+
+    **One file for both ways a draw is lost**, `kind="gate"` and `kind="error"`,
+    because the operational question is which of the two is eating a run — and
+    that was unanswerable while both were printed to stderr and discarded.
 
     **A gated draw is paid for and never written**, so without this its cost and
     its very existence vanish when the run ends — the counters were computed,
@@ -616,13 +676,13 @@ def _record_gate_drop(
       is. `cost` here is the discarded spend.
 
     Unconditional, like `prompts.jsonl` and unlike the reasoning sidecar: it is
-    one short line per rejection, carries no prose, and is the only record that
+    one short line per lost draw, carries no prose, and is the only record that
     a paid draw happened. `attempt` is 0 for the first draw; `redrawn` says
     whether a further draw followed, so `redrawn=false` marks the cell as
-    actually dropped rather than recovered.
+    actually lost rather than recovered.
     """
     append_jsonl(
-        data_dir / "gate_drops.jsonl",
+        data_dir / "lost_draws.jsonl",
         {
             "at": now_iso(),
             "synth_key": turn.key,
@@ -630,6 +690,7 @@ def _record_gate_drop(
             "generator": gen.name,
             "slop_strategy": gen.strategy,
             "reasoning_effort": gen.reasoning_effort,
+            "kind": kind,
             "gate": gate,
             "reason": reason,
             "attempt": attempt,
@@ -718,32 +779,72 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
                 out = await out
             slop, gen_meta = _normalize_gen_output(out)
             if not slop.strip():
-                raise RuntimeError("generator returned empty output")
+                raise _EmptyDraw("generator returned empty output")
             return slop, gen_meta
 
+        async def _draw(_turn: _Turn = turn) -> tuple[str, dict]:
+            """One paid draw, retried across providers. Raises once it gives up.
+
+            **Re-pinning matters more than waiting.** OpenRouter routes to an
+            upstream and sticky routing keeps a session on whoever served turn
+            1, so when that upstream is sick (`502 Provider returned error` from
+            Cloudflare is the common one) a plain retry re-hits the same broken
+            box — which is why the openai SDK's own retries do not save this,
+            and why every attempt after the first asks for a fresh provider.
+
+            The backoff is there for the case re-pinning cannot fix, an upstream
+            being rate-limited or restarting; it is short because a synth run is
+            thousands of independent cells and there is other work to do.
+            """
+            nonlocal call
+            delay = _RETRY_BACKOFF_SECS
+            for attempt in range(st.gen_retries + 1):
+                try:
+                    return await _attempt(call)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    if attempt == st.gen_retries or not _is_transient(exc):
+                        raise
+                    st.result.gen_retries_spent += 1
+                    logger.info(
+                        "transient %s from %s, redrawing (%d/%d): %s",
+                        type(exc).__name__,
+                        gen.name,
+                        attempt + 1,
+                        st.gen_retries,
+                        _turn.key,
+                    )
+                    if gen.begin_session is not None:
+                        call = gen.begin_session()
+                    await asyncio.sleep(delay)
+                    delay *= 2
+            raise AssertionError("unreachable")  # pragma: no cover
+
         try:
-            slop, gen_meta = await _attempt(call)
+            slop, gen_meta = await _draw()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            # Sticky routing pins a session to whoever served turn 1, and some
-            # upstreams cannot serve the rest of it: OpenRouter replays assistant
-            # turns with a `reasoning_content` some providers reject, and others
-            # answer a valid request with empty content. Giving up here would
-            # lose the LATE turns, biasing window-position analysis toward low
-            # context fill — so re-pin onto a fresh provider once first.
-            if sess.session_id and gen.begin_session is not None:
-                try:
-                    call = gen.begin_session()
-                    slop, gen_meta = await _attempt(call)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as retry_exc:
-                    _fail(f"{type(retry_exc).__name__}: {retry_exc} (after re-pinning provider)")
-                    return list(sess.turns[pos + 1 :])
-            else:
-                _fail(f"{type(exc).__name__}: {exc}")
-                return list(sess.turns[pos + 1 :])
+            _fail(f"{type(exc).__name__}: {exc} (after {st.gen_retries + 1} attempt(s))")
+            _record_lost_draw(
+                st.data_dir,
+                turn,
+                gen,
+                {},
+                kind="error",
+                reason=f"{type(exc).__name__}: {exc}",
+                attempt=st.gen_retries,
+                redrawn=False,
+            )
+            st.result.errors_by_generator[gen.name] = (
+                st.result.errors_by_generator.get(gen.name, 0) + 1
+            )
+            # The REST of the session still reflows into fresh sessions rather
+            # than being dropped — sticky routing means a session that has
+            # started failing usually keeps failing, and the leftover turns
+            # deserve a healthy provider. Only this cell is lost.
+            return list(sess.turns[pos + 1 :])
         # Hygiene gates, checked BEFORE any bookkeeping so a rejected draw can be
         # redrawn cheaply. A gated sample is paid for whether or not it is
         # written, so a redraw costs no more than the drop already did — and it
@@ -757,11 +858,12 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
         verdict = _gate_verdict(slop, turn.target.text, st)
         redraws = 0
         while verdict is not None and redraws < st.gate_retries:
-            _record_gate_drop(
+            _record_lost_draw(
                 st.data_dir,
                 turn,
                 gen,
                 gen_meta,
+                kind="gate",
                 gate=verdict[0],
                 reason=verdict[1],
                 attempt=redraws,
@@ -782,12 +884,22 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
                 turn.key,
             )
             try:
-                slop, gen_meta = await _attempt(call)
+                slop, gen_meta = await _draw()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                _fail(f"{type(exc).__name__}: {exc} (on gate redraw {redraws})")
-                return list(sess.turns[pos + 1 :])
+                # A provider failing DURING a redraw must not cost the session.
+                # We already hold a gated draw, so the honest outcome is the one
+                # we would have had without retries: drop this cell, keep going.
+                # (Until 2026-08-12 this abandoned every remaining turn, which
+                # turned one transient 502 into a session-wide loss.)
+                logger.warning(
+                    "gate redraw %d failed (%s); dropping the cell and continuing: %s",
+                    redraws,
+                    type(exc).__name__,
+                    turn.key,
+                )
+                break
             verdict = _gate_verdict(slop, turn.target.text, st)
         if redraws:
             st.result.redrawn_cells += 1
@@ -824,11 +936,12 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             # un-keyed, so a re-run retries it.
             counter, reason = verdict
             setattr(st.result, counter, getattr(st.result, counter) + 1)
-            _record_gate_drop(
+            _record_lost_draw(
                 st.data_dir,
                 turn,
                 gen,
                 gen_meta,
+                kind="gate",
                 gate=counter,
                 reason=reason,
                 attempt=redraws,
@@ -907,6 +1020,7 @@ def synthesize_pairs(
     max_length_ratio: float | None = None,
     drop_invented_anchors: bool = True,
     gate_retries: int = 0,
+    gen_retries: int = DEFAULT_GEN_RETRIES,
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
@@ -1019,6 +1133,7 @@ def synthesize_pairs(
         max_length_ratio=max_length_ratio,
         drop_invented_anchors=drop_invented_anchors,
         gate_retries=gate_retries,
+        gen_retries=gen_retries,
         replicate=replicate,
         on_progress=on_progress,
         on_error=on_error,
