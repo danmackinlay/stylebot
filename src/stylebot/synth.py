@@ -279,6 +279,11 @@ class SynthResult:
     skipped_degenerate: int = 0  # identity: transform_sim > max_transform_sim
     skipped_inflated: int = 0  # inflation: length ratio > max_length_ratio
     skipped_invented_anchors: int = 0  # fabrication: target carries anchors the slop lacks
+    # Redraw accounting (`gate_retries`): a gated draw is paid for either way, so
+    # these are the cost of NOT letting a gate quietly bias coverage.
+    gate_redraws: int = 0  # extra paid draws spent clearing a gate
+    redrawn_cells: int = 0  # cells that needed at least one redraw
+    redraws_recovered: int = 0  # ... of those, ones that went on to be written
     planned: int = 0  # (target, generator) assignments before dedup
     planned_sessions: int = 0  # sessions holding >=1 not-yet-generated turn
     errors: list[tuple[str, str]] = field(default_factory=list)  # (synth_key, message)
@@ -490,7 +495,8 @@ class _RunState:
     total: int  # pairs this run will attempt (for progress)
     max_transform_sim: float | None = None  # identity gate (None = off)
     max_length_ratio: float | None = None  # inflation gate (None = off)
-    drop_invented_anchors: bool = False  # fabrication gate (see `_gate_drop`)
+    drop_invented_anchors: bool = True  # fabrication gate (see `_gate_verdict`)
+    gate_retries: int = 0  # extra draws to spend clearing a gate before dropping
     replicate: str = ""  # deliberate-resample label, keyed AND recorded
     done: int = 0
     on_progress: Callable[[int, int, SynthResult], None] | None = None
@@ -517,6 +523,37 @@ def _estimate_next_prompt(
     if last_prompt:
         return last_prompt + last_visible + len(next_text) // 4
     return (sum(len(m["content"]) for m in history) + len(next_text)) // 4
+
+
+def _gate_verdict(slop: str, target_text: str, st: _RunState) -> tuple[str, str] | None:
+    """`(counter_name, reason)` if a hygiene gate rejects this draw, else None.
+
+    Pure and record-free so it can run BEFORE the per-pair bookkeeping (reasoning
+    sidecar, session covariates), which a redrawn sample must not repeat.
+    """
+    if st.max_transform_sim is not None:
+        sim = transform_similarity(slop, target_text)
+        if sim > st.max_transform_sim:
+            # Identity output: the model returned (nearly) the input.
+            return "skipped_degenerate", f"transform_sim={sim:.3f} > {st.max_transform_sim}"
+    if st.max_length_ratio is not None and target_text:
+        ratio = len(slop) / len(target_text)
+        if ratio > st.max_length_ratio:
+            # Inflated output: slop several times the target length, which would
+            # teach manic deletion.
+            return "skipped_inflated", f"length_ratio={ratio:.2f} > {st.max_length_ratio}"
+    if st.drop_invented_anchors and (invented := invented_anchors(slop, target_text)):
+        # Fabricated anchors: the generator dropped a link while "improving" the
+        # passage, and the reverse-edit swap turns that into an example reading
+        # *given text without links, produce text with these links*. The
+        # most-taught failure in the corpus and the one nothing checked before
+        # 0.3.0 (`_plans/anchor-integrity.md`).
+        uniq = sorted(set(invented))
+        return (
+            "skipped_invented_anchors",
+            f"target invents {len(uniq)} anchor(s) absent from the slop: {uniq[0]}",
+        )
+    return None
 
 
 def _pop_reasoning_to_sidecar(
@@ -621,6 +658,43 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             else:
                 _fail(f"{type(exc).__name__}: {exc}")
                 return list(sess.turns[pos + 1 :])
+        # Hygiene gates, checked BEFORE any bookkeeping so a rejected draw can be
+        # redrawn cheaply. A gated sample is paid for whether or not it is
+        # written, so a redraw costs no more than the drop already did — and it
+        # usually clears: rejection is mostly a per-sample accident, not a
+        # property of the passage (measured 2026-08-12, anchor invention spans
+        # 1.3% to 51% BY ARM, and of the corpus targets that ever lost an anchor
+        # only 20% lost one under every arm that saw them). Without this, a gate
+        # silently biases coverage toward the passages models find easy —
+        # link-dense prose drops 33% of the time against 16% for single-link —
+        # which is exactly the prose anchor fidelity matters most for.
+        verdict = _gate_verdict(slop, turn.target.text, st)
+        redraws = 0
+        while verdict is not None and redraws < st.gate_retries:
+            redraws += 1
+            st.result.gate_redraws += 1
+            st.result.add_gen_stats(gen.name, gen_meta)  # the discarded draw was paid for
+            logger.info(
+                "gate redraw %d/%d: %s %s (%s)",
+                redraws,
+                st.gate_retries,
+                gen.name,
+                verdict[1],
+                turn.key,
+            )
+            try:
+                slop, gen_meta = await _attempt(call)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _fail(f"{type(exc).__name__}: {exc} (on gate redraw {redraws})")
+                return list(sess.turns[pos + 1 :])
+            verdict = _gate_verdict(slop, turn.target.text, st)
+        if redraws:
+            st.result.redrawn_cells += 1
+            if verdict is None:
+                st.result.redraws_recovered += 1
+
         prompt_tokens = gen_meta.get("prompt_tokens")
         if sess.session_id:
             gen_meta.update(
@@ -646,32 +720,13 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             extra_tags=st.extra_tags,
             gen_meta=gen_meta,
         )
-        sim = record["meta"].get("transform_sim")
-        ratio = len(slop) / len(turn.target.text) if turn.target.text else None
-        drop = None
-        if st.max_transform_sim is not None and sim is not None and sim > st.max_transform_sim:
-            # Identity output: the model returned (nearly) the input.
-            st.result.skipped_degenerate += 1
-            drop = f"transform_sim={sim:.3f} > {st.max_transform_sim}"
-        elif st.max_length_ratio is not None and ratio is not None and ratio > st.max_length_ratio:
-            # Inflated output: slop several times the target length, which would
-            # teach manic deletion.
-            st.result.skipped_inflated += 1
-            drop = f"length_ratio={ratio:.2f} > {st.max_length_ratio}"
-        elif st.drop_invented_anchors and (invented := invented_anchors(slop, turn.target.text)):
-            # Fabricated anchors: the generator dropped a link while "improving"
-            # the passage, and the reverse-edit swap turned that into an example
-            # reading *given text without links, produce text with these links*.
-            # The most-taught failure in the corpus and the one nothing checked
-            # (`_plans/anchor-integrity.md`).
-            st.result.skipped_invented_anchors += 1
-            uniq = sorted(set(invented))
-            drop = f"target invents {len(uniq)} anchor(s) absent from the slop: {uniq[0]}"
-        if drop is not None:
+        if verdict is not None:
             # Count loudly, record the spend, write nothing — the cell stays
-            # missing, so a re-run retries it.
+            # un-keyed, so a re-run retries it.
+            counter, reason = verdict
+            setattr(st.result, counter, getattr(st.result, counter) + 1)
             st.result.add_gen_stats(gen.name, gen_meta)
-            logger.warning("degenerate output dropped: %s %s (%s)", gen.name, drop, turn.key)
+            logger.warning("degenerate output dropped: %s %s (%s)", gen.name, reason, turn.key)
         else:
             fp.write(dumps_line(record) + "\n")
             fp.flush()
@@ -734,7 +789,8 @@ def synthesize_pairs(
     skip_covered: bool = False,
     max_transform_sim: float | None = None,
     max_length_ratio: float | None = None,
-    drop_invented_anchors: bool = False,
+    drop_invented_anchors: bool = True,
+    gate_retries: int = 0,
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
@@ -763,10 +819,18 @@ def synthesize_pairs(
     identity output, `max_length_ratio` catches inflation, and
     `drop_invented_anchors` catches fabrication — a target carrying a link, URL
     or citation its slop never had, which after the reverse-edit swap teaches
-    the styler to conjure destinations it cannot know. Off by default because it
-    is the newest and the corpus predates it; `infer.is_anchor_faithful` is the
-    matching `selector` for filtering pairs already written
-    (`_plans/anchor-integrity.md`).
+    the styler to conjure destinations it cannot know.
+
+    The fabrication gate is the one that defaults **on**, unlike its two
+    threshold-valued siblings: there is no number to tune and no defensible
+    setting on the other side, since a pair teaching link invention has no
+    legitimate use. `infer.is_anchor_faithful` is the matching `selector` for
+    pairs written before it existed (`_plans/anchor-integrity.md`, D32).
+
+    **`gate_retries`** spends up to N extra draws clearing a gate before giving
+    up on a cell. Worth setting whenever a gate is on: a rejected draw is paid
+    for either way, so a redraw costs no more than the drop, and without it a
+    gate quietly biases coverage toward whatever the roster finds easy.
 
     Heading `context` is prepended verbatim to both sides of the pair while slop
     is generated from the body only, so the heading is never paraphrased;
@@ -838,6 +902,7 @@ def synthesize_pairs(
         max_transform_sim=max_transform_sim,
         max_length_ratio=max_length_ratio,
         drop_invented_anchors=drop_invented_anchors,
+        gate_retries=gate_retries,
         replicate=replicate,
         on_progress=on_progress,
         on_error=on_error,

@@ -58,9 +58,14 @@ still explains why each piece exists. What landed:
   disqualifies either, counting causes apart (`n_anchor_lost`,
   `n_anchor_invented`, overlapping inside `n_anchor_rejected`);
   `rewrite_candidates` gained an `anchors_gained` flag and still rejects nothing.
-- **Step 2** — `ai-style synth --drop-invented-anchors` (off by default,
+- **Step 2** — `ai-style synth --drop-invented-anchors` (**on by default**,
   `SynthResult.skipped_invented_anchors`), and `infer.is_anchor_faithful` as the
   `selector` for `train.assemble_training_corpus` over pairs already written.
+- **`--gate-retries N`**, not in the original plan and required by it: invention
+  is an arm property (1.3%–74%, `findings.md`), so a bare gate would have burned
+  ~a fifth of a run's spend on permanently-dropped cells and biased coverage
+  against link-dense prose. Redraw instead — a rejected draw is paid for either
+  way, and ~80% of rejections clear on one.
 
 **Step 3 remains gated and unstarted**, which is the point: nothing about
 masking should be built until `--anchor-log` output from a real run says how

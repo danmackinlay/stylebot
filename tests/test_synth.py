@@ -644,14 +644,15 @@ def test_invented_anchor_gate_drops_fabrication_lessons(tmp_path):
     data_dir = tmp_path / "corpus"
     targets = _linked_targets(4)
 
-    result = synth.synthesize_pairs(
-        targets, data_dir, [_delinker("dropper")], drop_invented_anchors=True
-    )
+    # On by default, unlike the two threshold gates: there is no number to tune
+    # and no defensible other side (D32).
+    result = synth.synthesize_pairs(targets, data_dir, [_delinker("dropper")])
     assert result.skipped_invented_anchors == 4 and result.written == 0
 
-    # Off by default — the gate is newer than the corpus, so a run that does not
-    # ask for it behaves exactly as it did before.
-    result = synth.synthesize_pairs(targets, data_dir, [_delinker("dropper")])
+    # Opting out is what reproduces a pre-0.3.0 corpus.
+    result = synth.synthesize_pairs(
+        targets, data_dir, [_delinker("dropper")], drop_invented_anchors=False
+    )
     assert result.written == 4 and result.skipped_invented_anchors == 0
 
 
@@ -665,6 +666,46 @@ def test_invented_anchor_gate_keeps_a_faithful_generator(tmp_path):
     assert result.written == 4 and result.skipped_invented_anchors == 0
 
 
+def test_gate_retries_redraw_and_recover(tmp_path):
+    """A gated draw is paid for either way, so a redraw costs no more than the
+    drop. Without it a gate biases coverage toward what the roster finds easy."""
+    data_dir = tmp_path / "corpus"
+    calls = {"n": 0}
+
+    def flaky(text: str) -> str:
+        # Drops the link on the first draw for each cell, keeps it after.
+        calls["n"] += 1
+        return "[flaky-slop] " + (
+            text.replace("[docs](./d.qmd)", "docs") if calls["n"] % 2 else text
+        )
+
+    gen = synth.Generator(name="flaky", generate=flaky)
+    result = synth.synthesize_pairs(_linked_targets(4), data_dir, [gen], gate_retries=2)
+    assert result.written == 4 and result.skipped_invented_anchors == 0
+    assert result.redrawn_cells == 4 and result.gate_redraws == 4
+    assert result.redraws_recovered == 4
+    assert calls["n"] == 8  # four cells, two draws each — the redraws were paid for
+
+
+def test_gate_retries_give_up_and_still_drop(tmp_path):
+    """A passage no draw clears is a real drop, not an infinite redraw loop —
+    and the recovery count is how the operator tells the two apart."""
+    data_dir = tmp_path / "corpus"
+    result = synth.synthesize_pairs(
+        _linked_targets(2), data_dir, [_delinker("dropper")], gate_retries=3
+    )
+    assert result.written == 0 and result.skipped_invented_anchors == 2
+    assert result.redrawn_cells == 2 and result.gate_redraws == 6
+    assert result.redraws_recovered == 0
+
+
+def test_gate_retries_are_off_unless_asked(tmp_path):
+    data_dir = tmp_path / "corpus"
+    result = synth.synthesize_pairs(_linked_targets(2), data_dir, [_delinker("dropper")])
+    assert result.skipped_invented_anchors == 2
+    assert result.redrawn_cells == 0 and result.gate_redraws == 0
+
+
 def test_is_anchor_faithful_selects_over_an_existing_corpus(tmp_path):
     """Step 2's other half: the corpus is a frozen record, so pairs already
     written are filtered out of the training SIGNAL rather than migrated away."""
@@ -672,7 +713,10 @@ def test_is_anchor_faithful_selects_over_an_existing_corpus(tmp_path):
     from stylebot.jsonl import iter_jsonl
 
     data_dir = tmp_path / "corpus"
-    synth.synthesize_pairs(_linked_targets(2), data_dir, [_delinker("dropper")])
+    # Gate off: the corpus this selector exists for was written before it.
+    synth.synthesize_pairs(
+        _linked_targets(2), data_dir, [_delinker("dropper")], drop_invented_anchors=False
+    )
     synth.synthesize_pairs(_linked_targets(2), data_dir, [_fake("keeps-links")])
     records = list(iter_jsonl(data_dir / "pairs.jsonl"))
     assert len(records) == 4

@@ -23,6 +23,7 @@ are untouched.
 | `capture.write_pairs_atomic` removed | import `write_jsonl_atomic` from `stylebot.jsonl`. It was a bare re-export that hid where the function lives; the atomic rewrite is a JSONL-level operation, not a pair-level one. |
 | `stylebot.tinker_tls` removed, and the `train._patch_pyqwest_tls_trust` alias with it | nothing to do — delete any call. The `trainer` extra's floor is now `tinker>=0.25.0`, which carries the fix upstream. |
 | `synth.covered_target_bodies` → `covered_target_keys` | it returns normalised coverage keys now, so the old name lied. See the `--skip-covered` note below. No consumer outside this repo. |
+| `synth --drop-invented-anchors` defaults **on** | a synth run now drops pairs whose target carries a link its slop lacks, where 0.2.x wrote them. Pass `--keep-invented-anchors` for the old behaviour. Pair it with `--gate-retries` — see Added, and note the drop rate is roster-dependent (1.3%–51% across arms currently in the roster). |
 | `synth_cli.run_synth` no longer prints — it is **silent without a sink** | pass `emit=synth_cli.click_emitter()` to keep CLI output, or read the returned `SynthResult`. A click wrapper that does neither goes mute *and still exits 0*, so this is worth grepping for: livingthing's `dan-style synth` needed exactly this change. |
 
 ### Removed
@@ -179,14 +180,29 @@ are untouched.
   non-empty `lost` or `gained`. A truncated sample gets no anchor verdict at
   all, since its delta measures the token budget rather than the model.
 
-- **`ai-style synth --drop-invented-anchors`** — write-gate in the
+- **`ai-style synth --drop-invented-anchors`, on by default** — write-gate in the
   `--max-transform-sim` idiom (count loudly as `skipped_invented_anchors`, write
   nothing, leave the cell un-keyed so a re-run retries it) for pairs whose target
-  carries an anchor its slop never had. Off by default: the gate is newer than
-  the corpus. For the 855 pairs already written, `infer.is_anchor_faithful` is a
-  `selector` for `train.assemble_training_corpus` — the corpus is a frozen
-  record, so they are excluded from the training *signal* rather than migrated
-  away, and `_synth_key` is untouched.
+  carries an anchor its slop never had. It defaults **on** where its two siblings
+  default off, because they take a threshold whose right value is a roster
+  property while this one is a boolean with no defensible other side. Pass
+  `--keep-invented-anchors` to reproduce pre-0.3.0 behaviour. For the 855 pairs
+  already written, `infer.is_anchor_faithful` is a `selector` for
+  `train.assemble_training_corpus` — the corpus is a frozen record, so they are
+  excluded from the training *signal* rather than migrated away, and
+  `_synth_key` is untouched.
+
+- **`ai-style synth --gate-retries N`** — redraws a cell a hygiene gate rejected,
+  up to N times, before giving up on it. Applies to all three gates.
+  **Set this if you run any gate.** Anchor invention is a property of the arm,
+  not the passage (1.3% to 74% across nine measured arms; `findings.md`), so a
+  bare gate burns roughly a fifth of a run's spend on cells it drops and
+  re-drops every subsequent run — and biases coverage *against link-dense prose*,
+  which is the prose anchor fidelity matters most for (16.1% rejection at one
+  anchor, 32.9% at five or more). A rejected draw is paid for either way, so a
+  redraw costs no more than the drop; ~80% of rejections clear on one.
+  `SynthResult` gained `gate_redraws` / `redrawn_cells` / `redraws_recovered`,
+  and a low recovery rate is the signal that more retries will not help.
 
 - **`stylebot.export` / `ai-style merge-adapter`** — merges a trained LoRA
   adapter back into its base weights, emitting one HF checkpoint a local

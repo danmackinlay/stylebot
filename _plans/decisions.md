@@ -741,6 +741,27 @@ slate for a human to pick from, and a human is exactly who can tell a real URL
 from a plausible one. It gained an `anchors_gained` flag beside `anchors_lost`
 and still disqualifies nothing (D20).
 
+**The fabrication gate defaults ON, unlike its two siblings.**
+`--max-transform-sim` and `--max-length-ratio` are default-off because each
+takes a *threshold* — a number whose right value is a roster property, and which
+`None` honestly declines to guess. `--drop-invented-anchors` is a boolean with no
+defensible off position: a pair teaching the styler to conjure a URL has no use.
+So the asymmetry in defaults follows the asymmetry in what the knob *is*.
+
+**But it ships with `--gate-retries`, and a bare gate would have been a
+regression.** Anchor invention is a property of the ARM, not the passage — 1.3%
+(sonnet) to 74% (deepseek-v3-0324) across nine measured arms, with llama-3.3-70b
+(51.5%) and qwen3.5-9b (37.9%) still on the live roster (`findings.md`). A gate
+alone therefore does two things nobody asked for: it burns roughly a fifth of a
+run's spend on cells it drops and re-drops on every subsequent run, and — worse
+— it biases coverage *against link-dense prose*, which is the prose anchor
+fidelity matters most for (rejection runs 16.1% at one anchor, 32.9% at five or
+more). `--gate-retries N` redraws a rejected cell instead. A rejected draw is
+paid for either way, so a redraw costs no more than the drop already did, and of
+the 148 corpus targets that ever lost an anchor only 29 lost one under every arm
+that saw them: ~80% of rejections are a redraw away from clearing. Applies to all
+three gates, since they share the drop idiom.
+
 **Rejected: migrating the 855 offending pairs out of `pairs.jsonl`.** The corpus
 is a frozen record. `synth --drop-invented-anchors` stops new ones being written;
 `infer.is_anchor_faithful` is a `selector` for `train.assemble_training_corpus`,

@@ -455,3 +455,43 @@ flags 2 of 4,590) and why the truncation guard is a floor with no ceiling —
 length cannot distinguish an expansive rewrite from a rambling one. The source
 document's 0.9 threshold, correct for a copy-edit task, would have called 70% of
 genuine rewrites truncated.
+
+**Anchor invention is a property of the arm, not of the passage** (measured
+2026-08-12 over the 4,140 synthetic pairs, `infer.invented_anchors` on
+`extract_slop` → `extract_target`; rate is per pair whose *target* carries an
+anchor). "Invention" here means the generator dropped a link while producing
+slop, so the reverse-edit swap made Dan's side look like it conjured one:
+
+| arm | pairs | rate | in the live roster? |
+|---|---:|---:|---|
+| deepseek/deepseek-chat-v3-0324 | 41 | 74.2% | no (left 2026-07-22) |
+| nvidia/nemotron-3-nano-30b-a3b | 731 | 60.4% | no (left 2026-07-22) |
+| meta-llama/llama-3.3-70b-instruct | 75 | 51.5% | **yes** |
+| qwen/qwen3-8b | 151 | 38.0% | no |
+| mistralai/mistral-small-3.2-24b | 21 | 36.8% | no |
+| qwen/qwen3.5-9b | 553 | 37.9% | **yes** |
+| qwen/qwen3.6-35b-a3b | 427 | 24.4% | **yes** |
+| google/gemma-4-26b-a4b-it | 1,082 | 5.7% | **yes** |
+| anthropic/claude-sonnet-4.6 | 1,059 | 1.3% | **yes** |
+
+A 46× spread across arms, and the two highest-volume arms are the two cleanest —
+which is why the corpus-wide rate (18.6%) understates what a gate costs on the
+*current* roster: llama-3.3-70b and qwen3.5-9b are still in it, so an unretried
+`--drop-invented-anchors` run would drop on the order of a fifth of its cells.
+
+Two secondary effects, both arguing for `--gate-retries` over a bare gate:
+
+- **It is mostly per-sample, not per-passage.** Of the 454 targets seen by more
+  than one arm, 148 lost an anchor under at least one — but only 29 lost one
+  under *every* arm that saw them. ~80% of rejections are a redraw away from
+  clearing.
+- **A bare gate biases coverage against link-dense prose**, which is exactly the
+  prose anchor fidelity matters most for. P(rejected) by anchor count in the
+  target: 1 → 16.1%, 2 → 20.1%, 3 → 25.1%, 4 → 27.9%, 5+ → 32.9%.
+
+**Gate precision.** Spot-checking the cleanest arm's 11 rejections found no false
+positives. The one systematic near-miss is pandoc citation locators: `[@X: 45]`
+keys as `@X:` while a bare `[@X]` keys as `@X`, so a target adding a page number
+reads as invention — 22 of 2,062 instances, 19 pairs flagged solely by it. Kept
+as rejections deliberately: a page number the model cannot know is the same
+fabrication failure in miniature.

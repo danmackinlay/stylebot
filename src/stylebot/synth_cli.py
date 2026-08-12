@@ -599,15 +599,28 @@ class CorpusOpts:
         "Counted as skipped_inflated; cells retry next run. Unset = record everything.",
     )
     drop_invented_anchors: bool = opt(
-        False,
+        True,
         "--drop-invented-anchors/--keep-invented-anchors",
         show_default=True,
         help="Fabrication gate: drop any generated pair whose Dan-side target carries a link, "
         "URL or citation key its slop side never had. The generator dropped the link while "
         "'improving' the passage, and reversing the edit turns that into a lesson in "
         "conjuring destinations the model cannot know — the most-taught failure in the "
-        "corpus (19.1% of pairs) and the one nothing checked until 0.3.0. Counted as "
-        "skipped_invented_anchors; cells retry next run.",
+        "corpus (18.6% of pairs) and the one nothing checked until 0.3.0. Counted as "
+        "skipped_invented_anchors; cells retry next run. On by default (unlike the two "
+        "threshold gates) because there is no number to tune and no defensible other side.",
+    )
+    gate_retries: int = opt(
+        0,
+        "--gate-retries",
+        show_default=True,
+        type=int,
+        help="On a hygiene-gate rejection, redraw the same cell up to N more times before "
+        "giving up on it. A rejected draw is paid for either way, so a redraw costs no more "
+        "than the drop already did — and rejection is mostly a per-sample accident, so most "
+        "clear. Worth setting whenever a gate is on: without it a gate biases coverage "
+        "toward the passages the roster finds easy (link-dense prose is rejected twice as "
+        "often as single-link prose), which is the opposite of what the gate is for.",
     )
 
 
@@ -914,6 +927,15 @@ def _report_result(
             "the reverse-edit swap would teach the styler to fabricate them",
             level="note",
         )
+    if result.redrawn_cells:
+        # The redraw budget's own report card: cells recovered vs draws spent.
+        # A low recovery rate means the gate is finding something structural
+        # (a passage no arm handles) and more retries will not fix it.
+        emit(
+            f"  {result.redrawn_cells} cell(s) hit a gate and were redrawn "
+            f"({result.gate_redraws} extra draw(s) spent, "
+            f"{result.redraws_recovered} recovered)"
+        )
     for name, count in sorted(result.per_generator.items()):
         emit(f"  {name}: {count}{_model_economics(result.model_stats.get(name))}")
     if result.total_cost:
@@ -1173,6 +1195,7 @@ def run_synth(
         max_transform_sim=corpus.max_transform_sim,
         max_length_ratio=corpus.max_length_ratio,
         drop_invented_anchors=corpus.drop_invented_anchors,
+        gate_retries=corpus.gate_retries,
     )
 
     _report_result(
