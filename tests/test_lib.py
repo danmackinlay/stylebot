@@ -138,6 +138,33 @@ def test_is_valid_qmd_file(tmp_path):
     assert is_valid_qmd_file(tmp_path / ".hidden" / "a.qmd") is False
     assert is_valid_qmd_file(tmp_path / "_site" / "a.qmd") is False
     assert is_valid_qmd_file(tmp_path / "renv" / "a.qmd") is False
+    assert is_valid_qmd_file(tmp_path / "node_modules" / "p" / "a.qmd") is False
+
+
+# Every case below passed the pre-2026-08-12 predicate, which tested
+# `path.name` — the filename — so an underscore *directory* was invisible to
+# it. These feed `iter_targets`, i.e. scratch prose offered up as a training
+# target (livingthing `_plans/qmd-walker-2026-08.md`).
+@pytest.mark.parametrize(
+    "rel",
+    ["_tmp/scratch.qmd", "_freeze/a/b.qmd", "_site/index.qmd", "_plans/design.qmd"],
+)
+def test_is_valid_qmd_file_rejects_underscore_directories(tmp_path, rel):
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True)
+    p.write_text("x", encoding="utf-8")
+    assert is_valid_qmd_file(p) is False
+
+
+def test_is_valid_qmd_file_base_makes_the_judgement_project_relative(tmp_path):
+    """A checkout under a `_`- or `.`-prefixed directory is not disqualified."""
+    base = tmp_path / "_checkout"
+    ok = base / "post" / "note.qmd"
+    ok.parent.mkdir(parents=True)
+    ok.write_text("x", encoding="utf-8")
+    assert is_valid_qmd_file(ok) is False  # judged whole: `_checkout` bites
+    assert is_valid_qmd_file(ok, base) is True  # judged below `base`
+    assert gather_qmd_files([], base=base) == [ok]
 
 
 def test_gather_qmd_files_walk_skips_build_dirs(tmp_path):
@@ -145,9 +172,20 @@ def test_gather_qmd_files_walk_skips_build_dirs(tmp_path):
     (tmp_path / "post" / "keep.qmd").write_text("x", encoding="utf-8")
     (tmp_path / "_site").mkdir()
     (tmp_path / "_site" / "built.qmd").write_text("x", encoding="utf-8")
+    (tmp_path / "_tmp" / "eval").mkdir(parents=True)
+    (tmp_path / "_tmp" / "eval" / "scratch.qmd").write_text("x", encoding="utf-8")
     (tmp_path / "post" / "_draft.qmd").write_text("x", encoding="utf-8")
     found = gather_qmd_files([], base=tmp_path)
     assert [p.name for p in found] == ["keep.qmd"]
+
+
+def test_gather_qmd_files_honours_a_non_qmd_glob(tmp_path):
+    """The suffix is the caller's glob to choose, not this predicate's to fix."""
+    (tmp_path / "post").mkdir()
+    (tmp_path / "post" / "a.md").write_text("x", encoding="utf-8")
+    (tmp_path / "post" / "b.qmd").write_text("x", encoding="utf-8")
+    found = gather_qmd_files([], base=tmp_path, default_glob="**/*.md")
+    assert [p.name for p in found] == ["a.md"]
 
 
 def test_gather_qmd_files_explicit_list_filters_missing_and_invalid(tmp_path):

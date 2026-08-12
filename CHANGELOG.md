@@ -47,6 +47,29 @@ are untouched.
 
 ### Fixed
 
+- **`is_valid_qmd_file` tested the filename, not the path**, so `_draft.qmd`
+  was excluded while `_tmp/scratch.qmd` and `_freeze/…` were walked, and
+  `_site` survived only by being hardcoded beside `renv`. The `_`/`.` rule now
+  runs over every path segment (which subsumes that hardcoding) and the skip
+  set becomes `QUARTO_SKIP_DIRS`, mirroring upstream rather than a two-name
+  guess. `is_valid_qmd_file` also takes an optional `base`: the rules are about
+  *project-relative* structure, so a checkout under a `_`- or `.`-prefixed
+  directory should not disqualify its own contents. `gather_qmd_files` passes
+  it on the glob branch.
+
+  This one is worth reading twice, because the predicate feeds `iter_targets`:
+  a scratch copy of a post was being offered to `synth` as prose to generate
+  training pairs from, and `synth_key` hashes target text, so the pair would
+  have been indistinguishable from a real one afterwards. **The corpus is
+  clean** — re-derived at `PINNED_BLOG_REV`, both stability floors hold at
+  3681/417 — but only because the blog's scratch copies carry `automation: 2`
+  and `is_human_authored` rejects them. The defence that held is not the one
+  anybody designed. The suffix stays unchecked on purpose: the walk's glob is
+  caller policy (`iter_targets(glob=…)`, `ai-style synth --glob`). Found and
+  designed blog-side; see livingthing `_plans/qmd-walker-2026-08.md`, whose
+  differential test against `quarto inspect` is the guard this predicate cannot
+  carry generically.
+
 - **The anchor guard checked only half the failure, and the wrong half.**
   `infer.missing_anchors` flagged a candidate that *dropped* a link, URL or
   citation and said nothing about one that *invented* one — while the corpus

@@ -130,12 +130,8 @@ def is_valid_qmd_file(path: Path, base: Path | None = None) -> bool:
     (`iter_targets(glob=…)`, `ai-style synth --glob`), so this must not
     hardcode `.qmd` the way a single-project walker can.
     """
-    parts = path.parts
-    if base is not None:
-        try:
-            parts = path.relative_to(base).parts
-        except ValueError:
-            pass  # not under `base` — judge the path as given
+    # A path not under `base` is judged as given, same as with no `base` at all.
+    parts = path.relative_to(base).parts if base and path.is_relative_to(base) else path.parts
     if any(part.startswith((".", "_")) for part in parts):
         return False
     if QUARTO_SKIP_DIRS.intersection(parts):
