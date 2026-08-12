@@ -215,6 +215,19 @@ are untouched.
   excluded from the training *signal* rather than migrated away, and
   `_synth_key` is untouched.
 
+- **`scripts/prune_anchor_inventing_pairs.py`** — the one-off cull for a corpus
+  written before the gate existed. Dry-run by default, `.bak` beside the
+  rewrite, atomic. **Defaults to synthetic pairs only**, because the two strata
+  are different propositions: a culled synthetic cell leaves its `synth_key`
+  missing and the next `synth` run refills it, while a captured pair is a record
+  of a real edit that nothing but git brings back. They also fail differently —
+  51.4% of what the synthetic stratum invents is an external URL (a generator
+  artifact), against 11.5% for the real stratum, which is mostly Dan adding
+  internal cross-references and citations while editing. `--include-real` culls
+  those too; `infer.is_anchor_faithful` excludes them from training without
+  culling. On the live corpus: 4,595 → 3,790 (synthetic only) or 3,740 (both),
+  with 657 of 3,685 targets emptied and therefore due for regeneration.
+
 - **`ai-style synth --gate-retries N`** — redraws a cell a hygiene gate rejected,
   up to N times, before giving up on it. Applies to all three gates.
   **Set this if you run any gate.** Anchor invention is a property of the arm,

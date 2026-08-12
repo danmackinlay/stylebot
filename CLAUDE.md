@@ -63,6 +63,13 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
   way in 0.3; users migrate on version increment rather than carrying spent
   code. Anything a user runs as part of the pipeline is a subcommand, no
   exceptions.
+
+  Current membership: `migrate_capture_archives.py` (the only path off the
+  legacy archive format) and `prune_anchor_inventing_pairs.py` (the corpus that
+  predates `--drop-invented-anchors`; delete it once the live corpus has been
+  through it). Both take `--apply` and dry-run by default, both keep a `.bak`,
+  and both carry a test in `tests/` — a script that deletes corpus records earns
+  one even though `scripts/` is outside the package.
 - **Explicit paths, precedence `--flag` > `$STYLEBOT_DATA_DIR` > default**,
   resolved in `stylebot.config`. Two distinct inputs, never collapsed:
   `--blog-root` (read source) vs `--data-dir` (read/write state).
