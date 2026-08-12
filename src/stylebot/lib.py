@@ -101,18 +101,46 @@ def editable_prose(content: str, *, div_is_prose: markdown.DivIsProse | None = N
     )
 
 
-def is_valid_qmd_file(path: Path) -> bool:
-    """Return True if this path qualifies as a valid .qmd file."""
-    if path.is_dir():
-        return False
-    if path.name.startswith("_"):
-        return False
-    if any(part.startswith(".") for part in path.parts):
-        return False
-    if "renv" in path.parts or "_site" in path.parts:  # noqa: SIM103 — last of a guard chain
-        return False
+# Directories Quarto itself never treats as project inputs. This set mirrors
+# upstream rather than inventing policy — which is the whole of what belongs
+# here: a *project's* own exclusions are the caller's business, not ours (the
+# blog's live in its `_quarto.yml`, and `livingthing.lib` reads them there).
+QUARTO_SKIP_DIRS = frozenset({"renv", "packrat", "rsconnect", "node_modules"})
 
-    return True
+
+def is_valid_qmd_file(path: Path, base: Path | None = None) -> bool:
+    """Return True if this path qualifies as a valid .qmd file.
+
+    The `_`/`.` rule runs over **every** path segment. Until 2026-08-12 it
+    checked `path.name` alone — the *filename* — so `_partial.qmd` was excluded
+    while `_tmp/scratch.qmd` and `_freeze/…` were walked, and `_site` survived
+    only by being hardcoded. That matters more here than it looks: this
+    predicate feeds `iter_targets`, so a scratch copy of a post was offered to
+    `synth` as prose to generate training pairs from, and `synth_key` hashes
+    target text — the resulting pair would be indistinguishable from a real one
+    afterwards. Nothing caught it; the corpus is clean only because the blog's
+    scratch copies happen to carry `automation: 2` and the selector rejects
+    them. See livingthing `_plans/qmd-walker-2026-08.md`.
+
+    Every rule here is about *project-relative* structure, so pass `base` when
+    you have one and the judgement is made below it. Without it an absolute
+    path is judged whole, which is the historical behaviour.
+
+    Suffix is deliberately not checked: the walk's glob is caller policy
+    (`iter_targets(glob=…)`, `ai-style synth --glob`), so this must not
+    hardcode `.qmd` the way a single-project walker can.
+    """
+    parts = path.parts
+    if base is not None:
+        try:
+            parts = path.relative_to(base).parts
+        except ValueError:
+            pass  # not under `base` — judge the path as given
+    if any(part.startswith((".", "_")) for part in parts):
+        return False
+    if QUARTO_SKIP_DIRS.intersection(parts):
+        return False
+    return not path.is_dir()
 
 
 def gather_qmd_files(
@@ -129,7 +157,7 @@ def gather_qmd_files(
     """
     if files:
         return [Path(f) for f in files if Path(f).is_file() and is_valid_qmd_file(Path(f))]
-    return [p for p in base.glob(default_glob) if is_valid_qmd_file(p)]
+    return [p for p in base.glob(default_glob) if is_valid_qmd_file(p, base)]
 
 
 def is_human_authored(meta: dict, *, field: str = "automation", max_level: int = 0) -> bool:

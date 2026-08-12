@@ -41,6 +41,18 @@ path to a v2 run.
 > — but that is agreement, not provenance, and any write-up should label it so.
 > The cheapest way to make v1 a real arm is to re-synthesise a labelled slice at
 > 1500 alongside the 3000/4500 batches rather than to assert the label.
+>
+> **Second reason to re-synthesise that slice, added 2026-08-12.**
+> `--drop-invented-anchors` now defaults on (D32), so every batch generated from
+> here is anchor-gated while the legacy 4,595 pairs are not. Contrasting a fresh
+> v2 arm against the *existing* corpus as the 1500 baseline would vary two things
+> at once — scale and anchor gating — and the scale question is the one this
+> ablation exists to answer. Generate all three scales fresh under identical gate
+> settings. The same hazard applies to `infer.is_anchor_faithful` at training
+> assembly: it removes ~18.6% of the legacy corpus, so apply it to every arm or
+> to none. Gate cost at v2 density is measured and bounded (`findings.md`,
+> "Why this matters for the v2 scale curriculum") — the rejection curve
+> plateaus, so budget redraws, not a rewrite of the plan.
 
 ## The section wall (the actual blocker)
 

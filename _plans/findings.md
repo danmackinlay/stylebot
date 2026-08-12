@@ -486,8 +486,34 @@ Two secondary effects, both arguing for `--gate-retries` over a bare gate:
   under *every* arm that saw them. ~80% of rejections are a redraw away from
   clearing.
 - **A bare gate biases coverage against link-dense prose**, which is exactly the
-  prose anchor fidelity matters most for. P(rejected) by anchor count in the
-  target: 1 → 16.1%, 2 → 20.1%, 3 → 25.1%, 4 → 27.9%, 5+ → 32.9%.
+  prose anchor fidelity matters most for — **but the effect saturates**, which is
+  what makes the gate affordable on v2. P(rejected) by exact anchor count:
+
+  | anchors | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10+ |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | all arms | 16.1% | 20.1% | 25.1% | 27.9% | 35.5% | 29.5% | 29.4% | 39.2% | 33.3% | 30.9% |
+  | live roster | 8.9% | 11.5% | 15.5% | 17.9% | 22.3% | 15.7% | 20.4% | 20.8% | 8.1% | 12.3% |
+
+  It roughly doubles from 1 to 5 anchors and then **plateaus** rather than
+  compounding toward certainty — consistent with the arm finding above: a model
+  that carries links through carries all of them, and one that strips them
+  strips them regardless of how many there are.
+
+**Why this matters for the v2 scale curriculum.** Cross-heading packing raises
+anchor density sharply — measured over the live blog through the real chunker:
+
+| config | chunks | median chars | median anchors | 5+ anchors |
+|---|---:|---:|---:|---:|
+| v1 section-bounded @1500 | 8,811 | 443 | 2 | 16.8% |
+| v2 cross-heading @1500 | 4,840 | 1,268 | 4 | 46.6% |
+| v2 cross-heading @3000 | 2,783 | 2,333 | 7 | 66.3% |
+| v2 cross-heading @4500 | 2,207 | 2,388 | 8 | 70.9% |
+
+Median anchors per target quadruples 1500-section → 4500-cross-heading. Because
+the rejection curve plateaus, the expected gate cost on v2 lands in the same
+15–22% band (live roster) as on v1 rather than compounding — so
+`--drop-invented-anchors --gate-retries N` is affordable at v2 scale. It is not
+free: budget the redraws.
 
 **Gate precision.** Spot-checking the cleanest arm's 11 rejections found no false
 positives. The one systematic near-miss is pandoc citation locators: `[@X: 45]`
