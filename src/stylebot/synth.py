@@ -540,28 +540,46 @@ def _gate_verdict(slop: str, target_text: str, st: _RunState) -> tuple[str, str]
 
     Pure and record-free so it can run BEFORE the per-pair bookkeeping (reasoning
     sidecar, session covariates), which a redrawn sample must not repeat.
+
+    **Every reason describes what the GENERATOR did**, never what the pair looks
+    like afterwards. The distinction is not pedantry: synthesis is a reverse
+    edit, so a defect in the generated slop surfaces as an apparent property of
+    Dan's prose, and a message phrased the second way reads as an accusation
+    against the one artifact here that is above suspicion. "target invents 3
+    anchors" is exactly backwards — the target is a fixed human passage that
+    invents nothing; the generator DELETED three links while producing slop, and
+    reversing that edit is what would teach invention.
     """
     if st.max_transform_sim is not None:
         sim = transform_similarity(slop, target_text)
         if sim > st.max_transform_sim:
             # Identity output: the model returned (nearly) the input.
-            return "skipped_degenerate", f"transform_sim={sim:.3f} > {st.max_transform_sim}"
+            return (
+                "skipped_degenerate",
+                f"generator returned (nearly) its input, transform_sim={sim:.3f} "
+                f"> {st.max_transform_sim}",
+            )
     if st.max_length_ratio is not None and target_text:
         ratio = len(slop) / len(target_text)
         if ratio > st.max_length_ratio:
             # Inflated output: slop several times the target length, which would
             # teach manic deletion.
-            return "skipped_inflated", f"length_ratio={ratio:.2f} > {st.max_length_ratio}"
+            return (
+                "skipped_inflated",
+                f"generator wrote {ratio:.2f}x the target length, over {st.max_length_ratio}",
+            )
     if st.drop_invented_anchors and (invented := invented_anchors(slop, target_text)):
-        # Fabricated anchors: the generator dropped a link while "improving" the
-        # passage, and the reverse-edit swap turns that into an example reading
-        # *given text without links, produce text with these links*. The
-        # most-taught failure in the corpus and the one nothing checked before
-        # 0.3.0 (`_plans/anchor-integrity.md`).
+        # The generator dropped a link while "improving" the passage, and the
+        # reverse-edit swap turns that into an example reading *given text
+        # without links, produce text with these links*. The most-taught failure
+        # in the corpus and the one nothing checked before 0.3.0
+        # (`_plans/anchor-integrity.md`).
         uniq = sorted(set(invented))
+        shown = ", ".join(uniq[:2]) + ("…" if len(uniq) > 2 else "")
         return (
             "skipped_invented_anchors",
-            f"target invents {len(uniq)} anchor(s) absent from the slop: {uniq[0]}",
+            f"generator deleted {len(uniq)} anchor(s) the target keeps ({shown}); "
+            "reversed, this pair would teach the styler to invent them",
         )
     return None
 
@@ -736,7 +754,11 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             counter, reason = verdict
             setattr(st.result, counter, getattr(st.result, counter) + 1)
             st.result.add_gen_stats(gen.name, gen_meta)
-            logger.warning("degenerate output dropped: %s %s (%s)", gen.name, reason, turn.key)
+            # "gate dropped a draw", not "degenerate output": two of the three
+            # gates catch a degenerate generator, but the anchor gate catches a
+            # perfectly fluent draw that merely deleted a link, and calling that
+            # degenerate sent readers looking for the wrong defect.
+            logger.warning("gate dropped a draw: %s — %s (%s)", gen.name, reason, turn.key)
         else:
             fp.write(dumps_line(record) + "\n")
             fp.flush()

@@ -922,9 +922,9 @@ def _report_result(
         )
     if result.skipped_invented_anchors:
         emit(
-            f"  {result.skipped_invented_anchors} anchor-inventing pair(s) DROPPED "
-            "(target carries links the slop never had) — paid for, not written; "
-            "the reverse-edit swap would teach the styler to fabricate them",
+            f"  {result.skipped_invented_anchors} pair(s) DROPPED where the generator "
+            "deleted a link the target keeps — paid for, not written; reversed, those "
+            "pairs would teach the styler to invent links",
             level="note",
         )
     if result.redrawn_cells:
