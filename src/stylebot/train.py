@@ -33,10 +33,13 @@ import json
 import logging
 import random
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 from pathlib import Path
 
+import click
+
+from stylebot.cli_options import opt
 from stylebot.jsonl import dumps_line
 from stylebot.pairs import iter_pairs, validate_pairs_file
 from stylebot.provenance import file_sha256, git_sha  # file_sha256 re-exported: public here
@@ -53,10 +56,102 @@ DEFAULT_NUM_EPOCHS = 1
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_VAL_FRAC = 0.1
 DEFAULT_MAX_LENGTH = 8192
+LR_SCHEDULES = ("linear", "cosine", "constant")
 
 # Crude keyless token estimate for dry-run cost previews: prose runs ~4 chars
 # per token. The paid path counts real rendered tokens before spending.
 _CHARS_PER_TOKEN = 4
+
+
+@dataclass(frozen=True)
+class Hyperparameters:
+    """The LoRA-SFT knobs — one declaration, every consumer.
+
+    **This dataclass IS the manifest's `hyperparameters` block**: `as_manifest()`
+    is a plain field dump, so adding a knob here puts it in the committed
+    reproducibility record with no second edit, and no knob can be set but
+    unrecorded. Each field also carries its own click flag via
+    `cli_options.opt()`, so `ai-style train` and livingthing's `dan-style train`
+    share one surface and re-pin what differs with
+    `bundle_options(defaults=[Hyperparameters(...)])` instead of restating nine
+    decorators each.
+
+    It replaced a nine-name relay written out by hand at five layers — click
+    decorators, the command signature, a `kwargs` dict, `run_training`,
+    `build_manifest`, the manifest literal, and `**cfg` string lookups in
+    `_tinker_runner`. The last of those was the dangerous one: an untyped
+    `cfg["max_lenght"]` was a paid run away from a `KeyError`.
+
+    A library module carrying click declarations is deliberate, and cheap:
+    `opt()` only stashes the declaration in the field's `metadata`, which is
+    inert unless `bundle_options` reads it, and click is an unconditional
+    dependency. The alternative — a `train_cli.py` twin — is exactly the
+    two-dataclasses-one-surface shape that `ChunkPolicy`/`ChunkOpts` was.
+    """
+
+    cli_section = "Hyperparameters"
+
+    base_model: str = opt(
+        DEFAULT_BASE_MODEL, "--base-model", show_default=True, help="Tinker base model id."
+    )
+    lora_rank: int = opt(
+        DEFAULT_LORA_RANK, "--lora-rank", show_default=True, type=int, help="LoRA rank."
+    )
+    learning_rate: float | None = opt(
+        None,
+        "--lr",
+        "learning_rate",
+        type=float,
+        help="Learning rate. Default: the cookbook's per-model recommendation "
+        "(hyperparam_utils.get_lr).",
+    )
+    lr_schedule: str = opt(
+        "linear",
+        "--lr-schedule",
+        show_default=True,
+        type=click.Choice(LR_SCHEDULES),
+        help="Learning-rate decay shape.",
+    )
+    num_epochs: int = opt(
+        DEFAULT_NUM_EPOCHS,
+        "--epochs",
+        "num_epochs",
+        show_default=True,
+        type=int,
+        help="Training epochs.",
+    )
+    batch_size: int = opt(
+        DEFAULT_BATCH_SIZE,
+        "--batch-size",
+        show_default=True,
+        type=int,
+        help="Examples per training batch.",
+    )
+    max_length: int = opt(
+        DEFAULT_MAX_LENGTH,
+        "--max-length",
+        show_default=True,
+        type=int,
+        help="Max sequence length after tokenisation.",
+    )
+    renderer_name: str | None = opt(
+        None,
+        "--renderer",
+        "renderer_name",
+        help="Cookbook renderer name (chat template). Default: the model's recommended renderer — "
+        "pass e.g. qwen3_5_disable_thinking to pin no-think.",
+    )
+    seed: int = opt(
+        0,
+        "--seed",
+        show_default=True,
+        type=int,
+        help="Seed for the val split and epoch shuffling.",
+    )
+
+    def as_manifest(self) -> dict:
+        """This bundle as the manifest's `hyperparameters` block."""
+        return {f.name: getattr(self, f.name) for f in fields(self)}
 
 _EXTRA_HINT = (
     "stylebot.train needs the 'trainer' extra: "
@@ -255,15 +350,7 @@ def build_manifest(
     run_id: str,
     pairs_path: Path,
     corpus: TrainCorpus,
-    base_model: str,
-    lora_rank: int,
-    learning_rate: float | None,
-    lr_schedule: str,
-    num_epochs: int,
-    batch_size: int,
-    max_length: int,
-    renderer_name: str | None,
-    seed: int,
+    hp: Hyperparameters,
     splits_path: Path | None,
     dry_run: bool,
     train_price_per_mtok: float | None = None,
@@ -272,7 +359,7 @@ def build_manifest(
     """The pre-run manifest: everything reproducibility needs *before* any
     paid call. The run appends `result` (tinker paths, real tokens, cost,
     losses) via `run_training`."""
-    est = estimate_tokens(corpus.train) * num_epochs
+    est = estimate_tokens(corpus.train) * hp.num_epochs
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "kind": "styler-lora-sft",
@@ -300,20 +387,13 @@ def build_manifest(
             # budget that goes stale the next time the corpus is re-cut.
             "chunk_scale": corpus.chunk_scale,
         },
-        "hyperparameters": {
-            "base_model": base_model,
-            "lora_rank": lora_rank,
-            "learning_rate": learning_rate,  # None -> cookbook recommendation
-            "lr_schedule": lr_schedule,
-            "num_epochs": num_epochs,
-            "batch_size": batch_size,
-            "max_length": max_length,
-            "renderer_name": renderer_name,  # None -> model_info recommendation
-            "seed": seed,
-        },
+        # `learning_rate: None` -> cookbook recommendation, `renderer_name: None`
+        # -> model_info recommendation; the run records what it resolved them to
+        # under `result`.
+        "hyperparameters": hp.as_manifest(),
         "estimate": {
             "train_tokens": est,
-            "basis": f"~{_CHARS_PER_TOKEN} chars/token heuristic x {num_epochs} epoch(s)",
+            "basis": f"~{_CHARS_PER_TOKEN} chars/token heuristic x {hp.num_epochs} epoch(s)",
             "train_price_per_mtok": train_price_per_mtok,
             "cost_usd": (
                 round(est / 1_000_000 * train_price_per_mtok, 4) if train_price_per_mtok else None
@@ -353,19 +433,11 @@ def run_training(
     work_dir: str | Path,
     manifest_out: str | Path,
     *,
-    base_model: str = DEFAULT_BASE_MODEL,
-    lora_rank: int = DEFAULT_LORA_RANK,
-    learning_rate: float | None = None,
-    lr_schedule: str = "linear",
-    num_epochs: int = DEFAULT_NUM_EPOCHS,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    max_length: int = DEFAULT_MAX_LENGTH,
-    renderer_name: str | None = None,
+    hp: Hyperparameters | None = None,
     splits_path: str | Path | None = None,
     selector: Callable[[dict], bool] | None = None,
     per_target: Callable[[list[dict]], list[dict]] | None = None,
     val_frac: float = DEFAULT_VAL_FRAC,
-    seed: int = 0,
     run_id: str | None = None,
     train_price_per_mtok: float | None = None,
     dry_run: bool = False,
@@ -374,16 +446,28 @@ def run_training(
 ) -> TrainResult:
     """Assemble → manifest → (unless dry-run) train on Tinker → export adapter.
 
+    The training knobs arrive as a `Hyperparameters` bundle
+    (`run_training(pairs, work, out, hp=Hyperparameters(lora_rank=64))`),
+    defaulting to the cookbook-recipe defaults; everything left here is a knob
+    that is *not* a hyperparameter — where the data comes from, which policy
+    hooks filter it, and what to do with the artifacts.
+
+    `val_frac` stays out of the bundle deliberately: it shapes the data split,
+    not the fit, and the manifest records its *outcome* (`data.val_posts`)
+    rather than the fraction. `hp.seed` drives both the split and epoch
+    shuffling, and is recorded, so it belongs in the bundle.
+
     The manifest at `manifest_out` is written twice: once pre-run (so even an
     interrupted run leaves its record) and once with `result` filled in. On
     `dry_run` only the pre-run manifest is written — no tinker import, no key,
     no spend. `runner` is the paid-execution seam:
-    `(corpus, manifest, work_dir, **cfg) -> result dict`, defaulting to
-    `_tinker_runner`; tests inject a fake.
+    `(corpus, manifest, work_dir, hp, *, download_adapter) -> result dict`,
+    defaulting to `_tinker_runner`; tests inject a fake.
     """
     pairs_path = Path(pairs_path)
     work_dir = Path(work_dir)
     run_id = run_id or _default_run_id()
+    hp = hp if hp is not None else Hyperparameters()
 
     splits = None
     if splits_path is not None:
@@ -397,7 +481,7 @@ def run_training(
         selector=selector,
         per_target=per_target,
         val_frac=val_frac,
-        seed=seed,
+        seed=hp.seed,
     )
     if corpus.n_train == 0:
         raise ValueError(f"no training pairs left after filtering {pairs_path}")
@@ -410,15 +494,7 @@ def run_training(
         run_id=run_id,
         pairs_path=pairs_path,
         corpus=corpus,
-        base_model=base_model,
-        lora_rank=lora_rank,
-        learning_rate=learning_rate,
-        lr_schedule=lr_schedule,
-        num_epochs=num_epochs,
-        batch_size=batch_size,
-        max_length=max_length,
-        renderer_name=renderer_name,
-        seed=seed,
+        hp=hp,
         splits_path=Path(splits_path) if splits_path else None,
         dry_run=dry_run,
         train_price_per_mtok=train_price_per_mtok,
@@ -430,21 +506,7 @@ def run_training(
 
     work_dir.mkdir(parents=True, exist_ok=True)
     run = runner or _tinker_runner
-    result = run(
-        corpus,
-        manifest,
-        work_dir,
-        base_model=base_model,
-        lora_rank=lora_rank,
-        learning_rate=learning_rate,
-        lr_schedule=lr_schedule,
-        num_epochs=num_epochs,
-        batch_size=batch_size,
-        max_length=max_length,
-        renderer_name=renderer_name,
-        seed=seed,
-        download_adapter=download_adapter,
-    )
+    result = run(corpus, manifest, work_dir, hp, download_adapter=download_adapter)
     manifest["dry_run"] = False
     manifest["result"] = {k: v for k, v in result.items() if k != "adapter_dir"}
     manifest_path = write_manifest(manifest, manifest_out)
@@ -554,7 +616,14 @@ def _read_final_metrics(log_path: Path) -> dict:
     return final
 
 
-def _tinker_runner(corpus: TrainCorpus, manifest: dict, work_dir: Path, **cfg) -> dict:
+def _tinker_runner(
+    corpus: TrainCorpus,
+    manifest: dict,
+    work_dir: Path,
+    hp: Hyperparameters,
+    *,
+    download_adapter: bool = True,
+) -> dict:
     """The real Tinker execution: the cookbook supervised recipe (LoRA SFT)
     over the assembled corpus, then a PEFT-adapter export. All heavy imports
     live here; the interface is pinned against the installed tinker-cookbook."""
@@ -567,9 +636,9 @@ def _tinker_runner(corpus: TrainCorpus, manifest: dict, work_dir: Path, **cfg) -
     except ImportError as exc:
         raise ImportError(_EXTRA_HINT) from exc
 
-    base_model = cfg["base_model"]
-    renderer_name = cfg["renderer_name"] or model_info.get_recommended_renderer_name(base_model)
-    learning_rate = cfg["learning_rate"] or hyperparam_utils.get_lr(base_model)
+    base_model = hp.base_model
+    renderer_name = hp.renderer_name or model_info.get_recommended_renderer_name(base_model)
+    learning_rate = hp.learning_rate or hyperparam_utils.get_lr(base_model)
 
     data_dir = work_dir / "data"
     train_file = _write_conversations(corpus.train, data_dir / "train.jsonl")
@@ -578,11 +647,11 @@ def _tinker_runner(corpus: TrainCorpus, manifest: dict, work_dir: Path, **cfg) -
     common = ChatDatasetBuilderCommonConfig(
         model_name_for_tokenizer=base_model,
         renderer_name=renderer_name,
-        max_length=cfg["max_length"],
-        batch_size=cfg["batch_size"],
+        max_length=hp.max_length,
+        batch_size=hp.batch_size,
     )
     builder = _make_presplit_builder(
-        train_file, val_file, common_config=common, shuffle_seed=cfg["seed"]
+        train_file, val_file, common_config=common, shuffle_seed=hp.seed
     )
 
     log_path = work_dir / "tinker"
@@ -593,14 +662,14 @@ def _tinker_runner(corpus: TrainCorpus, manifest: dict, work_dir: Path, **cfg) -
         renderer_name=renderer_name,
         dataset_builder=builder,
         learning_rate=learning_rate,
-        lr_schedule=cfg["lr_schedule"],
-        num_epochs=cfg["num_epochs"],
-        lora_rank=cfg["lora_rank"],
+        lr_schedule=hp.lr_schedule,
+        num_epochs=hp.num_epochs,
+        lora_rank=hp.lora_rank,
     )
     logger.info(
         "tinker SFT: %s rank=%s lr=%.3g renderer=%s (%d train / %d val pairs)",
         base_model,
-        cfg["lora_rank"],
+        hp.lora_rank,
         learning_rate,
         renderer_name,
         corpus.n_train,
@@ -621,7 +690,7 @@ def _tinker_runner(corpus: TrainCorpus, manifest: dict, work_dir: Path, **cfg) -
     }
 
     sampler_path = result["checkpoints"]["sampler_path"]
-    if cfg.get("download_adapter") and sampler_path:
+    if download_adapter and sampler_path:
         from tinker_cookbook import weights
 
         raw_dir = work_dir / "weights"

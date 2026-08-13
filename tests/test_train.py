@@ -124,8 +124,9 @@ def test_run_training_records_result_via_runner_seam(tmp_path, write_pairs_corpu
     manifest_out = tmp_path / "runs" / "run.json"
     seen = {}
 
-    def fake_runner(corpus, manifest, work_dir, **cfg):
+    def fake_runner(corpus, manifest, work_dir, hp, **cfg):
         seen["n_train"] = corpus.n_train
+        seen["hp"] = hp
         seen["cfg"] = cfg
         return {
             "tinker_run_id": "run-123",
@@ -141,13 +142,16 @@ def test_run_training_records_result_via_runner_seam(tmp_path, write_pairs_corpu
         tmp_path / "work",
         manifest_out,
         val_frac=0.2,
-        seed=1,
+        hp=tr.Hyperparameters(seed=1),
         run_id="r1",
         runner=fake_runner,
     )
     assert seen["n_train"] == result.corpus.n_train
-    assert seen["cfg"]["base_model"] == tr.DEFAULT_BASE_MODEL
-    assert seen["cfg"]["seed"] == 1  # the seed the epoch shuffle is built from
+    assert seen["hp"].base_model == tr.DEFAULT_BASE_MODEL
+    assert seen["hp"].seed == 1  # the seed the epoch shuffle is built from
+    # The bundle handed to the runner is the one recorded in the manifest — the
+    # relay that used to copy these nine names by hand at five layers.
+    assert json.loads(manifest_out.read_text())["hyperparameters"] == seen["hp"].as_manifest()
     manifest = json.loads(manifest_out.read_text())
     assert manifest["result"]["tinker_run_id"] == "run-123"
     assert "adapter_dir" not in manifest["result"]  # local path, not reproducibility

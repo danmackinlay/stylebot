@@ -1054,7 +1054,7 @@ def train_clf_cmd(
     click.echo(f"wrote artifact -> {out}/ (head.json, meta.json)")
 
 
-@main.command("train")
+@main.command("train", cls=SectionedCommand)
 @click.option(
     "--data-dir",
     "data_dir",
@@ -1084,74 +1084,11 @@ def train_clf_cmd(
     "make-splits). Omit only for fixture/experiment corpora.",
 )
 @click.option(
-    "--base-model",
-    default=tr.DEFAULT_BASE_MODEL,
-    show_default=True,
-    help="Tinker base model id.",
-)
-@click.option(
-    "--lora-rank",
-    default=tr.DEFAULT_LORA_RANK,
-    show_default=True,
-    type=int,
-    help="LoRA rank.",
-)
-@click.option(
-    "--lr",
-    "learning_rate",
-    default=None,
-    type=float,
-    help="Learning rate. Default: the cookbook's per-model recommendation "
-    "(hyperparam_utils.get_lr).",
-)
-@click.option(
-    "--lr-schedule",
-    default="linear",
-    show_default=True,
-    type=click.Choice(["linear", "cosine", "constant"]),
-)
-@click.option(
-    "--epochs",
-    "num_epochs",
-    default=tr.DEFAULT_NUM_EPOCHS,
-    show_default=True,
-    type=int,
-    help="Training epochs.",
-)
-@click.option(
-    "--batch-size",
-    default=tr.DEFAULT_BATCH_SIZE,
-    show_default=True,
-    type=int,
-    help="Examples per training batch.",
-)
-@click.option(
-    "--max-length",
-    default=tr.DEFAULT_MAX_LENGTH,
-    show_default=True,
-    type=int,
-    help="Max sequence length after tokenisation.",
-)
-@click.option(
-    "--renderer",
-    "renderer_name",
-    default=None,
-    help="Cookbook renderer name (chat template). Default: the model's recommended renderer — "
-    "pass e.g. qwen3_5_disable_thinking to pin no-think.",
-)
-@click.option(
     "--val-frac",
     default=tr.DEFAULT_VAL_FRAC,
     show_default=True,
     type=float,
     help="Fraction of POSTs held out for val loss (by-post, deterministic).",
-)
-@click.option(
-    "--seed",
-    default=0,
-    show_default=True,
-    type=int,
-    help="Seed for the val split and epoch shuffling.",
 )
 @click.option(
     "--run-id",
@@ -1179,26 +1116,19 @@ def train_clf_cmd(
     help="Assemble, write the manifest preview + token/cost estimate, and stop. No key, no spend.",
 )
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the pre-spend confirmation prompt.")
+@bundle_options([tr.Hyperparameters])
 def train_cmd(
     data_dir: Path,
     manifest_out: Path,
     work_dir: Path,
     splits_path: Path | None,
-    base_model: str,
-    lora_rank: int,
-    learning_rate: float | None,
-    lr_schedule: str,
-    num_epochs: int,
-    batch_size: int,
-    max_length: int,
-    renderer_name: str | None,
     val_frac: float,
-    seed: int,
     run_id: str | None,
     train_price_per_mtok: float | None,
     download_adapter: bool,
     dry_run: bool,
     assume_yes: bool,
+    **kw,
 ) -> None:
     """Phase 3: LoRA-SFT the styler on Tinker (stylebot.train.run_training).
 
@@ -1213,17 +1143,9 @@ def train_cmd(
         raise click.ClickException(f"no pairs.jsonl in {data_dir}")
 
     kwargs = dict(
-        base_model=base_model,
-        lora_rank=lora_rank,
-        learning_rate=learning_rate,
-        lr_schedule=lr_schedule,
-        num_epochs=num_epochs,
-        batch_size=batch_size,
-        max_length=max_length,
-        renderer_name=renderer_name,
+        hp=bundles_from_kwargs(kw, {"hp": tr.Hyperparameters})["hp"],
         splits_path=splits_path,
         val_frac=val_frac,
-        seed=seed,
         run_id=run_id,
         train_price_per_mtok=train_price_per_mtok,
         download_adapter=download_adapter,
