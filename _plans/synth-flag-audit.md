@@ -6,6 +6,11 @@ plus the `FILES` argument, which is not counted here). The next-largest
 subcommand has 19. This document classifies all 54 against evidence so the repo
 owner can decide what to retire.
 
+> `_OPTION_SPECS` was the spec table the shared surface was declared in at audit
+> time. It has since been replaced by the `cli_options.opt()` bundles, where each
+> field carries its own flag; the *count* and the classification below are
+> unaffected, and the name is left as audited rather than back-edited.
+
 The classification below is **as-audited** and left that way on purpose — it is
 the evidence, and rewriting it to match today's surface would destroy the record
 of what the evidence actually said. What was acted on is in Decisions.
@@ -41,14 +46,44 @@ proposal.
   recorded-but-unkeyed covariates precisely so sampling can be swept without
   re-keying. Dan's explicit call: not retiring on an absence of evidence.
 
+## Decisions — 2026-08-13 (closes the audit)
+
+The remaining class-C proposals were reviewed together and the file is now
+**closed**: nothing in it is an open question. `ai-style synth` is a
+**49**-option command.
+
+- **Retired: `--sort`, `--report-max-rows`, `--all`, `--tag`** (items 1, 2, 15,
+  16). All four are non-`synth_key` by construction, and each field survives
+  as a library-only knob with its current value hardcoded, so **no cell
+  re-keys and no paid corpus regenerates**:
+  - `--sort` → `ChunkPolicy.sort_name = "none"`. Arms are assigned by content
+    hash, so target *order* cannot reach the corpus at all.
+  - `--report-max-rows` → `InspectOpts.report_max_rows = 2000`.
+  - `--all` → gone entirely; `--max-level` already relaxes the selector and
+    `FILES` bypasses it, which is what the docstring now says.
+  - `--tag` → `run_synth(extra_tags=…)` stays. The one tag on the live corpus
+    (`livingthing`) was always set through the library parameter, never the flag.
+- **Kept: `--capture-reasoning`** (item 6). The audit's own risk note carries
+  it: reading what a model deliberated has no substitute, and the tokens are
+  paid for whether or not the trace is saved. "Never run yet" is not evidence
+  against a diagnostic.
+- **Kept: `--splits` / `--role` / `--sample-frac` / `--sample-salt`** (items
+  11–14). Retiring this cluster is a bet that measurement runs will never need
+  a substrate disjoint from the detector's training pool. That bet reads worse
+  now than in August: the masking work (D33) needs the voice classifier re-fit
+  on masked text and then measured, which is exactly the `--role styler` case.
+- **Deferred: `--assign-seed`** (item 9). A `synth_key` input — it decides
+  which arm a target gets, hence the generator name in the hash — so it falls
+  outside the "retire only non-key flags" rule this pass worked under.
+
 ## Summary (as audited)
 
 | Class | Count | What it means |
 | --- | ---: | --- |
 | **A — Load-bearing** | 14 | Swept across runs, folded into `synth_key`, recorded as a `meta.gen` covariate with ≥2 observed values, or typed in the blog RUNBOOK's command lines. Removing or re-defaulting these breaks resume or loses analysis covariates. |
 | **B — Policy constants** | 24 | Set once by the blog wrapper (`synth_options` override or `exclude`) or left at their default and never varied. Real, but the value is pinned; the *flag* is optional, the *value* often is not. |
-| **C — Retirement candidates** | 16 | No usage found in either repo beyond the option definition and its own tests. **4 of these have since been retired** (see Decisions); 12 remain proposals. |
-| **Total** | **54** | 50 today. |
+| **C — Retirement candidates** | 16 | No usage found in either repo beyond the option definition and its own tests. **8 have since been retired** and 8 were reviewed and kept or deferred (see Decisions). None remains an open proposal. |
+| **Total** | **54** | 49 today. |
 
 Two cross-cutting caveats before the tables:
 
@@ -188,22 +223,22 @@ open proposal, nothing done.
 
 | # | Flag | Rationale | Risk | Verdict |
 | --: | --- | --- | --- | --- |
-| 1 | `--sort` | No occurrence in either repo. Arm assignment is by content hash, so target *order* cannot change the corpus. | **Low** — affects only which chunks `--limit` takes and report row order. |  |
-| 2 | `--report-max-rows` | No occurrence; the 2000 default has never been raised or zeroed. | **Low** — a huge selection would render every row. |  |
+| 1 | `--sort` | No occurrence in either repo. Arm assignment is by content hash, so target *order* cannot change the corpus. | **Low** — affects only which chunks `--limit` takes and report row order. | **RETIRED** 2026-08-13 |
+| 2 | `--report-max-rows` | No occurrence; the 2000 default has never been raised or zeroed. | **Low** — a huge selection would render every row. | **RETIRED** 2026-08-13 |
 | 3 | `--generator` | The `gpt`/`local` direct-API preset path. **All 4169 synthetic pairs were OpenRouter-served**; no corpus pair has ever come from a preset. | **Medium** — with 4 and 5, deletes the only non-OpenRouter generation path. | **RETIRED** 2026-08-10 |
 | 4 | `--gpt-model` | Excluded by the blog wrapper; only test hits. Dead unless `--generator gpt` returns. | **Medium** — cluster with 3. | **RETIRED** 2026-08-10 |
 | 5 | `--local-model` | **Zero occurrences anywhere in either repo** outside `_OPTION_SPECS`. | **Medium** — cluster with 3; local-model experiments are a live interest elsewhere in the blog. | **RETIRED** 2026-08-10 |
-| 6 | `--capture-reasoning` | No `reasoning.jsonl` exists in the blog data-dir — never run against the real corpus. | **Low-Medium** — the only way to read what a model deliberated; costs nothing extra when on. |  |
+| 6 | `--capture-reasoning` | No `reasoning.jsonl` exists in the blog data-dir — never run against the real corpus. | **Low-Medium** — the only way to read what a model deliberated; costs nothing extra when on. | **KEPT** — no substitute for the diagnostic |
 | 7 | `--temperature` | `None` on all 4169 pairs. Never varied. | **Medium** — designed as a recorded-but-unkeyed covariate precisely so sampling can be swept without re-keying; removing forecloses that. | **KEPT** — importance untested, not disproven |
 | 8 | `--top-p` | `None` on all 4169 pairs. Never varied. | **Medium** — cluster with 7. | **KEPT** — cluster with 7 |
-| 9 | `--assign-seed` | No occurrence in either repo. `--replicate` covers the fresh-draw story and **is** used (460 pairs). | **Low-Medium** — loses re-randomizing arm assignment without a new replicate label. |  |
+| 9 | `--assign-seed` | No occurrence in either repo. `--replicate` covers the fresh-draw story and **is** used (460 pairs). | **Low-Medium** — loses re-randomizing arm assignment without a new replicate label. | **DEFERRED** — a `synth_key` input |
 | 10 | `--context-window` | Every pair's `context_window` came from the OpenRouter registry (5 distinct values); the flag only serves preset/injected generators. | **Low** — but coupled to cluster 3-5: it exists *for* the preset path. | **RETIRED** 2026-08-10 |
-| 11 | `--splits` | Substrate block: no synth-side occurrence in either repo. (`--splits` appears only for `train-clf`.) | **Medium** — cluster with 12-14. |  |
-| 12 | `--role` | No occurrence. The designed way to keep measurement runs disjoint from the detector's training pool. | **Medium** — the splits contract is live for `train-clf`/`eval`; only the synth-side filter is unused. |  |
-| 13 | `--sample-frac` | No occurrence. The growth-stable alternative to `--limit`, which is what actually gets typed. | **Medium** — cluster with 11-12. |  |
-| 14 | `--sample-salt` | No occurrence; inert without `--sample-frac`. | **Low** — cluster with 13. |  |
-| 15 | `--all` | No occurrence. `--field`/`--max-level` can already relax the selector, and `FILES` bypasses it entirely. | **Low**. |  |
-| 16 | `--tag` | Every synthetic pair carries exactly `["synthetic","paraphrase","livingthing"]`, and `livingthing` comes from `extra_tags=` in the **library** call, not this flag. | **Low** — the library parameter is what is actually used and would stay. |  |
+| 11 | `--splits` | Substrate block: no synth-side occurrence in either repo. (`--splits` appears only for `train-clf`.) | **Medium** — cluster with 12-14. | **KEPT** — cluster |
+| 12 | `--role` | No occurrence. The designed way to keep measurement runs disjoint from the detector's training pool. | **Medium** — the splits contract is live for `train-clf`/`eval`; only the synth-side filter is unused. | **KEPT** — cluster |
+| 13 | `--sample-frac` | No occurrence. The growth-stable alternative to `--limit`, which is what actually gets typed. | **Medium** — cluster with 11-12. | **KEPT** — cluster |
+| 14 | `--sample-salt` | No occurrence; inert without `--sample-frac`. | **Low** — cluster with 13. | **KEPT** — cluster |
+| 15 | `--all` | No occurrence. `--field`/`--max-level` can already relax the selector, and `FILES` bypasses it entirely. | **Low**. | **RETIRED** 2026-08-13 |
+| 16 | `--tag` | Every synthetic pair carries exactly `["synthetic","paraphrase","livingthing"]`, and `livingthing` comes from `extra_tags=` in the **library** call, not this flag. | **Low** — the library parameter is what is actually used and would stay. | **RETIRED** 2026-08-13 |
 
 ### If you want the biggest single win
 
@@ -213,8 +248,9 @@ CLI reachability, and the `Arm.kind` branch in `build_generators` — and the
 corpus says it has never produced a pair. **Taken, 2026-08-10 — see Decisions.**
 (In the event `local_generator` was deleted outright and `openai_generator`
 kept, since `openrouter_generator` is built on it.) Items **11-14** are a
-second one-decision cluster (5 flags with `--sample-salt`), still open: that
-one is a bet that measurement runs will never need a disjoint substrate.
+second one-decision cluster (5 flags with `--sample-salt`). **Declined,
+2026-08-13** — see Decisions: it is a bet that measurement runs will never
+need a disjoint substrate, and the masking work is about to need one.
 
 ## Known documentation drift spotted in passing
 

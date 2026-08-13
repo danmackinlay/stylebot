@@ -169,17 +169,16 @@ class ChunkPolicy:
         help="Pack across section boundaries with headings as chunk content (needs --merge; "
         "overrides --heading-context). This, not --merge-max-chars, is what buys chunk length.",
     )
-    sort_name: str = opt(
-        "none",
-        "--sort",
-        "sort_name",
-        type=click.Choice(SORT_KEYS),
-        show_default=True,
-        help="Order the resulting chunks.",
-    )
-    # Library-only (no `opt()`): a predicate is not expressible on a command
-    # line, and *which* `:::` classes wrap prose is blog policy set in code —
-    # see `stylebot.markdown` and livingthing's `training_targets.div_is_prose`.
+    # Library-only, no flag. Target ORDER cannot change the corpus — arms are
+    # assigned by content hash, so a chunk gets the same generator wherever it
+    # sits in the list — which left `--sort` affecting only which chunks
+    # `--limit` happened to take and the row order of a report. Retired 0.3.1
+    # (synth-flag-audit C1); the knob stays for a caller ordering in code.
+    sort_name: str = "none"
+    # Library-only for a different reason: a predicate is not expressible on a
+    # command line, and *which* `:::` classes wrap prose is blog policy set in
+    # code — see `stylebot.markdown` and livingthing's
+    # `training_targets.div_is_prose`.
     div_is_prose: DivIsProse | None = None
 
     def __post_init__(self) -> None:

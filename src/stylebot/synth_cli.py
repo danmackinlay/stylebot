@@ -174,13 +174,6 @@ class InspectOpts:
         "(pre-generation — vets selection, generates nothing; browse generated pairs via "
         "ai-style eval --report).",
     )
-    report_max_rows: int = opt(
-        2000,
-        "--report-max-rows",
-        show_default=True,
-        type=int,
-        help="Cap table rows in the HTML report (0 = all).",
-    )
     sample_n: int | None = opt(
         None,
         "--sample",
@@ -188,7 +181,12 @@ class InspectOpts:
         type=int,
         help="Print N random targets to stdout and exit (no generation).",
     )
-    report_title: str | None = None  # library-only: a caller-supplied label
+    # Library-only, no flags. `report_title` is a caller-supplied label;
+    # `report_max_rows` caps table rows (0 = all) and lost its `--report-max-rows`
+    # flag in 0.3.1 (synth-flag-audit C2) — the default had never been raised or
+    # zeroed, and a caller wanting another cap is already writing code.
+    report_title: str | None = None
+    report_max_rows: int = 2000
 
 
 @dataclass(frozen=True)

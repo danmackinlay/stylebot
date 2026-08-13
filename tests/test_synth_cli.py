@@ -194,18 +194,19 @@ def test_run_synth_takes_bundles_only():
 
 
 def test_synth_command_surface_is_exactly_the_bundles_plus_its_own():
-    # Pins the 52 (54 until the gpt/local preset path went, 2026-08-10; 50 until
-    # --drop-invented-anchors, --gate-retries and --gen-retries landed,
-    # 2026-08-12): the shared
-    # surface is the bundles' flag-bearing fields and nothing else, and `synth`
-    # adds only its own selection/provenance flags.
+    # The count is pinned deliberately: `synth` is by far the widest command in
+    # the tree (next is `train` at 19), so its surface only ever grows by
+    # someone editing this number and saying why.
     params = [p for p in ai_style_main.commands["synth"].params if isinstance(p, click.Option)]
-    own = {"blog_root", "data_dir", "field", "max_level", "select_all", "glob", "tags"}
+    own = {"blog_root", "data_dir", "field", "max_level", "glob"}
     shared = {f.name for bundle in synth_cli.DEFAULT_BUNDLES for f, _, _ in cli_fields(bundle)}
-    assert len(params) == 53
+    assert len(params) == 49
     assert {p.name for p in params} - own == shared
     # Library-only fields stay off the CLI — that is what omitting opt() means.
-    assert {"session_budgets", "report_title"} & {p.name for p in params} == set()
+    # `sort_name` and `report_max_rows` joined them when their flags retired.
+    assert {"session_budgets", "report_title", "sort_name", "report_max_rows"} & {
+        p.name for p in params
+    } == set()
 
 
 def test_synth_help_is_sectioned():

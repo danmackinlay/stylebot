@@ -272,24 +272,15 @@ def _synth_errors():
     type=int,
     help="Default selector keeps posts with field <= this.",
 )
-@click.option(
-    "--all",
-    "select_all",
-    is_flag=True,
-    help="Disable selection: take every post (ignore the selector).",
-)
 @click.option("--glob", default="**/*.qmd", show_default=True, help="Glob for the blog-root walk.")
 @synth_cli.synth_options()
-@click.option("--tag", "tags", multiple=True, help="Extra provenance tag(s) added to meta.tags.")
 def synth_cmd(
     files: tuple[Path, ...],
     blog_root: Path | None,
     data_dir: Path | None,
     field: str,
     max_level: int,
-    select_all: bool,
     glob: str,
-    tags: tuple[str, ...],
     **kw,
 ) -> None:
     """Manufacture synthetic (slop -> Dan) pairs from Dan's own prose.
@@ -298,17 +289,16 @@ def synth_cmd(
     plus a selector (default: is_human_authored, i.e. automation: 0). Writes the
     Phase-1 pairs.jsonl schema with meta.synthetic / meta.generator. Idempotent
     and resumable — re-running never duplicates.
+
+    To take every post regardless of the frontmatter field, raise --max-level
+    above every value it holds; to bypass selection entirely, pass FILES.
     """
     if bool(files) == bool(blog_root):
         raise click.UsageError(
             "provide either FILES (pre-selected) or --blog-root, not both/neither"
         )
 
-    # Selector: the bundled is_human_authored unless --all disables selection.
-    if select_all:
-        selector = lambda meta: True  # noqa: E731 — trivial inline policy
-    else:
-        selector = partial(is_human_authored, field=field, max_level=max_level)
+    selector = partial(is_human_authored, field=field, max_level=max_level)
 
     # The shared surface arrives as **kw; fold it back into its option bundles.
     opts = synth_cli.pop_bundles(kw)
@@ -347,11 +337,13 @@ def synth_cmd(
         # gets the click one (stream + colour routing lives in
         # `cli_options.EMIT_LEVELS`, shared with livingthing's `dan-style synth`
         # so the two front-ends cannot render a run differently).
+        # No `extra_tags=` here: provenance tagging is a library parameter
+        # (`run_synth(extra_tags=…)`), which is how the one tag on the live
+        # corpus was ever set. A wrapper that wants tags passes them in code.
         synth_cli.run_synth(
             targets,
             data_dir=_data_dir(required=not inspecting),
             emit=synth_cli.click_emitter(),
-            extra_tags=tags,
             **opts,
         )
 

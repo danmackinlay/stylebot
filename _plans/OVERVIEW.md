@@ -226,9 +226,27 @@ live in the blog's `_training_pairs/RUNBOOK.md`; durable decisions in
 - **Synthetic↔real distribution match**: the fifth eval capability — a
   feature/mannerism extractor over the synthetic vs real-slop strata. Spec in
   [`eval-harness.md`](eval-harness.md) §"Planned".
-- **`synth` option-surface retirements**: 12 class-C proposals still open, incl.
-  the `--splits`/`--role`/`--sample-frac`/`--sample-salt` cluster
-  ([`synth-flag-audit.md`](synth-flag-audit.md)).
+- ~~**`synth` option-surface retirements**~~ — **closed 2026-08-13.** `--sort`,
+  `--report-max-rows`, `--all` and `--tag` retired (49 options); the substrate
+  cluster and `--capture-reasoning` reviewed and kept, `--assign-seed` deferred
+  as a `synth_key` input ([`synth-flag-audit.md`](synth-flag-audit.md)).
+- **`ai-style log` never adopted the option-bundle idiom.** `save` and `pair`
+  each declare `--tag`, `--whole` and a six-line `--heading-context` block
+  verbatim, and `list` renders open and closed snapshots through two
+  near-identical loops. This module predates `cli_options.py` and was left
+  behind by it; `BackendOpts` and `ChunkPolicy` are the pattern to follow.
+  *Done when*: the shared flags come from one bundle and the two commands'
+  `--help` text cannot drift. Low risk — `ai-style log` writes the corpus but
+  none of these flags is a `synth_key` input.
+- **`meta.gen`'s key list is a third copy, not a source of truth.**
+  `pairs.GEN_META_KEYS` / `GEN_SESSION_KEYS` claim to be "one list, so a key
+  rename fails a test", but the keys are actually written as dict literals in
+  `generators.py` (the `gen_meta` builder) and `synth.py` (the session
+  covariates); the tuples are a third spelling asserted by a test rather than
+  the thing the writers read. A rename in the writer plus the tuple still
+  passes, which is the case the guard was for. (`GEN_FACET_KEYS` is different —
+  `eval.py` genuinely consumes it.) *Done when*: the covariate names have one
+  home that the writer reads, not a copy a test compares against.
 - **`openai` as an `[api]` extra**: every import of it is lazy, so a
   `classify`/`serve`/keyless-`eval` install carries the SDK for nothing. Written
   up as [`decisions.md`](decisions.md) P1 — undecided, and it would cost
