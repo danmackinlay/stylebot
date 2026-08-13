@@ -36,6 +36,8 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -43,7 +45,54 @@ import click
 
 from stylebot import capture, config
 from stylebot.capture import diff_chunks  # noqa: F401 — callers/tests reach it as log.diff_chunks
+from stylebot.cli_options import SectionedCommand, bundle_options, bundles_from_kwargs, opt
 from stylebot.jsonl import read_jsonl, write_jsonl_atomic
+
+
+@dataclass(frozen=True)
+class CaptureOpts:
+    """The flags `save` and `pair` share — what a captured pair looks like.
+
+    Both commands write (before, after) into `pairs.jsonl` and differ only in
+    where the two texts come from: `save` diffs a file against its session
+    snapshot, `pair` takes two paths or stdin. *What the resulting record looks
+    like* is the same question for both, and these three answer it — so they are
+    declared once here rather than twice, which is how the help text for
+    `--heading-context` came to be a six-line block maintained in two places.
+
+    `--replace` is deliberately NOT here despite appearing on both: it means
+    "drop prior pairs for this source" in `pair` and "force a full replace
+    across sessions, overriding the smart default" in `save`. One spelling, two
+    behaviours — sharing the declaration would imply a symmetry there isn't.
+    """
+
+    cli_section = "Capture"
+
+    tags: Sequence[str] = opt(
+        (), "--tag", "tags", multiple=True, help="Tag the pair(s) for later filtering."
+    )
+    whole: bool = opt(
+        False,
+        "--whole",
+        is_flag=True,
+        help="Emit ONE pair for the whole input rather than one per changed paragraph region. "
+        "Escape hatch for rewrites the chunk diff cuts badly — heavy structural rearrangement, "
+        "paragraph moves.",
+    )
+    heading_context: bool = opt(
+        True,
+        "--heading-context/--no-heading-context",
+        "heading_context",
+        help="Prepend the nearest preceding section heading (from the after text) "
+        "as fixed context to each changed chunk, identically on both sides, and "
+        "record it in meta.context. On by default; --no-heading-context captures "
+        "bare bodies instead. Ignored for --whole (no single heading).",
+    )
+
+
+def capture_options(**kw):
+    """The shared `save`/`pair` flags. `defaults=`/`exclude=` as elsewhere."""
+    return bundle_options([CaptureOpts], **kw)
 
 
 # Root for all logged state (the corpus), resolved through `stylebot.config` —
@@ -108,6 +157,35 @@ def _pairs_path() -> Path:
 # search, the synthesis target walk — cannot see it.
 SNAPSHOT_CONTENT = "content.md"
 SNAPSHOT_META = "meta.json"
+
+
+def _snapshot_dirs(root: Path) -> list[Path]:
+    """Every snapshot directory under `root`, sorted; `[]` if it doesn't exist.
+
+    A snapshot is identified by its sidecar, so this globs for `meta.json` and
+    takes the parent — the open-session reminder and `list` both need it, for
+    both the open and the closed tree.
+    """
+    return sorted(p.parent for p in root.rglob(SNAPSHOT_META)) if root.exists() else []
+
+
+def _echo_snapshots(snaps: list[Path], *, age: bool = False) -> None:
+    """List snapshot directories one per line, tolerating an unreadable one.
+
+    `age` renders `snapped_at` as a relative age rather than the raw stamp.
+    """
+    for snap in snaps:
+        try:
+            payload = _read_snapshot(snap)
+        except Exception as exc:
+            click.echo(f"  {snap} [unreadable: {exc}]")
+            continue
+        stamp = payload.get("snapped_at", "")
+        when = _humanize_age(stamp) if age else (stamp or "?")
+        click.echo(
+            f"  {payload.get('source', snap)} "
+            f"(opened {when}, {len(payload.get('content', ''))} chars)"
+        )
 
 
 def _snapshot_path(source: Path) -> Path:
@@ -248,10 +326,7 @@ def _remind_open_sessions(ctx: click.Context) -> None:
     """
     if ctx.obj and ctx.obj.get("quiet"):
         return
-    snapshots_dir = _snapshots_dir()
-    if not snapshots_dir.exists():
-        return
-    snaps = sorted(p.parent for p in snapshots_dir.rglob(SNAPSHOT_META))
+    snaps = _snapshot_dirs(_snapshots_dir())
     if not snaps:
         return
 
@@ -370,22 +445,14 @@ def reopen_session(ctx: click.Context, file: Path):
     _remind_open_sessions(ctx)
 
 
-@main.command(name="save")
+@main.command(name="save", cls=SectionedCommand)
 @click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-@click.option("--tag", "tags", multiple=True, help="Tag the pair(s) for later filtering.")
 @click.option(
     "--keep-open",
     is_flag=True,
     help="Leave the session open after saving so the original 'before' state "
     "stays sticky for future saves against the same starting point. Useful "
     "for banking interim progress.",
-)
-@click.option(
-    "--whole",
-    is_flag=True,
-    help="Emit one pair for the whole file rather than one pair per changed "
-    "paragraph region. Escape hatch for cases where the chunk diff loses too "
-    "much context (heavy structural rearrangement, paragraph moves).",
 )
 @click.option(
     "--replace",
@@ -409,26 +476,16 @@ def reopen_session(ctx: click.Context, file: Path):
     "do-over shorthand: you spotted a typo after saving and want the pair "
     "recaptured against the same base. No-op if a session is already open.",
 )
-@click.option(
-    "--heading-context/--no-heading-context",
-    "heading_context",
-    default=True,
-    help="Prepend the nearest preceding section heading (from the after text) "
-    "as fixed context to each changed chunk, identically on both sides, and "
-    "record it in meta.context. On by default; --no-heading-context captures "
-    "bare bodies instead. Ignored for --whole (no single heading).",
-)
+@capture_options()
 @click.pass_context
 def save_session(
     ctx: click.Context,
     file: Path,
-    tags: tuple[str, ...],
     keep_open: bool,
-    whole: bool,
     force_replace: bool,
     force_append: bool,
     redo: bool,
-    heading_context: bool,
+    **kw,
 ):
     """Save FILE's rewrite as pair(s) in pairs.jsonl, then close the session.
 
@@ -449,6 +506,7 @@ def save_session(
     if force_replace and force_append:
         raise click.UsageError("--replace and --append are mutually exclusive")
 
+    cap: CaptureOpts = bundles_from_kwargs(kw, {"capture": CaptureOpts})["capture"]
     snap = _snapshot_path(file)
     if redo and not snap.exists():
         try:
@@ -475,8 +533,8 @@ def save_session(
         raise click.ClickException(f"no changes since session opened on {file}; nothing to save")
 
     extra: dict = {}
-    if tags:
-        extra["tags"] = list(tags)
+    if cap.tags:
+        extra["tags"] = list(cap.tags)
 
     # ---- Disposition of prior pairs for this source ----
     #
@@ -529,9 +587,9 @@ def save_session(
             after_text=after_text,
             source=str(file),
             snapped_at=session_snapped_at,
-            whole=whole,
+            whole=cap.whole,
             extra_meta=extra or None,
-            heading_context=heading_context,
+            heading_context=cap.heading_context,
         )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -541,7 +599,7 @@ def save_session(
 
     total_before = sum(rec["meta"]["before_chars"] for rec in written)
     total_after = sum(rec["meta"]["after_chars"] for rec in written)
-    mode = "whole-file" if whole else "chunk-by-chunk"
+    mode = "whole-file" if cap.whole else "chunk-by-chunk"
     status = "session kept open" if keep_open else "session closed"
     click.echo(
         f"saved {len(written)} pair(s) for {file} "
@@ -598,12 +656,7 @@ def drop_session(ctx: click.Context, file: Path):
 @main.command(name="list")
 def list_state():
     """List open sessions, saved pairs (grouped by source), and totals."""
-    snapshots_dir = _snapshots_dir()
-    snaps = (
-        sorted(p.parent for p in snapshots_dir.rglob(SNAPSHOT_META))
-        if snapshots_dir.exists()
-        else []
-    )
+    snaps = _snapshot_dirs(_snapshots_dir())
     records = _iter_pairs()
     pair_count = len(records)
 
@@ -621,33 +674,16 @@ def list_state():
         click.echo(f"  {src}: {len(recs)} pair(s) across {len(capture_ids)} save(s)")
 
     click.echo(f"{len(snaps)} open session(s)")
-    for snap in snaps:
-        try:
-            payload = _read_snapshot(snap)
-            click.echo(
-                f"  {payload.get('source', snap)} "
-                f"(opened {payload.get('snapped_at', '?')}, "
-                f"{len(payload.get('content', ''))} chars)"
-            )
-        except Exception as exc:
-            click.echo(f"  {snap} [unreadable: {exc}]")
+    _echo_snapshots(snaps)
 
-    closed_dir = _closed_snapshots_dir()
-    closed = (
-        sorted(p.parent for p in closed_dir.rglob(SNAPSHOT_META)) if closed_dir.exists() else []
-    )
+    closed = _snapshot_dirs(_closed_snapshots_dir())
     if closed:
         click.echo(f"{len(closed)} closed session(s), redoable via `reopen` / `save --redo`")
-        for snap in closed:
-            try:
-                payload = _read_snapshot(snap)
-                click.echo(
-                    f"  {payload.get('source', snap)} "
-                    f"(opened {_humanize_age(payload.get('snapped_at', ''))}, "
-                    f"{len(payload.get('content', ''))} chars)"
-                )
-            except Exception as exc:
-                click.echo(f"  {snap} [unreadable: {exc}]")
+        # Relative age for closed sessions: an absolute stamp answers "which
+        # session was this" for one still open, but for a closed one the live
+        # question is whether the base is stale enough that a `--redo` would
+        # diff against prose that has moved on.
+        _echo_snapshots(closed, age=True)
 
 
 @main.command(name="tidy")
@@ -798,7 +834,7 @@ def _read_source(spec: str) -> str:
     return Path(spec).read_text(encoding="utf-8")
 
 
-@main.command()
+@main.command(cls=SectionedCommand)
 @click.option(
     "--before",
     "before_spec",
@@ -817,12 +853,6 @@ def _read_source(spec: str) -> str:
     default=None,
     help="Optional source label stored in meta (e.g. a file path or 'clipboard').",
 )
-@click.option("--tag", "tags", multiple=True, help="Tag the pair(s) for later filtering.")
-@click.option(
-    "--whole",
-    is_flag=True,
-    help="Emit one pair for the entire input rather than per-chunk.",
-)
 @click.option(
     "--replace",
     "replace",
@@ -830,25 +860,15 @@ def _read_source(spec: str) -> str:
     help="If --source is given, remove any prior pairs for that source first. "
     "By default `pair` appends — unlike `save`, which replaces by default.",
 )
-@click.option(
-    "--heading-context/--no-heading-context",
-    "heading_context",
-    default=True,
-    help="Prepend the nearest preceding section heading (from the after text) "
-    "as fixed context to each changed chunk, identically on both sides, and "
-    "record it in meta.context. On by default; --no-heading-context captures "
-    "bare bodies instead. Ignored for --whole (no single heading).",
-)
+@capture_options()
 @click.pass_context
 def pair(
     ctx: click.Context,
     before_spec: str,
     after_spec: str,
     source: str | None,
-    tags: tuple[str, ...],
-    whole: bool,
     replace: bool,
-    heading_context: bool,
+    **kw,
 ):
     """One-shot pair capture from files or stdin (no session dance).
 
@@ -857,6 +877,7 @@ def pair(
     to the corpus rather than overwrite. Pass --replace (with --source) to
     drop prior pairs for that source first.
     """
+    cap: CaptureOpts = bundles_from_kwargs(kw, {"capture": CaptureOpts})["capture"]
     if before_spec == "-" and after_spec == "-":
         raise click.UsageError("only one of --before/--after may be '-'")
     before_text = _read_source(before_spec)
@@ -872,23 +893,23 @@ def pair(
         if removed:
             click.echo(f"replaced {removed} prior pair(s) for {source}")
 
-    extra = {"tags": list(tags)} if tags else None
+    extra = {"tags": list(cap.tags)} if cap.tags else None
     try:
         written = _capture_and_append(
             before_text=before_text,
             after_text=after_text,
             source=source,
             snapped_at=None,
-            whole=whole,
+            whole=cap.whole,
             extra_meta=extra,
-            heading_context=heading_context,
+            heading_context=cap.heading_context,
         )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 
     total_before = sum(rec["meta"]["before_chars"] for rec in written)
     total_after = sum(rec["meta"]["after_chars"] for rec in written)
-    mode = "whole-input" if whole else "chunk-by-chunk"
+    mode = "whole-input" if cap.whole else "chunk-by-chunk"
     click.echo(
         f"saved {len(written)} pair(s) ({mode}; {total_before} -> {total_after} chars total)"
     )
