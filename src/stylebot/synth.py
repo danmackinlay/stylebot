@@ -728,6 +728,168 @@ def _pop_reasoning_to_sidecar(
     )
 
 
+def _record_gate_drop(
+    st: _RunState,
+    turn: _Turn,
+    gen: Generator,
+    gen_meta: dict,
+    *,
+    gate: str,
+    reason: str,
+    attempt: int,
+    redrawn: bool,
+) -> None:
+    """Account for one gated draw: sidecar line, arm rejection count, spend.
+
+    All three happen on BOTH gate paths — the redraw that will try again, and
+    the final give-up — because a gated draw is paid for either way. They were
+    written out twice, twenty lines apart, which is how an arm's rejection rate
+    and its true cost get to disagree.
+    """
+    _record_lost_draw(
+        st.data_dir,
+        turn,
+        gen,
+        gen_meta,
+        kind="gate",
+        gate=gate,
+        reason=reason,
+        attempt=attempt,
+        redrawn=redrawn,
+    )
+    st.result.drops_by_generator[gen.name] = st.result.drops_by_generator.get(gen.name, 0) + 1
+    st.result.add_gen_stats(gen.name, gen_meta)  # the discarded draw was paid for
+
+
+async def _attempt(fn, text: str, history: Sequence[dict]) -> tuple[str, dict]:
+    """One call to a generator callable, sync or async, normalized.
+
+    `history` is a parameter, not a closed-over variable: a session mutates its
+    history between turns, and passing it explicitly is what keeps the binding
+    obvious rather than something the reader has to reason about.
+    """
+    out = fn(text, history=list(history) or None)
+    if inspect.isawaitable(out):
+        out = await out
+    slop, gen_meta = _normalize_gen_output(out)
+    if not slop.strip():
+        raise _EmptyDraw("generator returned empty output")
+    return slop, gen_meta
+
+
+async def _draw(
+    call, gen: Generator, turn: _Turn, history: Sequence[dict], st: _RunState
+) -> tuple[str, dict, object]:
+    """One paid draw, retried across providers. Raises once it gives up.
+
+    Returns `(slop, gen_meta, call)` — the callable comes back because a retry
+    RE-PINS it, and the caller must keep using the one that worked.
+
+    **Re-pinning matters more than waiting.** OpenRouter routes to an upstream
+    and sticky routing keeps a session on whoever served turn 1, so when that
+    upstream is sick (`502 Provider returned error` from Cloudflare is the
+    common one) a plain retry re-hits the same broken box — which is why the
+    openai SDK's own retries do not save this, and why every attempt after the
+    first asks for a fresh provider.
+
+    The backoff is there for the case re-pinning cannot fix, an upstream being
+    rate-limited or restarting; it is short because a synth run is thousands of
+    independent cells and there is other work to do.
+    """
+    delay = _RETRY_BACKOFF_SECS
+    for attempt in range(st.gen_retries + 1):
+        try:
+            slop, gen_meta = await _attempt(call, turn.target.text, history)
+            return slop, gen_meta, call
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if attempt == st.gen_retries or not _is_transient(exc):
+                raise
+            st.result.gen_retries_spent += 1
+            logger.info(
+                "transient %s from %s, redrawing (%d/%d): %s",
+                type(exc).__name__,
+                gen.name,
+                attempt + 1,
+                st.gen_retries,
+                turn.key,
+            )
+            if gen.begin_session is not None:
+                call = gen.begin_session()
+            await asyncio.sleep(delay)
+            delay *= 2
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+async def _draw_past_gates(
+    call, gen: Generator, turn: _Turn, history: Sequence[dict], st: _RunState
+) -> tuple[str, dict, tuple[str, str] | None, int, object]:
+    """Draw for one turn, redrawing while a hygiene gate rejects the sample.
+
+    Returns `(slop, gen_meta, verdict, redraws, call)`. `verdict` is None once a
+    sample cleared, or the last rejection when the redraw budget ran out — the
+    caller decides what a surviving verdict costs. Every rejected draw is
+    accounted for here, since it was paid for.
+
+    A gated sample is paid for whether or not it is written, so a redraw costs
+    no more than the drop already did — and it usually clears: rejection is
+    mostly a per-sample accident, not a property of the passage (measured
+    2026-08-12, anchor invention spans 1.3% to 51% BY ARM, and of the corpus
+    targets that ever lost an anchor only 20% lost one under every arm that saw
+    them). Without redraws a gate silently biases coverage toward the passages
+    models find easy — link-dense prose drops 33% of the time against 16% for
+    single-link — which is exactly the prose anchor fidelity matters most for.
+    """
+    slop, gen_meta, call = await _draw(call, gen, turn, history, st)
+    verdict = _gate_verdict(slop, turn.target.text, st)
+    redraws = 0
+    while verdict is not None and redraws < st.gate_retries:
+        _record_gate_drop(
+            st,
+            turn,
+            gen,
+            gen_meta,
+            gate=verdict[0],
+            reason=verdict[1],
+            attempt=redraws,
+            redrawn=True,
+        )
+        redraws += 1
+        st.result.gate_redraws += 1
+        logger.info(
+            "gate redraw %d/%d: %s %s (%s)",
+            redraws,
+            st.gate_retries,
+            gen.name,
+            verdict[1],
+            turn.key,
+        )
+        try:
+            slop, gen_meta, call = await _draw(call, gen, turn, history, st)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # A provider failing DURING a redraw must not cost the session. We
+            # already hold a gated draw, so the honest outcome is the one we
+            # would have had without retries: drop this cell, keep going.
+            # (Until 2026-08-12 this abandoned every remaining turn, which
+            # turned one transient 502 into a session-wide loss.)
+            logger.warning(
+                "gate redraw %d failed (%s); dropping the cell and continuing: %s",
+                redraws,
+                type(exc).__name__,
+                turn.key,
+            )
+            break
+        verdict = _gate_verdict(slop, turn.target.text, st)
+    if redraws:
+        st.result.redrawn_cells += 1
+        if verdict is None:
+            st.result.redraws_recovered += 1
+    return slop, gen_meta, verdict, redraws, call
+
+
 async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
     """Run one session's turns in order, appending records as they complete.
 
@@ -759,74 +921,23 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             st.result.budget_bound_sessions += 1
             return list(sess.turns[pos:])
 
-        # A failed pair is never written, so its synth_key resolves to nothing —
-        # the recorded error must carry its config or be unattributable.
-        who = f"{gen.name} strategy={gen.strategy} effort={gen.reasoning_effort}"
-        if sess.session_id:
-            who += f" turn={turn.index}"
-
-        def _fail(message: str, *, _who: str = who, _key: str = turn.key) -> None:
-            msg = f"[{_who}] {message}"
-            st.result.errors.append((_key, msg))
-            if st.on_error is not None:
-                st.on_error(_key, msg)
-
-        async def _attempt(fn, _turn: _Turn = turn) -> tuple[str, dict]:
-            # B023: `history` is the live session list, and _attempt is awaited
-            # in this same iteration — late binding is the intent, not a leak.
-            out = fn(_turn.target.text, history=history or None)  # noqa: B023
-            if inspect.isawaitable(out):
-                out = await out
-            slop, gen_meta = _normalize_gen_output(out)
-            if not slop.strip():
-                raise _EmptyDraw("generator returned empty output")
-            return slop, gen_meta
-
-        async def _draw(_turn: _Turn = turn) -> tuple[str, dict]:
-            """One paid draw, retried across providers. Raises once it gives up.
-
-            **Re-pinning matters more than waiting.** OpenRouter routes to an
-            upstream and sticky routing keeps a session on whoever served turn
-            1, so when that upstream is sick (`502 Provider returned error` from
-            Cloudflare is the common one) a plain retry re-hits the same broken
-            box — which is why the openai SDK's own retries do not save this,
-            and why every attempt after the first asks for a fresh provider.
-
-            The backoff is there for the case re-pinning cannot fix, an upstream
-            being rate-limited or restarting; it is short because a synth run is
-            thousands of independent cells and there is other work to do.
-            """
-            nonlocal call
-            delay = _RETRY_BACKOFF_SECS
-            for attempt in range(st.gen_retries + 1):
-                try:
-                    return await _attempt(call)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    if attempt == st.gen_retries or not _is_transient(exc):
-                        raise
-                    st.result.gen_retries_spent += 1
-                    logger.info(
-                        "transient %s from %s, redrawing (%d/%d): %s",
-                        type(exc).__name__,
-                        gen.name,
-                        attempt + 1,
-                        st.gen_retries,
-                        _turn.key,
-                    )
-                    if gen.begin_session is not None:
-                        call = gen.begin_session()
-                    await asyncio.sleep(delay)
-                    delay *= 2
-            raise AssertionError("unreachable")  # pragma: no cover
-
         try:
-            slop, gen_meta = await _draw()
+            slop, gen_meta, verdict, redraws, call = await _draw_past_gates(
+                call, gen, turn, history, st
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            _fail(f"{type(exc).__name__}: {exc} (after {st.gen_retries + 1} attempt(s))")
+            # A failed pair is never written, so its synth_key resolves to
+            # nothing — the recorded error must carry its config or be
+            # unattributable.
+            who = f"{gen.name} strategy={gen.strategy} effort={gen.reasoning_effort}"
+            if sess.session_id:
+                who += f" turn={turn.index}"
+            msg = f"[{who}] {type(exc).__name__}: {exc} (after {st.gen_retries + 1} attempt(s))"
+            st.result.errors.append((turn.key, msg))
+            if st.on_error is not None:
+                st.on_error(turn.key, msg)
             _record_lost_draw(
                 st.data_dir,
                 turn,
@@ -845,66 +956,6 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             # started failing usually keeps failing, and the leftover turns
             # deserve a healthy provider. Only this cell is lost.
             return list(sess.turns[pos + 1 :])
-        # Hygiene gates, checked BEFORE any bookkeeping so a rejected draw can be
-        # redrawn cheaply. A gated sample is paid for whether or not it is
-        # written, so a redraw costs no more than the drop already did — and it
-        # usually clears: rejection is mostly a per-sample accident, not a
-        # property of the passage (measured 2026-08-12, anchor invention spans
-        # 1.3% to 51% BY ARM, and of the corpus targets that ever lost an anchor
-        # only 20% lost one under every arm that saw them). Without this, a gate
-        # silently biases coverage toward the passages models find easy —
-        # link-dense prose drops 33% of the time against 16% for single-link —
-        # which is exactly the prose anchor fidelity matters most for.
-        verdict = _gate_verdict(slop, turn.target.text, st)
-        redraws = 0
-        while verdict is not None and redraws < st.gate_retries:
-            _record_lost_draw(
-                st.data_dir,
-                turn,
-                gen,
-                gen_meta,
-                kind="gate",
-                gate=verdict[0],
-                reason=verdict[1],
-                attempt=redraws,
-                redrawn=True,
-            )
-            st.result.drops_by_generator[gen.name] = (
-                st.result.drops_by_generator.get(gen.name, 0) + 1
-            )
-            redraws += 1
-            st.result.gate_redraws += 1
-            st.result.add_gen_stats(gen.name, gen_meta)  # the discarded draw was paid for
-            logger.info(
-                "gate redraw %d/%d: %s %s (%s)",
-                redraws,
-                st.gate_retries,
-                gen.name,
-                verdict[1],
-                turn.key,
-            )
-            try:
-                slop, gen_meta = await _draw()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                # A provider failing DURING a redraw must not cost the session.
-                # We already hold a gated draw, so the honest outcome is the one
-                # we would have had without retries: drop this cell, keep going.
-                # (Until 2026-08-12 this abandoned every remaining turn, which
-                # turned one transient 502 into a session-wide loss.)
-                logger.warning(
-                    "gate redraw %d failed (%s); dropping the cell and continuing: %s",
-                    redraws,
-                    type(exc).__name__,
-                    turn.key,
-                )
-                break
-            verdict = _gate_verdict(slop, turn.target.text, st)
-        if redraws:
-            st.result.redrawn_cells += 1
-            if verdict is None:
-                st.result.redraws_recovered += 1
 
         prompt_tokens = gen_meta.get("prompt_tokens")
         if sess.session_id:
@@ -936,21 +987,9 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             # un-keyed, so a re-run retries it.
             counter, reason = verdict
             setattr(st.result, counter, getattr(st.result, counter) + 1)
-            _record_lost_draw(
-                st.data_dir,
-                turn,
-                gen,
-                gen_meta,
-                kind="gate",
-                gate=counter,
-                reason=reason,
-                attempt=redraws,
-                redrawn=False,
+            _record_gate_drop(
+                st, turn, gen, gen_meta, gate=counter, reason=reason, attempt=redraws, redrawn=False
             )
-            st.result.drops_by_generator[gen.name] = (
-                st.result.drops_by_generator.get(gen.name, 0) + 1
-            )
-            st.result.add_gen_stats(gen.name, gen_meta)
             # "gate dropped a draw", not "degenerate output": two of the three
             # gates catch a degenerate generator, but the anchor gate catches a
             # perfectly fluent draw that merely deleted a link, and calling that
