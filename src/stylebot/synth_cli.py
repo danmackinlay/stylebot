@@ -89,16 +89,15 @@ _HEARTBEAT_SECS = 20.0
 
 
 # ---------------------------------------------------------------------------
-# The error vocabulary. These replace the `click.UsageError` /
-# `click.BadParameter` / `click.ClickException` / `SystemExit(1)` this module
-# used to raise: a library function reachable without click must not hand its
-# caller a CLI exception, and must never exit the process.
+# The error vocabulary. A library function reachable without click must not
+# hand its caller a CLI exception, and must never exit the process — so nothing
+# here raises `click.UsageError` / `click.BadParameter` / `click.ClickException`
+# or `SystemExit`.
 #
 # The split mirrors the repo's established error idiom (see
 # `tests/test_ai_style_log.py`): a configuration the caller must fix is a usage
 # error, a fine configuration against an unready world is not. `bin/ai_style.py`
-# maps the former to exit 2 and the latter to exit 1, unchanged from when the
-# raises were click's own.
+# maps the former to exit 2 and the latter to exit 1.
 # ---------------------------------------------------------------------------
 
 
@@ -137,13 +136,10 @@ class SynthGenerationError(SynthError, RuntimeError):
         self.result = result
 
 
-# Slop models are selected by `--openrouter-model` alone (one key, many upstream
-# models). The direct-API `gpt`/`local` presets were retired 2026-08-10: across
-# the blog's 4169 synthetic pairs every single one was OpenRouter-served, so the
-# preset path carried an `Arm.kind` branch, four flags (`--generator`,
-# `--gpt-model`, `--local-model`, `--context-window`) and a whole generator
-# factory that had never produced a corpus pair. Library callers that want a
-# different provider inject their own `synth.Generator`s.
+# Slop models are selected by `--openrouter-model` alone: one key reaches many
+# upstream models, which is what a multi-source rotation wants. There is no
+# direct-API preset path (decisions.md D30). A library caller that wants a
+# different provider injects its own `synth.Generator`s.
 
 
 # ---------------------------------------------------------------------------
@@ -155,10 +151,9 @@ class SynthGenerationError(SynthError, RuntimeError):
 #
 # `ChunkPolicy` is the one bundle NOT declared here: it belongs to
 # `stylebot.targets`, whose `iter_targets` consumes it, and it carries its own
-# flags for the same reason the five below do. It used to have a CLI-side twin
-# here — `ChunkOpts`, identical field for field, kept honest by a test that
-# asserted the two agreed. Re-exported rather than relocated: it is part of this
-# kit's surface, so a wrapper reaches it as `synth_cli.ChunkPolicy`.
+# flags for the same reason the five below do. Re-exported rather than
+# relocated: it is part of this kit's surface, so a wrapper reaches it as
+# `synth_cli.ChunkPolicy`.
 # ---------------------------------------------------------------------------
 
 
@@ -578,14 +573,12 @@ def pop_bundles(kw: dict, bundles: Mapping[str, type] = BUNDLE_PARAMS) -> dict[s
 class Arm:
     """One rotation arm: a (model, slop strategy, reasoning effort) combination.
 
-    Reifies the unit rendezvous assignment spreads targets across
-    (previously "arm" existed only in comments). ``name`` is the single
-    computation of the generator name that feeds ``synth_key`` — dry-run stubs
-    and real factory generators both take it from here, so the two paths
-    cannot drift apart. Every arm is OpenRouter-served since the preset path
-    was retired (2026-08-10), so ``name`` no longer branches on a ``kind``;
-    the spelling is unchanged, which is why retiring the presets did not re-key
-    a single cell.
+    Reifies the unit rendezvous assignment spreads targets across. ``name`` is
+    the single computation of the generator name that feeds ``synth_key`` —
+    dry-run stubs and real factory generators both take it from here, so the
+    two paths cannot drift apart. Every arm is OpenRouter-served, so ``name``
+    is unconditionally ``openrouter/<model>``: that spelling is a corpus
+    invariant, not a formatting choice, since changing it re-keys every cell.
     """
 
     model: str  # OpenRouter model id
@@ -720,9 +713,8 @@ def _resolve_windows(
 ) -> dict[str, int]:
     """Per-generator context-window sizes — live sessions only (the overflow
     guard + the window_fill covariate). Resolved from the OpenRouter models
-    registry, which is ground truth; the `--context-window` flag that used to
-    supply a manual fallback was retired with the presets (2026-08-10) — all
-    5 window values ever recorded on the corpus came from the registry. An
+    registry, which is ground truth — there is no manual-override flag, and
+    every window value ever recorded on the corpus came from the registry. An
     injected generator with a non-OpenRouter name simply gets no window (no
     overflow guard, no window_fill); a library caller that needs one passes
     `context_windows=` to `synth.synthesize_pairs` directly."""
@@ -777,11 +769,11 @@ def _report_result(
 ) -> None:
     """Render the run summary to `emit` — reporting only.
 
-    It used to `raise SystemExit(1)` on generation errors, which a library
-    function must not do; deciding the run failed is now `run_synth`'s (it
-    raises `SynthGenerationError`), and deciding what that costs the process is
-    the CLI's. `emit` is required for the same reason the exceptions are: a
-    reporting helper decides *what* to say, never *where* it lands.
+    Reporting only: deciding the run failed is `run_synth`'s (it raises
+    `SynthGenerationError`), and deciding what that costs the process is the
+    CLI's. `emit` is required rather than defaulted for the same reason: a
+    helper whose whole job is output decides *what* to say, never *where* it
+    lands.
     """
     if dry_run:
         emit(
@@ -1056,8 +1048,7 @@ def run_synth(
 
     # auto concurrency: OpenRouter multiplexes fine, so a run we built ourselves
     # gets 16. Injected generators (a library caller's own endpoint, which we
-    # know nothing about) still get sequential. The `and not generator_names`
-    # half of this test went with the presets (2026-08-10).
+    # know nothing about) still get sequential.
     max_workers = session.max_workers
     if max_workers <= 0:
         max_workers = 16 if (gen.openrouter_models and not gen.dry_run) else 1

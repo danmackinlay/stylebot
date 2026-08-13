@@ -44,12 +44,10 @@ from typing import Protocol
 from stylebot.jsonl import dumps_line, iter_jsonl, read_jsonl, write_jsonl_atomic
 
 # The pair-text extractors and the score join key live in `stylebot.pairs`; this
-# module imports the four it uses and nothing else. It used to re-export
-# `pair_body` / `extract_slop` / `extract_target` / `extract_output` and the
-# private `_recut_digest` on the stated grounds that "callers outside this repo
-# reach that surface through `stylebot.eval`" — untrue when written and untrue
-# since: every consumer (`infer`, `train`, `classify_train`, the scripts, the
-# tests, livingthing) imports them from `stylebot.pairs` directly.
+# module imports the four it uses and re-exports nothing: every consumer
+# (`infer`, `train`, `classify_train`, the scripts, the tests, livingthing)
+# reaches them at `stylebot.pairs` directly, so a facade here would be a second
+# import path for one surface.
 from stylebot.pairs import FIELD_EXTRACTORS, GEN_FACET_KEYS, iter_pairs, record_id
 from stylebot.provenance import file_sha256
 
@@ -593,8 +591,8 @@ def score_pairs_file(
 
     Records are processed in slices of `_SCORE_BATCH_RECORDS`. Each slice runs a
     single batched **Vale pre-pass** (`vale_score_many` — one `vale` process per
-    ~256 texts rather than one per text, which used to be ~9k processes on the
-    live corpus and was dominated by process startup), then fans the judge /
+    ~256 texts rather than one per text, which on the live corpus would be ~9k
+    processes and dominated by startup cost), then fans the judge /
     detector out over `max_workers` threads with each record's Vale result
     injected. A single writer appends results as they complete and flushes per
     line, so the file still grows during the run and a crash still costs at most

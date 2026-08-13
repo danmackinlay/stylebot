@@ -415,8 +415,8 @@ def reopen_session(ctx: click.Context, file: Path):
     default=True,
     help="Prepend the nearest preceding section heading (from the after text) "
     "as fixed context to each changed chunk, identically on both sides, and "
-    "record it in meta.context. On by default; --no-heading-context restores "
-    "the old bare-body behaviour. Ignored for --whole (no single heading).",
+    "record it in meta.context. On by default; --no-heading-context captures "
+    "bare bodies instead. Ignored for --whole (no single heading).",
 )
 @click.pass_context
 def save_session(
@@ -836,8 +836,8 @@ def _read_source(spec: str) -> str:
     default=True,
     help="Prepend the nearest preceding section heading (from the after text) "
     "as fixed context to each changed chunk, identically on both sides, and "
-    "record it in meta.context. On by default; --no-heading-context restores "
-    "the old bare-body behaviour. Ignored for --whole (no single heading).",
+    "record it in meta.context. On by default; --no-heading-context captures "
+    "bare bodies instead. Ignored for --whole (no single heading).",
 )
 @click.pass_context
 def pair(

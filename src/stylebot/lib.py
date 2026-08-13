@@ -111,16 +111,13 @@ QUARTO_SKIP_DIRS = frozenset({"renv", "packrat", "rsconnect", "node_modules"})
 def is_valid_qmd_file(path: Path, base: Path | None = None) -> bool:
     """Return True if this path qualifies as a valid .qmd file.
 
-    The `_`/`.` rule runs over **every** path segment. Until 2026-08-12 it
-    checked `path.name` alone — the *filename* — so `_partial.qmd` was excluded
-    while `_tmp/scratch.qmd` and `_freeze/…` were walked, and `_site` survived
-    only by being hardcoded. That matters more here than it looks: this
-    predicate feeds `iter_targets`, so a scratch copy of a post was offered to
-    `synth` as prose to generate training pairs from, and `synth_key` hashes
-    target text — the resulting pair would be indistinguishable from a real one
-    afterwards. Nothing caught it; the corpus is clean only because the blog's
-    scratch copies happen to carry `automation: 2` and the selector rejects
-    them. See livingthing `_plans/qmd-walker-2026-08.md`.
+    The `_`/`.` rule runs over **every** path segment, not just the filename.
+    That distinction is load-bearing and its failure is silent: this predicate
+    feeds `iter_targets`, so a segment-blind check walks `_tmp/scratch.qmd` and
+    `_freeze/…` and offers a scratch copy of a post to `synth` as prose to
+    generate training pairs from. `synth_key` hashes target text, so the
+    resulting pair is indistinguishable from a real one afterwards — nothing
+    downstream can detect it. See livingthing `_plans/qmd-walker-2026-08.md`.
 
     Every rule here is about *project-relative* structure, so pass `base` when
     you have one and the judgement is made below it. Without it an absolute

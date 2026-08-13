@@ -103,9 +103,9 @@ th{cursor:pointer;user-select:none;position:sticky;top:0;background:var(--bg)}
 #
 # `#rows` is load-bearing, not decoration: the scores page also contains the
 # headline `<table class=headline>`, and it comes FIRST. A bare
-# `querySelector('tbody')` binds every control to the headline instead — which
-# is exactly what the scores report used to do, silently, so its sort buttons
-# did nothing and its filter threw on the headline's `.txt`-less rows.
+# `querySelector('tbody')` would bind every control to the headline instead,
+# silently: sort buttons that do nothing, and a filter that throws on the
+# headline's `.txt`-less rows.
 _JS = """
 const tbody=document.querySelector('#rows tbody');
 const rows=()=>Array.from(tbody.querySelectorAll('tr'));

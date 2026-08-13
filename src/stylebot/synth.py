@@ -43,14 +43,19 @@ logger = logging.getLogger(__name__)
 
 # --- re-exports ---------------------------------------------------------------
 # The surface this module publishes on behalf of its implementation homes
-# (`stylebot.generators`, `stylebot.targets`). Load-bearing, not convenience:
-# `stylebot.synth_cli` and `bin/ai_style.py` import ONLY `stylebot.synth` and reach
-# every name below by attribute lookup (`synth.openrouter_generator`,
-# `synth.MIN_CHUNK_CHARS`, …); livingthing reaches `iter_targets`, `STRATEGIES`
-# and `openrouter_generator` the same way. Tests monkeypatch the factories HERE
-# because that is where production resolves them — a consequence of the CLI
-# idiom, not the reason for it. Names used by this module's own code are
-# imported normally above and are not part of this list.
+# (`stylebot.generators`, `stylebot.targets`). Every name here is reached by
+# ATTRIBUTE lookup — `synth.openrouter_generator`, `synth.iter_targets` — by
+# `stylebot.synth_cli`, `bin/ai_style.py` and livingthing, and that indirection
+# is what lets a test monkeypatch a factory at the one place production resolves
+# it. Direct `from stylebot.generators import …` is the better spelling for
+# anything that does not need patching, and both consumers already do that where
+# they can; this list is only what the attribute idiom actually requires.
+#
+# Keep it minimal, and check before adding: three names (`MAX_CHUNK_CHARS`,
+# `MERGE_MAX_CHUNK_CHARS`, `MIN_CHUNK_CHARS`) sat here unreached once
+# `ChunkPolicy` moved to its consumer, because nothing prunes this list on its
+# own. Names used by this module's own code are imported normally above and are
+# not part of it.
 from stylebot.generators import (  # noqa: E402, F401
     DEFAULT_GEN_TIMEOUT,
     DEFAULT_SLOP_MAX_TOKENS,
@@ -62,12 +67,7 @@ from stylebot.generators import (  # noqa: E402, F401
     prompt_id_of,
     resolve_strategy,
 )
-from stylebot.targets import (  # noqa: E402, F401
-    MAX_CHUNK_CHARS,
-    MERGE_MAX_CHUNK_CHARS,
-    MIN_CHUNK_CHARS,
-    iter_targets,
-)
+from stylebot.targets import iter_targets  # noqa: E402, F401
 
 
 def transform_similarity(a: str, b: str) -> float:
@@ -873,8 +873,8 @@ async def _draw_past_gates(
             # A provider failing DURING a redraw must not cost the session. We
             # already hold a gated draw, so the honest outcome is the one we
             # would have had without retries: drop this cell, keep going.
-            # (Until 2026-08-12 this abandoned every remaining turn, which
-            # turned one transient 502 into a session-wide loss.)
+            # Abandoning the remaining turns instead would turn one transient
+            # 502 into a session-wide loss.
             logger.warning(
                 "gate redraw %d failed (%s); dropping the cell and continuing: %s",
                 redraws,

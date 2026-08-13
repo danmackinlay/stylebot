@@ -18,6 +18,9 @@ once their work shipped and the code became the better description):
 | [`v2-longer-rewrites.md`](v2-longer-rewrites.md) | the scale curriculum — mechanism shipped, generation not yet run |
 | [`synth-flag-audit.md`](synth-flag-audit.md) | the `synth` option surface, as-audited evidence + open retirement proposals |
 | [`vscode-marker.md`](vscode-marker.md) | the editor marker design, thresholds, honesty caveats |
+| [`anchor-integrity.md`](anchor-integrity.md) | the anchor guard/gate/audit — shipped (D32); the as-audited case is kept as the argument for it |
+| [`masking-placement.md`](masking-placement.md) | *where* masking goes (D33) — decided, not yet built |
+| [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md) | the mask *encoding* — the open half of the masking work |
 
 Narrative rationale (the "why") lives in the blog post
 [*Fine-tuning danbot*](https://danmackinlay.name/notebook/fine_tuning_danbot.html). This file is

@@ -325,11 +325,11 @@ def anchor_delta(
 ) -> tuple[list[str], list[str]]:
     """`(lost, gained)` — anchors `candidate` dropped, and ones it conjured.
 
-    The guard was one-directional until 2026-08-12 and checked only the half the
-    corpus does NOT teach: measured over the 4,595-pair corpus, 115 pairs (3.0%
-    of the anchor-bearing ones) hand the styler a target that dropped an anchor,
-    while 876 (19.1% of the corpus) hand it a target carrying anchors its source
-    never had — half of those external URLs whose destination no model can know.
+    Both directions are checked because the corpus overwhelmingly teaches the
+    second: measured over the 4,595-pair corpus, 115 pairs (3.0% of the
+    anchor-bearing ones) hand the styler a target that dropped an anchor, while
+    876 (19.1% of the corpus) hand it a target carrying anchors its source never
+    had — half of those external URLs whose destination no model can know.
     Reverse-edit synthesis produces that directly: a generator that drops a link
     while "improving" a paragraph becomes, after the swap, an example reading
     *given text without links, produce text with these links*
