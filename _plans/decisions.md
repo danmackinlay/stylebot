@@ -772,3 +772,56 @@ identity for 4,140 synthetic pairs and touching it orphans the corpus.
 **Re-evaluate if**: `--anchor-log` data from real runs shows the styler damaging
 anchors often enough to justify the masking scheme in
 `_plans/placeholder-design-2026-08.md`, which is deliberately still unbuilt.
+
+## D33: masking goes in everywhere, with a dropout fraction — and synthesis-vs-inference is not an asymmetry
+
+**Decision**: mask anchors at synthesis (to stop generators deleting them), store
+pairs mostly masked with a deliberate unmasked fraction, and mask at inference.
+Placement, evidence and ordering: [`masking-placement.md`](masking-placement.md).
+The *encoding* is unchanged and still lives in
+[`placeholder-design-2026-08.md`](placeholder-design-2026-08.md).
+
+Step 3 of the anchor work was gated on data that did not exist (D32). The data
+arrived on the first gated v2 run and is unambiguous: at 3000-char cross-heading
+chunks, rejection on the residue ran 98% (gemma-4-26b), 99% (qwen3.5-9b) and
+**100%** (qwen3.6-35b-a3b, 0 written of 105 draws); rejections delete a median of
+5 anchors and up to 29; and redrawing recovered 2 cells from 106. The slop
+prompts already instruct verbatim link preservation, so no prompt fix remains.
+
+**Why it collapses at v2 scale specifically.** A chunk passes only if every
+anchor survives, so P(pass) ≈ s^k. Cross-heading packing moves median k from 2 to
+11. **This corrects an earlier reading in `findings.md`** that the rejection
+curve *plateaus* and v2 would therefore be affordable: that plateau came from
+v1's 600-char chunks, where high-k cases were rare, and the requirement is
+exponential in k rather than asymptotic.
+
+**Rejected: masking everywhere with no dropout.** Simpler and internally
+coherent, and the reason against it is not "keep the corpus natural" — that is
+not a goal. It is that two documented paths depend on the styler *not requiring*
+the mask. `workflow_style` degrades to unmasked styling when masking or its
+integrity pre-check fails, so a mask-only styler turns a graceful fallback into
+an out-of-distribution failure exactly when things are already going wrong; and
+`ai-style run` ships no masker at all, so a mask-only adapter would only work
+behind the blog's wrapper. The dropout is the `CONTEXT_DROPOUT = 0.1` idiom
+("a fraction kept heading-less so the styler doesn't require one"), not a hedge.
+
+**Rejected: "masking is easier at synthesis than at inference because you own
+both texts."** Wrong, and recorded because it is easy to re-derive. You own the
+mask→unmask mapping equally in both places. The real difference is train/serve
+distribution: `〈MASKED_*〉` appears on the slop side of 21 of 8,264 pairs and on
+the target side of **zero**, so the styler has never been asked to emit a
+sentinel `STYLE_SYSTEM` has always promised it would preserve. Inference masking
+is also already built (`workflow_style.rewrite_masked`); the unbuilt part is the
+corpus support that makes it in-distribution.
+
+**Rejected: treating the voice classifier as a blocker.** It is the one consumer
+consistency cannot fully fix — a logistic head on a *frozen* `StyleDistance`
+encoder, which retraining cannot teach a new token — but `train-clf` is free,
+keyless and CV-reporting, so it is a prerequisite *measurement* and nothing more.
+The VS Code extension is not a concern at all: it already defers to
+`dan-style serve`, so masking lives server-side.
+
+**Re-evaluate if**: the classifier measurement comes back materially worse under
+masking, or the fine-tuned styler turns out to handle sentinels worse than the
+general models `placeholder-design-2026-08.md` measured — its own warning, and
+the one number that changes after step 2 trains on them.

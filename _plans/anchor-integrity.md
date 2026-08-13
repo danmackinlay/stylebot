@@ -67,9 +67,14 @@ still explains why each piece exists. What landed:
   against link-dense prose. Redraw instead — a rejected draw is paid for either
   way, and ~80% of rejections clear on one.
 
-**Step 3 remains gated and unstarted**, which is the point: nothing about
-masking should be built until `--anchor-log` output from a real run says how
-often an unmasked candidate actually damages an anchor.
+**Step 3 was unblocked 2026-08-12** — by the gate itself, which is what it was
+for. The first gated v2 run answered the question: on 3000-char cross-heading
+chunks, rejection ran 98–100% by arm, rejections delete a median of 5 anchors,
+and redrawing recovered 2 cells from 106. Placement, ordering and the
+prerequisite classifier measurement:
+[`masking-placement.md`](masking-placement.md); the decision and its rejected
+alternatives are D33. The *encoding* remains
+[`placeholder-design-2026-08.md`](placeholder-design-2026-08.md), unchanged.
 
 ## Current state, verified 2026-08-11
 
@@ -161,18 +166,25 @@ Watch out:
 predicate is available as a `selector` so a training run can exclude them
 without editing the corpus.
 
-### 3. Masking — GATED on step 0
+### 3. Masking — was gated on step 0; UNBLOCKED 2026-08-12
 
-Only if step 0 shows unmasked anchor survival is actually bad. The design work
-is done: read [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md),
-which has measured retention per model and per failure mode, and follow its
-priority list. Its load-bearing conclusion is that **no scheme guarantees
-recall, so validating the placeholder multiset at demask time is the part that
-matters, not the encoding.**
+The gate fired: unmasked anchor survival on link-dense passages is not merely
+bad, it is near-total failure (98–100% rejection by arm at the 3000-char
+budget). The placement decision — which stages mask, what the corpus stores, and
+the dropout fraction that keeps the styler from *requiring* the mask — is
+[`masking-placement.md`](masking-placement.md) and D33.
 
-If this happens, the blog-side masker should move into stylebot with the policy
-(which constructs, which classes) as caller-supplied parameters — the
-`div_is_prose` idiom.
+Unchanged and still authoritative for the *encoding*:
+[`placeholder-design-2026-08.md`](placeholder-design-2026-08.md), whose
+load-bearing conclusion is that **no scheme guarantees recall, so validating the
+placeholder multiset at demask time is the part that matters, not the
+encoding.**
+
+The blog-side masker should move into stylebot with the policy (which
+constructs, which classes) as caller-supplied parameters — the `div_is_prose`
+idiom. That is now load-bearing rather than tidy: `ai-style run` ships no
+masker, so a corpus trained mask-first would otherwise produce an adapter
+usable only behind the blog's wrapper.
 
 ## Do not
 

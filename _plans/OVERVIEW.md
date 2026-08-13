@@ -197,19 +197,20 @@ live in the blog's `_training_pairs/RUNBOOK.md`; durable decisions in
   contrast against, and no way to back-fill one. Generating the v2 batches is
   itself the unblock; consider re-synthesising a labelled 1500 slice so the
   baseline arm is stamped rather than assumed (`findings.md`).
-- **Anchor integrity, step 3 only** ([stylebot#1](https://github.com/danmackinlay/stylebot/issues/1)):
-  the guard, the write-gate and the run-level audit log shipped 2026-08-12
-  ([`anchor-integrity.md`](anchor-integrity.md), D32); what is left is
-  **masking, and it is deliberately gated on data that does not exist yet**.
-  Run `ai-style run --anchor-log` over real drafts and answer "how often does an
-  unmasked candidate lose or invent an anchor?" before building any of
-  [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md) — its own
-  conclusion was that a good enough decoder makes masking a vote of no
-  confidence the data may not justify. **That is a live outcome. Do not
-  pre-empt it.** Also open, and independent of masking: the blog-side masker in
-  `livingthing.workflow_style` is mechanism sitting outside the package whose
-  `STYLE_SYSTEM` promises `〈MASKED_*〉` preservation — the same generic/policy
-  inversion `merge_adapter` resolved for MLX export.
+- **Masking** ([stylebot#1](https://github.com/danmackinlay/stylebot/issues/1)
+  step 3): the guard, write-gate and audit log shipped 2026-08-12 (D32), and the
+  gate promptly answered the question it was built to gate on — at v2 chunk
+  scale, unmasked anchor survival is 0–22% by arm and redraws recover 2%
+  (`findings.md`). **Masking is now justified, and the placement decision is
+  made**: mask at synthesis, store mostly-masked with a `CONTEXT_DROPOUT`-style
+  unmasked fraction, mask at inference —
+  [`masking-placement.md`](masking-placement.md), D33; the *encoding* stays
+  [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md). One free
+  prerequisite before building: re-fit the voice classifier on masked text
+  (`train-clf`) — a logistic head on a frozen `StyleDistance` encoder is the one
+  consumer consistency alone cannot fix. Folding the blog-side masker into
+  stylebot is now load-bearing rather than tidy, since `ai-style run` ships no
+  masker and a mask-first corpus would otherwise yield a blog-only adapter.
 - **Fireworks serving**: PEFT upload + scale-to-zero, retry on
   `503 DEPLOYMENT_SCALING_UP`; acceptance is the same chat-template parity test
   the MLX exit passed (D8 / `findings.md`).

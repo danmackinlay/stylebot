@@ -536,3 +536,40 @@ batch was interrupted at 1,985 of 2,491). Interpretation and the three ways to
 analyse it honestly:
 [`v2-longer-rewrites.md`](v2-longer-rewrites.md), "What `meta.merge_max_chars`
 actually means".
+
+**Anchor survival collapses at v2 chunk scale — the measurement that unblocked
+masking** (2026-08-12, first gated run at the 3000-char cross-heading budget;
+source `lost_draws.jsonl` + the live corpus).
+
+| arm | draws rejected on the residue |
+|---|---:|
+| qwen/qwen3.6-35b-a3b | **100%** (0 written of 105) |
+| qwen/qwen3.5-9b | 99% |
+| google/gemma-4-26b-a4b-it | 98% |
+| deepseek/deepseek-v4-flash-0731 | 78% |
+
+Rejections are **wholesale, not marginal**: across 1,215 anchor rejections,
+median **5** anchors deleted per rejected draw, mean 6.2, max **29**. Redrawing
+does not help — 106 cells redrawn, 212 extra draws spent, **2 recovered (1.9%)**.
+The slop prompts already instruct verbatim link preservation, so this is
+instruction-following collapsing under length and density, not a missing prompt.
+
+**This corrects the "rejection plateaus" reading recorded above.** A chunk passes
+only if *every* anchor survives, so P(pass) ≈ s^k in the anchor count; at k=10 a
+model needs per-anchor fidelity ≈0.97 to pass three runs in four. Cross-heading
+packing moves median k from 2 (v1, 600 chars) to 8 (3000) to 11 (4500), so the
+requirement is **exponential in k, not asymptotic**. The earlier plateau was
+measured on v1's short chunks where high-k cases were rare and unrepresentative;
+it should not be used to size a v2 run.
+
+**The residue self-selects for difficulty**, which is why re-running never
+converges. At the 3000 budget, 1,181 of 1,282 cells are covered (92.1%); cells
+already written carry median 8 anchors with 51.0% at 8+, while the 101 still
+missing carry median **10** with **72.3%** at 8+. Each run creams off what passes
+and leaves a harder pool.
+
+**Sentinel exposure in the corpus** (2026-08-12, 8,264 pairs): `〈MASKED_*〉`
+appears on the slop side of **21** pairs and on the target side of **zero**. The
+styler has never been asked to *emit* a sentinel that `STYLE_SYSTEM` has always
+promised it would preserve — the gap that makes inference-side masking
+out-of-distribution today (D33).
