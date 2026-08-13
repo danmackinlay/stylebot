@@ -331,7 +331,7 @@ def synth_cmd(
             blog_root=blog_root,
             selector=selector,
             glob=glob,
-            **opts.pop("chunk").iter_targets_kwargs(),
+            policy=opts.pop("chunk"),
         )
 
         # The read-only inspection modes (--sample/--report) exit before generation:

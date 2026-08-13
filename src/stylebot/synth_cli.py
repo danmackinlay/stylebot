@@ -22,9 +22,9 @@ first and passes None when nothing will be written, so its own "no silent
 default" message stays in its own command), and provenance tags. A callback's
 `**kw` becomes bundles via `pop_bundles`.
 
-`ChunkOpts` is the CLI-side twin of `targets.ChunkPolicy` (the same hygiene
-knobs, plus `--sort`, which `iter_targets` takes as a `sort_key` callable); it
-feeds `iter_targets` on the *selection* side, the other five feed `run_synth`.
+`ChunkPolicy` (re-exported from `stylebot.targets`, which consumes it) feeds
+`iter_targets` on the *selection* side, before `run_synth` ever sees a target;
+the other five bundles feed `run_synth` itself.
 
 **click declares this module's options; it does not decide its control flow,
 and it does not own its output.** The option bundles carry
@@ -40,8 +40,8 @@ boundary, not here.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, fields
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -58,11 +58,12 @@ from stylebot.cli_options import (
     silent,
 )
 from stylebot.splits import ROLES as SPLIT_ROLES
+from stylebot.targets import ChunkPolicy
 
 __all__ = [
     "Arm",
     "BUNDLE_PARAMS",
-    "ChunkOpts",
+    "ChunkPolicy",
     "CorpusOpts",
     "DEFAULT_BUNDLES",
     "Emitter",
@@ -80,7 +81,6 @@ __all__ = [
     "iter_arms",
     "pop_bundles",
     "run_synth",
-    "sort_key",
     "synth_options",
 ]
 
@@ -146,135 +146,20 @@ class SynthGenerationError(SynthError, RuntimeError):
 # different provider inject their own `synth.Generator`s.
 
 
-def sort_key(name: str):
-    """Map the --sort choice to an iter_targets sort_key callable."""
-    if name == "none":
-        return None
-    if name == "length":
-        return lambda t: len(t.text)
-    if name == "source":
-        return lambda t: (t.source, t.chunk_index)
-    # Unreachable from the CLI (`--sort` is a click.Choice); this guards the
-    # library path, where a caller sets `ChunkOpts(sort_name=…)` in code.
-    raise SynthConfigError(f"unknown sort key {name!r}", param_hint="--sort")
-
-
 # ---------------------------------------------------------------------------
 # The option bundles: the surface grouped along its seams, one frozen dataclass
 # per consumer. Each field carries its own flag (`opt(default, *decls, **kw)`),
 # so a default is declared exactly once and `run_synth` — a public library
 # entry point reachable without click — cannot drift from the CLI. A field
 # WITHOUT `opt()` is library-only: no flag, set by a caller in code.
+#
+# `ChunkPolicy` is the one bundle NOT declared here: it belongs to
+# `stylebot.targets`, whose `iter_targets` consumes it, and it carries its own
+# flags for the same reason the five below do. It used to have a CLI-side twin
+# here — `ChunkOpts`, identical field for field, kept honest by a test that
+# asserted the two agreed. Re-exported rather than relocated: it is part of this
+# kit's surface, so a wrapper reaches it as `synth_cli.ChunkPolicy`.
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ChunkOpts:
-    """Chunking / hygiene — feeds `iter_targets`, i.e. WHAT counts as a target.
-
-    Consumed on the *selection* side, before `run_synth` ever sees the targets:
-    the caller splats `iter_targets_kwargs()` into `synth.iter_targets`. The
-    twin of `targets.ChunkPolicy` with `sort_name` added (the flag is a choice
-    string; `iter_targets` wants a `sort_key` callable).
-    """
-
-    cli_section = "Chunking / hygiene (selection)"
-
-    min_chars: int = opt(
-        synth.MIN_CHUNK_CHARS,
-        "--min-chars",
-        show_default=True,
-        type=int,
-        help="Skip prose chunks shorter than this.",
-    )
-    max_chars: int = opt(  # 0 -> None (uncapped) at translation
-        synth.MAX_CHUNK_CHARS,
-        "--max-chars",
-        show_default=True,
-        type=int,
-        help="Drop prose chunks longer than this (0 disables the cap).",
-    )
-    prose_only: bool = opt(
-        True,
-        "--prose-only/--no-prose-only",
-        show_default=True,
-        help="Drop code/math/:::divs/blockquotes before chunking.",
-    )
-    ignore_markers: Sequence[str] = opt(
-        (),
-        "--ignore-marker",
-        "ignore_markers",
-        multiple=True,
-        help="Drop any chunk containing this literal (repeatable), e.g. a stub marker.",
-    )
-    stop_at_headers: Sequence[str] = opt(
-        (),
-        "--stop-at-header",
-        "stop_at_headers",
-        multiple=True,
-        help="Truncate each post body at this section header (repeatable), e.g. '## Incoming'.",
-    )
-    drop_link_dumps: bool = opt(
-        True,
-        "--drop-link-dumps/--keep-link-dumps",
-        show_default=True,
-        help="Drop chunks that are mostly markdown links (little authored prose).",
-    )
-    drop_list_items: bool = opt(
-        False,
-        "--drop-list-items/--keep-list-items",
-        show_default=True,
-        help="Drop chunks that are entirely markdown list items.",
-    )
-    merge: bool = opt(
-        False,
-        "--merge/--no-merge",
-        show_default=True,
-        help="Pack consecutive prose paragraphs within a section into multi-paragraph passages.",
-    )
-    merge_max_chars: int = opt(
-        synth.MERGE_MAX_CHUNK_CHARS,
-        "--merge-max-chars",
-        show_default=True,
-        type=int,
-        help="Soft char budget per packed passage (merge mode).",
-    )
-    heading_context: str = opt(
-        "none",
-        "--heading-context",
-        type=click.Choice(["none", "immediate"]),
-        show_default=True,
-        help="Prepend the section heading (verbatim) to both sides of each pair as fixed context.",
-    )
-    cross_heading: bool = opt(
-        False,
-        "--cross-heading/--no-cross-heading",
-        show_default=True,
-        help="Pack across section boundaries with headings as chunk content (needs --merge; "
-        "overrides --heading-context). This, not --merge-max-chars, is what buys chunk "
-        "length.",
-    )
-    sort_name: str = opt(
-        "none",
-        "--sort",
-        "sort_name",
-        type=click.Choice(["none", "length", "source"]),
-        show_default=True,
-    )
-    # Library-only (no `opt()`, so no flag), like `session_budgets` and
-    # `report_title`: a predicate is not expressible on a command line, and
-    # *which* `:::` classes wrap prose is blog policy set in code — see
-    # `stylebot.markdown` and livingthing's `training_targets.div_is_prose`.
-    div_is_prose: Callable[[str], bool] | None = None
-
-    def iter_targets_kwargs(self) -> dict:
-        """This bundle shaped for `iter_targets` — the single documented path
-        from the CLI's chunking flags to selection (`--max-chars 0` -> no cap;
-        `--sort NAME` -> a `sort_key` callable)."""
-        out = {f.name: getattr(self, f.name) for f in fields(self)}
-        out["max_chars"] = out["max_chars"] or None
-        out["sort_key"] = sort_key(out.pop("sort_name"))
-        return out
 
 
 @dataclass(frozen=True)
@@ -637,7 +522,7 @@ class CorpusOpts:
 # The shared surface, keyed by the parameter each bundle binds to downstream:
 # "chunk" goes to `iter_targets`, the rest are `run_synth`'s own bundle params.
 BUNDLE_PARAMS: dict[str, type] = {
-    "chunk": ChunkOpts,
+    "chunk": ChunkPolicy,
     "inspection": InspectOpts,
     "gen": GenOpts,
     "session": SessionOpts,
@@ -1023,7 +908,7 @@ def run_synth(
 
     The knobs arrive as **option bundles** — ``run_synth(targets, data_dir=d,
     gen=GenOpts(max_tokens=900))``, or splatted from ``pop_bundles(kw)`` in a
-    click callback. `ChunkOpts` is not among them: it is consumed on the
+    click callback. `ChunkPolicy` is not among them: it is consumed on the
     selection side, by `iter_targets`.
 
     `data_dir` may be None **only** for the inspection modes, which write

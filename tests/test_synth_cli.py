@@ -16,7 +16,6 @@ and `run_synth` — the generic machinery is covered in `test_cli_options.py`.
 from __future__ import annotations
 
 import ast
-import inspect as inspect_mod
 from dataclasses import fields
 from pathlib import Path
 
@@ -25,13 +24,15 @@ import pytest
 from click.testing import CliRunner
 
 from stylebot import synth, synth_cli
+from stylebot import targets as targets_mod
 from stylebot.bin.ai_style import main as ai_style_main
 from stylebot.cli_options import EMIT_LEVELS, cli_fields, field_owners
+from stylebot.targets import Target as _Target
 
 
 def test_synth_options_repins_defaults():
     @click.command()
-    @synth_cli.synth_options(defaults=[synth_cli.ChunkOpts(merge=True, min_chars=123)])
+    @synth_cli.synth_options(defaults=[synth_cli.ChunkPolicy(merge=True, min_chars=123)])
     def cmd(**kw):
         click.echo(f"{kw['merge']} {kw['min_chars']} {kw['drop_list_items']}")
 
@@ -70,13 +71,29 @@ def test_synth_options_rejects_unknown_names():
         synth_cli.synth_options(exclude=("also_not_a_knob",))
 
 
-def test_chunk_opts_iter_targets_kwargs():
-    # The single documented selection-side path, with its two translations.
-    chunk = synth_cli.ChunkOpts(min_chars=10, max_chars=0, sort_name="length")
-    kwargs = chunk.iter_targets_kwargs()
-    assert kwargs["min_chars"] == 10
-    assert kwargs["max_chars"] is None  # 0 -> uncapped
-    assert callable(kwargs["sort_key"]) and "sort_name" not in kwargs
+def test_chunk_policy_translates_its_two_cli_spellings():
+    # The CLI spells "uncapped" as 0 and an ordering as a choice string; the
+    # library wants None and a callable. Both translations live on the type, so
+    # a caller cannot forget to apply them.
+    chunk = synth_cli.ChunkPolicy(min_chars=10, max_chars=0, sort_name="length")
+    assert chunk.min_chars == 10
+    assert chunk.max_chars is None  # 0 -> uncapped, normalised in __post_init__
+    assert chunk.sort_key()(_Target("abcd", "p.qmd", 0, 1)) == 4
+    assert synth_cli.ChunkPolicy().sort_key() is None  # "none" -> no ordering
+
+
+def test_chunk_policy_rejects_an_unknown_sort_name():
+    # Unreachable from the CLI (--sort is a click.Choice); this is the library
+    # path, where a caller builds the policy in code.
+    with pytest.raises(ValueError, match="unknown sort key"):
+        synth_cli.ChunkPolicy(sort_name="nope").sort_key()
+
+
+def test_iter_targets_refuses_policy_and_loose_kwargs_together():
+    # Two ways to say the same thing, and silently preferring one would make the
+    # other's knobs vanish without a word.
+    with pytest.raises(ValueError, match="not both"):
+        synth.iter_targets(files=[], policy=synth_cli.ChunkPolicy(), min_chars=10)
 
 
 def test_pop_bundles_folds_a_callback_kwargs():
@@ -126,32 +143,28 @@ def test_every_bundle_field_has_a_consumer():
         and isinstance(node.value, ast.Name)
         and node.value.id in holders
     }
-    chunk_fields = {f.name for f in fields(synth_cli.ChunkOpts)}
+    chunk_fields = {f.name for f in fields(synth_cli.ChunkPolicy)}
     for bundle in synth_cli.DEFAULT_BUNDLES:
         for f in fields(bundle):
             if f.name in chunk_fields:
                 continue  # splatted wholesale into iter_targets — checked below
             assert f.name in read, f"{bundle.__name__}.{f.name} is never read"
 
-    # The chunk bundle's consumer proof: every key it produces is a real
-    # iter_targets parameter, checked against the live signature.
-    accepted = set(inspect_mod.signature(synth.iter_targets).parameters)
-    produced = set(synth_cli.ChunkOpts().iter_targets_kwargs())
-    assert produced <= accepted, f"not iter_targets params: {sorted(produced - accepted)}"
-    assert len(produced) == len(chunk_fields)  # sort_name -> sort_key, 1:1
-
-
-def test_chunk_opts_agree_with_chunk_policy():
-    # ChunkOpts is the CLI-side twin of targets.ChunkPolicy; where they share a
-    # knob they must share its default, or --min-chars et al. mean one thing on
-    # the CLI and another to a library caller building a policy directly.
-    from stylebot.targets import ChunkPolicy
-
-    policy, opts = ChunkPolicy(), synth_cli.ChunkOpts()
-    shared = {f.name for f in fields(ChunkPolicy)} & {f.name for f in fields(synth_cli.ChunkOpts)}
-    assert len(shared) == len(fields(ChunkPolicy)), "a ChunkPolicy knob has no flag"
-    for name in shared:
-        assert getattr(policy, name) == getattr(opts, name), f"{name} default differs"
+    # The chunk bundle's consumer proof, in its own module: every ChunkPolicy
+    # field is read as `policy.<field>` (or, for the two the type translates
+    # itself, on `self`) somewhere in `stylebot.targets`. There is no longer a
+    # kwargs dict to check against a signature — the policy IS what iter_targets
+    # takes, which is the point of the collapse.
+    targets_src = Path(targets_mod.__file__).read_text(encoding="utf-8")
+    policy_read = {
+        node.attr
+        for node in ast.walk(ast.parse(targets_src))
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in {"policy", "self"}
+    }
+    for name in chunk_fields:
+        assert name in policy_read, f"ChunkPolicy.{name} is never read"
 
 
 def test_run_synth_takes_bundles_only():
@@ -177,7 +190,7 @@ def test_run_synth_takes_bundles_only():
         synth_cli.run_synth([], data_dir=None, max_tokens=900)
     # ChunkOpts is not a run_synth bundle: it is consumed by iter_targets.
     with pytest.raises(TypeError, match="unexpected keyword"):
-        synth_cli.run_synth([], data_dir=None, chunk=synth_cli.ChunkOpts())
+        synth_cli.run_synth([], data_dir=None, chunk=synth_cli.ChunkPolicy())
 
 
 def test_synth_command_surface_is_exactly_the_bundles_plus_its_own():

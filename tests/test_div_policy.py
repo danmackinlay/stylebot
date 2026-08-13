@@ -78,13 +78,12 @@ def test_policy_admits_callout_prose_only(post: Path):
     assert "figure caption that is markup" not in joined
 
 
-def test_chunk_opts_carries_the_hook_without_a_flag(post: Path):
+def test_chunk_policy_carries_the_hook_without_a_flag(post: Path):
     # Library-only field: no `opt()`, so it never appears in --help, but it does
-    # reach `iter_targets` through the documented kwargs path.
-    opts = synth_cli.ChunkOpts(min_chars=60, drop_link_dumps=False, div_is_prose=_is_callout)
-    kwargs = opts.iter_targets_kwargs()
-    assert kwargs["div_is_prose"] is _is_callout
-    texts = [t.text for t in iter_targets(files=[post], **kwargs)]
+    # reach `iter_targets` as part of the policy the CLI hands over.
+    policy = synth_cli.ChunkPolicy(min_chars=60, drop_link_dumps=False, div_is_prose=_is_callout)
+    assert policy.div_is_prose is _is_callout
+    texts = [t.text for t in iter_targets(files=[post], policy=policy)]
     assert any("the author's own voice" in t for t in texts)
 
 

@@ -19,6 +19,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import click
+
+from stylebot.cli_options import opt
 from stylebot.lib import (
     editable_prose,
     gather_qmd_files,
@@ -30,6 +33,9 @@ from stylebot.markdown import DivIsProse, heading_title, is_heading_line
 from stylebot.splits import role_of, unit_from_digest
 
 logger = logging.getLogger(__name__)
+
+#: The orderings `ChunkPolicy.sort_key` knows how to build.
+SORT_KEYS = ("none", "length", "source")
 
 # Chunk hygiene. There is no voice transform to learn from a bare heading, a
 # fenced code block, a link list, or a stub paragraph — so trim them.
@@ -72,29 +78,130 @@ class Target:
 
 @dataclass(frozen=True)
 class ChunkPolicy:
-    """The chunk-hygiene knobs, bundled — internal only.
+    """The chunk-hygiene knobs — WHAT counts as a target. One declaration.
 
-    `iter_targets`' flat kwargs remain the public API; this is how they thread
-    through `_post_targets`.
+    This was three: this dataclass, `iter_targets`' flat keyword defaults
+    restating every field, and `synth_cli.ChunkOpts` restating them a third time
+    for the CLI. The defaults lived in two places inside this module alone, and
+    a test existed whose whole job was asserting the two copies still agreed.
+
+    Each field carries its own click flag via `cli_options.opt()`, so
+    `ai-style synth` and livingthing's `dan-style synth` declare the surface
+    once and re-pin what differs with `synth_options(defaults=[ChunkPolicy(…)])`.
+    A field WITHOUT `opt()` is library-only: no flag, set by a caller in code.
     """
 
-    min_chars: int = MIN_CHUNK_CHARS
-    max_chars: int | None = MAX_CHUNK_CHARS
-    prose_only: bool = True
-    ignore_markers: Sequence[str] = ()
-    drop_link_dumps: bool = True
-    drop_list_items: bool = False
-    merge: bool = False
-    merge_max_chars: int = MERGE_MAX_CHUNK_CHARS
-    stop_at_headers: Sequence[str] = ()
-    heading_context: str = "none"
+    cli_section = "Chunking / hygiene (selection)"
+
+    min_chars: int = opt(
+        MIN_CHUNK_CHARS,
+        "--min-chars",
+        show_default=True,
+        type=int,
+        help="Skip prose chunks shorter than this.",
+    )
+    max_chars: int | None = opt(
+        MAX_CHUNK_CHARS,
+        "--max-chars",
+        show_default=True,
+        type=int,
+        help="Drop prose chunks longer than this (0 disables the cap).",
+    )
+    prose_only: bool = opt(
+        True,
+        "--prose-only/--no-prose-only",
+        show_default=True,
+        help="Drop code/math/:::divs/blockquotes before chunking.",
+    )
+    ignore_markers: Sequence[str] = opt(
+        (),
+        "--ignore-marker",
+        "ignore_markers",
+        multiple=True,
+        help="Drop any chunk containing this literal (repeatable), e.g. a stub marker.",
+    )
+    drop_link_dumps: bool = opt(
+        True,
+        "--drop-link-dumps/--keep-link-dumps",
+        show_default=True,
+        help="Drop chunks that are mostly markdown links (little authored prose).",
+    )
+    drop_list_items: bool = opt(
+        False,
+        "--drop-list-items/--keep-list-items",
+        show_default=True,
+        help="Drop chunks that are entirely markdown list items.",
+    )
+    merge: bool = opt(
+        False,
+        "--merge/--no-merge",
+        show_default=True,
+        help="Pack consecutive prose paragraphs within a section into multi-paragraph passages.",
+    )
+    merge_max_chars: int = opt(
+        MERGE_MAX_CHUNK_CHARS,
+        "--merge-max-chars",
+        show_default=True,
+        type=int,
+        help="Soft char budget per packed passage (merge mode).",
+    )
+    stop_at_headers: Sequence[str] = opt(
+        (),
+        "--stop-at-header",
+        "stop_at_headers",
+        multiple=True,
+        help="Truncate each post body at this section header (repeatable), e.g. '## Incoming'.",
+    )
+    heading_context: str = opt(
+        "none",
+        "--heading-context",
+        type=click.Choice(["none", "immediate"]),
+        show_default=True,
+        help="Prepend the section heading (verbatim) to both sides of each pair as fixed context.",
+    )
     # Pack across section boundaries, with heading lines as chunk CONTENT.
     # Only meaningful with `merge`; forces `heading_context` off, since an
     # inline heading is text the styler rewrites rather than fixed context.
-    cross_heading: bool = False
-    # Which `:::` div classes wrap prose rather than markup (see
-    # `stylebot.markdown`). None = every div protected wholesale.
+    cross_heading: bool = opt(
+        False,
+        "--cross-heading/--no-cross-heading",
+        show_default=True,
+        help="Pack across section boundaries with headings as chunk content (needs --merge; "
+        "overrides --heading-context). This, not --merge-max-chars, is what buys chunk length.",
+    )
+    sort_name: str = opt(
+        "none",
+        "--sort",
+        "sort_name",
+        type=click.Choice(SORT_KEYS),
+        show_default=True,
+        help="Order the resulting chunks.",
+    )
+    # Library-only (no `opt()`): a predicate is not expressible on a command
+    # line, and *which* `:::` classes wrap prose is blog policy set in code —
+    # see `stylebot.markdown` and livingthing's `training_targets.div_is_prose`.
     div_is_prose: DivIsProse | None = None
+
+    def __post_init__(self) -> None:
+        # `--max-chars 0` is the CLI's spelling of "uncapped", and the library's
+        # is None. Reconciling them HERE makes the sentinel a property of the
+        # type rather than of one translation helper every caller had to
+        # remember: a 0 that slipped past would drop every chunk, since
+        # `_keep_chunk` compares `len(s) > max_chars`.
+        if self.max_chars == 0:
+            object.__setattr__(self, "max_chars", None)
+
+    def sort_key(self) -> Callable[[Target], object] | None:
+        """This policy's `--sort` choice as an ordering callable (None = none)."""
+        if self.sort_name == "none":
+            return None
+        if self.sort_name == "length":
+            return lambda t: len(t.text)
+        if self.sort_name == "source":
+            return lambda t: (t.source, t.chunk_index)
+        # Unreachable from the CLI (`--sort` is a click.Choice); this guards the
+        # library path, where a caller sets `ChunkPolicy(sort_name=…)` in code.
+        raise ValueError(f"unknown sort key {self.sort_name!r}; known: {', '.join(SORT_KEYS)}")
 
 
 def _norm_header(text: str) -> str:
@@ -338,19 +445,9 @@ def iter_targets(
     blog_root: Path | str | None = None,
     selector: Callable[[dict], bool] = is_human_authored,
     glob: str = "**/*.qmd",
-    min_chars: int = MIN_CHUNK_CHARS,
-    max_chars: int | None = MAX_CHUNK_CHARS,
-    prose_only: bool = True,
-    ignore_markers: Sequence[str] = (),
-    drop_link_dumps: bool = True,
-    drop_list_items: bool = False,
-    merge: bool = False,
-    merge_max_chars: int = MERGE_MAX_CHUNK_CHARS,
-    stop_at_headers: Sequence[str] = (),
-    heading_context: str = "none",
-    cross_heading: bool = False,
-    div_is_prose: DivIsProse | None = None,
+    policy: ChunkPolicy | None = None,
     sort_key: Callable[[Target], object] | None = None,
+    **chunk_kw,
 ) -> list[Target]:
     """Collect prose chunks to use as synthesis targets.
 
@@ -359,6 +456,13 @@ def iter_targets(
     **`blog_root`** walks for `glob` and keeps posts where `selector(meta)` is
     true. Chunk hygiene below is all generic — policy stays in `selector` and the
     caller's marker choice.
+
+    The chunk knobs arrive either as a ready `policy=ChunkPolicy(...)` (what the
+    CLI kit hands in, since the bundle IS the flag surface) or as loose keywords
+    forwarded to its constructor — `iter_targets(blog_root=r, merge=True)`. They
+    are `**chunk_kw` rather than a restated signature so `ChunkPolicy` owns every
+    default exactly once; an unknown or misspelled knob is a `TypeError` from the
+    dataclass constructor at the call, and each one is documented below.
 
     - `prose_only` (default True): drop protected blocks — fenced code,
       block ``$$math$$``, ``:::`` divs/callouts, blockquotes — before splitting,
@@ -393,7 +497,8 @@ def iter_targets(
       `heading_context` off — an inline heading is text the styler rewrites, not
       fixed context. See `_plans/v2-longer-rewrites.md`.
 
-    `sort_key` orders the resulting chunks. Returns a flat list of `Target`s.
+    `sort_key` orders the resulting chunks, overriding the policy's own
+    `--sort` choice. Returns a flat list of `Target`s.
     """
     if files is not None and blog_root is not None:
         raise ValueError(
@@ -401,23 +506,16 @@ def iter_targets(
         )
     if files is None and blog_root is None:
         raise ValueError("provide `files` (pre-selected list) or `blog_root` (walk)")
+    if policy is not None and chunk_kw:
+        raise ValueError(
+            f"pass either `policy` or loose chunk keywords, not both "
+            f"(got policy= plus {sorted(chunk_kw)})"
+        )
 
     targets: list[Target] = []
     root = Path(blog_root) if blog_root is not None else None
-    policy = ChunkPolicy(
-        min_chars=min_chars,
-        max_chars=max_chars,
-        prose_only=prose_only,
-        ignore_markers=ignore_markers,
-        drop_link_dumps=drop_link_dumps,
-        drop_list_items=drop_list_items,
-        merge=merge,
-        merge_max_chars=merge_max_chars,
-        cross_heading=cross_heading,
-        stop_at_headers=stop_at_headers,
-        heading_context=heading_context,
-        div_is_prose=div_is_prose,
-    )
+    policy = policy if policy is not None else ChunkPolicy(**chunk_kw)
+    sort_key = sort_key if sort_key is not None else policy.sort_key()
 
     if files is not None:
         for f in files:
