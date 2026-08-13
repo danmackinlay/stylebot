@@ -226,11 +226,6 @@ def build_pair_record(
     }
 
 
-def append_pair(pairs_path: Path, record: dict) -> None:
-    """Append one record to `pairs_path` (parent dirs created)."""
-    append_jsonl(pairs_path, record)
-
-
 def remove_pairs_for_source(pairs_path: Path, source: str) -> int:
     """Drop every record whose meta.source matches. Returns count removed."""
     records = read_jsonl(pairs_path, keep_undecodable=True)
@@ -321,7 +316,7 @@ def capture_pairs(
             context=context,
             extra_meta=extra_meta,
         )
-        append_pair(pairs_path, record)
+        append_jsonl(pairs_path, record)
         written.append(record)
     return written
 

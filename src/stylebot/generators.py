@@ -298,7 +298,7 @@ def _reasoning_text_of(message) -> str | None:
 
 def openai_generator(
     *,
-    model: str = "gpt-4o",
+    model: str,
     strategy: str = DEFAULT_STRATEGY,
     system: str | None = None,
     max_tokens: int = DEFAULT_SLOP_MAX_TOKENS,
@@ -320,6 +320,12 @@ def openai_generator(
     `base_url` repoints at any OpenAI-compatible endpoint — the seam
     `openrouter_generator` uses; `extra_body` passes provider-specific knobs
     through. `generate` returns a `GenOutput` of covariates plus token usage.
+
+    `model` is required. It carried a default until 0.3.1, which no caller ever
+    used — every arm in this package reaches here through
+    `openrouter_generator`, which always names a model — so the default's only
+    effect was to let a caller who forgot the argument silently bill a model
+    they did not choose.
     """
     import openai
 

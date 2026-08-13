@@ -13,6 +13,7 @@ import json
 import pytest
 
 from stylebot import capture
+from stylebot.jsonl import append_jsonl
 from stylebot.pairs import validate_pairs_file
 
 
@@ -209,7 +210,7 @@ def test_recut_leaves_unarchived_captures_alone(tmp_path):
         chunk_index=0,
         chunk_total=1,
     )
-    capture.append_pair(pairs_path, legacy)
+    append_jsonl(pairs_path, legacy)
 
     capture.recut_archives(pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0)
     ids = {r["meta"]["capture_id"] for r in capture.read_jsonl(pairs_path)}

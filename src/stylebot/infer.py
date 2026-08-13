@@ -355,11 +355,6 @@ def anchor_delta(
     return lost, gained
 
 
-def missing_anchors(source: str, candidate: str, *, inline: bool = False) -> list[str]:
-    """Anchors present in `source` that `candidate` lost (count decreased)."""
-    return anchor_delta(source, candidate, inline=inline)[0]
-
-
 def invented_anchors(source: str, candidate: str, *, inline: bool = False) -> list[str]:
     """Anchors `candidate` carries that `source` never had at all."""
     return anchor_delta(source, candidate, inline=inline)[1]

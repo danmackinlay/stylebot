@@ -76,14 +76,20 @@ prerequisite classifier measurement:
 alternatives are D33. The *encoding* remains
 [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md), unchanged.
 
-## Current state, verified 2026-08-11
+## State as audited, 2026-08-11 — superseded by D32, kept as the case for it
 
-- `infer.missing_anchors` ([`src/stylebot/infer.py`](../src/stylebot/infer.py))
-  returns only anchors whose count **decreased** — `have.get(key, 0) < n`. Its
-  docstring says so explicitly. Gained anchors are invisible to it.
+Every bullet below describes the world **before** the 2026-08-12 fix. They are
+what the argument for that fix rested on, so they stay; for what is true now,
+read the code (`infer.anchor_delta`, `synth._gate_verdict`).
+
+- `infer.missing_anchors` returned only anchors whose count **decreased** —
+  `have.get(key, 0) < n`. Gained anchors were invisible to it. Step 1 below
+  replaced it with the symmetric `anchor_delta`, and the one-directional
+  wrapper was deleted in 0.3.1 once nothing called it.
 - **No anchor gate exists in synthesis or training.** The write-gates are
   `--max-transform-sim` (identity) and `--max-length-ratio` (inflation), both
   in `CorpusOpts` (`src/stylebot/synth_cli.py`). Neither reads an anchor.
+  (Shipped since: `--drop-invented-anchors`, on by default.)
 - **`STYLE_SYSTEM` promises something stylebot does not implement.** It says
   "Preserve any 〈MASKED_*〉 tokens verbatim if present" (`ai_core.py`), and the
   same clause is in every slop prompt (`generators.py`) — but there is no

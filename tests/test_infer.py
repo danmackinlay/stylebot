@@ -447,7 +447,8 @@ def test_content_anchors_counting():
     assert anchors["./a.qmd"] == 1
     assert anchors["https://b.org/c"] == 1
     assert anchors["@Cite2020"] == 2
-    assert infer.missing_anchors(text, text.replace(" [@Cite2020].", ".")) == ["@Cite2020"]
+    lost, _gained = infer.anchor_delta(text, text.replace(" [@Cite2020].", "."))
+    assert lost == ["@Cite2020"]
 
 
 # --- inline anchors (code spans + inline math), off by default -------------
