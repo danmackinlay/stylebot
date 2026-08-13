@@ -113,6 +113,17 @@ def test_session_history_accumulates_and_covariates_recorded(tmp_path):
     assert len({r["meta"]["gen"]["session_id"] for r in recs}) == 1
     assert recs[1]["meta"]["gen"]["context_window"] == 10_000
     assert recs[1]["meta"]["gen"]["window_fill"] == round(200 / 10_000, 4)
+    # The session loop's own contribution to meta.gen, pinned in both
+    # directions against its declaration — the generator's half is pinned in
+    # test_synth_generator.py. Forwards: every declared session key is actually
+    # written. Backwards: nothing appears that is undeclared anywhere. The stub
+    # generator supplies only `prompt_tokens` of the base keys, which is why
+    # this is a subset relation on that side rather than equality.
+    from stylebot import pairs
+
+    written = set(recs[1]["meta"]["gen"])
+    assert set(pairs.GEN_SESSION_KEYS) <= written
+    assert written <= set(pairs.GEN_META_KEYS) | set(pairs.GEN_SESSION_KEYS)
 
 
 def test_session_resume_packs_only_missing_cells(tmp_path):

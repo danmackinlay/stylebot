@@ -105,9 +105,15 @@ def test_openrouter_reasoning_effort_enum(monkeypatch):
 
 
 def test_gen_meta_keys_match_schema_constants(monkeypatch):
-    # The recorded meta.gen dict must stay within the schema constants in
-    # stylebot.pairs — eval and report facet by those names, so a key renamed
-    # here but not there would silently produce empty columns downstream.
+    # The recorded meta.gen dict must match the schema constants in
+    # stylebot.pairs EXACTLY — eval and report facet by those names, so a key
+    # renamed here but not there silently produces empty columns downstream.
+    #
+    # Both directions, deliberately. `writer ⊆ declaration` alone (what this
+    # asserted until 0.3.1) lets the declaration drift AHEAD of the writer: a
+    # key nothing emits sits in the list looking like a schema, and the facet
+    # built on it comes back empty — indistinguishable from "that covariate
+    # never varied", which is a conclusion, not a bug report.
     from stylebot import pairs
 
     calls = _patch_openai(
@@ -116,8 +122,20 @@ def test_gen_meta_keys_match_schema_constants(monkeypatch):
     )
     out = _run_gen(synth.openrouter_generator(model="anthropic/claude-opus-4.8", api_key="x"), "x")
     assert calls  # the fake client was exercised
-    unknown = set(out.meta) - set(pairs.GEN_META_KEYS)
-    assert not unknown, f"meta.gen keys missing from pairs.GEN_META_KEYS: {sorted(unknown)}"
+    # openrouter_generator = the base keys plus its own extra_meta contribution.
+    assert set(out.meta) == set(pairs.GEN_BASE_KEYS) | set(pairs.GEN_EXTRA_KEYS)
+
+
+def test_gen_meta_base_keys_are_exactly_the_plain_writer(monkeypatch):
+    # The same equality against `openai_generator` alone, which contributes no
+    # extra_meta — so GEN_BASE_KEYS is pinned independently of OpenRouter's
+    # routing knobs rather than only as a subtraction from them.
+    from stylebot import pairs
+    from stylebot.generators import openai_generator
+
+    _patch_openai(monkeypatch, _FakeResponse([_FakeChoice("slop")], _FakeUsage()))
+    out = _run_gen(openai_generator(model="some/model", api_key="x"), "x")
+    assert set(out.meta) == set(pairs.GEN_BASE_KEYS)
 
 
 def test_openrouter_reasoning_budget_family(monkeypatch):

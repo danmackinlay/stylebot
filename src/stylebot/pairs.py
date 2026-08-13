@@ -38,12 +38,21 @@ REQUIRED_META_KEYS = (
 )
 
 # --- meta.gen schema (synthetic pairs only) ----------------------------------
-# The generation covariates recorded under `meta.gen`, written by stylebot.synth
-# and consumed by stylebot.eval (flattened onto score records) and
-# stylebot.report (row columns). One list, so a key rename fails a test instead
-# of silently producing empty facet columns downstream. Callers may extend the
-# dict via a factory's `extra_meta`.
-GEN_META_KEYS = (
+# The generation covariates recorded under `meta.gen`, consumed by stylebot.eval
+# (flattened onto score records) and stylebot.report (row columns). Split by
+# WHICH WRITER produces each group, because that is what makes the declaration
+# checkable: `tests/test_synth_generator.py` and `tests/test_synth_sessions.py`
+# assert each group against a real record from its writer, in BOTH directions.
+#
+# The both-directions part is the point. Until 0.3.1 the guard only checked
+# writer ⊆ declaration, so a key the writer stopped emitting could sit here
+# indefinitely and the list would quietly become a wish rather than a schema —
+# and a downstream facet built on it comes back empty, which reads exactly like
+# "that covariate never varied". Callers may still extend the dict via a
+# factory's `extra_meta`; those keys belong in `GEN_EXTRA_KEYS`.
+
+#: Written unconditionally by `generators.openai_generator` for every draw.
+GEN_BASE_KEYS = (
     "model",
     "reasoning_effort",
     "temperature",
@@ -57,14 +66,22 @@ GEN_META_KEYS = (
     "cost",
     "gen_seconds",
     "provider",
-    "provider_sort",
     "prompt_id",
     "prompt_version",
     "prompt_label",
-    "replicate",  # deliberate-resample label (folded into synth_key; absent = base corpus)
 )
-# Added by the session loop only (`session_turns > 1`).
+#: Added through a factory's `extra_meta` — `openrouter_generator` sets
+#: `provider_sort` (the routing *request*, recorded next to the `provider` it
+#: actually produced).
+GEN_EXTRA_KEYS = ("provider_sort",)
+#: Added by `synth.synthesize_pairs`: the deliberate-resample label, folded into
+#: `synth_key`. Absent means the base corpus.
+GEN_REPLICATE_KEYS = ("replicate",)
+#: Added by the session loop only (`session_turns > 1`).
 GEN_SESSION_KEYS = ("session_id", "session_turn", "context_window", "window_fill")
+
+#: Everything that can appear under `meta.gen`, whatever wrote it.
+GEN_META_KEYS = GEN_BASE_KEYS + GEN_EXTRA_KEYS + GEN_REPLICATE_KEYS
 # The experiment-relevant subset eval flattens onto each score record so
 # `summarize_scores(by=...)` and the report can facet by them directly.
 #
