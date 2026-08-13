@@ -775,8 +775,12 @@ anchors often enough to justify the masking scheme in
 
 ## D33: masking goes in everywhere, with a dropout fraction — and synthesis-vs-inference is not an asymmetry
 
-**Decision**: mask anchors at synthesis (to stop generators deleting them), store
-pairs mostly masked with a deliberate unmasked fraction, and mask at inference.
+**Decision**: mask anchors at synthesis (to stop generators deleting them), keep
+the corpus **canonical and unmasked on disk**, and apply masking as a
+deterministic transform at each consumption point — training assembly (for a
+`1 − p` fraction), inference, and independently the classifier. Storage format
+and masking policy are separate concerns; conflating them was an error in the
+first draft of this entry.
 Placement, evidence and ordering: [`masking-placement.md`](masking-placement.md).
 The *encoding* is unchanged and still lives in
 [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md).
@@ -813,6 +817,21 @@ the target side of **zero**, so the styler has never been asked to emit a
 sentinel `STYLE_SYSTEM` has always promised it would preserve. Inference masking
 is also already built (`workflow_style.rewrite_masked`); the unbuilt part is the
 corpus support that makes it in-distribution.
+
+**Rejected: storing masked pairs.** The first draft of this entry proposed it.
+Masking is deterministic and reversible, so an assembly-time transform gives the
+same training diet while keeping the corpus greppable, needing no migration, and
+leaving `p` a sweepable knob rather than something a generation run buys once.
+The two consistency contracts — styler train/serve, and classifier train/serve —
+are **independent**: each needs internal agreement and neither constrains the
+other, which is what decouples the classifier question entirely.
+
+**The contract has teeth, and one violation is already live.**
+`workflow_style.rewrite_masked` passes `scorer` into `infer.rewrite_text` and
+unmasks only afterwards, so `--mask --best-of N` scores masked candidates with a
+detector trained on unmasked text. Also load-bearing: a pair must be masked
+*jointly*, one numbering across both sides, or it teaches placeholder
+renumbering — a defect no existing gate can see.
 
 **Rejected: treating the voice classifier as a blocker.** It is the one consumer
 consistency cannot fully fix — a logistic head on a *frozen* `StyleDistance`

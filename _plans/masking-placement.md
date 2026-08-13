@@ -91,11 +91,60 @@ pre-check, and degrades to unmasked styling on failure. The unbuilt part was
 never the inference wrapper — it is the corpus support that would make it
 in-distribution.
 
-## The storage decision: mask everywhere, with a dropout fraction
+## Storage: keep the corpus canonical and unmasked; mask at consumption
 
-Store *mostly* masked, keeping a deliberate unmasked fraction. **This is not a
-hedge; it is the `CONTEXT_DROPOUT` idiom**, already blog policy for exactly this
-shape of reason:
+**Masking is a transform applied at each consumption point, not a storage
+format.** `pairs.jsonl` keeps ordinary markdown; every consumer that wants
+sentinels derives them deterministically:
+
+| consumer | masks at | must agree with |
+|---|---|---|
+| synthesis | before sending to the generator; unmask before writing | — (invisible downstream) |
+| styler training | training-assembly time | styler inference |
+| styler inference | before styling; unmask after | styler training |
+| classifier training | before embedding | classifier inference |
+| classifier scoring | before embedding | classifier training |
+
+**The two consistency contracts are independent.** The styler pair and the
+classifier pair each need internal agreement and neither constrains the other,
+so the classifier question decouples completely: measure it, decide it
+separately, change your mind later without touching the styler.
+
+Three things fall out, all good:
+
+- **No migration, ever.** Masking is deterministic and reversible over stored
+  text, so nothing about the existing 8k pairs needs regenerating or rewriting.
+- **The dropout fraction becomes a training-time knob**, not a property baked
+  into the corpus — so it is sweepable as a hyperparameter rather than a
+  decision you buy once with a generation run.
+- **The corpus stays greppable and human-readable**, and
+  `validate_pairs_file` keeps working on plain markdown.
+
+Two implementation constraints that genuinely bind:
+
+1. **Mask a pair JOINTLY, with one numbering shared across both sides.** Masking
+   slop and target independently gives the same URL different sentinel indices
+   on each side, and the pair then teaches the styler to *renumber* placeholders
+   — a defect invisible to every existing gate. Inference has one text and is
+   trivially safe; training assembly is where this can go wrong.
+2. **Pin whether the detector scores masked or unmasked text**, because it sits
+   *inside* the styling step (below).
+
+### The consistency violation already in the tree
+
+`workflow_style.rewrite_masked` passes `scorer` into `infer.rewrite_text` and
+unmasks only after it returns — so under `--mask --best-of N`, the voice
+classifier scores **masked** candidates while having been trained on
+**unmasked** text. That is exactly the failure "just be consistent" is supposed
+to prevent, live today, and it is the reason to write the contract down rather
+than assume it. Fix by unmasking per candidate before scoring, or by training
+the detector on masked text — but pick one deliberately.
+
+## The dropout fraction
+
+Keep a deliberate unmasked fraction in the styler's training diet. **This is not
+a hedge; it is the `CONTEXT_DROPOUT` idiom**, already blog policy for exactly
+this shape of reason:
 
 ```python
 CONTEXT_DROPOUT = 0.1
@@ -159,11 +208,12 @@ The VS Code extension is **not** a concern here: it already talks to
    conclusion: no scheme guarantees recall, so validating at demask time is the
    part that matters), unmask, then apply the existing fabrication gate — which
    becomes a round-trip check rather than a quality gate.
-2. **The masked fraction.** Choose it deliberately and record it as blog policy
-   beside `CONTEXT_DROPOUT`. Store masked pairs on both sides for `1 − p`, plain
-   for `p`. **Do not guess p by analogy**: `CONTEXT_DROPOUT = 0.1` was chosen for
-   headings, and the failure it insures against here (a masking failure at
-   serving time) has a different base rate.
+2. **The masked fraction**, applied at training assembly over the unmasked
+   corpus — mask both sides jointly for `1 − p` of pairs, leave `p` plain.
+   Record it as blog policy beside `CONTEXT_DROPOUT`. **Do not guess p by
+   analogy**: `CONTEXT_DROPOUT = 0.1` was chosen for headings, and the failure it
+   insures against here (a masking failure at serving time) has a different base
+   rate. Being an assembly-time knob, it is cheap to sweep.
 3. **Inference.** `--mask` already exists; what changes is that it stops being
    out-of-distribution. Re-check retention against the *fine-tuned* styler
    specifically — `placeholder-design-2026-08.md` warns its numbers came from
@@ -183,3 +233,6 @@ The VS Code extension is **not** a concern here: it already talks to
   deterministic, reversible transform over stored text, so a masked *training
   assembly* can be produced from unmasked pairs without re-synthesis. Only the
   yield fix (step 1) needs to happen at generation time.
+- **Do not store masked pairs.** An earlier draft of this proposed it. It buys
+  nothing the assembly-time transform does not, and it costs the migration, the
+  greppability, and the ability to change `p` without regenerating.
