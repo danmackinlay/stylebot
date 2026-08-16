@@ -215,3 +215,7 @@ confirm `npm test` passes, then `npm run package` and reinstall.
   `TINKER_API_KEY`, …). Export them, or let [direnv](https://direnv.net) do it:
   `direnv exec <dir-with-an-.envrc> uv run ai-style …`. stylebot loads no
   dotenv file of its own. Whatever file holds your keys stays gitignored.
+
+## Acknowledgements
+
+stylebot's development is supported by [ACS Research](https://acsresearch.org).
