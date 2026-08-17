@@ -360,30 +360,61 @@ def invented_anchors(source: str, candidate: str, *, inline: bool = False) -> li
     return anchor_delta(source, candidate, inline=inline)[1]
 
 
+def record_anchor_delta(record: dict, *, inline: bool = False) -> tuple[list[str], list[str]]:
+    """`anchor_delta` over a pair record: `(lost, gained)` from its slop side to
+    its Dan side. The corpus-side face of the guard `rewrite_text` applies to a
+    candidate."""
+    from stylebot.pairs import extract_slop, extract_target
+
+    return anchor_delta(extract_slop(record), extract_target(record), inline=inline)
+
+
 def invents_anchors(record: dict, *, inline: bool = False) -> bool:
     """True if a pair record's Dan-side target conjures anchors its slop lacks.
 
-    The corpus-side face of `anchor_delta`: such a pair is an explicit lesson in
-    fabricating links, so it is what the synth write-gate drops
-    (`--drop-invented-anchors`) and what `is_anchor_faithful` filters out of a
-    training assembly.
+    Such a pair is an explicit lesson in fabricating links, so it is what the
+    synth write-gate drops (`--drop-invented-anchors`).
     """
-    from stylebot.pairs import extract_slop, extract_target
-
-    return bool(invented_anchors(extract_slop(record), extract_target(record), inline=inline))
+    return bool(record_anchor_delta(record, inline=inline)[1])
 
 
-def is_anchor_faithful(record: dict) -> bool:
+def is_anchor_faithful(
+    record: dict, *, lose: bool = True, gain: bool = True, inline: bool = False
+) -> bool:
     """Pair-level `selector` for `train.assemble_training_corpus`: keep pairs
-    whose target invents no anchor.
+    whose target neither invents nor drops an anchor.
 
-    Named rather than a lambda because `assemble_training_corpus` records
-    `selector.__name__` in the run manifest — a run filtered this way should say
-    so. The corpus is a frozen record, so the 876 offending pairs stay on disk
-    as evidence and are excluded from the training SIGNAL here instead of being
-    migrated away (`_plans/anchor-integrity.md`, step 2).
+    Symmetric by default, matching the guard `rewrite_text` applies at inference
+    — a corpus that teaches what the guard then rejects buys nothing but wasted
+    draws. The two halves keep `anchor_delta`'s deliberately different rules
+    (loss is a count decrease, invention is key absence — D32); `lose` and
+    `gain` select which halves bind, since the two directions have different
+    provenance and different costs:
+
+    - **gained** is fabrication. In synthesis it comes from the reverse-edit
+      swap (a generator that dropped a link becomes a target that conjured
+      one); in *captured* pairs it is Dan adding a cross-reference while
+      editing. Either way the styler cannot know a destination it was not
+      given.
+    - **lost** is deletion, and in synthesis it is the mirror artefact: the
+      generator conjured a link while "improving", so after the swap the pair
+      reads *given text with this URL, produce text without it* — the
+      compression-by-deletion habit, arriving through the direction
+      `synth._gate_verdict` does not check.
+
+    Which pairs a run excluded belongs in its manifest, and
+    `assemble_training_corpus` records only `selector.__name__` — so a caller
+    that varies these keywords should wrap this in a distinctly *named*
+    function rather than a `partial`, or two runs will claim identical filters.
+
+    Filtering here excludes a pair from the training SIGNAL without touching the
+    corpus. That is the whole treatment for captured pairs, whose only backup is
+    git; the synthetic stratum can also be culled outright, because a culled
+    cell leaves its `synth_key` missing and the next batch refills it under the
+    gate (`_plans/anchor-integrity.md` step 2, and the blog's RUNBOOK 6a).
     """
-    return not invents_anchors(record)
+    lost, gained = record_anchor_delta(record, inline=inline)
+    return not (lose and lost) and not (gain and gained)
 
 
 def _anchor_summary(keys: list[str]) -> str:

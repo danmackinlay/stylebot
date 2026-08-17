@@ -511,6 +511,57 @@ def test_rewrite_candidates_always_flags_inline_anchors():
     assert out["candidates"][0]["anchors_lost"] == ["make check"]
 
 
+# --- the corpus-side predicate (the training-assembly `selector`) -----------
+
+
+def _pair(slop: str, target: str) -> dict:
+    return {
+        "messages": [
+            {"role": "system", "content": STYLE_SYSTEM},
+            {"role": "user", "content": slop},
+            {"role": "assistant", "content": target},
+        ],
+        "meta": {},
+    }
+
+
+def test_record_anchor_delta_reads_both_sides_of_a_pair():
+    rec = _pair("Slop with [docs](./d.qmd) and [@Cite2020].", "Dan with [docs](./d.qmd).")
+    assert infer.record_anchor_delta(rec) == (["@Cite2020"], [])
+
+
+def test_anchor_faithful_rejects_a_fabrication_lesson():
+    """The direction the synth gate covers: a target carrying a link its slop
+    never had (the reverse-edit swap of a generator that dropped one)."""
+    rec = _pair("Slop without the link.", "Dan with [docs](./d.qmd).")
+    assert infer.invents_anchors(rec)
+    assert not infer.is_anchor_faithful(rec)
+    assert infer.is_anchor_faithful(rec, gain=False)
+
+
+def test_anchor_faithful_rejects_a_deletion_lesson():
+    """The mirror, which `synth._gate_verdict` does not check: the generator
+    conjured a link, so after the swap the pair reads *given this URL, produce
+    text without it* — the compression-by-deletion habit."""
+    rec = _pair("Slop with [docs](./d.qmd) invented.", "Dan without it.")
+    assert not infer.invents_anchors(rec)  # nothing fabricated on the Dan side
+    assert not infer.is_anchor_faithful(rec)  # ... and it still fails, symmetrically
+    assert infer.is_anchor_faithful(rec, lose=False)
+
+
+def test_anchor_faithful_keeps_a_pair_that_carries_its_anchors_through():
+    rec = _pair("Slop, [docs](./d.qmd), verbose.", "Dan, [docs](./d.qmd), terse.")
+    assert infer.is_anchor_faithful(rec)
+
+
+def test_anchor_faithful_inline_is_opt_in():
+    """Same asymmetry as the guard: inline anchors triple the disqualification
+    rate on real rewrites, so a corpus filter must ask for them."""
+    rec = _pair("Run `make check` before pushing.", "Run make check first.")
+    assert infer.is_anchor_faithful(rec)
+    assert not infer.is_anchor_faithful(rec, inline=True)
+
+
 # ---------------------------------------------------------------------------
 # rewrite_candidates — the editor seam (all candidates, none auto-chosen)
 # ---------------------------------------------------------------------------
