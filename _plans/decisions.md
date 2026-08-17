@@ -769,6 +769,30 @@ so a training run excludes them from the *signal* while they stay on disk as
 evidence. No migration script, no re-keying — `_synth_key` is the resume
 identity for 4,140 synthetic pairs and touching it orphans the corpus.
 
+> **Amended 2026-08-17 — the blanket rule did not survive contact.** The
+> synthetic stratum *was* culled: `scripts/prune_anchor_inventing_pairs.py`
+> ships, 805 pairs went in the blog's `dacf57892f`, and the blog's RUNBOOK 6a
+> documents it as policy. The reasoning is sound and narrower than "frozen":
+> **culling a synthetic pair leaves its `synth_key` missing, so the next batch
+> refills the cell under the gate**, which converges the corpus on
+> fully-gated — whereas a *captured* pair records an edit Dan made and only git
+> brings it back, so those are filtered at assembly and never culled. Keep the
+> re-keying prohibition, which is what actually protects the resume identity;
+> read "frozen record" as **cull synthetic, filter captured**. A plan drafted
+> off the un-amended clause asserted the corpus had never been mutated, which
+> was false.
+
+**Superseded in part 2026-08-17: `is_anchor_faithful` is now symmetric.** Its
+`lose`/`gain` keywords both default on, because the pair this decision was
+written about has a mirror the gate never checked — a generator that *conjured*
+a link while producing slop yields, after the swap, a target that deletes one.
+Measured on the blog corpus: 306 synthetic and 52 captured pairs. Nothing about
+the two directions' *rules* changes (loss is a count decrease, invention is key
+absence — that is the substance of this decision); what changed is that the
+corpus-side predicate now applies both, matching the guard at inference. The
+matching synthesis gate is still one-sided, so a cull of the loss stratum must
+wait for `synth._gate_verdict` to gain its mirror, or the refill re-mints it.
+
 **Re-evaluate if**: `--anchor-log` data from real runs shows the styler damaging
 anchors often enough to justify the masking scheme in
 `_plans/placeholder-design-2026-08.md`, which is deliberately still unbuilt.

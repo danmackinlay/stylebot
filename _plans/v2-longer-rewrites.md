@@ -6,6 +6,19 @@ we actually want. This doc records what blocks longer rewrites, the
 groundwork ALREADY LAID so the data problem stops compounding, and the
 path to a v2 run.
 
+> **Status 2026-08-17 — generation RAN; no v2 adapter trained yet.** The blog
+> corpus holds 4,532 pairs stamped `chunk_mode: cross-heading` at
+> `merge_max_chars` 1500 / 3000 / 4500 (2,629 / 1,096 / 807), median anchors per
+> target 4 / 7 / 10. That clears the "blocked — no labelled baseline arm" note
+> below, which is kept for the reasoning about *what the labels mean* (still
+> live: the stamp records which batch first produced a target's text). The
+> mixed-scale training run is the blog's run 4,
+> `_plans/styler-run4-preflight-2026-08.md`. The two thresholds this doc's
+> RUNBOOK counterpart asked to re-audition at 4500 look scale-stable among
+> written pairs (`transform_sim` p90 0.90/0.91/0.92, length ratio p90
+> 1.91/1.67/1.66) — post-gate survivors, so a bound on shape, not on rejection
+> rate.
+>
 > **Status 2026-08-04 — mechanism shipped, generation not yet run.**
 > The diagnosis below was half wrong and the section "Why the model is
 > stuck at 1500" is corrected in place; read "The section wall" first.
