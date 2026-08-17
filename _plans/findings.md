@@ -369,7 +369,16 @@ different pairs. The verdict is on the frozen eval stratum, 127 chunks, paired:
 | judge (n=40) | 3.25 | 4.08 | 4.05 | 4.20 | +0.025 [−0.124, +0.174] |
 | outputs damaging an anchor | — | 7/127 | 6/127 | — | 6 lost + 2 invented vs 6 + 0 |
 
-**Every signal says indistinguishable.** The filter costs 15% of the scarce
+**Against the serving default, though, run 4 is a real gain.** Run 2 sampled
+over the same 127 chunks with the same detector: output **0.2501**, closing
+81.4% of the gap, against 4a's 0.2125 / 90.7%. Paired **4a − run 2 = −0.0376,
+95% CI [−0.0616, −0.0136]** — excludes zero. 4b − run 2 is −0.0280,
+CI [−0.0576, +0.0016], which does not. Vale −0.087 [−0.194, +0.021] and anchor
+damage 7/127 vs run 2's 6/127 (4a loses more, invents fewer: 6+2 against 4+5),
+median output/input length 0.99 vs 1.00 — so the gain is not bought with
+deletion, which is what killed run 1.
+
+**Every signal says the two run-4 arms are indistinguishable.** The filter costs 15% of the scarce
 real pairs (31 of 172) and buys nothing measurable at n=127 — including on
 anchor fidelity at inference, the thing it exists to move. The pre-registered
 rule (keep the filter unless the unfiltered arm *wins* on the detector with the
