@@ -279,6 +279,41 @@ def test_judge_reply_parser_clamps_and_falls_back():
     assert ev.parse_judge_reply("I would rate this a 3 overall.")["score"] == 3
 
 
+def test_openrouter_judge_records_what_the_call_cost(monkeypatch):
+    """The judge is the only signal that costs money per call — Vale and the
+    detector are local and free — so the verdict carries its own price tag.
+    Without it, 'is the judge worth its spend' is unanswerable after the fact,
+    which is how the corpus ended up with 270 scored rows and no judge data."""
+    import sys
+    import types
+
+    seen = {}
+
+    class _Usage:
+        prompt_tokens, completion_tokens, cost = 1200, 40, 0.0731
+
+    class _Resp:
+        choices = [types.SimpleNamespace(message=types.SimpleNamespace(content='{"score": 4}'))]
+        usage = _Usage()
+
+    def create(**kw):
+        seen.update(kw)
+        return _Resp()
+
+    fake_openai = types.SimpleNamespace(
+        OpenAI=lambda **kw: types.SimpleNamespace(
+            chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create))
+        )
+    )
+    monkeypatch.setitem(sys.modules, "openai", fake_openai)
+
+    verdict = ev.openrouter_judge(api_key="sk-test")("Some prose.")
+    assert verdict["score"] == 4
+    assert verdict["usage"] == {"prompt_tokens": 1200, "completion_tokens": 40, "cost": 0.0731}
+    # OpenRouter only reports cost when the request asks for it.
+    assert seen["extra_body"] == {"usage": {"include": True}}
+
+
 # --- batched, JSONL-native scoring over a pairs.jsonl corpus ----------------
 
 

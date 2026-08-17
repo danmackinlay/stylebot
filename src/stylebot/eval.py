@@ -323,10 +323,28 @@ def openrouter_judge(
                 {"role": "system", "content": system},
                 {"role": "user", "content": prose},
             ],
+            # OpenRouter returns the billed cost on the usage object when asked
+            # for it. Without this the judge is the one signal whose price is
+            # unknowable after the fact — the detector and Vale are free and
+            # local, so "is the judge worth it?" is a question only this field
+            # can answer. Recorded per call rather than aggregated: a stratified
+            # subsample is the standing recommendation, and a per-call figure is
+            # what sizes one.
+            extra_body={"usage": {"include": True}},
         )
         reply = resp.choices[0].message.content or ""
         verdict = parse_judge_reply(reply)
         verdict["model"] = model
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            verdict["usage"] = {
+                "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                "completion_tokens": getattr(usage, "completion_tokens", None),
+                # Absent on providers that do not report it, and — per the blog's
+                # BYOK note — potentially the 5% fee rather than list price when
+                # the arm bills to a bring-your-own key. Treat as an indication.
+                "cost": getattr(usage, "cost", None),
+            }
         return verdict
 
     return judge
