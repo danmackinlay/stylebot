@@ -35,7 +35,12 @@ eval` is the thin CLI. Paths resolved via `stylebot.config`.
 ## The four signals
 
 1. **Vale** — mechanical slop (banned words, indefinite "you", -ize spelling).
-2. **LLM-as-judge** — "is this Dan-shaped" at the voice level.
+2. **LLM-as-judge** — "is this Dan-shaped" at the voice level. **Demoted
+   2026-08-17 to an aggregate sanity check on a subsample**: measured against
+   the detector it ranks Dan above slop on *real* captured pairs 3/20 of the
+   time (14 ties) and cannot resolve two adapters at n=40. Never use it as a
+   tie-breaker between runs; see `findings.md`, "The LLM judge". Its cost was
+   the wrong worry (~$2.71 for 160 calls); its resolution is the right one.
 3. **Trained detector** — "is this Dan vs AI-slop", scored by the trained
    voice classifier (`P(slop)`, higher = more AI-like). Keyless, free per pair.
 4. **Dan's eyeball** — the veto channel (not automatable; reported alongside).
