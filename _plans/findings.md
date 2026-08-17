@@ -243,6 +243,50 @@ holds near 1.0.
 
 ---
 
+## The LLM judge — measured 2026-08-17, and it is the weak signal
+
+Prompted by "check that this judge is worth it; it costs an insane amount"
+(Dan). Measured on the run-4 eval: 160 opus-4-8 calls over 40 eval chunks
+(slop, Dan, and both arms' output). **Two corrections and one design fix.**
+
+**Cost is not the problem — the estimate was wrong by an order of magnitude.**
+122,103 prompt + 11,685 completion tokens over 160 calls: **~$2.71 at
+claude-opus list**, median prompt **672 tokens**. A full 127-chunk four-field
+pass is ~$8.60. OpenRouter reported **$0.0000**, because the Anthropic arm bills
+through BYOK. The judge prompt is short; the intuition that it was expensive
+came from never having measured it — `openrouter_judge` recorded no usage at
+all until this run, which is why the blog's `scores.jsonl` has 270 scored rows
+and **zero** judge scores, and why the ρ=0.09 judge-vs-detector figure quoted in
+the blog post cannot be reproduced from anything on disk.
+
+**The problem is that it cannot see real slop.** Pairwise, does the signal rank
+Dan's side above the slop side of the same pair?
+
+| stratum | judge | detector |
+|---|---|---|
+| **real** captured pairs (n=20) | **3/20 (15%), 14 ties** | 15/20 (75%) |
+| synthetic pairs (n=20) | 16/20 (80%), 4 ties | 20/20 (100%) |
+
+The judge's apparent competence is carried entirely by synthetic slop, which is
+florid and easy. On the real slop Dan actually cleans up it is **worse than
+chance**, and ties on 14 of 20 — the 1–5 integer scale has no resolution at the
+distances that matter. Aggregates still look sane (slop 3.25 → output 4.08 →
+Dan 4.20), which is how this went unnoticed: the means move in the right
+direction while the per-pair judgements are noise.
+
+**It cannot arbitrate between two adapters.** Paired 4a−4b judge difference
++0.025, 95% CI [−0.124, +0.174] at n=40; resolving a 0.10-point difference
+would need **n ≈ 88**. Spearman against the detector is **−0.193** over 160
+texts — correctly signed (judge high = Dan, detector high = slop) but weak,
+consistent with the post's "near enough independent" claim.
+
+**What to do:** keep the judge as a cheap *aggregate* sanity check on a
+subsample (40 chunks is ample for a mean, useless for a comparison), never as a
+tie-breaker between runs. The design fix worth trying before spending more on
+it is a **pairwise A/B judge** — "which of these two is more Dan?" — since the
+ties, not the cost, are what destroy the signal. Until then the detector is the
+instrument and the judge is a smoke alarm.
+
 ## The voice classifier (the detector signal)
 
 **Backbone bake-off** (2026-06-30), ranked by content-matched pairwise accuracy
@@ -309,6 +353,32 @@ marginally softer (detector 0.425 vs 0.415, judge 3.48 vs 3.70) but the
 over-compression tail retreats (p10 output/slop **0.76 vs 0.60**) and content
 fidelity improves (anchor losses **1 vs 2**). Fidelity was chosen over voice
 score; run 2 is the serving default.
+
+**Run 4, the anchor-filter ablation** (2026-08-17, blog-side; two arms on the
+recut 8,319-pair corpus, first mixed-scale diet). **4a** = `styler_pair_ok`
+with symmetric anchor filtering (3,944 train / 446 val, $5.15, test/nll 0.7630);
+**4b** = `styler_pair_ok_keep_anchor_damage`, same but keeping the 188 pairs
+whose Dan side invents or deletes an anchor (4,182 / 396, $5.36, test/nll
+0.7457). *Those two val losses are not comparable* — the arms hold out
+different pairs. The verdict is on the frozen eval stratum, 127 chunks, paired:
+
+| signal | slop in | 4a out | 4b out | Dan | paired 4a−4b (95% CI) |
+|---|---:|---:|---:|---:|---|
+| detector P(slop) | 0.5823 | **0.2125** | 0.2221 | 0.1744 | −0.0096 [−0.0335, +0.0143] |
+| Vale alerts | 2.12 | 1.66 | 1.67 | 0.91 | −0.008 [−0.091, +0.076] |
+| judge (n=40) | 3.25 | 4.08 | 4.05 | 4.20 | +0.025 [−0.124, +0.174] |
+| outputs damaging an anchor | — | 7/127 | 6/127 | — | 6 lost + 2 invented vs 6 + 0 |
+
+**Every signal says indistinguishable.** The filter costs 15% of the scarce
+real pairs (31 of 172) and buys nothing measurable at n=127 — including on
+anchor fidelity at inference, the thing it exists to move. The pre-registered
+rule (keep the filter unless the unfiltered arm *wins* on the detector with the
+judge agreeing) therefore keeps it, but on a tie rather than on evidence; the
+honest summary is that anchor-damaged pairs are ~4% of the diet and behave like
+noise at this corpus size. Both arms close ~90% of the slop→Dan detector gap
+(4a 90.7%, 4b 88.3%) against runs 1–2's ~55%, but **the detector was refit the
+same day**, so that is not a like-for-like comparison with the run-1/2 table
+above.
 
 ---
 
