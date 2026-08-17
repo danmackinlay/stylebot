@@ -705,16 +705,16 @@ def format_scores_sample(
 # ---------------------------------------------------------------------------
 
 _COMPARE_CSS = """
-.cmp-wrap{overflow:auto;max-height:calc(100vh - 12rem);border:1px solid #e5e2d8}
-table.cmp{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed}
-table.cmp thead th{position:sticky;top:0;z-index:3;background:#f1eee1;
+.armtab-wrap{overflow:auto;max-height:calc(100vh - 12rem);border:1px solid #e5e2d8}
+table.armtab{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed}
+table.armtab thead th{position:sticky;top:0;z-index:3;background:#f1eee1;
   border-bottom:1px solid #d8d3c4;padding:.4rem .5rem;text-align:left;font-size:.8rem}
-table.cmp td{vertical-align:top;padding:.45rem .5rem;border-bottom:1px solid #ece9df;
+table.armtab td{vertical-align:top;padding:.45rem .5rem;border-bottom:1px solid #ece9df;
   font-size:.82rem;line-height:1.42}
-table.cmp td.src,table.cmp th.src{position:sticky;left:0;z-index:2;background:#faf8f1;
-  width:8.5rem;font-size:.72rem;color:#6b6455;border-right:1px solid #d8d3c4;
-  overflow-wrap:anywhere}
-table.cmp thead th.src{z-index:4}
+table.armtab td.src,table.armtab th.src{position:sticky;left:0;z-index:2;background:#faf8f1;
+  font-size:.72rem;color:#6b6455;border-right:1px solid #d8d3c4;
+  overflow-wrap:anywhere;white-space:normal}
+table.armtab thead th.src{z-index:4}
 tr.chunk:target td,tr.chunk.mark td{background:#fdf6e0}
 .body{white-space:pre-wrap;overflow-wrap:anywhere;max-height:11.5em;overflow:hidden;
   position:relative}
@@ -742,7 +742,7 @@ document.getElementById('expandAll').addEventListener('click',function(){
   document.querySelectorAll('tr.chunk').forEach(function(r){r.classList.toggle('open',!!any);});
 });
 function cmpSort(key){
-  var tb=document.querySelector('table.cmp tbody');
+  var tb=document.querySelector('table.armtab tbody');
   var rows=[].slice.call(tb.querySelectorAll('tr.chunk'));
   var asc=tb.dataset.k===key?tb.dataset.d==='1':true;
   rows.sort(function(a,b){
@@ -854,8 +854,16 @@ def render_comparison_report(
         f"{html.escape(label)}</th>"
         for n, (label, _, _) in enumerate(loaded)
     )
+    # Explicit equal widths via <colgroup>, not left to the layout algorithm.
+    # Arms are read by comparing them, so an arm that happens to hold longer
+    # text must not get a wider column for it — the eye reads column width as
+    # significance. `table-layout: fixed` makes these authoritative.
+    arm_pct = round(92 / len(loaded), 4)
+    cols = "<colgroup><col style='width:8%'>" + "".join(
+        f"<col style='width:{arm_pct}%'>" for _ in loaded
+    ) + "</colgroup>"
     table = (
-        "<div class=cmp-wrap><table class=cmp><thead><tr>"
+        f"<div class=armtab-wrap><table class=armtab>{cols}<thead><tr>"
         "<th class=src onclick=\"cmpSort('spread')\" "
         'title="sort by how much the arms disagree">source</th>'
         f"{heads}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"

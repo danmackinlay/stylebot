@@ -604,3 +604,20 @@ def test_comparison_report_needs_two_arms(tmp_path):
     pairs, scores = _make_scored(tmp_path)
     with pytest.raises(ValueError, match="at least two arms"):
         report.render_comparison_report([("only", pairs, scores, "slop")], tmp_path / "x.html")
+
+
+def test_comparison_columns_are_equal_width_and_not_a_flex_row(tmp_path):
+    """Two bugs in one test. `.cmp` is already claimed by the per-arm report's
+    `display:flex` rule, which silently stopped this table laying out as a
+    table; and arm widths must be declared equal, because the eye reads column
+    width as significance and one arm holding longer text is not significance."""
+    pairs, scores = _make_scored(tmp_path)
+    p = tmp_path / "cmp.html"
+    report.render_comparison_report(
+        [("a", pairs, scores, "slop"), ("b", pairs, scores, "target")], p
+    )
+    h = p.read_text()
+    assert "class=armtab" in h and "<table class=cmp" not in h
+    widths = re.findall(r"<col style='width:([\d.]+)%'>", h)
+    assert len(widths) == 3  # source + two arms
+    assert widths[1] == widths[2]
