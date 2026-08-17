@@ -1307,6 +1307,27 @@ def merge_adapter_cmd(
     is_flag=True,
     help="Rewrite FILE in place (a .bak backup is left beside it). Default prints to stdout.",
 )
+@click.option(
+    "--pairs",
+    "pairs_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Corpus mode: rewrite the slop side of every pair in this pairs.jsonl instead of a "
+    "file, writing an output-bearing JSONL for `ai-style eval --field output`. This is how a "
+    "trained adapter gets a number rather than an impression. Needs --out.",
+)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="[--pairs] Where the output-bearing JSONL goes. Appended to and resumable: ids already "
+    "present are skipped, so an interrupted sweep continues rather than re-paying for them.",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="[--pairs] Cap how many pairs are rewritten.",
+)
 @backend_options(defaults=[BackendOpts(backend="tinker")])
 def run_cmd(
     file: Path | None,
@@ -1314,6 +1335,9 @@ def run_cmd(
     strict_anchors: bool,
     anchor_log: Path | None,
     write_in_place: bool,
+    pairs_path: Path | None,
+    out_path: Path | None,
+    limit: int | None,
     **kw,
 ) -> None:
     """Phase 4: rewrite FILE (or stdin) through the trained styler.
@@ -1322,10 +1346,24 @@ def run_cmd(
     protected, original whitespace reassembled verbatim), sends each chunk
     with the frozen STYLE_SYSTEM, and prints the rewrite to stdout (--write
     edits in place with a backup). See `stylebot.infer` for the library seam.
+
+    With --pairs/--out it runs in **corpus mode** instead: the styler rewrites
+    each pair's slop side and the result lands as a top-level "output" field,
+    which `ai-style eval --field output` scores beside the same corpus's slop
+    and Dan sides. That is the shape the eval harness has always documented and
+    nothing produced — the missing half of comparing two adapters.
     """
     from stylebot import infer
 
     opts: BackendOpts = bundles_from_kwargs(kw, BACKEND_PARAMS)["opts"]
+    if pairs_path is not None:
+        if file is not None:
+            raise click.UsageError("--pairs rewrites a corpus; pass it or a FILE, not both")
+        if out_path is None:
+            raise click.UsageError("--pairs needs --out (the output-bearing JSONL to write)")
+    elif out_path is not None or limit is not None:
+        raise click.UsageError("--out/--limit only apply in corpus mode (--pairs)")
+
     styler = build_styler(opts)
 
     scorer = None
@@ -1335,6 +1373,18 @@ def run_cmd(
         from stylebot.classify import sklearn_detector
 
         scorer = infer.detector_scorer(sklearn_detector(opts.detector_model))
+
+    if pairs_path is not None:
+        def _progress(i: int, total: int) -> None:
+            if i == 1 or i % 10 == 0 or i == total:
+                click.echo(f"  ... {i}/{total} rewritten", err=True)
+
+        written = infer.rewrite_pairs_file(
+            pairs_path, out_path, styler,
+            limit=limit, best_of=best_of, scorer=scorer, on_progress=_progress,
+        )
+        click.echo(f"rewrote {written} pair(s) -> {out_path}", err=True)
+        return
 
     text = file.read_text(encoding="utf-8") if file else click.get_text_stream("stdin").read()
     result = infer.rewrite_text(
