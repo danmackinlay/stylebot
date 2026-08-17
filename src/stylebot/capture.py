@@ -450,9 +450,17 @@ def recut_archives(
     max_chars: int | None = None,
     heading_context: bool = True,
     min_chars: int = 0,
+    max_similarity: float | None = None,
     dry_run: bool = False,
 ) -> list[dict]:
     """Re-derive real pairs from the capture archives at a new cut policy.
+
+    `min_chars` and `max_similarity` are the two no-op floors, and re-cutting is
+    how a corpus already holding no-ops sheds them: the archives are the source
+    of truth, so a policy change plus a re-run *replaces* those pairs rather
+    than requiring anyone to hand-cull `pairs.jsonl`. Captures with no archive
+    keep their native cut and stay the exception (they must be filtered at
+    training assembly instead).
 
     Emitted records carry `meta.recut` (the gap policy) and reuse the archive's
     own `capture_id`, making a re-cut IDEMPOTENT: re-running with the same policy
@@ -463,6 +471,10 @@ def recut_archives(
     Returns the records written (or that *would* be written, under `dry_run`).
     """
     policy = {"gap_paras": coalesce_gap_paras, "gap_chars": coalesce_gap_chars}
+    if min_chars:
+        policy["min_chars"] = min_chars
+    if max_similarity is not None:
+        policy["max_similarity"] = max_similarity
     records: list[dict] = []
     recut_ids: set[str] = set()
 
@@ -481,6 +493,17 @@ def recut_archives(
             max_chars=max_chars,
         )
         triples = [t for t in triples if len(t[1].strip()) >= min_chars]
+        if max_similarity is not None:
+            # The null-edit floor, and the one `min_chars` cannot stand in for:
+            # a long paragraph whose only change is a comma is not a short pair,
+            # it is a full-length pair carrying no lesson. Both floors are
+            # needed because they fail in different directions — a one-line
+            # cross-reference is short, a punctuation touch-up is not.
+            triples = [
+                t
+                for t in triples
+                if difflib.SequenceMatcher(None, t[0], t[1]).ratio() < max_similarity
+            ]
         if not triples:
             continue
         recut_ids.add(cap_id)

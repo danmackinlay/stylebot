@@ -777,14 +777,25 @@ def tidy_pairs(ctx: click.Context, source: str | None, dry_run: bool):
 )
 @click.option(
     "--min-chars",
-    default=80,
+    default=300,
     show_default=True,
     type=int,
-    help="Drop re-cut pairs whose after-side is shorter than this.",
+    help="Drop re-cut pairs whose after-side is shorter than this. 300 rather than a "
+    "token floor because below it a 'pair' is a cross-reference line or a bracketed "
+    "aside — 22% of real eval chunks, and nothing a styler can restyle.",
+)
+@click.option(
+    "--max-similarity",
+    default=0.95,
+    show_default=True,
+    type=float,
+    help="Drop re-cut pairs whose two sides are at least this similar: the null edit, "
+    "which --min-chars cannot catch because a punctuation touch-up to a long paragraph "
+    "is full-length. 1.0 disables.",
 )
 @click.option("--dry-run", is_flag=True, help="Report the new cut without modifying pairs.jsonl.")
 @click.pass_context
-def recut_pairs(ctx, gap_paras, gap_chars, max_chars, min_chars, dry_run):
+def recut_pairs(ctx, gap_paras, gap_chars, max_chars, min_chars, max_similarity, dry_run):
     """Re-cut real pairs from the capture archives at a new gap policy.
 
     The archives under `captures/` hold the full before/after texts, so the
@@ -805,6 +816,7 @@ def recut_pairs(ctx, gap_paras, gap_chars, max_chars, min_chars, dry_run):
             coalesce_gap_chars=gap_chars,
             max_chars=max_chars or None,
             min_chars=min_chars,
+            max_similarity=None if max_similarity >= 1 else max_similarity,
             dry_run=dry_run,
         )
     except ValueError as exc:

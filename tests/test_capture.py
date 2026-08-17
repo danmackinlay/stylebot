@@ -389,3 +389,46 @@ def test_recut_ids_are_stable_across_reruns_at_the_same_policy(tmp_path):
     # A DIFFERENT policy is a different cut, so it must key differently.
     capture.recut_archives(pairs_path, coalesce_gap_paras=99, coalesce_gap_chars=99999, min_chars=0)
     assert not (set(_ids_to_text(pairs_path)) & set(first))
+
+
+def test_recut_drops_null_edits_that_min_chars_cannot_catch(tmp_path):
+    """The two floors fail in different directions: a cross-reference line is
+    short, a punctuation touch-up to a long paragraph is not. `max_similarity`
+    is the second one, and re-cutting is how a corpus already holding no-ops
+    sheds them without anyone hand-culling pairs.jsonl."""
+    long_para = (
+        "The archive is insurance against an environment shift the training "
+        "objective never anticipated, which is the whole reason it earns its "
+        "keep across a fleet of otherwise identical policies and their runs."
+    )
+    before = f"# H\n\n{long_para}\n\nSee [that](./x.qmd).\n\nA third paragraph, untouched here."
+    after = f"# H\n\n{long_para}!\n\nSee [this](./x.qmd).\n\nA third paragraph, untouched here."
+
+    loose = capture.diff_chunks(before, after, heading_context=True)
+    assert len(loose) >= 1  # the raw cut keeps both edits
+
+    d = tmp_path / "data"
+    d.mkdir()
+    pairs = d / "pairs.jsonl"
+    pairs.write_text("")
+    arch = d / "captures" / "cap1"
+    arch.mkdir(parents=True)
+    (arch / "before.md").write_text(before)
+    (arch / "after.md").write_text(after)
+    (arch / "meta.json").write_text(
+        json.dumps({"capture_id": "cap1", "source": "notebook/x.qmd", "snapped_at": "t"})
+    )
+
+    kept = capture.recut_archives(
+        pairs, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0, dry_run=True
+    )
+    floored = capture.recut_archives(
+        pairs,
+        coalesce_gap_paras=2,
+        coalesce_gap_chars=800,
+        min_chars=0,
+        max_similarity=0.95,
+        dry_run=True,
+    )
+    assert len(floored) < len(kept)
+    assert all((r["meta"]["recut"].get("max_similarity")) == 0.95 for r in floored)
