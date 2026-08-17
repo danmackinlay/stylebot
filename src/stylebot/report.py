@@ -698,3 +698,196 @@ def format_scores_sample(
             if c["rationale"]:
                 out.append(f"      ⌜ {c['rationale']} ⌟")
     return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Adapter comparison — N arms, one table
+# ---------------------------------------------------------------------------
+
+_COMPARE_CSS = """
+.cmp-wrap{overflow:auto;max-height:calc(100vh - 12rem);border:1px solid #e5e2d8}
+table.cmp{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed}
+table.cmp thead th{position:sticky;top:0;z-index:3;background:#f1eee1;
+  border-bottom:1px solid #d8d3c4;padding:.4rem .5rem;text-align:left;font-size:.8rem}
+table.cmp td{vertical-align:top;padding:.45rem .5rem;border-bottom:1px solid #ece9df;
+  font-size:.82rem;line-height:1.42}
+table.cmp td.src,table.cmp th.src{position:sticky;left:0;z-index:2;background:#faf8f1;
+  width:8.5rem;font-size:.72rem;color:#6b6455;border-right:1px solid #d8d3c4;
+  overflow-wrap:anywhere}
+table.cmp thead th.src{z-index:4}
+tr.chunk:target td,tr.chunk.mark td{background:#fdf6e0}
+.body{white-space:pre-wrap;overflow-wrap:anywhere;max-height:11.5em;overflow:hidden;
+  position:relative}
+tr.open .body{max-height:none}
+.body.clipped:after{content:"";position:absolute;left:0;right:0;bottom:0;height:2.2em;
+  background:linear-gradient(rgba(255,255,255,0),#fffdf7)}
+tr.open .body.clipped:after{display:none}
+.hd{display:flex;gap:.3rem;align-items:center;margin-bottom:.25rem;flex-wrap:wrap}
+.arm{font-weight:600;font-size:.72rem;letter-spacing:.03em;text-transform:uppercase}
+.expand{cursor:pointer;font-size:.7rem;color:#6b6455;border:1px solid #d8d3c4;
+  border-radius:.6rem;padding:0 .4rem;background:#fff}
+.win{outline:2px solid #b9d4b0;outline-offset:-2px}
+"""
+
+_COMPARE_JS = """
+document.querySelectorAll('.body').forEach(function(b){
+  if(b.scrollHeight>b.clientHeight+2)b.classList.add('clipped');});
+document.addEventListener('click',function(e){
+  var t=e.target;
+  if(t.classList.contains('expand')){t.closest('tr').classList.toggle('open');return;}
+  if(t.closest('td.src')){t.closest('tr').classList.toggle('mark');}
+});
+document.getElementById('expandAll').addEventListener('click',function(){
+  var any=document.querySelector('tr.chunk:not(.open)');
+  document.querySelectorAll('tr.chunk').forEach(function(r){r.classList.toggle('open',!!any);});
+});
+function cmpSort(key){
+  var tb=document.querySelector('table.cmp tbody');
+  var rows=[].slice.call(tb.querySelectorAll('tr.chunk'));
+  var asc=tb.dataset.k===key?tb.dataset.d==='1':true;
+  rows.sort(function(a,b){
+    var x=parseFloat(a.dataset[key]),y=parseFloat(b.dataset[key]);
+    if(isNaN(x))x=Infinity; if(isNaN(y))y=Infinity;
+    return asc?x-y:y-x;});
+  tb.dataset.k=key;tb.dataset.d=asc?'0':'1';
+  rows.forEach(function(r){tb.appendChild(r);});
+}
+document.getElementById('filter').addEventListener('input',function(){
+  var q=this.value.toLowerCase();
+  document.querySelectorAll('tr.chunk').forEach(function(r){
+    r.style.display=!q||r.textContent.toLowerCase().indexOf(q)>=0?'':'none';});
+});
+"""
+
+
+def render_comparison_report(
+    arms: Sequence[tuple[str, object, object, str]],
+    out_path: Path | str,
+    *,
+    title: str = "stylebot adapter comparison",
+    max_rows: int | None = None,
+) -> Path:
+    """Render N arms over the same chunks into ONE table. Returns the path.
+
+    `arms` is `(label, pairs_or_output_path, scores, field)` per column, in the
+    order they should read — conventionally slop first, Dan last, adapters
+    between. Rows join on `record_id`, so every arm must have been sampled over
+    the same corpus; a chunk missing from any arm is dropped rather than
+    rendered ragged.
+
+    This exists because the per-arm report cannot answer the question anyone
+    actually has, which is *is this rewrite better than that one* — that meant
+    two browser tabs, scrolled in sync, with no shared row anchor. Design notes,
+    all from a real read-through going badly:
+
+    - **No covariate columns.** `strategy`/`generator`/`reasoning`/`prompt` are
+      the widest columns in the per-arm report and are empty for every real
+      captured pair, so they ate the screen to say "—". Source and the scores
+      are the only non-text columns here.
+    - **Text is not truncated**, only visually clipped, with a per-row expander
+      and an expand-all. A 400-character clip hides exactly the long rewrites
+      whose coherence is the thing under review.
+    - **The source column is sticky**, so the row identity survives horizontal
+      scrolling; clicking it highlights the row across the width of the table.
+    """
+    out_path = Path(out_path)
+    if len(arms) < 2:
+        raise ValueError("a comparison needs at least two arms")
+
+    loaded: list[tuple[str, dict[str, dict], str]] = []
+    for label, pairs_path, scores, field in arms:
+        # `_scores_rows_data` emits one row per record in order but drops the id,
+        # which is the join key across arms — so zip it back on rather than
+        # re-deriving it from the pair.
+        records, rows = _load_scores_rows(scores, pairs_path, (field,))
+        by_id = {rec["id"]: row for rec, row in zip(records, rows, strict=True)}
+        loaded.append((label, by_id, field))
+
+    ids = set.intersection(*(set(by_id) for _, by_id, _ in loaded))
+    order = [i for i in loaded[0][1] if i in ids]
+    if max_rows is not None:
+        order = order[:max_rows]
+
+    def cell(row: dict, field: str, *, best: bool) -> str:
+        c = row["cells"][field]
+        det, vale = c["detector"], c["vale"]
+        chips = _chip("s-det", None if det is None else f"P(slop) {det:.2f}", "detector P(slop)")
+        chips += _chip("s-vale", None if vale is None else f"vale {vale}", "Vale alerts")
+        chips += _chip("s-judge", None if c["score"] is None else f"judge {c['score']}", "judge")
+        return (
+            f'<td class="{"win" if best else ""}"><div class=hd>'
+            f'<span class=arm>{html.escape(row["_label"])}</span>{chips}'
+            f'<span class=expand title="show the whole rewrite">⤢</span></div>'
+            f'<div class=body>{html.escape(c["text"])}</div></td>'
+        )
+
+    body = []
+    for i in order:
+        cells, dets = [], []
+        for label, by_id, field in loaded:
+            row = dict(by_id[i], _label=label)
+            dets.append(row["cells"][field]["detector"])
+            cells.append((row, field))
+        # Mark the best-scoring ADAPTER arm (never slop or the human target,
+        # which are the reference points rather than competitors).
+        mid = [n for n in range(1, len(cells) - 1) if dets[n] is not None]
+        best = min(mid, key=lambda n: dets[n]) if mid else None
+        tds = "".join(cell(r, f, best=(n == best)) for n, (r, f) in enumerate(cells))
+        data = " ".join(
+            f'data-a{n}="{"" if d is None else d}"' for n, d in enumerate(dets)
+        )
+        spread = (
+            max(d for d in dets if d is not None) - min(d for d in dets if d is not None)
+            if any(d is not None for d in dets)
+            else None
+        )
+        src = loaded[0][1][i]["source"]
+        body.append(
+            f'<tr class=chunk id="c-{html.escape(i, quote=True)}" {data} '
+            f'data-spread="{"" if spread is None else round(spread, 4)}">'
+            f'<td class=src title="{html.escape(src, quote=True)}">{html.escape(src)}</td>'
+            f"{tds}</tr>"
+        )
+
+    heads = "".join(
+        f'<th onclick="cmpSort(\'a{n}\')" title="sort by this column\'s P(slop)">'
+        f"{html.escape(label)}</th>"
+        for n, (label, _, _) in enumerate(loaded)
+    )
+    table = (
+        "<div class=cmp-wrap><table class=cmp><thead><tr>"
+        "<th class=src onclick=\"cmpSort('spread')\" "
+        'title="sort by how much the arms disagree">source</th>'
+        f"{heads}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
+    )
+    cards = _stat_cards(
+        [(len(order), "chunks")]
+        + [
+            (
+                _mean([by_id[i]["cells"][f]["detector"] for i in order]),
+                f"{label} P(slop)",
+            )
+            for label, by_id, f in loaded
+        ]
+    )
+    controls = (
+        '<input id=filter placeholder="filter by source or text…">'
+        '<button id=expandAll type=button>expand / collapse all</button>'
+    )
+    page = _page(
+        title=title,
+        cards=cards,
+        blocks=[f"<style>{_COMPARE_CSS}</style>"],
+        controls=controls,
+        note=(
+            f"{len(order)} chunks present in all {len(loaded)} arms. "
+            "Click a source cell to highlight a row, ⤢ to expand one cell's full text, "
+            "a column header to sort by its P(slop), or 'source' to sort by disagreement. "
+            "The green outline marks the better-scoring adapter — by the detector, "
+            "which is not the same thing as better."
+        ),
+        table=table,
+    )
+    page = page.replace("</body></html>", f"<script>{_COMPARE_JS}</script>\n</body></html>")
+    out_path.write_text(page, encoding="utf-8")
+    return out_path
