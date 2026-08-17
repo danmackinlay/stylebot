@@ -287,6 +287,32 @@ it is a **pairwise A/B judge** — "which of these two is more Dan?" — since t
 ties, not the cost, are what destroy the signal. Until then the detector is the
 instrument and the judge is a smoke alarm.
 
+## Register — the labels are not free (2026-08-17)
+
+Prompted by "my style has many registers and the model is struggling to hit a
+median register... I don't really know how to control for that variable".
+
+**A single SFT LoRA on a multimodal target learns the conditional mean**, so a
+median register is the expected outcome rather than a defect of any run. The
+cheap fix would be conditioning on a register label, the way heading context is
+already conditioned on (D14) — if labels could be had for free.
+
+They cannot. K-means over StyleDistance embeddings of **2,500 distinct Dan-side
+chunks** (≥400 chars): silhouette **0.232** at k=2, 0.231 at k=3, **0.117** at
+k=4, 0.090 at k=6. And reading the cluster exemplars, what separates is
+**topic, not register** — LaTeX/tooling in one, political economy and academic
+prose in another, link-list pages in a third. Subject matter dominates the
+variance at this granularity, so unsupervised labels would condition the styler
+on what a passage is *about*.
+
+**This does not mean no register axis exists.** The same backbone supports a
+*supervised* Dan-vs-slop direction at 0.73 real pairwise accuracy despite topic
+dominating the same variance — supervision picks the direction, k-means picks
+the biggest one. So the honest next step is a few hundred hand-labelled chunks
+("brisk technical" / "whimsical" / "academic"), a logistic head over them, and
+either a conditioning tag or a steering vector with λ as the slider. What is
+ruled out is getting the labels for nothing.
+
 ## The voice classifier (the detector signal)
 
 **Backbone bake-off** (2026-06-30), ranked by content-matched pairwise accuracy
