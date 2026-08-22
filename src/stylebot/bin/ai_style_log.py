@@ -188,6 +188,31 @@ def _echo_snapshots(snaps: list[Path], *, age: bool = False) -> None:
         )
 
 
+def _canonical_source(ctx, param, value):
+    """Normalize a symlinked FILE to the path it points at.
+
+    A session key *is* the source path as given (`_snapshot_path`), so any
+    second path to the same file opens a second, parallel session. The blog's
+    `_focus/` render harness creates exactly that: it symlinks a post into a
+    scratch project, and that scratch project is wiped and rebuilt on every
+    invocation -- so a session keyed there loses its file the next time a
+    different post is focused, and a `save` would write a transient,
+    gitignored path into the committed `pairs.jsonl`.
+
+    Only symlinks are rewritten. An ordinary path is returned untouched, so no
+    existing session key can move.
+    """
+    if value is None or not value.is_symlink():
+        return value
+    target = value.resolve()
+    try:
+        return target.relative_to(Path.cwd())
+    except ValueError:
+        # Invoked from outside the tree the symlink points into; an absolute
+        # key is still better than one under a directory that gets wiped.
+        return target
+
+
 def _snapshot_path(source: Path) -> Path:
     """Where the snapshot for `source` lives.
 
@@ -365,7 +390,11 @@ def main(ctx: click.Context, quiet: bool):
 
 
 @main.command(name="open")
-@click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument(
+    "file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    callback=_canonical_source,
+)
 @click.pass_context
 def open_session(ctx: click.Context, file: Path):
     """Open a rewrite session on FILE: record its current content as the 'before' state.
@@ -411,7 +440,11 @@ def _restore_snapshot(file: Path) -> dict:
 
 
 @main.command(name="reopen")
-@click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument(
+    "file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    callback=_canonical_source,
+)
 @click.pass_context
 def reopen_session(ctx: click.Context, file: Path):
     """Reopen FILE's last closed session, restoring its original 'before' state.
@@ -446,7 +479,11 @@ def reopen_session(ctx: click.Context, file: Path):
 
 
 @main.command(name="save", cls=SectionedCommand)
-@click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument(
+    "file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    callback=_canonical_source,
+)
 @click.option(
     "--keep-open",
     is_flag=True,
@@ -641,7 +678,11 @@ def save_session(
 
 
 @main.command(name="drop")
-@click.argument("file", type=click.Path(dir_okay=False, path_type=Path))
+@click.argument(
+    "file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    callback=_canonical_source,
+)
 @click.pass_context
 def drop_session(ctx: click.Context, file: Path):
     """Drop the open session for FILE without saving any pair."""

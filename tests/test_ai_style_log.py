@@ -560,3 +560,35 @@ def test_recut_reports_legacy_archives_as_an_error_not_a_traceback(temp_corpus):
     assert "Error:" in result.output
     assert "1 legacy JSON capture archive" in result.output
     assert "scripts/migrate_capture_archives.py" in result.output
+
+
+# ---- symlinked sources converge on one session ----------------------------
+#
+# A session key *is* the source path as given, so a second path to the same
+# file used to open a second, parallel session. The blog's `_focus/` render
+# harness creates exactly that shape: it symlinks a post into a scratch project
+# that is wiped and rebuilt on every invocation, so a session keyed there loses
+# its file as soon as a different post is focused.
+
+
+def test_symlinked_source_is_keyed_by_its_target(session_repo):
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nIt is worth noting the rich tapestry.\n", encoding="utf-8")
+    harness = session_repo / "_focus" / "post"
+    harness.mkdir(parents=True)
+    (harness / "foo.qmd").symlink_to(f)
+
+    _run("open", "_focus/post/foo.qmd")
+
+    assert log._snapshot_path(Path("post/foo.qmd")).exists()
+    assert not (log._snapshots_dir() / "_focus").exists()
+
+
+def test_ordinary_source_path_is_not_rewritten(session_repo):
+    """Only symlinks are normalized, so no existing session key can move."""
+    f = session_repo / "post" / "foo.qmd"
+    f.write_text("## S\n\nIt is worth noting the rich tapestry.\n", encoding="utf-8")
+
+    _run("open", "post/foo.qmd")
+
+    assert log._snapshot_path(Path("post/foo.qmd")).exists()
