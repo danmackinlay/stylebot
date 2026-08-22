@@ -65,18 +65,38 @@ MATH = "math"
 DIV = "div"
 BLOCKQUOTE = "blockquote"
 RAW_HTML = "raw_html"
+HTML_COMMENT = "html_comment"
 
 #: Kinds a rewrite must never be handed, in the default configuration.
 #: `HEADING` is deliberately absent: a heading is protected *as a line* but
 #: rides along as chunk context (or, under the cross-heading diet, as chunk
 #: content), so callers treat it separately. `RAW_HTML` is absent because it is
 #: opt-in — use `protected_kinds` when the option is not fixed at the call site.
+#:
+#: `HTML_COMMENT` is absent for the same reason as `RAW_HTML` and by the same
+#: mechanism, but on a different argument. An HTML comment is nobody's prose — it
+#: renders as nothing, and it routinely holds words that are not the author's at
+#: all (tool directives like ``<!-- vale off -->``, notes-to-self, imported
+#: reviewer comments) — so a *reflower* should always protect one. But a comment
+#: may open mid-line, and protecting it there **splits the prose around it**: a
+#: caller that deletes protected spans to cut training targets loses the target,
+#: where a caller that reassembles them loses nothing. Measured against the blog
+#: corpus at 1aa290e463, protecting comments unconditionally took section-bounded
+#: reproducibility from 3023/3028 to 3020/3028, all three losses prose interrupted
+#: by an inline ``<!-- vale … -->`` marker. So this is `block_only`'s trade in a
+#: second place, and it gets `block_only`'s answer: a keyword, and two recorded
+#: configurations, rather than one side's policy imposed on the other.
 PROTECTED_KINDS = frozenset({FENCE, MATH, DIV, BLOCKQUOTE})
 
 
-def protected_kinds(*, raw_html: bool = False) -> frozenset[str]:
+def protected_kinds(*, raw_html: bool = False, html_comments: bool = False) -> frozenset[str]:
     """The kinds `protected_spans` can emit under a given configuration."""
-    return (PROTECTED_KINDS | {RAW_HTML}) if raw_html else PROTECTED_KINDS
+    kinds = PROTECTED_KINDS
+    if raw_html:
+        kinds = kinds | {RAW_HTML}
+    if html_comments:
+        kinds = kinds | {HTML_COMMENT}
+    return kinds
 
 
 #: CommonMark ATX heading: up to 3 *spaces* of indent, 1-6 hashes, then either
@@ -124,6 +144,22 @@ RAW_HTML_BLOCK_RE = re.compile(
     r"^[ \t]*<(?P<tag>script|style)\b[^>]*>.*?</(?P=tag)[ \t]*>[ \t]*$(?:\n|\Z)",
     re.MULTILINE | re.DOTALL | re.IGNORECASE,
 )
+
+#: An HTML comment, at any indent, spanning any number of lines. Non-greedy, so
+#: two comments in one document are two spans rather than one that swallows the
+#: prose between them.
+#:
+#: Deliberately *not* folded into `RAW_HTML_BLOCK_RE`: that one is opt-in and this
+#: one is always on (see `PROTECTED_KINDS`), and a shared pattern could not express
+#: the difference. The line anchoring differs too — a comment may legitimately open
+#: mid-line, and a trailing ``<!-- vale on -->`` after a sentence must still be
+#: protected.
+#:
+#: Measured 2026-08-22 in livingthing, which is what prompted this: a multi-line
+#: comment handed to `format-sentences` had its opening line joined to its body and
+#: the result split at sentence boundaries. The comment survived only because
+#: nothing inside it happened to spell ``-->``.
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 #: Receives a div opener's attribute text (e.g. ``{.callout-note}``) and says
 #: whether the div's *contents* are prose. Policy, supplied by the caller.
@@ -236,14 +272,17 @@ def protected_spans(
     block_only: bool = False,
     div_is_prose: DivIsProse | None = None,
     raw_html: bool = False,
+    html_comments: bool = False,
 ) -> list[Span]:
     """Merged, sorted, non-overlapping protected spans of `text`.
 
     `block_only` restricts ``$$…$$`` to line-anchored display math; an inline
     ``$$k$$`` then stays in the prose the styler rewrites. `raw_html` adds
     ``<script>``/``<style>`` blocks (`RAW_HTML_BLOCK_RE`), which nothing in
-    stylebot wants but a whole-document reflower does. Overlapping spans of
-    different kinds merge under the kind that starts first.
+    stylebot wants but a whole-document reflower does; `html_comments` adds
+    ``<!--…-->`` (`HTML_COMMENT_RE`), on the same terms and for the reason
+    recorded above `HTML_COMMENT_RE`. Overlapping spans of different kinds merge
+    under the kind that starts first.
 
     Public on purpose, though every caller today is in this module: this IS the
     module's central question — what a rewrite must never be handed — and it is
@@ -269,6 +308,9 @@ def protected_spans(
         spans.append((m.start(), m.end(), MATH))
     for m in BLOCKQUOTE_RE.finditer(text):
         spans.append((m.start(), m.end(), BLOCKQUOTE))
+    if html_comments:
+        for m in HTML_COMMENT_RE.finditer(text):
+            spans.append((m.start(), m.end(), HTML_COMMENT))
     if raw_html:
         for m in RAW_HTML_BLOCK_RE.finditer(text):
             spans.append((m.start(), m.end(), RAW_HTML))

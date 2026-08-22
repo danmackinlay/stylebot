@@ -1,15 +1,17 @@
 {
   "fixture": "segmenter_conformance.qmd",
-  "fixture_sha256": "8c7c74579e97a78337c938a7be98399fb503230497e0bbd3c3433bbde06d273a",
+  "fixture_sha256": "4c8fe2881a7c79aa29e748e36f5c005dad9c86bd65215a90f5c84a430b5489fb",
   "configurations": {
     "stylebot": {
       "block_only": true,
       "raw_html": false,
+      "html_comments": false,
       "div_is_prose": null
     },
     "livingthing": {
       "block_only": false,
       "raw_html": true,
+      "html_comments": true,
       "div_is_prose": null
     }
   },
@@ -137,10 +139,44 @@
       ]
     },
     {
+      "name": "html_comment_single_line",
+      "needle": "never prose, in any configuration",
+      "start": 1242,
+      "end": 1275,
+      "protected_in": [
+        "livingthing"
+      ]
+    },
+    {
+      "name": "html_comment_multi_line",
+      "needle": "Its second sentence sits on its own line.",
+      "start": 1444,
+      "end": 1485,
+      "protected_in": [
+        "livingthing"
+      ]
+    },
+    {
+      "name": "html_comment_midline",
+      "needle": "A trailing comment, opened mid-line.",
+      "start": 1646,
+      "end": 1682,
+      "protected_in": [
+        "livingthing"
+      ]
+    },
+    {
+      "name": "prose_between_comments",
+      "needle": "which must stay prose",
+      "start": 1316,
+      "end": 1337,
+      "protected_in": []
+    },
+    {
       "name": "unclosed_div",
       "needle": "an-opener-that-is-never-closed",
-      "start": 1253,
-      "end": 1283,
+      "start": 1732,
+      "end": 1762,
       "protected_in": []
     }
   ],
@@ -193,6 +229,12 @@
         "end": 1053,
         "kind": "div",
         "text": "::: {.callout-note}\nCallout prose paragraph one: the author's own voice, sitting inside a container\nthat carries class semantics.\n\n::: {#fig-nested}\n![](nested.png)\n:::\n\nTrailing callout prose after the nested figure.\n:::\n"
+      },
+      {
+        "start": 1524,
+        "end": 1600,
+        "kind": "blockquote",
+        "text": "  > And a quoted line, indented, which is not a blockquote of the author's.\n"
       }
     ],
     "livingthing": [
@@ -255,6 +297,24 @@
         "end": 1208,
         "kind": "raw_html",
         "text": "<script type=\"text/javascript\">\n// A raw-text element, where line structure is load-bearing.\nconst conformance = 1;\n\nconst afterABlankLine = 2;\n</script>\n"
+      },
+      {
+        "start": 1209,
+        "end": 1280,
+        "kind": "html_comment",
+        "text": "<!-- A single-line HTML comment: never prose, in any configuration. -->"
+      },
+      {
+        "start": 1417,
+        "end": 1603,
+        "kind": "html_comment",
+        "text": "<!-- A multi-line comment.\nIts second sentence sits on its own line. A third rides along after the second.\n  > And a quoted line, indented, which is not a blockquote of the author's.\n-->"
+      },
+      {
+        "start": 1641,
+        "end": 1686,
+        "kind": "html_comment",
+        "text": "<!-- A trailing comment, opened mid-line. -->"
       }
     ]
   }

@@ -56,6 +56,18 @@ const conformance = 1;
 const afterABlankLine = 2;
 </script>
 
+<!-- A single-line HTML comment: never prose, in any configuration. -->
+
+A paragraph between two comments, which must stay prose.
+Two sentences, so a reflow of the comment below would visibly reach into it.
+
+<!-- A multi-line comment.
+Its second sentence sits on its own line. A third rides along after the second.
+  > And a quoted line, indented, which is not a blockquote of the author's.
+-->
+
+Prose after the multi-line comment. <!-- A trailing comment, opened mid-line. -->
+
 The closing paragraph of the document.
 
 ::: an-opener-that-is-never-closed

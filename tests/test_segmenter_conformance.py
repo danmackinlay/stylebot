@@ -61,8 +61,18 @@ EXPECTED = Path(__file__).parent / "fixtures" / "segmenter_conformance.json"
 #: ``div_is_prose: null`` records that neither side frees div contents — that is
 #: the caller's policy hook, out of scope for a segmenter conformance spec.
 CONFIGURATIONS: dict[str, dict] = {
-    "stylebot": {"block_only": True, "raw_html": False, "div_is_prose": None},
-    "livingthing": {"block_only": False, "raw_html": True, "div_is_prose": None},
+    "stylebot": {
+        "block_only": True,
+        "raw_html": False,
+        "html_comments": False,
+        "div_is_prose": None,
+    },
+    "livingthing": {
+        "block_only": False,
+        "raw_html": True,
+        "html_comments": True,
+        "div_is_prose": None,
+    },
 }
 
 #: ``(case name, needle)``. Each needle must occur exactly once in the fixture;
@@ -83,13 +93,43 @@ CASES: list[tuple[str, str]] = [
     ("callout_div", "callout-note"),
     ("nested_div", "fig-nested"),
     ("raw_html_script", "const conformance = 1;"),
+    ("html_comment_single_line", "never prose, in any configuration"),
+    ("html_comment_multi_line", "Its second sentence sits on its own line."),
+    ("html_comment_midline", "A trailing comment, opened mid-line."),
+    ("prose_between_comments", "which must stay prose"),
     ("unclosed_div", "an-opener-that-is-never-closed"),
 ]
+
+
+#: The `CONFIGURATIONS` keys that select *kinds* rather than tune one kind's
+#: shape. Derived rather than restated, so a third opt-in kind cannot be added to
+#: `protected_spans` and silently left out of the invariant tests below.
+_KIND_SWITCHES = ("raw_html", "html_comments")
 
 
 def spans_for(doc: str, config: str) -> list[md.Span]:
     """The protected spans of `doc` under the named configuration."""
     return md.protected_spans(doc, **CONFIGURATIONS[config])
+
+
+def covered_chars(doc: str, config: str) -> set[int]:
+    """Every character index the named configuration protects.
+
+    Coverage rather than span identity, because merging makes the two
+    incomparable as *tuples* while leaving the real invariant intact. A `>` line
+    inside a multi-line comment -- which is what a harvested reviewer reply looks
+    like -- is a standalone blockquote span under a configuration that does not
+    protect comments, and part of one larger comment span under one that does.
+    Both protect the same characters, which is the only thing a consumer can rely
+    on; asserting on the tuples made the fixture's richness look like a violation.
+    """
+    return {i for s, e, _k in spans_for(doc, config) for i in range(s, e)}
+
+
+def kinds_for(config: str) -> frozenset[str]:
+    """The kinds the named configuration is allowed to emit."""
+    cfg = CONFIGURATIONS[config]
+    return md.protected_kinds(**{k: cfg[k] for k in _KIND_SWITCHES})
 
 
 def _covered(spans: list[md.Span], start: int, end: int) -> bool:
@@ -156,13 +196,40 @@ def test_stylebot_matches_the_conformance_fixture(doc: str):
 
 
 def test_the_configurations_disagree_only_where_intended(doc: str):
+    """Three declared policy differences, and nothing else.
+
+    Each is a case of the same asymmetry: livingthing reassembles protected spans
+    and stylebot deletes them, so livingthing can afford to protect a construct
+    that sits *inside* a sentence and stylebot cannot.
+    """
     lt = {(s, e) for s, e, _k in spans_for(doc, "livingthing")}
     sb = {(s, e) for s, e, _k in spans_for(doc, "stylebot")}
     extra = sorted(doc[s:e] for s, e in lt - sb)
-    assert len(extra) == 2, extra
     assert any("$$d$$" in x for x in extra), extra  # inline display math
     assert any(x.lstrip().startswith("<script") for x in extra), extra
-    assert not sb - lt, "the stylebot config must protect a subset of livingthing's"
+    comments = [x for x in extra if x.lstrip().startswith("<!--")]
+    assert len(comments) == 3, comments  # single-line, multi-line, mid-line
+    assert len(extra) == 2 + len(comments), extra
+    stylebot_chars = covered_chars(doc, "stylebot")
+    livingthing_chars = covered_chars(doc, "livingthing")
+    leaked = stylebot_chars - livingthing_chars
+    assert not leaked, (
+        "the stylebot config must protect a subset of livingthing's; "
+        f"unprotected for livingthing: {doc[min(leaked):max(leaked) + 1]!r}"
+    )
+
+
+def test_html_comments_are_protected_for_livingthing_only(doc: str):
+    cases = {c["name"]: c["protected_in"] for c in build_record(doc)["cases"]}
+    for name in (
+        "html_comment_single_line",
+        "html_comment_multi_line",
+        "html_comment_midline",
+    ):
+        assert cases[name] == ["livingthing"], name
+    # The corollary that makes the mid-line case worth having: protecting a
+    # comment must not drag the prose on either side of it out of reach.
+    assert cases["prose_between_comments"] == []
 
 
 def test_midline_math_is_prose_for_stylebot_only(doc: str):
@@ -184,7 +251,7 @@ def test_spans_are_sorted_disjoint_and_in_bounds(doc: str):
         for start, end, kind in spans_for(doc, name):
             assert 0 <= start < end <= len(doc), name
             assert start >= prev_end, f"{name} spans overlap or are unsorted"
-            assert kind in md.protected_kinds(raw_html=CONFIGURATIONS[name]["raw_html"])
+            assert kind in kinds_for(name), name
             prev_end = end
 
 
@@ -211,7 +278,7 @@ def test_every_named_case_occurs_exactly_once(doc: str):
 def test_the_fixture_exercises_every_protected_kind(doc: str):
     for name in CONFIGURATIONS:
         kinds = {k for _s, _e, k in spans_for(doc, name)}
-        want = md.protected_kinds(raw_html=CONFIGURATIONS[name]["raw_html"])
+        want = kinds_for(name)
         assert kinds == want, f"{name} fixture misses {want - kinds}"
 
 
