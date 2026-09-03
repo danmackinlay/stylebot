@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 
 import pytest
 from click.testing import CliRunner
@@ -244,6 +246,85 @@ def test_two_writers_on_different_shards_still_refuse_the_same_cell(sharded):
     with PairsWriter(pairs, set()) as a, PairsWriter(pairs, set()) as b:
         assert a.write("shared", aug) is True
         assert b.write("shared", sep) is False
+
+
+def _lock_is_held_elsewhere(lock_path) -> bool:
+    """True when some other open file description holds `lock_path` exclusively.
+
+    Asked from a child process because `flock` is per open-file-description: a
+    second `open()` in *this* process would block rather than answer.
+    """
+    code = (
+        "import fcntl, sys\n"
+        "fp = open(sys.argv[1], 'a+')\n"
+        "try:\n"
+        "    fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        "except OSError:\n"
+        "    sys.exit(1)\n"
+        "sys.exit(0)\n"
+    )
+    done = subprocess.run([sys.executable, "-c", code, str(lock_path)])
+    return done.returncode == 1
+
+
+def test_rewrite_holds_the_corpus_lock_while_it_replaces_shards(sharded, monkeypatch):
+    """A rewrite is a writer, so it serialises against appends like one."""
+    pytest.importorskip("fcntl")
+    data_dir, _ = sharded
+    pairs = data_dir / "pairs"
+    lock_path = data_dir / corpus.LOCK_NAME
+
+    seen: list[bool] = []
+    real = corpus.write_jsonl_atomic
+
+    def spy(path, records):
+        seen.append(_lock_is_held_elsewhere(lock_path))
+        return real(path, records)
+
+    monkeypatch.setattr(corpus, "write_jsonl_atomic", spy)
+    corpus.rewrite(pairs, corpus.read_records(pairs)[:-1])
+    assert seen and all(seen)
+
+
+def test_a_rewrite_between_two_appends_does_not_swallow_the_second(sharded):
+    """The append after an interleaved rewrite must still reach the corpus.
+
+    `rewrite` replaces a shard by rename, which leaves `PairsWriter`'s open
+    `ab+` handle pointing at an unlinked inode: before this was fixed, the
+    write below succeeded, reported `True`, and vanished — and so did every
+    later append in that run. `log save`'s replace rule, a prune and a dedupe
+    all call `rewrite`, so a long synth run racing one is the live shape.
+    """
+    from stylebot.synth import PairsWriter
+
+    data_dir, _ = sharded
+    pairs = data_dir / "pairs"
+
+    doomed = _rec(synthetic=True, at="2026-09-01T00:00:00+00:00", body="doomed")
+    doomed["meta"]["synth_key"] = "doomed"
+    corpus.rewrite(pairs, corpus.read_records(pairs) + [doomed])
+
+    first = _rec(synthetic=True, at="2026-09-02T00:00:00+00:00", body="before")
+    first["meta"]["synth_key"] = "k1"
+    second = _rec(synthetic=True, at="2026-09-03T00:00:00+00:00", body="after")
+    second["meta"]["synth_key"] = "k2"
+
+    with PairsWriter(pairs, set()) as w:
+        assert w.write("k1", first) is True
+        # An unrelated read-filter-write op lands mid-run and rewrites the very
+        # shard this writer has open, because it drops a record from it.
+        kept = [
+            r
+            for r in corpus.read_records(pairs)
+            if (r.get("meta") or {}).get("synth_key") != "doomed"
+        ]
+        corpus.rewrite(pairs, kept)
+        assert w.write("k2", second) is True
+
+    keys = [(r.get("meta") or {}).get("synth_key") for r in iter_pairs(pairs)]
+    assert "doomed" not in keys
+    assert keys.count("k1") == 1
+    assert keys.count("k2") == 1
 
 
 def test_capture_save_appends_to_the_captures_shard(sharded):

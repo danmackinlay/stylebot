@@ -98,6 +98,19 @@ def shard_paths(corpus: str | Path) -> list[Path]:
     return [path]
 
 
+def shard_ident(shard: str | Path) -> tuple[int, int] | None:
+    """`(dev, ino)` of a shard path, or None when it does not exist.
+
+    An open append handle survives `rewrite` replacing the file it points at, so
+    a writer that wants to notice has to compare this against its own `fstat`.
+    """
+    try:
+        st = Path(shard).stat()
+    except FileNotFoundError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
 def shard_of(record: dict) -> str:
     """Which shard a record belongs in. The routing rule; see the module docstring.
 
@@ -150,37 +163,37 @@ def rewrite(corpus: str | Path, records: Iterable[dict]) -> list[Path]:
     the migration prunes. On a single-file corpus it is `write_jsonl_atomic` and
     nothing else, so nothing about the unsharded install changes.
 
-    On a sharded corpus every record is routed by `shard_of` and **a shard whose
-    bytes would not change is not written at all**. That is not an optimisation,
-    it is the property the whole exercise is for: a synth run that appends 200
-    September pairs leaves the twelve other shards byte-identical, so
-    `git diff --stat` names one file and git stores one small delta.
+    On a sharded corpus every record is routed by `shard_of`, **a shard whose
+    bytes would not change is not written at all** (the property D50 exists for),
+    and a shard that ends up empty is truncated rather than deleted, so a prune
+    that empties a month shows as a diff and not as a vanished file.
 
-    A shard that exists and ends up empty is truncated rather than deleted, so a
-    prune that empties a month shows up as a diff instead of as a vanished file.
+    Held under `corpus_lock`: a rewrite is a writer, and replacing a shard under
+    an appender loses what it appends (D60).
     """
     path = Path(corpus)
     records = list(records)
-    if not path.is_dir():
-        write_jsonl_atomic(path, records)
-        return [path]
+    with corpus_lock(path):
+        if not path.is_dir():
+            write_jsonl_atomic(path, records)
+            return [path]
 
-    buckets: dict[str, list[dict]] = {}
-    for rec in records:
-        buckets.setdefault(shard_of(rec), []).append(rec)
-    # Shards that exist but got no records must be emptied, not left stale.
-    for shard in shard_paths(path):
-        buckets.setdefault(shard.name, [])
+        buckets: dict[str, list[dict]] = {}
+        for rec in records:
+            buckets.setdefault(shard_of(rec), []).append(rec)
+        # Shards that exist but got no records must be emptied, not left stale.
+        for shard in shard_paths(path):
+            buckets.setdefault(shard.name, [])
 
-    touched: list[Path] = []
-    for name, recs in sorted(buckets.items()):
-        shard = path / name
-        wanted = "".join(_line(rec) for rec in recs)
-        if shard.exists() and shard.read_text(encoding="utf-8") == wanted:
-            continue
-        write_jsonl_atomic(shard, recs)
-        touched.append(shard)
-    return touched
+        touched: list[Path] = []
+        for name, recs in sorted(buckets.items()):
+            shard = path / name
+            wanted = "".join(_line(rec) for rec in recs)
+            if shard.exists() and shard.read_text(encoding="utf-8") == wanted:
+                continue
+            write_jsonl_atomic(shard, recs)
+            touched.append(shard)
+        return touched
 
 
 def _line(record: dict) -> str:
@@ -238,10 +251,16 @@ def corpus_lock(corpus: str | Path):
     """Exclusive advisory lock over a whole corpus, whatever its shape.
 
     One lock per corpus rather than one per shard, so two writers targeting
-    *different* shards still serialise. Without that, the W8 duplicate-cell
-    defect would come back in exactly the window sharding introduces: two synth
-    processes either side of a month boundary, each appending cells the other
-    had already planned. A no-op on platforms without `fcntl`.
+    *different* shards still serialise: without that the W8 duplicate-cell
+    defect returns in the window sharding introduces — two synth processes
+    either side of a month boundary, each appending cells the other had planned.
+    Both writers take it: `PairsWriter.write` for an append and `rewrite` for a
+    replace.
+
+    It does **not** cover a caller that reads the corpus, filters, and then
+    calls `rewrite`; an append arriving in that gap is still overwritten, and
+    the lock is not re-entrant, so such a caller cannot simply wrap both. D60
+    has the residual window and why it was left. A no-op without `fcntl`.
     """
     path = Path(corpus)
     data_dir = path.parent

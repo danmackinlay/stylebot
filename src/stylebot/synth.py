@@ -21,6 +21,7 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -568,39 +569,25 @@ class PairsWriter:
     — which is the property that makes `git diff --stat` after a synth run name
     one file. Handles are opened lazily and kept, one per shard touched.
 
-    **The defect this exists for.** `synthesize_pairs` loads
-    `existing_synth_keys` once, plans, and appends with a bare `fp.write`. Two
-    runs against the same corpus each read the file before the other wrote to
-    it, so every cell both planned got written twice: 21 duplicate `record_id`s
-    reached the live corpus on 2026-08-12, from two budgets run concurrently.
-    Nothing downstream tolerates that — eval and rewrite resume on `record_id`,
-    score the first copy and skip the second, while training takes both, so the
-    pair silently gets double weight and a score measured on the other draw.
+    Every append is guarded by `corpus.corpus_lock`, and inside that lock the
+    writer catches up on **whatever was appended since it last looked** before
+    deciding. The catch-up is a tail read from a remembered byte offset over
+    *every* shard, not a re-read of the corpus: re-reading 38 MB per record
+    would be quadratic, which is why "re-read `seen` before each write" is not
+    on its own an implementable instruction. The duplicate-cell defect this
+    answers, and why the lock is one file per corpus rather than one per shard:
+    D36 and D50. Without `fcntl` it degrades to the unlocked-but-still-tail-
+    checking path rather than failing to write.
 
-    So every append is guarded by an exclusive `flock` on the file, and inside
-    that lock the writer catches up on **whatever was appended since it last
-    looked** before deciding. The catch-up is a tail read from a byte offset,
-    not a re-read of the corpus: re-reading 38 MB per record would be
-    quadratic, which is why "re-read `seen` before each write" is not on its own
-    an implementable instruction.
-
-    `flock` is advisory and per open-file-description, so it serialises two
-    processes *and* two handles in one process, and costs nothing when there is
-    only one writer. Platforms without `fcntl` (Windows) degrade to the
-    unlocked-but-still-tail-checking path rather than failing to write.
-
-    **Sharding does not reopen that hole.** The lock is `corpus.corpus_lock` —
-    one file for the whole corpus, not one per shard — and the catch-up reads
-    the tail of *every* shard, so two processes appending to different months
-    still serialise and still see each other's keys. Locking each shard
-    separately would have let two runs either side of a month boundary write the
-    same cell twice, which is precisely the 2026-08-12 defect wearing a hat.
+    A rewrite may replace a shard mid-run, so both the handle and the offset are
+    checked against the shard's inode before they are trusted (D60).
     """
 
     def __init__(self, path: Path, seen: set[str]) -> None:
         self._path = Path(path)
         self._seen = seen
         self._offsets: dict[Path, int] = {}
+        self._idents: dict[Path, tuple[int, int] | None] = {}
         self._handles: dict[Path, object] = {}
         self._open = False
 
@@ -611,6 +598,7 @@ class PairsWriter:
             self._path.parent.mkdir(parents=True, exist_ok=True)
         for shard in corpus.shard_paths(self._path):
             self._offsets[shard] = shard.stat().st_size if shard.exists() else 0
+            self._idents[shard] = corpus.shard_ident(shard)
         self._open = True
         return self
 
@@ -621,8 +609,14 @@ class PairsWriter:
         self._open = False
 
     def _handle(self, shard: Path):
-        """The append handle for one shard, opened on first use."""
+        """One shard's append handle, reopened if a rewrite replaced it (D60)."""
         fp = self._handles.get(shard)
+        if fp is not None:
+            st = os.fstat(fp.fileno())
+            if (st.st_dev, st.st_ino) != corpus.shard_ident(shard):
+                fp.close()
+                del self._handles[shard]
+                fp = None
         if fp is None:
             # BINARY "ab+", not text mode, for two reasons that both bite
             # silently: a text handle raises on `tell()` after line iteration,
@@ -631,6 +625,7 @@ class PairsWriter:
             fp = shard.open("ab+")
             self._handles[shard] = fp
             self._offsets.setdefault(shard, 0)
+            self._idents[shard] = corpus.shard_ident(shard)
         return fp
 
     def _catch_up(self) -> None:
@@ -644,6 +639,11 @@ class PairsWriter:
         """
         for shard in corpus.shard_paths(self._path):
             size = shard.stat().st_size if shard.exists() else 0
+            ident = corpus.shard_ident(shard)
+            if ident != self._idents.get(shard):
+                # Rewritten under us: the offset is into a dead inode (D60).
+                self._idents[shard] = ident
+                self._offsets[shard] = 0
             start = self._offsets.get(shard, 0)
             if size <= start:
                 self._offsets[shard] = size
