@@ -436,6 +436,84 @@ band we serve from. That raises the cost of any masking scheme relative to
 exclusion, which cannot be got wrong by a model at all — an excluded block is
 never in the model's hands to mangle.
 
+### D27 amendment (2026-09-03, W2): exclusion has a packing consequence, and it is priced, declared, and not paid yet
+
+Exclusion is not a local edit. `targets._post_targets` deletes protected blocks
+**and then packs paragraphs**, so a passage either side of a figure becomes one
+target — a passage the document does not contain. `infer._segment` cannot ever
+present it: it breaks a chunk at every protected item. The adapter is trained on
+"A+B (fence gone)" and served "A", then "B".
+
+**Measured 2026-09-03**, over the blog's 467 selected posts and the 7,846-pair
+synthetic corpus, which is what turns this from a curiosity into the dominant
+train/serve skew in the system:
+
+| | training (`_post_targets`, 4500 cross-heading) | serving (`_segment`, same diet) |
+| --- | --- | --- |
+| chunks over the same prose | 933 | 4,278 |
+| median chars | 4,027 | **434** |
+| mean chars | 3,267 | 919 |
+
+Same prose, cut into 2 pieces per post for training and 9 for serving. 4,646
+protected items are scattered through those 467 posts (1,424 divs, 1,313
+blockquotes, 1,114 fences, 795 display-math blocks) and 466 of the 467 posts
+carry at least one. Group the served chunks across them and the median goes to
+3,558 — i.e. essentially all of the gap is this. D15 says out-of-distribution
+length makes the styler return its input verbatim, and run 4a was trained at
+4,500 cross-heading.
+
+**Alternatives considered, and both were priced before choosing.**
+
+- **A: `_segment` groups prose across protected items, reassembling the block in
+  place on output.** *Impossible, and the reason is structural rather than
+  effortful.* The group is sent as A+B with the block deleted; the model returns
+  one text; there is no anchor in it that says where A ended. The only
+  reassemblies available are splitting the model's output on a paragraph-count
+  heuristic — which silently relocates a figure relative to the prose that
+  introduces it the first time a rewrite merges two paragraphs — or sending the
+  block inline and asking the model to echo it, which is exactly what the
+  protection principle forbids and what D27 above refutes on measurement.
+  Rejected on correctness, not cost.
+- **B: `_post_targets` stops packing across a deleted block.** *Correct, and
+  expensive.* Implemented and measured: as `ChunkPolicy.pack_across_protected`,
+  defaulting to True (today's behaviour). Flipping it, priced against the two
+  corpus-stability arms as W5 re-measured them on the same day:
+
+  | arm | today | with B |
+  | --- | --- | --- |
+  | section-bounded (frozen) | 3,023 / 3,028 | 2,116 / 3,028 |
+  | cross-heading | 4,181 / 4,194 | 964 / 4,194 |
+
+  **4,124 distinct cells orphaned, 57% of the synthetic corpus.** Orphaned, not
+  deleted: `synth_key` keys on target text, so those pairs stay trainable and the
+  *new* cells simply go unfilled until a synth run pays for them. The
+  section-bounded 907 cannot be refilled at all, since `CROSS_HEADING` is live
+  policy.
+
+**Deciding constraint**: B is the right shape and its bill is a paid synth run
+plus a re-measure of both corpus-stability floors, which is Dan's call and not a
+refactor's. A is unavailable at any price. So the asymmetry **stands, as a
+declared parameter with a default**, and the reason it is tolerable while the
+other three A1-class findings were not is a real difference in kind: the other
+three put constructs in the model's hands that the corpus never contained
+(callout prose rewritten but never trained, a heading prefix training never saw,
+a runaway fence protected on one side only). This one puts nothing new in the
+model's hands. It is a **scale** mismatch, of exactly the kind the mixed-scale
+curriculum (1500/3000/4500) exists to absorb — and the measurement above says the
+curriculum is aimed at the wrong end of the distribution, which is a training-diet
+question rather than a correctness one.
+
+`tests/test_protection_parity.py` now pins both halves: that the two sides agree
+under `pack_across_protected=False`, and that the default's disagreement is
+exactly the join across a deleted block and nothing else.
+
+**Re-evaluate if**: a synth run is being paid for anyway (flip the default in the
+same batch, then re-measure both floors in
+`livingthing/tests/test_corpus_stability.py`); or the next scale curriculum is
+chosen — in which case pick it against the *served* distribution (median 434,
+mean 919, p90 2,658) rather than against what `_post_targets` cuts, because the
+served one is what the adapter meets.
+
 ## D28: a conformance fixture, not a shared import, pins the second implementation
 
 **Decision (2026-08-11)**: `livingthing.qmd_core`'s copy of the segmenter is
@@ -1145,3 +1223,322 @@ then has to run across the shard set rather than per file, and
 `dedupe_pairs_file`'s "first" needs a defined order between shards. Also if a
 non-git corpus deployment appears, at which point `blog_sha`/`blog_dirty` want a
 more general name than the one deployment gave them.
+
+---
+
+## D37: the corpus-stability guard belongs to whoever owns the corpus
+
+**Decision (2026-09-03, W5)**: `test_corpus_stability.py` moves to livingthing's
+suite. stylebot keeps no replacement, and `python-dateutil` — which sat in its
+dev group for no reason but that test's `sys.path` hop into the blog — goes with
+it. **stylebot depends on no checkout it does not own**: not in `src/`, not in
+`tests/`, not in its dependency groups.
+
+**What the guard needs, and who has it.** Three things, and the blog has all
+three: the corpus (which by rule never enters the public tooling repo), the
+chunk policy (which is blog policy, in `livingthing.training_targets`), and a
+git pin into blog history to freeze the prose. stylebot had none of them, so the
+test probed `../livingthing` and `~/Source/livingthing`, patched `sys.path` to
+import a package it does not depend on, and carried a transitive dependency of
+*that* package to make the import work. In the blog it is an ordinary test: two
+imports and the file next door.
+
+**Alternatives considered**:
+
+- **Keep a stylebot-side guard reading policy as data** from the newest run
+  manifest's `data.chunk_scale`, skipping when no corpus is configured (the QA
+  list's own fallback). Rejected: on every machine but Dan's it skips, and the
+  file already argues at length that a green skip reads as "measured, fine". A
+  guard that cannot run where the package is developed is decoration. What
+  stylebot keeps instead is what it can honestly own — `test_markdown.py`,
+  `test_protection_parity.py` and the conformance fixture pin the segmenter's
+  *behaviour*; the corpus floor pins what that behaviour cost, which is a
+  question about one corpus.
+- **Vendor a corpus sample into stylebot.** Rejected outright: the corpus never
+  enters this repo.
+- **Leave it and add `python-dateutil` properly.** That is the arrow pointing
+  the wrong way, written down as a dependency.
+
+**Deciding constraint**: the failure this already caused. Dropping the unused
+`python-dateutil` runtime dependency (correctly, in `aa570f4`) also dropped it
+from the dev environment, `livingthing.training_targets` imports it
+transitively, and the harness silently stopped measuring for hours. The fix at
+the time was to make the import failure `pytest.fail` rather than skip — a
+better error for a defect that should not have been reachable.
+
+**And the floors are real again.** Moving it exposed that both arms had been
+mis-measured, which is the second half of this entry:
+
+- **Each arm gets its own pin.** The section-bounded cells were cut at
+  2026-07-22, the cross-heading (v2) cells three weeks later; one pin for both
+  charged v2 cells for three weeks of Dan's prose drift.
+- **Each arm gets its own policy.** `div_is_prose` (callouts-as-prose) postdates
+  the v1 cells and predates the v2 ones, so v1 is re-derived without it and v2
+  with it.
+- **Each *budget* gets its own cut.** `dan-style synth` swept three chunk
+  budgets over the same prose (2381 cells at 1500 chars, 1045 at 3000, 768 at
+  4500) and each cell records its own in `meta.merge_max_chars` — but the
+  harness asked every cell for `MERGE_MAX_CHARS = 1500`, so two thirds of the
+  corpus was charged for a cut nobody made. This is the same principle that
+  already selected on `chunk_mode`, applied one level down.
+
+Measured 2026-09-03: section-bounded 3023/3028 (99.83%, unchanged, the pin and
+policy were already right for it); cross-heading **417 → 4181 of 4194**
+(99.69%). The old value was annotated "stale on purpose", read 11% of its
+stratum, and could catch only a catastrophic break. Both floors are now
+near-equalities, which is what makes them able to fail for a reason.
+
+**Re-evaluate if**: a third chunk regime lands — add an `Arm`, pin it at its own
+generation revision, measure. Or if the corpus is sharded by producer (W6), at
+which point `CORPUS` becomes a glob. If stylebot ever needs its own floor, the
+honest version is a small fixture corpus committed *to stylebot* and cut from
+its own test fixtures — a different instrument, measuring the segmenter rather
+than the blog.
+
+---
+
+## D38: no `scripts/` carve-out — migrations are a hidden `ai-style data` group
+
+**Decision (2026-09-03, W5)**: `scripts/` is deleted. Its two one-off migrations
+become typed functions in `stylebot.migrations` behind `ai-style data
+migrate-captures` and `ai-style data prune-invented-anchors`, a click group
+declared `hidden=True`. "One entry point, subcommands" now has no exceptions.
+
+**What the carve-out was actually protecting**, and what it cost. The stated
+reason was the `--help` tree: a migration is run once, by one person, per schema
+change, and does not belong beside the pipeline. That is a real concern and
+`hidden=True` answers it exactly — absent from `ai-style --help`, fully
+documented under `ai-style data --help`. What the directory bought on top of
+that was all cost:
+
+- `scripts/` is not in the wheel. `capture.iter_archives` refuses a legacy
+  archive and prints the command to fix it; for anyone who installed stylebot
+  rather than cloning it, that command named a file they did not have.
+- The blog's RUNBOOK invoked both scripts as `uv run python
+  ../stylebot/scripts/…` — a hardcoded blog→stylebot *path*, in the same repo
+  whose OVERVIEW says stylebot never hardcodes a blog location. The arrow was
+  bent in both directions at once (D37 is the other).
+- "Typed once per schema change, and each carries a test" was written in
+  `CLAUDE.md` while only one of the two had a test. A directory outside the
+  package is a directory outside the checks.
+
+**Alternatives considered**:
+
+- **Move them to the blog's `scripts/`**, on the grounds that only the blog
+  corpus is ever migrated (the QA list's other option). Rejected: it is true
+  today and it is not what the code says. `migrate-captures` converts
+  *stylebot's own* archive format and is named by *stylebot's* error message; a
+  second installation would hit that error and be told to go and find Dan's
+  blog. Migration of a data format belongs with the code that defines it.
+- **Plain visible subcommands.** Rejected for the reason the carve-out existed:
+  `ai-style --help` is a phase map, and two spent migrations in it read as
+  pipeline steps.
+- **A separate `stylebot-migrate` console script.** That is the `ai-style-log`
+  mistake (folded back in 2026-07-20), one release later.
+
+**Deciding constraint**: an error message that names a command must name a
+command that exists. Everything else here follows from putting the migrations
+where the error can reach them.
+
+**Re-evaluate if**: nothing. A migration is deleted once the only corpus that
+exists has been through it — function, command and test together — and if both
+of these go, `stylebot/migrations.py` goes with them and the next one starts a
+fresh file.
+
+---
+
+## D39: a score carries the instrument that produced it, and two instruments never share a mean
+
+**Decision (2026-09-03, W10)**: every detector result carries
+`DETECTOR_IDENTITY_KEYS` — `name`, `embed_model`, `git_sha`, `trained_at`,
+`n_pairs` — read from the artifact's `meta.json` and stamped onto every
+`scores.jsonl` row. `eval.score_pairs_file` refuses to append to a file whose
+existing rows name a different head (`--allow-mixed-detector` to override), and
+`eval.compare_scores` refuses a verdict spanning two heads
+(`--allow-cross-detector`, which then flags the result `cross_detector: true`).
+
+**The defect.** One classifier is the best-of-N reranker, the do-no-harm guard
+*and* the verdict metric, and it is refit every time the corpus grows. Run 4a's
+own promotion note admits the detector was refit the same day as the verdict it
+produced, so its headline — "closes 90.7% of the slop→Dan gap, against runs 1–2's
+~55%" — is not a like-for-like comparison and says so in a parenthesis rather
+than in the data. The rows recorded `name` and `embed_model` only, both of which
+are constant across every refit this project will ever do; they identified the
+*recipe*, not the artifact.
+
+**Why the refusal is at the resume, not only at the compare.** `scores.jsonl` is
+append-only and resumes by pair id, which says nothing about what scored it. A
+refit head plus a resumed run silently produces one file whose means blend two
+instruments — no error, no marker, and `summarize_scores` reports the blend as
+one number. That is a worse failure than a cross-file comparison, because
+nothing downstream can even see it happened.
+
+**Rejected: a header line, or a sidecar `scores.meta.json`.** The file is
+appended to across sessions by different processes; a header records only the
+first writer, which is precisely the writer a refit run is not. Per-row costs
+~60 bytes against a file already dominated by Vale's `raw` alert objects, and it
+makes "which rows came from which head" answerable rather than assumed.
+
+**Rejected: probing the detector for its identity by scoring a canary string.**
+An embed per guard call, on a path that is meant to be free.
+
+**Deciding constraint**: an unconfigured (`null`) detector must never trip the
+guard. A keyless re-run adds no detector scores at all, so it cannot blend
+anything, and making it raise would break the documented keyless path.
+
+**Re-evaluate if**: the detector gains a calibration layer that is versioned
+separately from the head (then the identity is a pair), or artifacts start
+carrying a semantic version, at which case `git_sha` becomes the tiebreak rather
+than the key.
+
+---
+
+## D40: the eval interval clusters by post, and the headline is the real facet
+
+**Decision (2026-09-03, W10)**: `eval.paired_delta(clusters=…)` computes the
+paired difference with a **cluster bootstrap over POSTs**, and
+`eval.compare_scores` clusters by `meta.source` by default. `summarize_scores`
+facets `by_provenance` and names `headline_facet: "real"`; both CLIs print the
+real facet first and the synthetic one separately.
+
+**The measurement that forces it** (re-measured 2026-09-03, live corpus): the
+frozen eval stratum is **6 posts / 103 pairs, 41 real and 62 synthetic**, and
+**77 of the 103 come from `notebook/automatic_coding.qmd`** — 75%. (Through the
+detector's near-identity gate the same stratum reads 89 / 41 / 48, which is what
+`check-splits` prints; the two numbers are the corpus and the dataset, and both
+are right.) Run 4's verdict was "127 chunks, paired", with a normal-approximation
+interval that treats those 127 as independent observations. Chunks inside a post
+share topic, register and whatever the generator did to that post, so the
+effective n is nearer the 6 posts. On the synthetic-vs-real question the same
+stratum is 60% our own paraphrase generators, so an unfaceted headline is
+substantially a measurement of this month's slop roster.
+
+**Why a bootstrap rather than a mixed model or a cluster-robust SE.** Stdlib
+only: `splits`, `provenance` and now the verdict path must import with no extras
+(`_plans/eval-harness.md`, the split contract). A percentile bootstrap over
+resampled posts is a dozen lines and needs nothing; a random-effects fit would
+drag statsmodels into a module the trainer imports.
+
+**What this does NOT fix.** Widening the interval is honesty, not power: 6
+clusters is 6 clusters, and the run-4 arms were already indistinguishable at the
+narrow interval. The fix for power is D41 — more posts in the stratum.
+
+**Rejected: clustering by capture rather than by post.** A capture is one
+editing session, so captures nest inside posts; clustering at the finer level
+would leave the between-post correlation uncounted, which is the correlation
+that exists.
+
+**Re-evaluate if**: the eval stratum passes ~30 posts (the percentile bootstrap
+gets conservative at small cluster counts and a BCa correction starts to be
+worth its complexity), or a verdict ever needs more than one signal jointly.
+
+---
+
+## D41: the automation cap applies to synthetic pairs only — a capture is *supposed* to sit on an AI-touched post
+
+**Decision (2026-09-03, W10)**: `classify_train.assemble_dataset` grows a
+caller-supplied `pair_ok` hook, and the blog's `dan-style train-clf` passes one
+that drops **synthetic** pairs whose source post's frontmatter `automation`
+exceeds 0 (`--max-synthetic-automation`, default 0). Real captures are never
+dropped by it.
+
+**Why the QA list's version of this was wrong.** The list says "restrict
+detector targets to `automation: 0`", on the reasonable ground that the detector
+pool holds pairs from AI-touched posts. Measured on the live corpus
+(2026-09-03), the detector pool is 2,596 pairs from `automation: 0` posts, 517
+from `1` and 139 from `2` — but split by provenance those break down as **488 of
+the 656 non-zero pairs synthetic, and 168 of the 179 REAL pairs (94%) sitting on
+`automation: 1/2` posts**. Applying the cap to everything would leave the honest
+`real` facet — the headline metric of the whole classifier — with **11 pairs**.
+
+The asymmetry is not an accident, it is the definition. A synthetic pair's "Dan"
+side is the post's existing prose taken as ground truth, so on an AI-touched post
+the detector is taught that AI-assisted prose *is* the author: exactly the
+discrimination it exists to make, inverted. A *capture* is Dan editing an
+AI-touched draft — the post carries `automation: 1/2` **because** the capture
+happened — and its Dan side is his own keystrokes. The frontmatter field means
+"AI touched this post", which is evidence about the synthetic label and evidence
+*for* the real one.
+
+**Deciding constraint**: an unreadable or missing post keeps its pairs. A file
+that cannot be parsed is not evidence of contamination, and `meta.source` records
+paths that renames have moved (hence the alias-resolved lookup, D34).
+
+**Rejected: reading `meta.provenance.source_automation` instead of the file.**
+W8 stamps it, but only on records written after 2026-09-03; the corpus is 8,244
+records and almost none carry it. Reading the frontmatter covers the whole corpus
+and needs no migration. Once provenance is universal, the stamp is the better
+source — it records what the frontmatter said *at generation time*, which is the
+question actually being asked.
+
+**Rejected: hardcoding the gate in `classify_train`.** `automation` is a blog
+convention; stylebot's selection rule is "selection is a user-supplied policy"
+(CLAUDE.md). The hook is the mechanism, the level is the policy.
+
+**Re-evaluate if**: `meta.provenance.source_automation` reaches most of the
+corpus (switch to the stamp), or the real stratum grows enough that capping it
+too costs less than the contamination it removes.
+
+---
+
+## D42: the eval stratum is versioned and add-only, and a manifest pins the partition it held out
+
+**Decision (2026-09-03, W10)**: `splits.json` carries `eval_version` (v1 = the
+original cut) and grows only through `splits.extend_eval`, which forms
+`eval_v(n+1) = eval_v(n) ∪ posts`, bumps the version and appends an
+`eval_history` entry. Removing a pinned post is not expressible. Run manifests
+gain `data.splits_sha256`, `data.eval_version`, `data.record_ids_sha256`,
+`data.selector_constants`, `dependencies` and `base_model_revision`; the
+classifier artifact gains `splits_sha256` and `split.eval_version`; verdict
+outputs are written under `runs/<run_id>/` (`eval.verdict_dir`,
+`dan-style eval --run-id`).
+
+**Why add-only is the whole safety property.** Growing the stratum moves posts
+*out of* the training pools and *into* the frozen one: prose leaves training, it
+never enters it. Shrinking it would retroactively license training on prose an
+existing verdict was computed over — the leak D34 was written about, arrived at
+deliberately. So the operation exists in one direction and the other requires
+cutting a new file and admitting it.
+
+**What v2 would actually cost, measured 2026-09-03.** 52 posts carry at least
+one real pair; 6 are already eval. A maximal `eval_v2 = eval_v1 ∪ (all 46)`
+gives a 52-post stratum of 1,025 pairs (398 real) — and takes **all 179 of the
+detector pool's real pairs and all 178 of the styler's**. The detector's honest
+`real` facet would go to zero and the styler would train on synthetic pairs
+alone. Real pairs are scarce and all three roles want them; a maximal extension
+is not "more eval", it is "no more anything else".
+
+**The recommended v2 is therefore sized, and takes from one pool.** Adding the
+six styler-role real-capture posts with ≥9 real pairs —
+`notebook/local_llm_mac.qmd` (31 real), `post/should_we_allow_ai_articles.qmd`
+(25), `notebook/open_world_inference.qmd` (19), `notebook/pdf_ingestion.qmd`
+(12), `notebook/ai_search.qmd` (11), `notebook/ai_reasoning.qmd` (10) — gives a
+**12-post, 245-pair, 149-real** stratum: 3.6× the real pairs, the dominant post's
+share down from 75% to 31%, the detector's real facet untouched at 179, and the
+styler left with 70 real pairs. That is the trade this file records; **it has not
+been applied**, because it re-roles 441 pairs and obsoletes the current detector
+artifact and every verdict computed with it, which is Dan's call and a retrain.
+
+**Why the manifest needed four more pins.** It named the corpus file and both git
+trees, so two runs of "the same" recipe could agree on every recorded field and
+train on different data: `pairs_sha256` hashes the FILE, while the role filter,
+the selector and the multiplicity hook all run after it (`record_ids_sha256`
+closes that); `filters.selector` records `styler_pair_ok` by name while
+`RETIRED_ARMS` is a set whose membership changes the diet (`selector_constants`);
+and `splits_path` recorded a path to a file that has since gained an `aliases`
+map (`splits_sha256`).
+
+**Rejected: `eval_version` as a new `schema_version`.** The file's *shape* is
+unchanged; what versions is the stratum. Bumping the schema would force every
+reader to update for a change none of them care about, and `load_splits` pins
+the schema exactly.
+
+**Rejected: resolving `base_model_revision` at manifest time.** It would mean a
+network call to a model hub inside `--dry-run`, which is the one path that
+promises to be free and offline. The key is present and `None` until the runner
+can fill it from what the training service reports.
+
+**Re-evaluate if**: a v2 cut is applied (then this entry records the reasoning
+and `eval_history` records the event), or the corpus gains enough real captures
+that all three roles can be fed — at which point the sizing argument above
+dissolves and the maximal extension is simply right.
