@@ -43,12 +43,17 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
   library that happened to sit in the executables package — and now raises its
   own `SynthConfigError` / `SynthRunError` / `SynthGenerationError` instead of
   `click` exceptions, which `bin/ai_style.py` translates into exit codes at the
-  boundary. And `BackendOpts` + `build_styler` (in `bin/ai_style.py`) are the
-  one backend-flag surface `run` and `serve` share; the sidecar's rewrite op is
-  `run` held open, so declaring those twelve flags twice had already drifted.
+  boundary. And `stylebot.backends` (`BackendOpts`, `build_styler`,
+  `serving_diet`, `opts_from_manifest`) is the one backend surface `run` and
+  `serve` share; the sidecar's rewrite op is `run` held open, so declaring
+  those twelve flags twice had already drifted. It sat in `bin/ai_style.py`
+  until 2026-09-03, where livingthing could not import it and reimplemented it
+  instead — losing `max_tokens` in the copy, which truncated every blog rewrite
+  at the 2000-token floor while the promoted run served a 4500-char diet (D35).
+  A library that can only be reached through `CliRunner` will be copied.
 - **One entry point, subcommands** (`ai-style
-  eval|export-table|log|make-splits|merge-adapter|run|serve|synth|train|train-clf`). Not a
-  scatter of loose scripts: Phase 1's logger shipped as a standalone
+  check-splits|eval|export-table|log|make-splits|merge-adapter|run|serve|synth|train|train-clf|validate-pairs`).
+  Not a scatter of loose scripts: Phase 1's logger shipped as a standalone
   `ai-style-log` script until 2026-07-20, and was folded in. One console script,
   one `--help` tree. **One carve-out: one-off data migrations** — currently a
   membership of one, `scripts/migrate_capture_archives.py` (converts the
@@ -127,8 +132,18 @@ Sanity-check before any commit in stylebot: `git status` must never show
 ## Validating corpus data
 
 `stylebot.pairs.validate_pairs_file(path)` checks a `pairs.jsonl` against the
-Phase 1 schema contract (roles, frozen system prompt, required `meta`). Run it
-as the done-criteria gate for Phase 2 output and the Phase 3 input check.
+Phase 1 schema contract: roles, frozen system prompt, required `meta`, the
+types and domains of every meta key it knows, and **`record_id` uniqueness
+across the whole file**. Run it as the done-criteria gate for Phase 2 output and
+the Phase 3 input check; `ai-style validate-pairs PAIRS [--fix]` is the same
+thing on demand, `--fix` dropping duplicate cells (first occurrence wins).
+
+Uniqueness is a file-level property, so it cannot live in `validate_pair_record`
+— which is why 21 duplicate cells reached the live corpus before anything
+noticed. New records also carry `meta.schema_version`, `meta.system_sha` and
+`meta.provenance` (which trees, which chunk policy, what the source post's
+`automation` said at cut time). Records without them are the pre-2026-09 corpus
+and stay valid. See `_plans/decisions.md` D36.
 
 ## BLOG INTEGRATION — filled in 2026-06-27 (Dan's blog)
 

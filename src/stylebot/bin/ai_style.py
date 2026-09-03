@@ -3,7 +3,8 @@
 Per OVERVIEW "Interfaces": one command, subcommands — not a scatter of loose
 scripts. Each subcommand is a thin `click` wrapper that parses flags and calls a
 typed library function: `log` (Phase 1 capture), `synth` (Phase 2), `make-splits`
-(the shared by-post splits contract), `train-clf` (the voice classifier),
+(the shared by-post splits contract) and `check-splits` (its health check),
+`train-clf` (the voice classifier),
 `train` (Phase 3 LoRA SFT), `run` (Phase 4 inference), `eval` (the offline
 scorer, `stylebot.eval`), `export-table` (scores -> tidy CSV), `merge-adapter`
 (adapter + base -> one merged checkpoint, `stylebot.export`) and `serve` (the
@@ -20,7 +21,7 @@ import datetime
 import json
 import sys
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from functools import cache, partial
 from pathlib import Path
 
@@ -33,12 +34,13 @@ import click
 # import free (tinker/sklearn/sentence-transformers stay lazy) and reuse the
 # substrate `synth` already pulls in: 344 µs measured, against 9 ms for asyncio
 # and 4.5 ms for click. `infer` stays lazy — it owns no default declared here.
+from stylebot import backends, config, pairs, synth, synth_cli
 from stylebot import classify_train as ct
-from stylebot import config, synth, synth_cli
 from stylebot import splits as sp
 from stylebot import train as tr
+from stylebot.backends import BACKEND_PARAMS, BackendOpts, backend_options
 from stylebot.bin.ai_style_log import main as _log
-from stylebot.cli_options import SectionedCommand, bundle_options, bundles_from_kwargs, opt
+from stylebot.cli_options import SectionedCommand, bundle_options, bundles_from_kwargs
 from stylebot.jsonl import append_jsonl
 from stylebot.lib import is_human_authored
 
@@ -58,9 +60,10 @@ main.add_command(_log, name="log")
 #
 # `run` (batch, one file) and `serve` (long-lived editor sidecar) arm the SAME
 # styler from the SAME flags — the sidecar's rewrite op is `run` held open. The
-# declarations lived twice, drifted in wording, and the tinker/openai
-# construction was written twice; both are here now, in the `cli_options`
-# bundle idiom that `stylebot/synth_cli.py` already uses.
+# surface itself (`BackendOpts`, `build_styler`, the token-scaling rule and the
+# manifest diet) is `stylebot.backends`, a LIBRARY: it lived here until
+# 2026-09-03, where livingthing could not import it, reimplemented it, and lost
+# `max_tokens` in the copy. All that is left here is the click translation.
 #
 # The per-command differences below are deliberate and stay per-command:
 # `run` defaults --backend to tinker (serve omits it for score-only serving),
@@ -69,156 +72,36 @@ main.add_command(_log, name="log")
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class BackendOpts:
-    """How to reach the styler — the surface `run` and `serve` share."""
-
-    cli_section = "Styler backend"
-
-    backend: str | None = opt(
-        None,
-        "--backend",
-        type=click.Choice(["tinker", "openai"]),
-        show_default=True,
-        help="tinker: sample the trained checkpoint (no serving infra; needs TINKER_API_KEY + "
-        "trainer extra). openai: any OpenAI-compatible endpoint (Fireworks, mlx_lm.server, "
-        "Osaurus). `serve` defaults to neither: omit it there for score-only serving.",
-    )
-    sampler_path: str | None = opt(
-        None,
-        "--sampler-path",
-        help="[tinker] tinker:// sampler checkpoint (from the training manifest "
-        "result.checkpoints.sampler_path).",
-    )
-    base_model: str | None = opt(
-        None,
-        "--base-model",
-        help="[tinker] Base model id the adapter was trained on (manifest "
-        "hyperparameters.base_model).",
-    )
-    renderer_name: str | None = opt(
-        None,
-        "--renderer",
-        "renderer_name",
-        help="[tinker] Cookbook renderer used at training time (manifest result.renderer_name).",
-    )
-    base_url: str | None = opt(
-        None,
-        "--base-url",
-        help="[openai] Endpoint base URL, e.g. http://localhost:8080/v1.",
-    )
-    model: str | None = opt(None, "--model", help="[openai] Served model name.")
-    api_key_env: str | None = opt(
-        None,
-        "--api-key-env",
-        help="[openai] Env var holding the endpoint key (e.g. FIREWORKS_API_KEY); omit for "
-        "keyless local servers.",
-    )
-    temperature: float = opt(
-        0.3,
-        "--temperature",
-        type=float,
-        show_default=True,
-        help="Sampling temperature. `serve` runs hotter (0.7) on purpose: interactive best-of "
-        "wants DISTINCT candidates; at 0.3 the sampler mode-collapses to near-identical draws.",
-    )
-    max_tokens: int | None = opt(
-        None,
-        "--max-tokens",
-        type=int,
-        help="Output-token budget per chunk. [default: scaled off --max-chunk-chars, floor 2000]",
-    )
-    max_chunk_chars: int | None = opt(
-        None,
-        "--max-chunk-chars",
-        type=int,
-        help="Inference chunk budget; MUST match the adapter's training chunk scale. "
-        "[default: 1500]",
-    )
-    inline_headings: bool = opt(
-        False,
-        "--inline-headings/--no-inline-headings",
-        show_default=True,
-        help="Match the chunk diet the adapter was TRAINED on (the training manifest records it "
-        "under data.chunk_scale). On = the v2 cross-heading diet: headings are chunk content the "
-        "styler may rewrite, and chunks span sections. Off = v1, headings pass through verbatim "
-        "as context. Serving at the wrong diet is out-of-distribution and makes the styler fall "
-        "back to copying its input.",
-    )
-    detector_model: Path | None = opt(
-        None,
-        "--detector-model",
-        type=click.Path(exists=True, file_okay=False, path_type=Path),
-        help="Voice-classifier artifact dir for --best-of reranking.",
-    )
-
-    def chunk_chars(self) -> int:
-        """The inference chunk budget, defaulted from `infer`."""
-        from stylebot import infer
-
-        return self.max_chunk_chars or infer.STYLE_CHARS_PER_CHUNK
-
-    def tokens(self) -> int:
-        """Output-token budget. Fixed at backend construction, so it is scaled
-        off the chunk budget — a big --max-chunk-chars would otherwise truncate
-        a rewrite mid-chunk."""
-        from stylebot import infer
-
-        if self.max_tokens is not None:
-            return self.max_tokens
-        return infer.max_tokens_for(self.chunk_chars())
-
-
-BACKEND_PARAMS: dict[str, type] = {"opts": BackendOpts}
-
-
-def backend_options(**kw):
-    """The shared `--backend …` flags. `defaults=`/`exclude=` as elsewhere."""
-    return bundle_options([BackendOpts], **kw)
-
-
 def build_styler(opts: BackendOpts):
-    """Construct the styler backend described by `opts` — the one build site.
+    """`backends.build_styler` with this repo's exit codes attached.
 
-    Raises `click.UsageError` for a flag combination the user must fix (exit 2)
-    and `click.ClickException` for an environment failure (exit 1). `serve`
-    re-raises both as `ValueError`, which `serve.handle_request` reports on the
-    failing request instead of taking the sidecar down.
+    A flag combination the user must fix exits 2 (`UsageError`); a fine
+    invocation against an unready world — no key, no extra — exits 1.
     """
-    from stylebot import infer
+    try:
+        return backends.build_styler(opts)
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+    except (RuntimeError, ImportError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
-    tokens = opts.tokens()
-    if opts.backend is None:
-        raise click.UsageError("no --backend given, so there is no styler to build")
-    if opts.backend == "tinker":
-        if not opts.sampler_path or not opts.base_model:
-            raise click.UsageError(
-                "--backend tinker needs --sampler-path and --base-model (see the training manifest)"
-            )
-        if not config.get_key("TINKER_API_KEY"):
-            raise click.ClickException("TINKER_API_KEY is not set")
-        try:
-            return infer.tinker_backend(
-                opts.sampler_path,
-                opts.base_model,
-                renderer_name=opts.renderer_name,
-                temperature=opts.temperature,
-                max_tokens=tokens,
-            )
-        except ImportError as exc:
-            raise click.ClickException(str(exc)) from exc
-    if not opts.base_url or not opts.model:
-        raise click.UsageError("--backend openai needs --base-url and --model")
-    api_key = config.get_key(opts.api_key_env) if opts.api_key_env else None
-    if opts.api_key_env and not api_key:
-        raise click.ClickException(f"{opts.api_key_env} is not set")
-    return infer.openai_backend(
-        opts.base_url,
-        opts.model,
-        api_key=api_key,
-        temperature=opts.temperature,
-        max_tokens=tokens,
-    )
+
+MANIFEST_HELP = (
+    "A training-run manifest to serve: supplies --sampler-path, --base-model, --renderer and "
+    "the chunk diet (--max-chunk-chars/--inline-headings) the adapter was TRAINED on. Explicit "
+    "flags win over it. Serving at the wrong diet is out-of-distribution — the styler falls back "
+    "to copying its input — so prefer this over retyping four flags."
+)
+
+
+def _load_manifest(manifest_path: Path | None) -> dict:
+    """A training manifest as a dict, or `{}` when none was named."""
+    if manifest_path is None:
+        return {}
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise click.ClickException(f"{manifest_path}: not valid JSON ({exc})") from exc
 
 
 @contextmanager
@@ -660,10 +543,18 @@ def export_table_cmd(
     default=None,
     help="Arm the 'prefer' op: append client decisions (plus a UTC ts) to this JSONL.",
 )
+@click.option(
+    "--manifest",
+    "manifest_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=MANIFEST_HELP,
+)
 @backend_options(defaults=[BackendOpts(temperature=0.7)], exclude=["detector_model"])
 def serve_cmd(
     detector_model: Path,
     preferences_path: Path | None,
+    manifest_path: Path | None,
     **kw,
 ) -> None:
     """Score texts over stdin/stdout NDJSON (long-lived editor sidecar).
@@ -678,7 +569,10 @@ def serve_cmd(
     """
     from stylebot import classify, infer, serve
 
-    opts = replace(bundles_from_kwargs(kw, BACKEND_PARAMS)["opts"], detector_model=detector_model)
+    opts = backends.opts_from_manifest(
+        _load_manifest(manifest_path),
+        replace(bundles_from_kwargs(kw, BACKEND_PARAMS)["opts"], detector_model=detector_model),
+    )
 
     try:
         meta = classify.load_artifact_meta(detector_model)
@@ -701,11 +595,12 @@ def serve_cmd(
         @cache
         def make_styler():
             try:
-                return build_styler(opts)
-            except click.ClickException as exc:
+                return backends.build_styler(opts)
+            except (RuntimeError, ImportError) as exc:
                 # A sidecar answers, it does not exit: re-raised as ValueError so
                 # the failing rewrite request gets an {"error"} and scoring lives.
-                raise ValueError(exc.format_message()) from exc
+                # (`build_styler`'s own ValueErrors already have that shape.)
+                raise ValueError(str(exc)) from exc
 
         scorer = infer.detector_scorer(detector)
 
@@ -717,7 +612,7 @@ def serve_cmd(
                 best_of=best_of,
                 scorer=scorer,
                 max_chunk_chars=chunk_chars,
-                inline_headings=opts.inline_headings,
+                inline_headings=opts.headings(),
             )
 
         rewriter = rewrite_op
@@ -871,6 +766,77 @@ def make_splits_cmd(
     for warning in sp.check_splits(splits_doc, ds):
         click.secho(f"WARNING: {warning}", fg="yellow", err=True)
     click.echo(f"wrote splits -> {out_path} (seed {seed}; eval frozen, rest by hash rule)")
+
+
+@main.command("check-splits")
+@click.option(
+    "--splits",
+    "splits_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The splits.json to check.",
+)
+@click.option(
+    "--blog-root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=".",
+    show_default=True,
+    help="Source tree the pinned eval posts must still exist in.",
+)
+@click.option(
+    "--pairs",
+    "pairs_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Also print the per-role post/pair table for this corpus, and the danger report.",
+)
+def check_splits_cmd(splits_path: Path, blog_root: Path, pairs_path: Path | None) -> None:
+    """Health-check the splits contract: eval posts present, strata big enough.
+
+    The read-only counterpart of `make-splits`, and the thing to run after any
+    `post-op move`: a renamed post silently changes role, which is how two
+    frozen-eval posts leaked into the styler/detector pools (2026-09-03). Exits
+    non-zero when a pinned eval post is no longer on disk under --blog-root;
+    small-stratum findings stay warnings.
+    """
+    splits_doc = sp.load_splits(splits_path)
+    spellings = sp.eval_post_spellings(splits_doc)
+    missing = set(sp.missing_eval_posts(splits_doc, blog_root))
+    click.echo(
+        f"eval posts on disk: {len(spellings) - len(missing)}/{len(spellings)} "
+        f"(under {blog_root})"
+    )
+    for canonical, paths in spellings.items():
+        mark = "MISSING" if canonical in missing else "ok"
+        others = [p for p in paths if p != canonical]
+        alias_note = f"  [also: {', '.join(others)}]" if others else ""
+        click.echo(f"  {mark:>7}  {canonical}{alias_note}")
+
+    if pairs_path is not None:
+        ds = ct.assemble_dataset(pairs_path)
+        roles = sp.summarize_roles(splits_doc, ds)
+        for role in sp.ROLES:
+            entry = roles[role]
+            click.echo(
+                f"{role:>8}: {entry['posts']} post(s), {entry['pairs']} pair(s) "
+                f"({entry['pairs_real']} real / {entry['pairs_synthetic']} synthetic)"
+            )
+        report = sp.check_splits(splits_doc, ds, blog_root=blog_root)
+    else:
+        # No corpus, no danger report — the on-disk contract is checkable alone.
+        report = [
+            f"{sp.ERROR_PREFIX} pinned eval post {canonical!r} is not on disk under {blog_root}"
+            for canonical in sorted(missing)
+        ]
+
+    errors = [line for line in report if sp.is_error(line)]
+    for line in report:
+        if sp.is_error(line):
+            click.secho(line, fg="red", err=True)
+        else:
+            click.secho(f"WARNING: {line}", fg="yellow", err=True)
+    if errors:
+        raise click.ClickException(f"{len(errors)} pinned eval post(s) missing from {blog_root}")
 
 
 @main.command("train-clf")
@@ -1328,6 +1294,13 @@ def merge_adapter_cmd(
     default=None,
     help="[--pairs] Cap how many pairs are rewritten.",
 )
+@click.option(
+    "--manifest",
+    "manifest_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=MANIFEST_HELP,
+)
 @backend_options(defaults=[BackendOpts(backend="tinker")])
 def run_cmd(
     file: Path | None,
@@ -1338,6 +1311,7 @@ def run_cmd(
     pairs_path: Path | None,
     out_path: Path | None,
     limit: int | None,
+    manifest_path: Path | None,
     **kw,
 ) -> None:
     """Phase 4: rewrite FILE (or stdin) through the trained styler.
@@ -1355,7 +1329,13 @@ def run_cmd(
     """
     from stylebot import infer
 
-    opts: BackendOpts = bundles_from_kwargs(kw, BACKEND_PARAMS)["opts"]
+    # The manifest is the committed reproducibility record: it carries the
+    # checkpoint, the base model, the renderer AND the chunk diet the adapter
+    # was trained on. Explicit flags still win over every one of them.
+    opts: BackendOpts = backends.opts_from_manifest(
+        _load_manifest(manifest_path),
+        bundles_from_kwargs(kw, BACKEND_PARAMS)["opts"],
+    )
     if pairs_path is not None:
         if file is not None:
             raise click.UsageError("--pairs rewrites a corpus; pass it or a FILE, not both")
@@ -1393,7 +1373,7 @@ def run_cmd(
         max_chunk_chars=opts.chunk_chars(),
         best_of=best_of,
         scorer=scorer,
-        inline_headings=opts.inline_headings,
+        inline_headings=opts.headings(),
         inline_anchors=strict_anchors,
     )
     if scorer is not None:
@@ -1427,6 +1407,54 @@ def run_cmd(
         click.echo(f"rewrote {file} (backup at {file}.bak)", err=True)
     else:
         click.echo(result.text, nl=not result.text.endswith("\n"))
+
+
+@main.command("validate-pairs")
+@click.argument("pairs_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--fix",
+    is_flag=True,
+    help="Drop duplicate record_ids (keeping the first of each) and rewrite the file.",
+)
+@click.option(
+    "--backup/--no-backup",
+    default=True,
+    show_default=True,
+    help="With --fix, keep a .bak beside the corpus before rewriting.",
+)
+@click.option("--limit", type=int, default=20, show_default=True, help="Problem lines to print.")
+def validate_pairs_cmd(pairs_file: Path, fix: bool, backup: bool, limit: int) -> None:
+    """Check a pairs.jsonl against the record contract, and optionally de-duplicate.
+
+    The gate `train` runs on its input, exposed so it can be run on demand: the
+    message triple and the frozen system prompt, meta types and domains, and
+    `record_id` uniqueness across the whole file. `--fix` addresses only the
+    last of those — a duplicate is mechanically removable, a malformed record
+    is not.
+    """
+    problems = pairs.validate_pairs_file(pairs_file)
+    dupes = [(ln, e) for ln, e in problems if any("duplicate record_id" in x for x in e)]
+    click.echo(
+        f"{pairs_file}: {len(problems)} problem line(s), {len(dupes)} duplicate record_id(s)"
+    )
+    for lineno, errs in problems[:limit]:
+        click.echo(f"  line {lineno}: {'; '.join(errs)}")
+    if len(problems) > limit:
+        click.echo(f"  ... and {len(problems) - limit} more")
+
+    if fix:
+        report = pairs.dedupe_pairs_file(pairs_file, apply=True, backup=backup)
+        click.echo(
+            f"deduped: dropped {report.dropped} of {report.total} record(s) across "
+            f"{report.duplicate_ids} duplicated id(s); {report.kept} kept"
+            + (f"; backup at {report.backup}" if report.backup else "")
+        )
+        remaining = pairs.validate_pairs_file(pairs_file)
+        click.echo(f"re-validated: {len(remaining)} problem line(s)")
+        if remaining:
+            raise SystemExit(1)
+    elif problems:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

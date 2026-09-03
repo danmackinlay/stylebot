@@ -868,3 +868,206 @@ The VS Code extension is not a concern at all: it already defers to
 masking, or the fine-tuned styler turns out to handle sentinels worse than the
 general models `placeholder-design-2026-08.md` measured — its own warning, and
 the one number that changes after step 2 trains on them.
+
+## D34: a post's role is keyed on an alias-resolved identity, and synth refuses the eval stratum unasked
+
+**Decision**: `splits.json` gains an optional `aliases` map and `role_of`
+resolves every source through it before doing anything else
+(`splits.canonical_source`). An entry reads **`{path the post has now: path its
+pairs are already keyed under}`** — new → old, which is the opposite of the
+direction the name suggests. `ai-style synth` then refuses any target whose post
+resolves to `eval`, consulting the corpus's own `<data-dir>/splits.json` when no
+`--splits` was passed, and `--role eval` is the only way past it. `ai-style log
+save` says so but does not refuse. `check_splits(…, blog_root=…)` reports a
+pinned eval post that is on disk under no known spelling as an **error**
+(`ERROR_PREFIX`), and `ai-style check-splits` exits non-zero on one.
+
+**The defect.** Roles are keyed on the post's *path*, and paths move: `post-op
+move` renamed `notebook/empowerment.qmd` → `notebook/informational_empowerment.qmd`
+and `notebook/learning_from_madness_of_crowds.qmd` →
+`notebook/wisdom_from_madness_of_crowds.qmd` (blog `77a1b398aa`). Measured
+2026-09-03: the new paths hashed to `styler` and `detector`. Nothing caught it,
+and the reasons compound — the STALE warning is about pairs, and the old paths
+still carried theirs; `role_of` is open-world by design, so an unknown path gets
+a role rather than a question; and the canonical corpus run (blog RUNBOOK §6)
+passes no `--role`, so the next synth would have cut frozen-eval prose as
+training targets. Two independent single points of failure, so the fix is two:
+an identity that survives a rename, and a guard that does not wait to be asked.
+
+**Why the alias direction is inverted.** Roles are assigned from `meta.source`
+as recorded at capture/synth time, so the corpus is keyed on the OLD path.
+Aliasing old → new (the plan's `renames: {old: new}` reading) re-hashes every
+existing pair of a renamed post into whatever role the new path draws — a
+migration of the corpus, and a silent one for `styler`/`detector` posts, where
+nothing pins the answer. Aliasing new → old moves nothing: `test_aliases_need_no
+_migration_of_existing_pairs` asserts exactly that over 50 hash-assigned posts.
+The pinned list keeps **both** spellings (add-only), and `eval_post_spellings`
+groups by identity so six pinned posts under eight names still count six.
+
+**Rejected: a frontmatter `id:` as the stable identity.** The right answer if
+the blog had one — it does not (`lib.read_w_frontmatter_text` reads whatever is
+there; the quality ladder keys on the path too), so it would have to be minted
+across ~1700 posts. Worse, `role_of` takes a string and is called per pair and
+per chunk with no filesystem in reach; an id-keyed contract makes it a disk read,
+and every existing `meta.source` would have to be rewritten to the new key. That
+is precisely the migration W0 says to avoid. The alias map is the same idea with
+the path as the id and the map as the rename log.
+
+**Rejected: re-cutting the splits.** `make-splits --force` would repair the
+symptom and un-freeze the eval stratum, which is the one thing the contract
+exists to prevent.
+
+**Rejected: bumping `schema_version`.** `load_splits` compares the version for
+exact equality, so a bump makes every stylebot checkout without this commit
+refuse the file outright. `aliases` is additive and optional: a reader that has
+never heard of it degrades to exactly today's behaviour rather than to an error.
+The cost is that such a reader disagrees about a renamed post silently — accepted
+because both repos pin stylebot as an editable path dependency, and because the
+disagreement is the status quo, not a regression.
+
+**Why `synth` refuses and `log save` only notices.** Cutting eval prose as a
+synthesis target trains the styler on the metric — the eval is no longer frozen
+and no downstream number means anything. A *captured* rewrite of an eval post is
+Dan's own editing work, is legitimate corpus data, and is kept out of every
+fitting stage by the same contract; the only thing worth saying is that the
+capture will never train anything.
+
+**Re-evaluate if**: the blog gains real post ids (then the alias map becomes the
+migration record and `role_of` can key on the id), or `aliases` grows past a
+handful of entries — at which point it wants generating from `post-op move`
+rather than hand-editing, which is the natural next step and deliberately not
+built here.
+
+## D35: the styler backend is a library (`stylebot.backends`), and the manifest is what configures it
+
+**Decision (2026-09-03, W1)**: `BackendOpts`, `build_styler`, the token-scaling
+rule and the serving-diet rule live in `stylebot/backends.py`, a plain library
+raising `ValueError` / `RuntimeError` / `ImportError`. `bin/ai_style.py` keeps
+only the translation to exit codes (usage → 2, unready world → 1), and
+livingthing's `dan-style run/style/serve` import the same module instead of
+owning a second construction. Both front-ends take a `--manifest`, and
+`opts_from_manifest` fills the checkpoint, base model, renderer and chunk diet
+from it, with explicit flags winning.
+
+**The defect it repairs.** `BackendOpts` + `build_styler` sat inside
+`bin/ai_style.py`, unimportable as a library and raising `click` exceptions, so
+the blog wrote its own (`style_file.build_styler`). The copy passed no
+`max_tokens`, so `infer.tinker_backend` fell to `DEFAULT_MAX_TOKENS = 2000`
+while the promoted run (`20260817-170037`) serves a 4500-char cross-heading
+diet, for which `ai-style run` computes 3375 via `max_tokens_for`. Every blog
+rewrite of a full-length chunk was being cut off mid-sentence, and the blog's
+summary line omitted `n_truncated`, so nothing said so. A copy is not merely
+duplication: it is duplication that loses the argument the original was making.
+
+**Why a new module rather than growing `infer`.** `infer` is the rewriting
+engine — chunking, guards, the `Styler` protocol — and is imported lazily
+everywhere precisely because it is the expensive one. The backend surface is
+import-light (click, `config`, `cli_options`) and is needed at *flag-declaration*
+time, before any command body runs; putting it in `infer` would drag the engine
+into `--help`. It also keeps `infer.py` clear for the segmentation work.
+
+**Why `inline_headings` became tri-state.** A manifest can only supply a default
+that an explicit flag beats, and with `bool` there is no way to tell
+`--no-inline-headings` from silence. `None` means "nobody said"; `headings()` is
+the resolved boolean every call site uses. The same reasoning would apply to any
+future flag the manifest can fill.
+
+**Why the diet rule moved but its fallback did not.** `serving_diet` reads
+stylebot's own manifest schema (`data.chunk_scale`), so it was mechanism in the
+wrong repo; the largest-well-supported-budget rule and the cross-heading-majority
+rule came across verbatim. What stayed blog-side is the one genuinely
+policy-shaped input — the fallback for runs 1-3, which predate `chunk_scale` and
+were trained at `training_targets.MERGE_MAX_CHARS` — passed in as
+`default_chunk_chars`. `chunk_diet` is now three lines around the library call.
+
+**Rejected: re-exporting the surface from `bin/ai_style.py` for compatibility.**
+There is one other consumer and it is in this tree; an alias would have left the
+old import path working and therefore in use.
+
+**Rejected: letting the blog keep its own `build_styler` and merely passing
+`max_tokens`.** That fixes the measured bug and leaves the mechanism that
+produced it. The same divergence had already cost five flags on `dan-style run`
+and four on `serve`; `tests/test_dan_style_cli.py` now asserts
+`flags(dan-style X) ⊇ flags(ai-style X) − EXCLUDED[X]` with a written reason per
+exclusion, which is the part that keeps this from happening again.
+
+**Rejected: taking `--detector-model` from the shared bundle blog-side.** The
+bundle types it `click.Path(exists=True)` and click converts defaults through
+the type, so pinning `_models/voice-clf` as a default would fail every
+invocation in a checkout without the artifact — including `--best-of 1`, which
+needs no detector. It stays excluded and pinned in code.
+
+**Re-evaluate if**: a third front-end appears (the exclusion lists are per-repo
+policy and would want a shared vocabulary), or manifests grow a serving section
+of their own — at which point `opts_from_manifest` should read that rather than
+inferring the diet from training-time histograms.
+
+---
+
+## D36: a pair record carries its own provenance, and uniqueness is a property of the file
+
+**Decision (2026-09-03, W8)**: every record written from now on stamps
+`meta.schema_version`, `meta.system_sha` and a five-key `meta.provenance`
+(`blog_sha`, `blog_dirty`, `stylebot_sha`, `policy_digest`, `source_automation`)
+— both producers, `synth._build_record` and `capture.build_pair_record`.
+`record_id` uniqueness moves into `validate_pairs_file`, where the whole file is
+visible, and `pairs.dedupe_pairs_file` (`ai-style validate-pairs --fix`) drops
+repeats keeping the **first** occurrence. `synth.PairsWriter` makes the corpus
+append safe under two concurrent writers.
+
+**The three sub-decisions worth naming**:
+
+- **The chunk policy rides in on the `Target`, not on a `synthesize_pairs`
+  parameter.** `iter_targets` is the one construction site, and it already holds
+  the composed `ChunkPolicy`, so `targets._post_targets` digests whatever it was
+  handed and stamps it on each `Target`. Nothing between the policy and the
+  record has to be told about it — and `provenance.policy_digest` takes the
+  object rather than a field list, so the stamp keeps meaning what it says when
+  the blog composes that policy in one place (W2). A `div_is_prose` predicate
+  hashes as `module.qualname`; `repr()` carries a memory address and could never
+  have been stable.
+- **First writer wins.** The 21 duplicates were two *draws* for one cell, not
+  two copies of one row, so deduping picks a winner. The first is the copy every
+  committed `scores.jsonl` row and every resumable rewrite already joined to —
+  keeping any other silently re-points those artifacts at prose they were not
+  measured on.
+- **`source_automation` is read at cut time.** The corpus is frozen and the post
+  is not, so nothing else can recover what the selector was looking at. 75 pairs
+  now sit on `automation: 2` posts with no record of it.
+
+**Alternatives considered**:
+
+- **A lock around the whole run** instead of around each append. Serialises two
+  synth runs completely, which is exactly the thing anyone running two budgets
+  is trying to avoid.
+- **Literally "re-read `seen` before each write"** (the QA list's own wording).
+  That is O(corpus) per record: 38 MB × 4,000 records. `PairsWriter` re-reads
+  only the tail appended since it last looked, from a byte offset, under the
+  same lock — the same guarantee at O(what actually changed).
+- **Keying `synth_key` on the provenance** so a tree change mints a fresh cell.
+  Rejected: resume would restart on every commit, and the corpus would grow a
+  copy of each pair per SHA.
+- **A closed whitelist of `meta` keys in the validator.** Rejected: the schema is
+  open by design (`extra_meta`, `meta.gen`), so a whitelist would turn every
+  experiment's covariate into a validation failure. The type/domain table checks
+  keys it knows, when present, and ignores the rest.
+- **Bumping `schema_version` for the new keys.** The absent-`schema_version`
+  records ARE version 0; a consumer that must branch has the tell it needs, and
+  adding optional keys is not a change anyone branches on.
+
+**Deciding constraint**: `validate_pair_record` had been per-record since Phase
+1, so the one defect it structurally could not see is the one that reached the
+corpus — 21 duplicate `record_id`s, written 2026-08-12 14:03–14:56 by two synth
+runs that each loaded `existing_synth_keys` before the other appended. Eval and
+rewrite resume score the first and skip the second; training takes both. The
+whole-file check and the locked writer are the two halves of that: one finds it,
+one stops it recurring. Measured on the live corpus 2026-09-03: 21 duplicates
+before, 0 after, over 8,265 → 8,244 records; every other type and domain check
+in the new table passed on all 8,265 without a single relaxation, which is the
+evidence that the table describes the corpus rather than an aspiration.
+
+**Re-evaluate if**: the corpus is sharded by producer (W6) — `check_duplicates`
+then has to run across the shard set rather than per file, and
+`dedupe_pairs_file`'s "first" needs a defined order between shards. Also if a
+non-git corpus deployment appears, at which point `blog_sha`/`blog_dirty` want a
+more general name than the one deployment gave them.
