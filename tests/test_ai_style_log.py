@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from stylebot import capture
+from stylebot import capture, session
 from stylebot.bin import ai_style_log as log
 from stylebot.pairs import build_pair_content, validate_pair_record
 
@@ -30,6 +30,11 @@ def temp_corpus(tmp_path, monkeypatch):
     data_dir = tmp_path / "corpus"
     monkeypatch.setenv("STYLEBOT_DATA_DIR", str(data_dir))
     return data_dir
+
+
+def _store() -> session.SessionStore:
+    """The store the CLI would build for this environment."""
+    return session.SessionStore.resolve()
 
 
 # ---- diff_chunks heading resolution --------------------------------------
@@ -122,13 +127,13 @@ def test_diff_chunks_skips_pure_insert_and_delete():
 def test_captured_pair_has_heading_prefix_and_validates(temp_corpus):
     before_text = "## Section\n\nIt is worth noting the rich tapestry."
     after_text = "## Section\n\nWe dig in."
-    written = log._capture_and_append(
-        before_text=before_text,
-        after_text=after_text,
+    written = capture.capture_pairs(
+        before_text,
+        after_text,
+        pairs_path=session.SessionStore(temp_corpus).pairs_path,
         source="post/foo.qmd",
         snapped_at="2026-06-28T00:00:00+00:00",
         whole=False,
-        extra_meta=None,
         heading_context=True,
     )
     assert len(written) == 1
@@ -171,13 +176,13 @@ def test_build_pair_record_context_matches_build_pair_content():
 def test_no_heading_context_leaves_content_bare(temp_corpus):
     before_text = "## Section\n\nold body here."
     after_text = "## Section\n\nnew body here."
-    written = log._capture_and_append(
-        before_text=before_text,
-        after_text=after_text,
+    written = capture.capture_pairs(
+        before_text,
+        after_text,
+        pairs_path=session.SessionStore(temp_corpus).pairs_path,
         source="post/foo.qmd",
         snapped_at=None,
         whole=False,
-        extra_meta=None,
         heading_context=False,
     )
     assert len(written) == 1
@@ -193,13 +198,13 @@ def test_no_heading_context_leaves_content_bare(temp_corpus):
 def test_whole_mode_has_no_context_even_when_on(temp_corpus):
     before_text = "## H\n\nold body\n\n## H2\n\nmore old"
     after_text = "## H\n\nnew body\n\n## H2\n\nmore new"
-    written = log._capture_and_append(
-        before_text=before_text,
-        after_text=after_text,
+    written = capture.capture_pairs(
+        before_text,
+        after_text,
+        pairs_path=session.SessionStore(temp_corpus).pairs_path,
         source="post/foo.qmd",
         snapped_at=None,
         whole=True,
-        extra_meta=None,
         heading_context=True,
     )
     assert len(written) == 1
@@ -216,13 +221,13 @@ def test_preamble_change_is_valid_with_no_context(temp_corpus):
     # Change before any heading -> heading-less pair, no meta.context.
     before_text = "Opening line, original.\n\n## Heading\n\nbody"
     after_text = "Opening line, rewritten.\n\n## Heading\n\nbody"
-    written = log._capture_and_append(
-        before_text=before_text,
-        after_text=after_text,
+    written = capture.capture_pairs(
+        before_text,
+        after_text,
+        pairs_path=session.SessionStore(temp_corpus).pairs_path,
         source="post/foo.qmd",
         snapped_at=None,
         whole=False,
-        extra_meta=None,
         heading_context=True,
     )
     assert len(written) == 1
@@ -252,7 +257,7 @@ def _run(*args):
 
 
 def _sources_and_stamps():
-    recs = log._iter_pairs()
+    recs = session.read_pairs(_store())
     return [
         (r["meta"].get("source"), r["meta"].get("snapped_at"), r["messages"][2]["content"])
         for r in recs
@@ -266,13 +271,13 @@ def test_save_archives_snapshot_instead_of_deleting(session_repo):
     f.write_text("## S\n\nWe dig in, with a typoo.\n", encoding="utf-8")
     _run("save", "post/foo.qmd")
 
-    assert not log._snapshot_path(Path("post/foo.qmd")).exists()
-    archived = log._closed_snapshot_path(Path("post/foo.qmd"))
+    assert not _store().snapshot_path(Path("post/foo.qmd")).exists()
+    archived = _store().closed_snapshot_path(Path("post/foo.qmd"))
     assert archived.exists()
     # The archive holds the ORIGINAL base, not the saved state -- and holds it
     # as an ordinary readable file, not a JSON-escaped string.
     assert "rich tapestry" in (archived / "content.md").read_text(encoding="utf-8")
-    assert log._read_snapshot(archived)["source"] == "post/foo.qmd"
+    assert session.read_snapshot(archived).source == "post/foo.qmd"
 
 
 def test_redo_replaces_prior_pair_against_same_base(session_repo):
@@ -297,8 +302,8 @@ def test_redo_replaces_prior_pair_against_same_base(session_repo):
     # ...because the session timestamp was preserved across the reopen.
     assert after[0][1] == first[0][1]
     # And the redo's own close re-archived the same base for a further redo.
-    payload = log._read_snapshot(log._closed_snapshot_path(Path("post/foo.qmd")))
-    assert "rich tapestry" in payload["content"]
+    payload = session.read_snapshot(_store().closed_snapshot_path(Path("post/foo.qmd")))
+    assert "rich tapestry" in payload.content
 
 
 def test_reopen_then_save_matches_redo(session_repo):
@@ -311,9 +316,9 @@ def test_reopen_then_save_matches_redo(session_repo):
 
     out = _run("reopen", "post/foo.qmd")
     assert "reopened session" in out
-    assert log._snapshot_path(Path("post/foo.qmd")).exists()
+    assert _store().snapshot_path(Path("post/foo.qmd")).exists()
     # Restoring consumes the archive, so it cannot be double-restored.
-    assert not log._closed_snapshot_path(Path("post/foo.qmd")).exists()
+    assert not _store().closed_snapshot_path(Path("post/foo.qmd")).exists()
 
     f.write_text("## S\n\nWe dig in, without a typo.\n", encoding="utf-8")
     _run("save", "post/foo.qmd")
@@ -390,8 +395,8 @@ def test_drop_is_recoverable_via_reopen(session_repo):
     _run("open", "post/foo.qmd")
     _run("drop", "post/foo.qmd")
     _run("reopen", "post/foo.qmd")
-    payload = log._read_snapshot(log._snapshot_path(Path("post/foo.qmd")))
-    assert "rich tapestry" in payload["content"]
+    payload = session.read_snapshot(_store().snapshot_path(Path("post/foo.qmd")))
+    assert "rich tapestry" in payload.content
 
 
 def test_closed_sessions_are_not_reported_as_open(session_repo):
@@ -580,8 +585,8 @@ def test_symlinked_source_is_keyed_by_its_target(session_repo):
 
     _run("open", "_focus/post/foo.qmd")
 
-    assert log._snapshot_path(Path("post/foo.qmd")).exists()
-    assert not (log._snapshots_dir() / "_focus").exists()
+    assert _store().snapshot_path(Path("post/foo.qmd")).exists()
+    assert not (_store().snapshots_dir / "_focus").exists()
 
 
 def test_ordinary_source_path_is_not_rewritten(session_repo):
@@ -591,4 +596,4 @@ def test_ordinary_source_path_is_not_rewritten(session_repo):
 
     _run("open", "post/foo.qmd")
 
-    assert log._snapshot_path(Path("post/foo.qmd")).exists()
+    assert _store().snapshot_path(Path("post/foo.qmd")).exists()

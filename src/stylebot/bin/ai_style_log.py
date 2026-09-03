@@ -15,8 +15,14 @@ The cycle is one rewrite of one file per session:
 `save` diffs at paragraph granularity and emits one pair per changed region,
 not one pair per file. Pairs land in `$STYLEBOT_DATA_DIR/pairs.jsonl` in the
 shared chat-completion contract that Phase 2 synthesis also writes and Phase 3
-training reads (`stylebot.pairs` validates it; `stylebot.capture` implements
-the mechanism, while this module holds the path policy and session workflow).
+training reads.
+
+This module is a **click shell**, nothing more: it declares the flags, resolves
+the store, calls `stylebot.session`, and prints. The mechanism sits in two
+modules below it — `stylebot.capture` does the diffing and the pair records,
+`stylebot.session` owns snapshot persistence, symlink canonicalisation, `save`'s
+disposition rule and `tidy`'s latest-wins rule. Those four were reachable only
+through click's `CliRunner` until 2026-09.
 
 The full workflow — chunking rules, the `snapped_at` disposition of prior
 pairs, the `--replace`/`--append`/`--keep-open`/`--redo` flags, editing
@@ -26,27 +32,27 @@ documented for users in `_training_pairs/README.md`.
 Errors follow the one `ai-style` idiom: `click.UsageError` when the flags
 themselves are wrong (contradictory or missing a companion — click exits 2),
 `click.ClickException` when the flags are fine but the world is not (no open
-session, nothing changed — exit 1). Never a bare `sys.exit` after an
+session, nothing changed — exit 1). The library says which is which by raising
+`ValueError` for the first and `session.SessionError` for the second; the
+translation is the `except` clauses here. Never a bare `sys.exit` after an
 `echo(err=True)`: raising leaves the exit code and the "Error:" prefix to
 click, which is what makes the two classes distinguishable to a caller.
 """
 
 from __future__ import annotations
 
-import json
-import shutil
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 import click
 
-from stylebot import capture, config
+from stylebot import session
+from stylebot import splits as splits_mod
 from stylebot.capture import diff_chunks  # noqa: F401 — callers/tests reach it as log.diff_chunks
 from stylebot.cli_options import SectionedCommand, bundle_options, bundles_from_kwargs, opt
-from stylebot.jsonl import read_jsonl, write_jsonl_atomic
+from stylebot.session import SessionError, SessionStore, SnapshotEntry, humanize_age
 
 
 @dataclass(frozen=True)
@@ -106,180 +112,67 @@ def capture_options(**kw):
 # training) run in this repo and point STYLEBOT_DATA_DIR at the same corpus.
 # Both default and override are gitignored. See `_training_pairs/README.md`.
 #
-# Resolved lazily (per use, when a command runs) rather than baked into module
-# constants at import time. Import-time constants freeze whatever the
-# environment looked like when the module was first imported, which is the
-# wrong moment: `log` is imported by the CLI entry point and by tests, and in
-# 2026-08 that made it the one subcommand that could quietly write to a
-# cwd-relative `_training_pairs/` instead of the configured corpus. Resolving
-# per use is a dict lookup — there is nothing to cache.
-def _data_dir() -> Path:
-    """The corpus root for this invocation."""
-    return config.resolve_data_dir()
+# Resolved lazily (per command, not at import time). Import-time constants
+# freeze whatever the environment looked like when the module was first
+# imported, which is the wrong moment: `log` is imported by the CLI entry point
+# and by tests, and in 2026-08 that made it the one subcommand that could
+# quietly write to a cwd-relative `_training_pairs/` instead of the configured
+# corpus. Resolving per use is a dict lookup — there is nothing to cache.
+def _store() -> SessionStore:
+    """The session/corpus store for this invocation."""
+    return SessionStore.resolve()
 
 
-def _snapshots_dir() -> Path:
-    """Where open sessions' snapshots live."""
-    return _data_dir() / "snapshots"
+def _warn_if_eval_post(store: SessionStore, source: Path) -> None:
+    """Say so — loudly, once — when a capture lands on a frozen-eval post.
 
-
-def _closed_snapshots_dir() -> Path:
-    """Where closed sessions' snapshots are retained.
-
-    Retained so `reopen` / `save --redo` can diff a corrected rewrite against
-    the SAME base. A sibling directory rather than a suffix inside the
-    snapshots dir, because the open-session listings rglob there and would
-    otherwise report closed sessions as open.
+    Deliberately a NOTICE, not a refusal, and the asymmetry with `synth` is the
+    point: a real captured rewrite of an eval post is Dan's own editing work and
+    belongs in the corpus, where the splits contract keeps it out of every
+    training and fitting stage. What must not happen silently is that the eval
+    stratum shrinks — every capture here is prose the styler will never see and
+    the frozen eval will score, so the operator should know they just spent one.
     """
-    return _data_dir() / "snapshots-closed"
+    try:
+        splits = splits_mod.load_corpus_splits(store.data_dir)
+    except (OSError, ValueError) as exc:  # a broken splits.json must not block a capture
+        click.secho(f"note: could not read splits.json ({exc})", fg="yellow", err=True)
+        return
+    if splits is None or splits_mod.role_of(str(source), splits) != "eval":
+        return
+    click.secho(
+        f"NOTE: {source} is a FROZEN EVAL post — this capture is legitimate (it is your "
+        f"own rewrite) but it will never train anything, and it scores the final eval.",
+        fg="yellow",
+        err=True,
+    )
 
 
-def _pairs_path() -> Path:
-    """The corpus file itself — what every downstream phase reads."""
-    return _data_dir() / "pairs.jsonl"
-
-
-# The capture mechanism lives in stylebot.capture; this CLI keeps the path
-# policy (the resolvers above) and the session workflow. Call `capture.X`
-# directly — the `_now_iso` / `_build_pair_record` aliases here were only ever
-# reached through this module by tests, which now import them from their home.
-
-
-# A snapshot is a DIRECTORY mirroring the source path, holding the base text as
-# an ordinary file plus a small sidecar:
-#
-#     snapshots/post/foo.qmd/content.md
-#     snapshots/post/foo.qmd/meta.json   {source, snapped_at}
-#
-# Same reasoning as the capture archive (see stylebot.capture): the document is
-# readable and editable on disk instead of being a JSON-escaped string, and it
-# is `.md` so the blog's `*.qmd` tooling — the reformatting pre-commit hook, qmd
-# search, the synthesis target walk — cannot see it.
-SNAPSHOT_CONTENT = "content.md"
-SNAPSHOT_META = "meta.json"
-
-
-def _snapshot_dirs(root: Path) -> list[Path]:
-    """Every snapshot directory under `root`, sorted; `[]` if it doesn't exist.
-
-    A snapshot is identified by its sidecar, so this globs for `meta.json` and
-    takes the parent — the open-session reminder and `list` both need it, for
-    both the open and the closed tree.
-    """
-    return sorted(p.parent for p in root.rglob(SNAPSHOT_META)) if root.exists() else []
-
-
-def _echo_snapshots(snaps: list[Path], *, age: bool = False) -> None:
+def _echo_snapshots(entries: list[SnapshotEntry], *, age: bool = False) -> None:
     """List snapshot directories one per line, tolerating an unreadable one.
 
     `age` renders `snapped_at` as a relative age rather than the raw stamp.
     """
-    for snap in snaps:
-        try:
-            payload = _read_snapshot(snap)
-        except Exception as exc:
-            click.echo(f"  {snap} [unreadable: {exc}]")
+    for entry in entries:
+        if entry.snapshot is None:
+            click.echo(f"  {entry.path} [unreadable: {entry.error}]")
             continue
-        stamp = payload.get("snapped_at", "")
-        when = _humanize_age(stamp) if age else (stamp or "?")
-        click.echo(
-            f"  {payload.get('source', snap)} "
-            f"(opened {when}, {len(payload.get('content', ''))} chars)"
-        )
+        stamp = entry.snapshot.snapped_at
+        when = humanize_age(stamp) if age else (stamp or "?")
+        click.echo(f"  {entry.source} (opened {when}, {entry.snapshot.chars} chars)")
 
 
 def _canonical_source(ctx, param, value):
-    """Normalize a symlinked FILE to the path it points at.
+    """click callback wrapping `session.canonical_source`.
 
-    A session key *is* the source path as given (`_snapshot_path`), so any
-    second path to the same file opens a second, parallel session. The blog's
-    `_focus/` render harness creates exactly that: it symlinks a post into a
-    scratch project, and that scratch project is wiped and rebuilt on every
-    invocation -- so a session keyed there loses its file the next time a
-    different post is focused, and a `save` would write a transient,
-    gitignored path into the committed `pairs.jsonl`.
-
-    Only symlinks are rewritten. An ordinary path is returned untouched, so no
-    existing session key can move.
+    A symlinked FILE is keyed by the path it points at, so the blog's `_focus/`
+    harness cannot open a second, parallel session under a scratch tree that
+    gets wiped. See the library function for the full reasoning.
     """
-    if value is None or not value.is_symlink():
-        return value
-    target = value.resolve()
-    try:
-        return target.relative_to(Path.cwd())
-    except ValueError:
-        # Invoked from outside the tree the symlink points into; an absolute
-        # key is still better than one under a directory that gets wiped.
-        return target
+    return session.canonical_source(value)
 
 
-def _snapshot_path(source: Path) -> Path:
-    """Where the snapshot for `source` lives.
-
-    Mirrors the source path under the snapshots dir as a directory. So
-    `post/foo.qmd` -> `_training_pairs/snapshots/post/foo.qmd/`.
-    """
-    return _snapshots_dir() / str(source)
-
-
-def _closed_snapshot_path(source: Path) -> Path:
-    """Where the retained snapshot of `source`'s last closed session lives.
-
-    Same mirrored layout as `_snapshot_path`, under the closed-snapshots dir.
-    One archive per source, overwritten each time a session closes — the redo
-    workflow only ever wants the most recent base.
-    """
-    return _closed_snapshots_dir() / str(source)
-
-
-def _write_snapshot(snap: Path, *, source: str, snapped_at: str, content: str) -> None:
-    """Write a snapshot directory (base text + sidecar)."""
-    snap.mkdir(parents=True, exist_ok=True)
-    (snap / SNAPSHOT_CONTENT).write_text(content, encoding="utf-8")
-    (snap / SNAPSHOT_META).write_text(
-        json.dumps({"source": source, "snapped_at": snapped_at}, ensure_ascii=False, indent=2)
-        + "\n",
-        encoding="utf-8",
-    )
-
-
-def _read_snapshot(snap: Path) -> dict:
-    """Load a snapshot directory into the flat payload shape callers expect."""
-    meta = json.loads((snap / SNAPSHOT_META).read_text(encoding="utf-8"))
-    return {**meta, "content": (snap / SNAPSHOT_CONTENT).read_text(encoding="utf-8")}
-
-
-def _move_snapshot(src: Path, dst: Path) -> None:
-    """Move a snapshot directory, replacing any existing one at `dst`."""
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.move(str(src), str(dst))
-
-
-def _close_snapshot(snap: Path, source: Path) -> None:
-    """Close a session by archiving its snapshot rather than deleting it.
-
-    Retaining the base text is what makes `reopen` / `save --redo` possible:
-    the pairs themselves cannot reconstruct it, since in chunk mode they hold
-    only the changed regions. The archive keeps the original `snapped_at`, so
-    a re-save after `reopen` lands in the same session and `save`'s smart
-    disposition REPLACES the earlier pairs instead of stacking a near-duplicate
-    onto the corpus.
-    """
-    _move_snapshot(snap, _closed_snapshot_path(source))
-
-
-def _iter_pairs() -> list[dict]:
-    """Read pairs.jsonl into memory. Returns [] if file is missing.
-
-    Unparseable lines come back as ``{"_raw": line}`` so the rewrite path
-    (`stylebot.jsonl.write_jsonl_atomic`) round-trips them instead of silently dropping.
-    """
-    return read_jsonl(_pairs_path(), keep_undecodable=True)
-
-
-def _corpus_confirmation() -> str:
+def _corpus_confirmation(store: SessionStore) -> str:
     """One-line 'it landed where training reads' confirmation for write commands.
 
     Resolves the data-dir to an ABSOLUTE path (a relative default like
@@ -287,59 +180,11 @@ def _corpus_confirmation() -> str:
     running corpus size plus heading-context coverage, so each save visibly
     accumulates in the corpus you expect rather than a stray cwd dir.
     """
-    pairs = _iter_pairs()
-    with_ctx = sum(1 for r in pairs if (r.get("meta", {}).get("context") or "").strip())
+    summary = session.corpus_summary(store)
     return (
-        f"corpus now: {len(pairs)} pair(s) ({with_ctx} with heading context) "
-        f"-> {_pairs_path().resolve()}"
+        f"corpus now: {summary.pairs} pair(s) ({summary.with_context} with heading context) "
+        f"-> {summary.path.resolve()}"
     )
-
-
-def _capture_and_append(
-    *,
-    before_text: str,
-    after_text: str,
-    source: str | None,
-    snapped_at: str | None,
-    whole: bool,
-    extra_meta: dict | None,
-    heading_context: bool = True,
-) -> list[dict]:
-    """`stylebot.capture.capture_pairs` against the module's corpus path."""
-    return capture.capture_pairs(
-        before_text,
-        after_text,
-        pairs_path=_pairs_path(),
-        source=source,
-        snapped_at=snapped_at,
-        whole=whole,
-        extra_meta=extra_meta,
-        heading_context=heading_context,
-    )
-
-
-# ---- CLI ----
-
-
-def _humanize_age(iso_ts: str) -> str:
-    """Render an ISO-8601 timestamp as a relative age string ("3h ago")."""
-    try:
-        ts = datetime.fromisoformat(iso_ts)
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=UTC)
-        delta = datetime.now(UTC) - ts
-        seconds = max(0, int(delta.total_seconds()))
-        if seconds < 60:
-            return f"{seconds}s ago"
-        if seconds < 3600:
-            return f"{seconds // 60}m ago"
-        if seconds < 86400:
-            return f"{seconds // 3600}h ago"
-        if seconds < 86400 * 14:
-            return f"{seconds // 86400}d ago"
-        return f"{seconds // (86400 * 7)}w ago"
-    except Exception:
-        return iso_ts
 
 
 def _remind_open_sessions(ctx: click.Context) -> None:
@@ -351,24 +196,21 @@ def _remind_open_sessions(ctx: click.Context) -> None:
     """
     if ctx.obj and ctx.obj.get("quiet"):
         return
-    snaps = _snapshot_dirs(_snapshots_dir())
-    if not snaps:
+    entries = session.load_snapshots(_store().snapshots_dir)
+    if not entries:
         return
 
-    entries: list[tuple[str, str]] = []
-    for snap in snaps:
-        try:
-            payload = _read_snapshot(snap)
-            source = payload.get("source", str(snap))
-            age = _humanize_age(payload.get("snapped_at", ""))
-            entries.append((source, age))
-        except Exception:
-            entries.append((str(snap), "unreadable"))
-
-    width = max(len(src) for src, _ in entries)
+    rows = [
+        (
+            entry.source,
+            humanize_age(entry.snapshot.snapped_at) if entry.snapshot else "unreadable",
+        )
+        for entry in entries
+    ]
+    width = max(len(src) for src, _ in rows)
     click.echo()
-    click.echo(f"Open sessions ({len(entries)}):", err=True)
-    for source, age in entries:
+    click.echo(f"Open sessions ({len(rows)}):", err=True)
+    for source, age in rows:
         click.echo(f"  {source:<{width}}  (opened {age})", err=True)
     click.echo(
         "  use `ai-style log -q ...` to suppress, `ai-style log drop <file>` to abandon", err=True
@@ -404,39 +246,13 @@ def open_session(ctx: click.Context, file: Path):
     the original (worst) state is preserved across editing sittings.
     A later `save` diffs the current contents against this recorded state.
     """
-    snap = _snapshot_path(file)
-    if snap.exists():
-        raise click.ClickException(
-            f"session already open for {file}; `drop` it, or `save` without --keep-open to close it"
-        )
-    snap.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "source": str(file),
-        "snapped_at": capture.now_iso(),
-        "content": file.read_text(encoding="utf-8"),
-    }
-    _write_snapshot(
-        snap, source=payload["source"], snapped_at=payload["snapped_at"], content=payload["content"]
-    )
-    click.echo(f"opened session for {file} ({len(payload['content'])} chars) -> {snap}")
+    store = _store()
+    try:
+        snapshot = session.open_session(store, file)
+    except SessionError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"opened session for {file} ({snapshot.chars} chars) -> {store.snapshot_path(file)}")
     _remind_open_sessions(ctx)
-
-
-def _restore_snapshot(file: Path) -> dict:
-    """Restore `file`'s archived session to the live snapshot path.
-
-    Returns the restored payload. Raises `FileNotFoundError` when there is no
-    archive to restore. Preserves `snapped_at` verbatim — see `_close_snapshot`
-    for why that is the load-bearing part.
-    """
-    closed = _closed_snapshot_path(file)
-    if not closed.exists():
-        raise FileNotFoundError(closed)
-    payload = _read_snapshot(closed)
-    snap = _snapshot_path(file)
-    snap.parent.mkdir(parents=True, exist_ok=True)
-    _move_snapshot(closed, snap)
-    return payload
 
 
 @main.command(name="reopen")
@@ -456,24 +272,15 @@ def reopen_session(ctx: click.Context, file: Path):
 
     Also recovers an accidental `drop`.
     """
-    snap = _snapshot_path(file)
-    if snap.exists():
-        raise click.ClickException(
-            f"session already open for {file}; nothing to reopen "
-            "(`save` against it, or `drop` it first)"
-        )
     try:
-        payload = _restore_snapshot(file)
-    except FileNotFoundError as exc:
-        raise click.ClickException(
-            f"no closed session for {file}; run `open` to start a fresh one"
-        ) from exc
+        snapshot = session.reopen_session(_store(), file)
+    except SessionError as exc:
+        raise click.ClickException(str(exc)) from exc
     # Surface the age: resurrecting a weeks-old base against a much-changed
     # file produces a huge, unrepresentative diff, and that should be visible.
-    age = _humanize_age(payload.get("snapped_at", ""))
     click.echo(
         f"reopened session for {file} "
-        f"({len(payload.get('content', ''))} chars, originally opened {age})"
+        f"({snapshot.chars} chars, originally opened {humanize_age(snapshot.snapped_at)})"
     )
     _remind_open_sessions(ctx)
 
@@ -544,134 +351,55 @@ def save_session(
         raise click.UsageError("--replace and --append are mutually exclusive")
 
     cap: CaptureOpts = bundles_from_kwargs(kw, {"capture": CaptureOpts})["capture"]
-    snap = _snapshot_path(file)
-    if redo and not snap.exists():
-        try:
-            restored = _restore_snapshot(file)
-        except FileNotFoundError as exc:
-            raise click.ClickException(
-                f"--redo: no closed session for {file} to reopen; run `open` first"
-            ) from exc
-        click.echo(
-            f"reopened session for {file} "
-            f"(originally opened {_humanize_age(restored.get('snapped_at', ''))})"
-        )
-    if not snap.exists():
-        hint = "run `open` first"
-        if _closed_snapshot_path(file).exists():
-            hint += ", or `save --redo` to reopen the last closed session"
-        raise click.ClickException(f"no open session for {file}; {hint}")
+    disposition = "append" if force_append else ("replace-all" if force_replace else "smart")
 
-    payload = _read_snapshot(snap)
-    before_text = payload["content"]
-    after_text = file.read_text(encoding="utf-8")
-
-    if before_text == after_text:
-        raise click.ClickException(f"no changes since session opened on {file}; nothing to save")
-
-    extra: dict = {}
-    if cap.tags:
-        extra["tags"] = list(cap.tags)
-
-    # ---- Disposition of prior pairs for this source ----
-    #
-    # Smart default: replace same-session interim pairs, keep cross-session.
-    # --replace forces full drop of all prior pairs for this source.
-    # --append forces keep of all prior pairs, even same-session.
-    session_snapped_at = payload.get("snapped_at")
-    all_records = _iter_pairs()
-    same_session: list[dict] = []
-    other_session: list[dict] = []
-    other_source: list[dict] = []
-    for rec in all_records:
-        meta = rec.get("meta", {}) if isinstance(rec, dict) else {}
-        if meta.get("source") != str(file):
-            other_source.append(rec)
-        elif meta.get("snapped_at") == session_snapped_at:
-            same_session.append(rec)
-        else:
-            other_session.append(rec)
-
-    if force_append:
-        records_to_keep = all_records
-        disposition = "append"
-    elif force_replace:
-        records_to_keep = other_source
-        disposition = "replace-all"
-    else:
-        records_to_keep = other_source + other_session
-        disposition = "smart"
-
-    if len(records_to_keep) != len(all_records):
-        write_jsonl_atomic(_pairs_path(), records_to_keep)
-
-    # Report disposition before the save line
-    if disposition == "smart" and same_session:
-        click.echo(f"replaced {len(same_session)} interim pair(s) from this session")
-    elif disposition == "replace-all":
-        total_dropped = len(same_session) + len(other_session)
-        if total_dropped:
-            extra_note = (
-                f" (including {len(other_session)} from earlier session(s))"
-                if other_session
-                else ""
-            )
-            click.echo(f"replaced {total_dropped} prior pair(s) for {file}{extra_note}")
-
+    store = _store()
     try:
-        written = _capture_and_append(
-            before_text=before_text,
-            after_text=after_text,
-            source=str(file),
-            snapped_at=session_snapped_at,
+        result = session.save_session(
+            store,
+            file,
+            keep_open=keep_open,
+            disposition=disposition,
+            redo=redo,
+            tags=cap.tags,
             whole=cap.whole,
-            extra_meta=extra or None,
             heading_context=cap.heading_context,
+            notify=click.echo,
         )
-    except ValueError as exc:
+    except SessionError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    if not keep_open:
-        _close_snapshot(snap, file)
+    _warn_if_eval_post(store, file)
 
-    total_before = sum(rec["meta"]["before_chars"] for rec in written)
-    total_after = sum(rec["meta"]["after_chars"] for rec in written)
-    mode = "whole-file" if cap.whole else "chunk-by-chunk"
-    status = "session kept open" if keep_open else "session closed"
+    mode = "whole-file" if result.whole else "chunk-by-chunk"
+    status = "session kept open" if result.kept_open else "session closed"
     click.echo(
-        f"saved {len(written)} pair(s) for {file} "
-        f"({mode}; {total_before} -> {total_after} chars total; {status})"
+        f"saved {len(result.written)} pair(s) for {file} "
+        f"({mode}; {result.before_chars} -> {result.after_chars} chars total; {status})"
     )
-    click.echo(_corpus_confirmation())
+    click.echo(_corpus_confirmation(store))
 
     # Post-save reporting of preserved cross-session / appended pairs
-    if disposition == "smart" and other_session:
+    prior = result.prior
+    if result.disposition == "smart" and prior.other_session:
         # Pairs logged outside a session (`log pair`, `synth`) carry snapped_at=None;
         # they have no session timestamp to sort or age, so count them separately.
-        stamps = {
-            rec.get("meta", {}).get("snapped_at") for rec in other_session if isinstance(rec, dict)
-        }
-        sessions_ts = sorted(ts for ts in stamps if ts)
-        sessionless = len(other_session) - sum(
-            1
-            for rec in other_session
-            if isinstance(rec, dict) and rec.get("meta", {}).get("snapped_at")
-        )
+        stamps = prior.earlier_session_stamps
         parts = []
-        if sessions_ts:
+        if stamps:
             parts.append(
-                f"{len(sessions_ts)} earlier session(s) "
-                f"[oldest opened {_humanize_age(sessions_ts[0])}]"
+                f"{len(stamps)} earlier session(s) [oldest opened {humanize_age(stamps[0])}]"
             )
-        if sessionless:
-            parts.append(f"{sessionless} logged outside a session")
-        click.echo(f"  kept {len(other_session)} pair(s) from {', '.join(parts)}")
-    elif disposition == "append":
-        total_kept = len(same_session) + len(other_session)
+        if prior.sessionless:
+            parts.append(f"{prior.sessionless} logged outside a session")
+        click.echo(f"  kept {len(prior.other_session)} pair(s) from {', '.join(parts)}")
+    elif result.disposition == "append":
+        total_kept = len(prior.same_session) + len(prior.other_session)
         if total_kept:
             click.echo(
                 f"  appended alongside {total_kept} prior pair(s) for this source "
-                f"({len(same_session)} from this session, {len(other_session)} from earlier)"
+                f"({len(prior.same_session)} from this session, "
+                f"{len(prior.other_session)} from earlier)"
             )
 
     _remind_open_sessions(ctx)
@@ -686,10 +414,10 @@ def save_session(
 @click.pass_context
 def drop_session(ctx: click.Context, file: Path):
     """Drop the open session for FILE without saving any pair."""
-    snap = _snapshot_path(file)
-    if not snap.exists():
-        raise click.ClickException(f"no open session for {file}")
-    _close_snapshot(snap, file)
+    try:
+        session.drop_session(_store(), file)
+    except SessionError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo(f"dropped session for {file} (`reopen` restores it if that was a mistake)")
     _remind_open_sessions(ctx)
 
@@ -697,34 +425,26 @@ def drop_session(ctx: click.Context, file: Path):
 @main.command(name="list")
 def list_state():
     """List open sessions, saved pairs (grouped by source), and totals."""
-    snaps = _snapshot_dirs(_snapshots_dir())
-    records = _iter_pairs()
-    pair_count = len(records)
+    state = session.summarize_state(_store())
 
-    # Group pairs by source for a quick summary
-    by_source: dict[str, list[dict]] = {}
-    for rec in records:
-        meta = rec.get("meta", {}) if isinstance(rec, dict) else {}
-        src = meta.get("source") or "(no source)"
-        by_source.setdefault(src, []).append(rec)
+    click.echo(
+        f"{state.pair_count} pair(s) across {len(state.by_source)} source(s) in {state.pairs_path}"
+    )
+    for row in state.by_source:
+        click.echo(f"  {row.source}: {row.pairs} pair(s) across {row.saves} save(s)")
 
-    click.echo(f"{pair_count} pair(s) across {len(by_source)} source(s) in {_pairs_path()}")
-    for src, recs in sorted(by_source.items()):
-        capture_ids = {r.get("meta", {}).get("capture_id") for r in recs if isinstance(r, dict)}
-        capture_ids.discard(None)
-        click.echo(f"  {src}: {len(recs)} pair(s) across {len(capture_ids)} save(s)")
+    click.echo(f"{len(state.open_sessions)} open session(s)")
+    _echo_snapshots(state.open_sessions)
 
-    click.echo(f"{len(snaps)} open session(s)")
-    _echo_snapshots(snaps)
-
-    closed = _snapshot_dirs(_closed_snapshots_dir())
-    if closed:
-        click.echo(f"{len(closed)} closed session(s), redoable via `reopen` / `save --redo`")
+    if state.closed_sessions:
+        click.echo(
+            f"{len(state.closed_sessions)} closed session(s), redoable via `reopen` / `save --redo`"
+        )
         # Relative age for closed sessions: an absolute stamp answers "which
         # session was this" for one still open, but for a closed one the live
         # question is whether the base is stale enough that a `--redo` would
         # diff against prose that has moved on.
-        _echo_snapshots(closed, age=True)
+        _echo_snapshots(state.closed_sessions, age=True)
 
 
 @main.command(name="tidy")
@@ -745,52 +465,19 @@ def tidy_pairs(ctx: click.Context, source: str | None, dry_run: bool):
     Normally unnecessary because `save` replaces by default. Useful if
     you've used `save --append` and want to clean up retroactively.
     """
-    records = _iter_pairs()
-    if not records:
+    result = session.tidy_pairs(_store(), source, dry_run=dry_run)
+    if result.empty:
         click.echo("pairs.jsonl is empty; nothing to tidy")
         return
-
-    # Find latest captured_at per source (only among records that have a source)
-    latest_ts: dict[str, str] = {}
-    for rec in records:
-        if not isinstance(rec, dict):
-            continue
-        meta = rec.get("meta", {})
-        src = meta.get("source")
-        ts = meta.get("captured_at", "")
-        if src is None:
-            continue
-        if ts > latest_ts.get(src, ""):
-            latest_ts[src] = ts
-
-    kept: list[dict] = []
-    removed = 0
-    for rec in records:
-        if not isinstance(rec, dict) or "meta" not in rec:
-            kept.append(rec)
-            continue
-        meta = rec["meta"]
-        src = meta.get("source")
-        ts = meta.get("captured_at", "")
-        if src is None:
-            kept.append(rec)
-            continue
-        if source is not None and src != source:
-            kept.append(rec)
-            continue
-        if ts == latest_ts.get(src):
-            kept.append(rec)
-        else:
-            removed += 1
-
-    if removed == 0:
+    if result.removed == 0:
         click.echo("nothing to remove; every source already has a single save")
         _remind_open_sessions(ctx)
         return
 
-    click.echo(f"{'would remove' if dry_run else 'removed'} {removed} pair(s), keeping {len(kept)}")
-    if not dry_run:
-        write_jsonl_atomic(_pairs_path(), kept)
+    click.echo(
+        f"{'would remove' if dry_run else 'removed'} {result.removed} pair(s), "
+        f"keeping {len(result.kept)}"
+    )
     _remind_open_sessions(ctx)
 
 
@@ -849,34 +536,31 @@ def recut_pairs(ctx, gap_paras, gap_chars, max_chars, min_chars, max_similarity,
     from a re-cut capture (original or previous re-cut) is replaced, not
     stacked. Captures with no archive keep their native cut.
     """
-    before = len(_iter_pairs())
     try:
-        records = capture.recut_archives(
-            _pairs_path(),
-            coalesce_gap_paras=gap_paras,
-            coalesce_gap_chars=gap_chars,
+        result = session.recut(
+            _store(),
+            gap_paras=gap_paras,
+            gap_chars=gap_chars,
+            # 0 / 1.0 are the flags' "disable" sentinels; the library takes None.
             max_chars=max_chars or None,
             min_chars=min_chars,
             max_similarity=None if max_similarity >= 1 else max_similarity,
             dry_run=dry_run,
         )
-    except ValueError as exc:
+    except SessionError as exc:
         # e.g. unmigrated legacy JSON archives — a legible instruction, not a
         # traceback, since the fix is a command the user has to run.
         raise click.ClickException(str(exc)) from exc
-    if not records:
+    if not result.records:
         click.echo("no archives to re-cut (captures/ is empty or holds only --whole captures)")
         return
-    lens = sorted(len(r["messages"][2]["content"]) for r in records)
-    med = lens[len(lens) // 2]
-    caps = len({r["meta"]["capture_id"] for r in records})
     verb = "would write" if dry_run else "wrote"
     click.echo(
-        f"{verb} {len(records)} pair(s) from {caps} capture(s) "
-        f"[median {med} chars, p90 {lens[int(0.9 * (len(lens) - 1))]}, max {lens[-1]}]"
+        f"{verb} {len(result.records)} pair(s) from {result.captures} capture(s) "
+        f"[median {result.median_chars} chars, p90 {result.p90_chars}, max {result.max_chars}]"
     )
     if not dry_run:
-        click.echo(f"pairs.jsonl: {before} -> {len(_iter_pairs())}")
+        click.echo(f"pairs.jsonl: {result.pairs_before} -> {result.pairs_after}")
     _remind_open_sessions(ctx)
 
 
@@ -933,40 +617,32 @@ def pair(
     cap: CaptureOpts = bundles_from_kwargs(kw, {"capture": CaptureOpts})["capture"]
     if before_spec == "-" and after_spec == "-":
         raise click.UsageError("only one of --before/--after may be '-'")
-    before_text = _read_source(before_spec)
-    after_text = _read_source(after_spec)
 
-    if before_text == after_text:
-        raise click.ClickException("before and after are identical; refusing to log")
-
-    if replace:
-        if source is None:
-            raise click.UsageError("--replace requires --source")
-        removed = capture.remove_pairs_for_source(_pairs_path(), source)
-        if removed:
-            click.echo(f"replaced {removed} prior pair(s) for {source}")
-
-    extra = {"tags": list(cap.tags)} if cap.tags else None
+    store = _store()
     try:
-        written = _capture_and_append(
-            before_text=before_text,
-            after_text=after_text,
+        result = session.capture_pair(
+            store,
+            before_text=_read_source(before_spec),
+            after_text=_read_source(after_spec),
             source=source,
-            snapped_at=None,
+            replace=replace,
+            tags=cap.tags,
             whole=cap.whole,
-            extra_meta=extra,
             heading_context=cap.heading_context,
+            notify=click.echo,
         )
     except ValueError as exc:
+        # The arguments contradict (--replace with no --source): exit 2.
+        raise click.UsageError(str(exc)) from exc
+    except SessionError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    total_before = sum(rec["meta"]["before_chars"] for rec in written)
-    total_after = sum(rec["meta"]["after_chars"] for rec in written)
-    mode = "whole-input" if cap.whole else "chunk-by-chunk"
+    mode = "whole-input" if result.whole else "chunk-by-chunk"
     click.echo(
-        f"saved {len(written)} pair(s) ({mode}; {total_before} -> {total_after} chars total)"
+        f"saved {len(result.written)} pair(s) "
+        f"({mode}; {result.before_chars} -> {result.after_chars} chars total)"
     )
-    click.echo(_corpus_confirmation())
+    click.echo(_corpus_confirmation(store))
     _remind_open_sessions(ctx)
 
 
