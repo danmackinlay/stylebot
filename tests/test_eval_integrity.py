@@ -29,7 +29,7 @@ from stylebot import classify, synth
 from stylebot import eval as ev
 from stylebot import splits as sp
 from stylebot.classify_train import Dataset
-from stylebot.errors import ConfigError
+from stylebot.errors import ConfigError, RunError
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -353,9 +353,7 @@ def test_pangram_polls_the_async_task_until_a_terminal_stage():
             return {"stage": "STAGE_PENDING"}
         return {"stage": "STAGE_SUCCESS", "fraction_ai": 0.42, "prediction": "Mixed"}
 
-    detector = ev.pangram_detector(
-        api_key="k", post=fake_post, fetch=fake_fetch, poll_interval=0
-    )
+    detector = ev.pangram_detector(api_key="k", post=fake_post, fetch=fake_fetch, poll_interval=0)
     assert detector("prose")["score"] == pytest.approx(0.42)
     assert fetched[-1].endswith("/task/t-1")
     assert len(fetched) == 3
@@ -566,3 +564,250 @@ def test_extend_eval_cli_is_a_dry_run_by_default(tmp_path):
     result = CliRunner().invoke(main, [*argv, "--apply"])
     assert result.exit_code == 0, result.output
     assert sp.eval_version(sp.load_splits(path)) == 2
+
+
+# ---------------------------------------------------------------------------
+# 5. document scale, part two: score chunk-wise, and do not share a process
+#    with the sampler (2026-09-03, W10 item 7's follow-up)
+# ---------------------------------------------------------------------------
+#
+# The first live `--documents` run found two things no stub had: the command
+# segfaults (exit 139, hidden by a `| tail`), and the verdict it would have
+# produced has no resolution — mean P(slop) 0.4880 / 0.4951 / 0.4914 for the
+# draft, Dan's edit and the styler's output, with byte-identical min and max
+# across all three fields. Both are fixed here, and both get a test that could
+# have caught them.
+
+
+DOC = (
+    "---\ntitle: T\n---\n"
+    "Alpha paragraph, prose the styler would rewrite.\n"
+    "\n"
+    "```python\nx = 1\n```\n"
+    "\n"
+    "Bravo paragraph, also prose.\n"
+    "\n"
+    "Charlie paragraph, the third.\n"
+)
+
+
+def _recording_detector(scores_by_chunk):
+    """A detector that answers per chunk and records every text it saw."""
+    seen = []
+
+    def detect(prose):
+        seen.append(prose)
+        return {
+            "score": scores_by_chunk.get(prose[:5], 0.5),
+            "p_dan": None,
+            "configured": True,
+            "name": "stub",
+            "embed_model": "stub-embed",
+            "git_sha": "abc",
+            "trained_at": "2026-01-01",
+            "n_pairs": 10,
+        }
+
+    detect.identity = {
+        "name": "stub",
+        "embed_model": "stub-embed",
+        "git_sha": "abc",
+        "trained_at": "2026-01-01",
+        "n_pairs": 10,
+    }
+    return detect, seen
+
+
+def test_chunked_detector_scores_chunks_not_the_document():
+    detector, seen = _recording_detector({"Alpha": 0.9, "Bravo": 0.3, "Charl": 0.6})
+    chunked = ev.chunked_detector(detector, max_chunk_chars=40)
+
+    result = chunked(DOC)
+
+    # Three prose chunks — never the whole document, never the fence, never
+    # the frontmatter. That is the whole point: over 25k chars the head has no
+    # resolution, so it is never handed 25k chars.
+    assert seen == [
+        "Alpha paragraph, prose the styler would rewrite.",
+        "Bravo paragraph, also prose.",
+        "Charlie paragraph, the third.\n",
+    ]
+    assert result["n_chunks"] == 3
+    assert result["score"] == pytest.approx((0.9 + 0.3 + 0.6) / 3)
+    assert result["p_dan"] == pytest.approx(1 - (0.9 + 0.3 + 0.6) / 3)
+    assert result["sd"] == pytest.approx(0.3)
+
+
+def test_chunked_detector_reports_no_signal_for_a_document_with_no_prose():
+    """`None`, not 0.0 — an absent reading is said out loud, as everywhere else."""
+    detector, seen = _recording_detector({})
+    chunked = ev.chunked_detector(detector, max_chunk_chars=40)
+    result = chunked("# Only a heading\n\n```\ncode\n```\n")
+    assert seen == []
+    assert result["score"] is None and result["n_chunks"] == 0 and result["sd"] is None
+
+
+def test_chunked_detector_does_not_align_chunks_across_fields():
+    """Each field is segmented on its own; an edit is not a rewrite.
+
+    before/after/output legitimately cut to different chunk counts, so there is
+    no correspondence to join on. The test pins that the wrapper never tries.
+    """
+    detector, seen = _recording_detector({})
+    chunked = ev.chunked_detector(detector, max_chunk_chars=12)
+    before = chunked("One para.\n\nTwo para.\n\nThree para.\n")
+    after = chunked("One para, merged with two para.\n")
+    assert before["n_chunks"] == 3
+    assert after["n_chunks"] == 1
+
+
+def test_chunked_detector_carries_the_head_identity_with_the_scale_appended():
+    detector, _ = _recording_detector({})
+    chunked = ev.chunked_detector(detector, max_chunk_chars=4500, inline_headings=True)
+    identity = ev.detector_identity(chunked)
+    assert identity["git_sha"] == "abc"  # same artifact
+    assert identity["name"] == "stub/chunked:4500:inline-headings"  # different instrument
+
+
+def test_a_chunk_wise_pass_refuses_to_append_to_a_whole_document_file(tmp_path):
+    """Two scales of one head are two instruments, and must not blend into a mean.
+
+    This is precisely D39's guard doing the job it was built for: the
+    whole-document numbers and the chunk-wise ones differ by more than anything
+    being measured across them.
+    """
+    data_dir = tmp_path / "c"
+    pairs = _make_pairs(data_dir, [("A paragraph long enough to score.", "post/a.qmd")])
+    out = tmp_path / "scores.jsonl"
+    whole, _ = _recording_detector({})
+    ev.score_pairs_file(pairs, out, detector=whole, fields=("slop",))
+
+    chunked = ev.chunked_detector(whole, max_chunk_chars=4500)
+    with pytest.raises(ConfigError, match="blend two instruments"):
+        ev.score_pairs_file(pairs, out, detector=chunked, fields=("slop",))
+    # A fresh --out is the fix, and it is not refused.
+    ev.score_pairs_file(pairs, tmp_path / "chunked.jsonl", detector=chunked, fields=("slop",))
+
+
+def test_chunk_wise_document_scores_keep_the_ordinary_scores_jsonl_shape(tmp_path):
+    """`summarize_scores` / `format_summary` / the report see nothing new.
+
+    The aggregate lands in the same `scores[field]["detector"]["score"]` slot,
+    with `n_chunks` and `sd` beside it, so every consumer keeps working.
+    """
+    data_dir = tmp_path / "c"
+    pairs = _make_pairs(data_dir, [("A paragraph long enough to score.", "post/a.qmd")])
+    _archive(data_dir, "cap-eval", "post/eval.qmd", DOC, DOC.replace("Bravo", "Delta"))
+    splits = {
+        "schema_version": 1,
+        "eval_posts": ["post/eval.qmd"],
+        "rest_rule": {"kind": "hash", "detector_frac": 0.4, "salt": "0"},
+    }
+    docs = tmp_path / "documents.jsonl"
+    ev.rewrite_documents_file(
+        pairs,
+        docs,
+        styler=object(),
+        splits=splits,
+        rewrite=lambda text, styler, **kw: type("R", (), {"text": text, "n_chunks": 3})(),
+        max_chunk_chars=40,
+    )
+
+    detector, _ = _recording_detector({"Alpha": 0.9, "Bravo": 0.3, "Charl": 0.6, "Delta": 0.1})
+    scores = tmp_path / "doc-scores.jsonl"
+    ev.score_pairs_file(
+        docs,
+        scores,
+        fields=("slop", "target", "output"),
+        detector=ev.chunked_detector(detector, max_chunk_chars=40),
+        prune_orphans=False,
+    )
+
+    rec = json.loads(scores.read_text().splitlines()[0])
+    slop = rec["scores"]["slop"]["detector"]
+    assert slop["n_chunks"] == 3 and slop["sd"] is not None
+    assert slop["score"] == pytest.approx((0.9 + 0.3 + 0.6) / 3)
+    # Dan's side differs (Bravo -> Delta), which the whole-document reading
+    # could not see at all.
+    assert rec["scores"]["target"]["detector"]["score"] == pytest.approx((0.9 + 0.1 + 0.6) / 3)
+
+    summary = ev.summarize_scores(scores)
+    assert summary["fields"]["slop"]["mean_detector_score"] == pytest.approx(0.6)
+    assert any("slop" in line for line in ev.format_summary(summary))
+    assert summary["detectors"][0]["name"] == "stub/chunked:40"
+
+
+# --- the isolated scoring pass (the SIGSEGV) ---------------------------------
+
+
+def test_score_job_round_trips_through_json():
+    job = ev.ScoreJob(
+        pairs="p.jsonl",
+        out="s.jsonl",
+        fields=("slop", "output"),
+        detector_model="_models/voice-clf",
+        chunk_scale={"max_chunk_chars": 4500, "inline_headings": True},
+    )
+    assert ev.ScoreJob.from_dict(json.loads(json.dumps(job.to_dict()))) == job
+
+
+def test_score_job_refuses_an_unknown_key():
+    with pytest.raises(ConfigError, match="unknown ScoreJob key"):
+        ev.ScoreJob.from_dict({"pairs": "p", "out": "s", "detector": "a callable"})
+
+
+def test_isolated_scoring_reports_a_crashing_child_instead_of_an_empty_file(tmp_path):
+    """The bug this exists for: exit 139 that a `| tail` turned into 0.
+
+    The rewrite half flushes per record, so `documents.jsonl` looked complete;
+    the scores file was created and left empty and nothing said why. A crash
+    must now be an exception naming the status.
+    """
+    job = ev.ScoreJob(pairs=str(tmp_path / "p.jsonl"), out=str(tmp_path / "s.jsonl"))
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append((argv, kw))
+        return type("P", (), {"returncode": -11})()
+
+    with pytest.raises(RunError, match="SIGSEGV"):
+        ev.run_score_job_isolated(job, run=fake_run)
+    assert calls[0][0][1:3] == ["-m", "stylebot.eval"]
+    assert calls[0][1]["env"][ev.SCORE_CHILD_ENV] == "1"
+
+
+def test_isolated_scoring_runs_the_job_in_a_real_child_process(tmp_path):
+    """`python -m stylebot.eval` really is spawnable and really scores.
+
+    A stub `run` proves the marshalling; only an actual subprocess proves the
+    module has a working `__main__`, which is the class of thing three paths
+    shipped without on 2026-09-03. Null detector, so no model loads.
+    """
+    data_dir = tmp_path / "c"
+    pairs = _make_pairs(data_dir, [("A paragraph long enough to score.", "post/a.qmd")])
+    out = tmp_path / "scores.jsonl"
+    result = ev.run_score_job_isolated(
+        ev.ScoreJob(pairs=str(pairs), out=str(out), fields=("slop", "target"))
+    )
+    assert result.written == 1
+    rec = json.loads(out.read_text().splitlines()[0])
+    assert set(rec["scores"]) == {"slop", "target"}
+    assert rec["scores"]["slop"]["detector"]["name"] == "null"
+
+
+def test_the_document_pass_never_builds_the_detector_in_the_sampling_process(tmp_path):
+    """The parent samples (Tinker SDK); the child scores.
+
+    The scoring pass runs in its own process so a crash in it is a named error
+    rather than the bare exit 139 of 2026-09-03, which means the `--documents`
+    branch must DESCRIBE the detector (a path in a `ScoreJob`) rather than build
+    one here. Asserted against the source because the property is which imports
+    happen where, which a functional test with a stub detector cannot see.
+    """
+    from pathlib import Path as _Path
+
+    src = _Path(ev.__file__).parent / "bin" / "ai_style.py"
+    body = src.read_text(encoding="utf-8")
+    documents_branch = body.split("if doc_opts.documents:")[1].split("    else:")[0]
+    assert "run_score_job_isolated" in documents_branch
+    assert "sklearn_detector" not in documents_branch

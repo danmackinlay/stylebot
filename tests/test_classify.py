@@ -113,3 +113,47 @@ def test_runtime_import_pulls_no_ml_deps():
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
+
+
+def test_the_embedder_is_serialized_across_threads(monkeypatch):
+    """One model, one forward pass at a time — the crash of 2026-09-03.
+
+    Scoring 34 documents chunk-wise through `score_pairs_file`'s eight default
+    workers killed the process (SIGSEGV/SIGBUS, deterministically, before a
+    single record was written) and completed only at `--max-workers 1`. The
+    forward pass and the Rust tokenizer under it are not ours to make
+    re-entrant, so `sentence_transformers_batch_embed_fn` holds a lock.
+    """
+    import sys
+    import threading
+    import time
+    import types
+    from concurrent.futures import ThreadPoolExecutor
+
+    live = 0
+    peak = 0
+    guard = threading.Lock()
+
+    class FakeModel:
+        def __init__(self, model_id):
+            self.model_id = model_id
+
+        def encode(self, texts, **kw):
+            nonlocal live, peak
+            with guard:
+                live += 1
+                peak = max(peak, live)
+            time.sleep(0.01)  # a window wide enough for a second thread to enter
+            with guard:
+                live -= 1
+            return [[1.0] for _ in texts]
+
+    fake = types.ModuleType("sentence_transformers")
+    fake.SentenceTransformer = FakeModel
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake)
+
+    encode = classify.sentence_transformers_batch_embed_fn("stub-model")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda i: encode([f"text {i}"]), range(16)))
+
+    assert peak == 1, f"{peak} concurrent forward passes — the embedder is not serialized"

@@ -335,6 +335,29 @@ unchanged and v2 is what made two of them survivable.
    the diet under test existed, which is why a diet switch could not move its own
    verdict.
 
+   **The document is rewritten whole and scored chunk-wise** (D54, 2026-09-03).
+   The detector is a StyleDistance embedding + logistic head fit at chunk scale
+   and has no resolution over 25k chars — its first document-scale run returned
+   0.49 for the draft, Dan's edit *and* the styler's output, with identical min
+   and max across all three. So `--documents` wraps the head in
+   `eval.chunked_detector`: each field is segmented at the manifest's serving
+   diet (`infer.prose_chunks`), every prose chunk scored, and the document's
+   number is the mean over its chunks with `n_chunks` and `sd` beside it. The
+   chunks are **not** aligned across `slop`/`target`/`output` — an edit is not a
+   rewrite, so the three variants cut to different chunk counts and there is
+   nothing honest to pair. Scale is part of the instrument's identity: the
+   head's `name` carries it, so #1's mixing guard refuses to blend a
+   whole-document reading with a chunk-wise one. Numbers: `findings.md`,
+   "Document-scale eval, chunk-wise".
+
+   The scoring half runs in a **child process**
+   (`eval.run_score_job_isolated` / `ScoreJob`), so a crash in it is a named
+   `RunError` rather than a bare exit 139 into a half-written file (D55). The
+   crash that motivated it turned out to be concurrent forward passes through
+   one `SentenceTransformer`, fixed by a lock in
+   `classify.sentence_transformers_batch_embed_fn`, not the libomp double-load
+   it was first diagnosed as.
+
 Verdict outputs belong under `runs/<run_id>/` (`eval.verdict_dir`,
 `dan-style eval --run-id`), beside the manifest of the adapter they judge. Run
 4a's lived in `_tmp/eval/` and were never committed.

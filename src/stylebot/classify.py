@@ -150,19 +150,34 @@ def sentence_transformers_batch_embed_fn(model_id: str, *, normalize: bool = Tru
     encode call-site for the classifier: the per-passage `embed_fn` below and
     the training-time `classify_train.embed_texts` both wrap it, so
     normalize/encode semantics can't drift between training and serving.
+
+    **Serialized.** One `SentenceTransformer` driven concurrently from several
+    Python threads crashes the process — measured 2026-09-03, deterministically,
+    scoring 34 documents chunk-wise through `eval.score_pairs_file`'s default
+    eight workers: **SIGSEGV/SIGBUS before a single record was written**, and
+    survivable only at `--max-workers 1`. The forward pass and the Rust
+    tokenizer under it are not ours to make re-entrant, so the model gets a lock
+    and callers keep their thread pool for the work that is actually I/O (the
+    judge, Vale). Embedding is CPU-bound anyway: threads bought it nothing but a
+    race. Note this makes an *instrument* serial, not the run — the pool still
+    overlaps everything else.
     """
+    import threading
+
     from sentence_transformers import SentenceTransformer
 
     model = SentenceTransformer(model_id)
+    lock = threading.Lock()
 
     def encode(texts: Sequence[str], *, batch_size: int = 32):
-        return model.encode(
-            list(texts),
-            batch_size=batch_size,
-            convert_to_numpy=True,
-            normalize_embeddings=normalize,
-            show_progress_bar=False,
-        )
+        with lock:
+            return model.encode(
+                list(texts),
+                batch_size=batch_size,
+                convert_to_numpy=True,
+                normalize_embeddings=normalize,
+                show_progress_bar=False,
+            )
 
     return encode
 

@@ -9,6 +9,102 @@ Each entry: date, what was measured, sample size, the number.
 
 ---
 
+## Document-scale eval, chunk-wise — run 2026-09-03 (later the same day): it separates
+
+The fix for the entry below. Same 34 rewritten documents, same detector
+(`c0e2ac85be`), same command — **only the scoring changed**: each field is now
+segmented the way serving segments it (`infer.prose_chunks`, the promoted diet:
+4500 chars, cross-heading), every prose chunk is scored on its own, and the
+document's number is the mean over its chunks (`eval.chunked_detector`). No new
+sampling: the rewrite is resumable by record id, so re-scoring is free.
+
+| | whole-document embedding | **chunk-wise mean** |
+|---|---|---|
+| mean P(slop), slop (the AI draft) | 0.4880 | **0.3844** |
+| mean P(slop), target (Dan's edit) | 0.4951 | **0.3622** |
+| mean P(slop), output (the styler) | 0.4914 | **0.3658** |
+| min / max, slop | 0.1107 / 0.7921 | 0.2627 / 0.5591 |
+| min / max, target | 0.1107 / 0.7921 | 0.1631 / 0.4968 |
+| min / max, output | 0.1107 / 0.7921 | 0.2323 / 0.4969 |
+| documents where Dan < draft | 2 / 34 = 0.059 | **25 / 34 = 0.735** |
+| documents where styler < draft | 0 / 34 = 0.000 | **25 / 34 = 0.735** |
+
+Paired deltas, bootstrap CI **clustered by post** (34 documents over only 7
+posts, so the cluster count is the honest n):
+
+| | whole-document | **chunk-wise** |
+|---|---|---|
+| target − slop | +0.0071 (−0.0017, +0.0291) | **−0.0222 (−0.0452, −0.0139)** |
+| output − slop | +0.0034 (+0.0000, +0.0148) | **−0.0186 (−0.0234, −0.0118)** |
+| output − target | −0.0037 (−0.0172, +0.0022) | +0.0036 (−0.0055, +0.0288) |
+
+**Three things the numbers say.**
+
+1. **The direction is now right and the interval excludes zero.** Dan's edit
+   scores below the AI draft, and the styler's output does too. Whole-document,
+   both signs were *positive* — the styler's output scored closer to slop than
+   the draft in 34 of 34 documents. The identical min/max across all three
+   fields is gone, which was the tell that the embedding was reading the
+   document rather than the writing.
+2. **0.735 is the document-scale pairwise, against the head's own chunk-scale
+   real-facet 0.784.** Close enough to say the instrument is being used inside
+   its range, which is exactly the claim the entry below could not make.
+3. **The styler cannot be told apart from Dan's own edit at this scale**
+   (output − target CI spans zero, and only 7 clusters). That is not a win
+   claim; it is the resolution this measurement has. It is also the first
+   document-scale reading of the promoted diet that means anything.
+
+Chunk counts: 563 / 564 / 563 for slop / target / output. The near-equality is a
+coincidence of these documents, not an alignment — **the chunks are deliberately
+not paired across fields.** An edit is not a rewrite: Dan moves paragraph
+boundaries, so field *i*'s chunk *k* is often not field *j*'s chunk *k*. Each
+field is segmented and aggregated on its own and the comparison is between two
+unaligned means. A chunk-index join would be false precision.
+
+Each score also carries `n_chunks` and `sd`, the within-document spread (mean sd
+over the slop side: **0.2642** — three times the between-document sd of 0.0812).
+That number is itself worth having: documents are far more varied inside
+themselves than they are from each other, which is the mechanical reason a
+single embedding of one told you nothing.
+
+**Caveat that survives.** StyleDistance truncates at its max sequence length, so
+a 4500-char chunk is read to roughly its first half. The same truncation applied
+when the head was fit on the corpus's 4500-budget cells, so this is consistent,
+not a new bias — but a diet wider than the backbone's window is only ever scored
+on its head.
+
+### The segfault was not the libomp double-load — and isolating it is how we know
+
+`--documents` was expected to be the `index-blog` failure: two OpenMP runtimes
+(Tinker SDK + sentence-transformers) in one process. It is not. Moving the
+scoring pass into its own child — no sampling SDK anywhere near it — the child
+**still crashed**, deterministically, exit 139/138, before writing a record.
+
+The cause is **concurrent forward passes through one `SentenceTransformer`**.
+`score_pairs_file` fans the detector out over eight worker threads; at
+whole-document scale that was three embeds per record and survived, and
+chunk-wise it is ~17 per field and does not. `--max-workers 1` completed
+cleanly, which located it. The fix is a lock around `model.encode` in
+`classify.sentence_transformers_batch_embed_fn` — the one encode call-site, so
+it also covers best-of-N reranking and the serve sidecar. With the lock, a
+single process holding **both** the Tinker SDK and the embedder scored the
+sample fine (measured), which is the direct refutation of the double-load story.
+
+The subprocess isolation stays, for the reason it earned rather than the one it
+was built for: **it is what made the crash legible**. In-process it was exit 139
+into a half-written file with nothing said, laundered to 0 by a `| tail`; from a
+child it is a `RunError` naming the status. Same posture the
+`index-blog-pipeline` skill takes about its own guards — the guarantee is
+loudness; the double-load defence is defence-in-depth against a mechanism this
+repo has still never reproduced.
+
+**Live run, unpiped: `EXIT=0`.** 34 documents scored, 0 errors, 0 rewritten (the
+resume skipped all 34, so no sampling spend). `43f0e688` still fails to rewrite
+with `AttributeError: 'list' object has no attribute 'strip'` — unchanged, still
+undiagnosed, still caught by the per-document guard.
+
+---
+
 ## Document-scale eval — run 2026-09-03 (W10 item 7): the instrument has no resolution there
 
 The first time `rewrite_text` has been run over whole eval posts rather than

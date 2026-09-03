@@ -248,6 +248,41 @@ def _segment(
     return out_items, out_seps
 
 
+def prose_chunks(
+    text: str,
+    *,
+    max_chunk_chars: int = STYLE_CHARS_PER_CHUNK,
+    inline_headings: bool = False,
+    div_is_prose: markdown.DivIsProse | None = None,
+) -> list[str]:
+    """The prose chunks `rewrite_text` would actually send to the styler.
+
+    The public name for what `_segment` computes: frontmatter dropped, protected
+    blocks and bare headings excluded, adjacent prose grouped to the same
+    `max_chunk_chars` budget under the same diet. Whatever the styler is asked to
+    rewrite is exactly what comes back here, and nothing else.
+
+    It exists because `stylebot.eval` needs to score a document at the scale the
+    detector was fit on (`eval.chunked_detector`), and a private `_segment`
+    reached across a module boundary is the seam that goes stale — the same
+    argument that collapsed five markdown segmenters into `stylebot.markdown`.
+    Callers wanting the protected items too (or the separators, to reassemble)
+    still want `_segment`; this is the read-only projection.
+    """
+    _, body = split_frontmatter(text)
+    items, _ = _segment(
+        body,
+        max_chars=max_chunk_chars,
+        inline_headings=inline_headings,
+        div_is_prose=div_is_prose,
+    )
+    return [
+        chunk
+        for kind, chunk in items
+        if kind not in markdown.PROTECTED_KINDS and kind != "heading" and chunk.strip()
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Rewrite
 # ---------------------------------------------------------------------------

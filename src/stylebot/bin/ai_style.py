@@ -229,10 +229,12 @@ def synth_cmd(
 def _document_pass(pairs_path: Path, out: Path, doc_opts, score_fields):
     """Rewrite whole eval-stratum documents; return what to score instead.
 
-    Returns `(pairs_path, fields, prune_orphans)` for the scoring pass that
-    follows: the output JSONL is a DIFFERENT corpus from `pairs.jsonl`, so orphan
-    pruning must be off (every row would read as orphaned) and `output` joins the
-    scored fields.
+    Returns `(pairs_path, fields, prune_orphans, chunk_scale)` for the scoring
+    pass that follows: the output JSONL is a DIFFERENT corpus from `pairs.jsonl`,
+    so orphan pruning must be off (every row would read as orphaned) and `output`
+    joins the scored fields. `chunk_scale` is the manifest's serving diet, handed
+    to `eval.chunked_detector` so the documents are scored at the scale the
+    detector head was fit on rather than as one 25k-char embedding.
     """
     if doc_opts.documents_manifest is None:
         raise click.UsageError("--documents needs --documents-manifest (the adapter to serve)")
@@ -272,7 +274,8 @@ def _document_pass(pairs_path: Path, out: Path, doc_opts, score_fields):
     for capture_id, message in result.errors[:10]:
         click.secho(f"  {capture_id}: {message}", fg="yellow", err=True)
     fields = (*score_fields, *(() if "output" in score_fields else ("output",)))
-    return docs_out, fields, False
+    chunk_scale = {"max_chunk_chars": max_chunk_chars, "inline_headings": inline_headings}
+    return docs_out, fields, False, chunk_scale
 
 
 def _echo_summary(summary: dict) -> None:
@@ -442,42 +445,62 @@ def eval_cmd(
 
     judge_fn = ev.openrouter_judge(model=judge_model) if judge else None
 
-    # A trained voice-classifier artifact, if given, supplies a real detector
-    # (P(slop)); else the null detector. The embedder is rebuilt lazily from the
-    # artifact's pinned meta.embed_model — heavy imports stay inside classify.
-    detector_fn = ev.null_detector
-    if detector_model is not None:
-        from stylebot import classify
-
-        try:
-            detector_fn = classify.sklearn_detector(detector_model)
-        except ImportError as exc:
-            raise click.ClickException(
-                f"--detector-model needs the embedder installed (sentence-transformers): {exc}"
-            ) from exc
-
     def _progress(i: int, total: int) -> None:
         if i == 1 or i % 25 == 0 or i == total:
             click.echo(f"  ... {i}/{total} scored", err=True)
 
     if doc_opts.documents:
-        pairs_path, score_fields, prune_orphans = _document_pass(
+        # --documents samples the adapter in THIS process (the Tinker SDK) and
+        # scores in a child, so a crash in the scoring pass is a named error
+        # rather than the bare exit 139 of 2026-09-03. The detector is therefore
+        # described (a path in a ScoreJob) rather than built here.
+        pairs_path, score_fields, prune_orphans, chunk_scale = _document_pass(
             pairs_path, out, doc_opts, score_fields
         )
+        result = ev.run_score_job_isolated(
+            ev.ScoreJob(
+                pairs=str(pairs_path),
+                out=str(out),
+                fields=tuple(score_fields),
+                detector_model=str(detector_model) if detector_model else None,
+                judge_model=judge_model if judge else None,
+                vale_config=str(vale_config) if vale_config else None,
+                max_workers=max_workers,
+                limit=limit,
+                prune_orphans=prune_orphans,
+                allow_mixed_detector=verdict_opts.allow_mixed_detector,
+                chunk_scale=chunk_scale,
+            )
+        )
+    else:
+        # A trained voice-classifier artifact, if given, supplies a real detector
+        # (P(slop)); else the null detector. The embedder is rebuilt lazily from
+        # the artifact's pinned meta.embed_model — heavy imports stay inside
+        # classify.
+        detector_fn = ev.null_detector
+        if detector_model is not None:
+            from stylebot import classify
 
-    result = ev.score_pairs_file(
-        pairs_path,
-        out,
-        fields=score_fields,
-        judge=judge_fn,
-        detector=detector_fn,
-        vale_config=vale_config,
-        max_workers=max_workers,
-        limit=limit,
-        prune_orphans=prune_orphans,
-        allow_mixed_detector=verdict_opts.allow_mixed_detector,
-        on_progress=_progress,
-    )
+            try:
+                detector_fn = classify.sklearn_detector(detector_model)
+            except ImportError as exc:
+                raise click.ClickException(
+                    f"--detector-model needs the embedder installed (sentence-transformers): {exc}"
+                ) from exc
+
+        result = ev.score_pairs_file(
+            pairs_path,
+            out,
+            fields=score_fields,
+            judge=judge_fn,
+            detector=detector_fn,
+            vale_config=vale_config,
+            max_workers=max_workers,
+            limit=limit,
+            prune_orphans=prune_orphans,
+            allow_mixed_detector=verdict_opts.allow_mixed_detector,
+            on_progress=_progress,
+        )
     # Loud, never silent: the prune REWROTE a file the operator may have
     # committed, and a big count usually means --out belongs to another corpus.
     if result.pruned_orphans:

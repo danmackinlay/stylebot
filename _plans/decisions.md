@@ -2264,3 +2264,120 @@ to freeze, which is where this belongs: the two operations are one intent.
 with the corpus (orphans are exactly the cells that make it), or if the corpus
 stops being cut at multiple budgets — at which point orphan pairs stop being
 cheap to leave lying about and the 4.06 stops being the dominant term.
+
+---
+
+## D54: a document-scale verdict is a mean over serving-scale chunks, unaligned across fields
+
+**Decision (2026-09-03, the same day as the measurement that forced it).** The
+detector is never handed a whole document. `eval.chunked_detector` wraps any
+`Detector` so a passage is first segmented exactly the way serving segments it
+(`infer.prose_chunks` — the promoted diet, the same protected blocks, the same
+budget), each prose chunk is scored on its own, and the passage's number is the
+**unweighted mean over its chunks**, carried in the ordinary
+`scores[field]["detector"]["score"]` slot with `n_chunks` and `sd` beside it, so
+`summarize_scores`, `format_summary` and `render_scores_report` change not at
+all. **The chunks are not aligned across `slop` / `target` / `output`**: each
+field is segmented and aggregated independently, and the verdict compares two
+unaligned means.
+
+The before/after is in [`findings.md`](findings.md): the whole-document reading
+scored 0.4880 / 0.4951 / 0.4914 with byte-identical min and max across all three
+fields and the styler's output *above* the draft in 34 of 34 documents;
+chunk-wise it is 0.3844 / 0.3622 / 0.3658, Dan below the draft in 25 of 34, and
+a post-clustered CI on both `target − slop` and `output − slop` that excludes
+zero.
+
+*Alternatives.* **Pair the chunks across fields** and report a paired
+chunk-level delta, which is what the first write-up of the problem assumed:
+rejected on the data. An edit is not a rewrite — Dan moves paragraph boundaries,
+so the three variants of a capture cut to different chunk counts (563 / 564 /
+563 here, near-equal by coincidence and not by correspondence) and field *i*'s
+chunk *k* is frequently not field *j*'s chunk *k*. A chunk-index join would
+produce a tighter interval by pairing things that are not pairs. **Segment at
+the detector's own training scale** (~1.2k chars) rather than the serving diet:
+rejected because the corpus the head was fit on contains 4500-budget cells too,
+so the serving diet is inside its range, and because scoring at a scale the
+styler never worked at reintroduces the gap `--documents` exists to close.
+**A length-weighted mean**: rejected as unmotivated — the chunk is the head's
+unit of observation, and every other mean in the harness is per-observation.
+**A median or a max**: rejected; a max turns the verdict into "the worst
+paragraph", which is a useful *editing* signal and a bad *comparison* one.
+
+*The deciding constraint.* An instrument has a range, and a StyleDistance
+embedding of 25k chars is outside it — the shared 90-odd percent of two variants
+of one document dominates the vector and the difference washes out. Nothing in
+the harness knew that, because the detector had been built, validated and always
+used at chunk scale; its first use outside that scale returned 0.49 for
+everything and said so in a table. Scale is therefore part of the instrument's
+identity, not a property of the caller: `chunked_detector` appends it to the
+head's `name` (`voice-clf/chunked:4500:inline-headings`), so D39's mixing guard
+refuses to blend a whole-document reading and a chunk-wise one into one mean —
+which is exactly what it would otherwise have done on a resume.
+
+`sd` is recorded because a mean with no spread beside it hides the case the mean
+exists to expose: a document half Dan and half slop reads identically to a
+uniformly middling one. Measured, the within-document sd is 0.2642 against a
+between-document 0.0812 — documents vary far more inside themselves than from
+each other, which is the mechanical statement of why one embedding of one told
+us nothing. It is a dispersion, not a standard error; the interval still comes
+from `paired_delta` clustered by post.
+
+**Re-evaluate if** the backbone changes to one whose context window covers a
+whole post (then the aggregation is a choice rather than a necessity, and a
+whole-document embedding becomes worth re-measuring against this), or if the
+eval stratum ever supplies enough captured posts that the cluster count — 7 for
+these 34 documents — stops being the binding constraint on the interval.
+
+---
+
+## D55: the scoring pass runs in a child — and the crash it was built for was a different bug
+
+**Decision (2026-09-03).** `--documents` samples the adapter in the command's
+own process and runs the scoring pass in a **child** (`python -m stylebot.eval
+--job … --result …`, driven by `eval.run_score_job_isolated`), so a scoring pass
+has to cross the boundary as data: `eval.ScoreJob` describes the detector as a
+path and the judge as a model id. Separately and independently,
+`classify.sentence_transformers_batch_embed_fn` now holds a **lock** around
+`model.encode`.
+
+**The two are not the same fix, and the order they were found in is the
+finding.** `dan-style eval --documents` exited 139 after the rewrite and before
+scoring, reproducibly, and the diagnosis on the day was the libomp double-load
+the blog's `index-blog-pipeline` skill documents — two OpenMP runtimes (Tinker
+SDK, sentence-transformers) in one process. The isolation was built to that
+diagnosis and **disproved it**: the child crashed too, alone, with no sampling
+SDK in the process. The real cause is concurrent forward passes through one
+`SentenceTransformer` — `score_pairs_file` fans the detector over eight worker
+threads, which survived three embeds per record at whole-document scale and does
+not survive ~17 per field chunk-wise. `--max-workers 1` completes; the lock
+makes eight workers complete; and with the lock a single process holding **both**
+the SDK and the embedder scores fine, measured.
+
+*Alternatives.* **Force `--max-workers 1` for document scoring**: rejected — it
+serialises the judge and Vale too, and it hides a latent crash behind a setting
+that any caller can raise. **Drop the isolation now that it is not the fix**:
+rejected, and this is the live tension. It costs one extra model load on a pass
+that already runs for minutes, and it buys the property that made today's run
+readable at all: in-process the failure was exit 139 into a half-written file
+with nothing said, laundered to 0 by the RUNBOOK's `| tail`; from a child it is
+a `RunError` naming the status. Keeping torch out of the sampling process is
+then defence-in-depth against a mechanism this repo has still never reproduced —
+the same posture that skill takes about its own guards. **Fix the pipe instead**
+(`set -o pipefail` in the RUNBOOK): rejected outright. The segfault is real
+whether or not its exit code is visible, and a documented caveat is not a
+working command.
+
+*The deciding constraint.* A crash that a stub cannot produce needs a live run
+to find and a loud failure to identify. Three paths shipped "built and tested"
+on 2026-09-03 and all three failed on first contact — a 404 endpoint, this
+segfault, and an instrument with no resolution. The cheap structural answer is
+to make the failure name itself, which is what a child process and a propagated
+exit status do.
+
+**Re-evaluate if** the embedder gains a documented thread-safe forward pass, or
+the detector moves behind a service boundary (then the lock is the service's
+problem and the isolation is the only remaining reason for `ScoreJob`); or if
+the double process ever costs more than the loudness is worth — at which point
+the honest move is to delete the isolation and keep the lock, not to keep both
+out of caution.

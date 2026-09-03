@@ -896,3 +896,57 @@ def test_rewrite_candidates_flags_truncation_without_filtering():
     out = infer.rewrite_candidates(chunk, _truncating_styler, best_of=1, scorer=None)
     assert len(out["candidates"]) == 1  # flagged, not filtered
     assert out["candidates"][0]["truncated"] is True
+
+
+# ---------------------------------------------------------------------------
+# `prose_chunks` — the public projection of `_segment` (eval scores at this scale)
+# ---------------------------------------------------------------------------
+
+
+def test_prose_chunks_is_exactly_what_rewrite_text_sends():
+    """The parity that makes `eval.chunked_detector` an honest instrument.
+
+    A document-scale verdict scores the chunks the styler was asked to rewrite;
+    if this projection drifted from `rewrite_text`'s own segmentation the two
+    would be measuring different documents.
+    """
+    text = (
+        "---\ntitle: T\n---\n"
+        "First paragraph, plain prose.\n"
+        "\n"
+        "> a blockquote, not Dan's words\n"
+        "\n"
+        "## A heading\n"
+        "\n"
+        "```python\nx = 1\n```\n"
+        "\n"
+        "Last paragraph, also prose."
+    )
+    sent = []
+
+    infer.rewrite_text(
+        text,
+        _identity_styler,
+        max_chunk_chars=40,
+        on_decision=lambda chunk, *a, **kw: sent.append(chunk),
+    )
+    assert sent  # the fixture has prose to rewrite
+    assert infer.prose_chunks(text, max_chunk_chars=40) == sent
+
+
+def test_prose_chunks_drops_frontmatter_headings_and_protected_blocks():
+    text = "---\ntitle: T\n---\n" + BODY
+    chunks = infer.prose_chunks(text, max_chunk_chars=40)
+    assert chunks == ["First paragraph, plain prose.\nSecond line of it.", "Last paragraph."]
+    assert not any("```" in c or "title: T" in c for c in chunks)
+
+
+def test_prose_chunks_honours_the_diet_it_is_handed():
+    """A bigger budget groups more prose into one chunk — the diet is the point."""
+    text = "One paragraph.\n\nTwo paragraph.\n\nThree paragraph."
+    assert len(infer.prose_chunks(text, max_chunk_chars=15)) == 3
+    assert len(infer.prose_chunks(text, max_chunk_chars=4500)) == 1
+
+
+def test_prose_chunks_of_a_document_with_no_prose_is_empty():
+    assert infer.prose_chunks("# Only a heading\n\n```\ncode\n```\n", max_chunk_chars=100) == []

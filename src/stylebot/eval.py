@@ -38,9 +38,10 @@ import tempfile
 import time as _time
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
-from statistics import mean
+from statistics import mean, stdev
 from typing import Protocol
 
 # click is an unconditional dependency, and `VerdictOpts` below is a
@@ -526,6 +527,104 @@ def detector_identity(detector: Detector) -> dict:
     return fallback
 
 
+def _chunked_name(name: str | None, max_chunk_chars: int, inline_headings: bool) -> str:
+    """How a chunk-wise detector names the scale it was applied at.
+
+    Two readings from one artifact at two scales are two instruments (see
+    `chunked_detector`), and `DETECTOR_IDENTITY_KEYS` has no field for scale —
+    so it rides on `name`, which is the key the mixing guard already compares.
+    """
+    suffix = f"/chunked:{max_chunk_chars}" + (":inline-headings" if inline_headings else "")
+    return f"{name or 'detector'}{suffix}"
+
+
+def chunked_detector(
+    detector: Detector,
+    *,
+    max_chunk_chars: int,
+    inline_headings: bool = False,
+    div_is_prose=None,
+) -> Detector:
+    """Score a WHOLE DOCUMENT at the scale the head was fit on, and aggregate.
+
+    Wraps any `Detector` so that a passage is first segmented the way serving
+    segments it (`infer.prose_chunks` — same budget, same diet, same protected
+    blocks), each prose chunk scored on its own, and the passage's score
+    reported as the **unweighted mean over its chunks**. Returns the usual
+    detector record plus ``n_chunks`` and ``sd`` (the within-passage spread of
+    the chunk scores, sample standard deviation; ``0.0`` for a single chunk).
+
+    **Why.** The voice classifier is a StyleDistance embedding + a logistic head
+    fit on chunks of ~1.2k chars. Run over a 25k-char document it has no
+    resolution at all: measured over 34 eval-role capture archives on
+    2026-09-03, mean P(slop) was 0.4880 / 0.4951 / 0.4914 for the AI draft,
+    Dan's edit and the styler's output, with **byte-identical min and max
+    across all three fields** (`_plans/findings.md`). A capture's three variants
+    are the same document differing in a few percent of their characters, so the
+    shared remainder dominates the embedding and the differences wash out. One
+    embedding of 25k chars is not a reading of a document; it is a reading of
+    the topic.
+
+    **The chunks are NOT aligned across fields, deliberately.** `before`,
+    `after` and `output` segment to different chunk counts — an edit is not a
+    rewrite, and Dan moves paragraph boundaries — so there is no honest
+    correspondence to pair up. Each field is segmented and aggregated on its
+    own, and the comparison is between two unaligned means. That is weaker than
+    a paired chunk comparison and it is what the data supports; a chunk-index
+    join across variants would be false precision dressed as rigour.
+
+    ``sd`` is recorded because a mean over chunks with no spread beside it hides
+    the case the mean exists to expose — a document that is half Dan and half
+    slop reads identically to one that is uniformly middling. It is a
+    *within-document* dispersion, not a standard error on the mean: it says how
+    varied the document is, and says nothing about how sure the reading is.
+
+    A passage with no prose chunks scores ``None`` (n_chunks 0) rather than 0.0,
+    the same convention every other absent signal follows.
+
+    The identity is the wrapped head's, with the scale appended to ``name``:
+    scoring one artifact whole-document and chunk-wise gives two numbers that
+    must never be averaged, which is exactly what the D39 mixing guard is for,
+    and it compares `name`.
+    """
+    from stylebot.infer import prose_chunks
+
+    identity = detector_identity(detector)
+    identity["name"] = _chunked_name(identity.get("name"), max_chunk_chars, inline_headings)
+
+    def detect(prose: str) -> dict:
+        chunks = prose_chunks(
+            prose,
+            max_chunk_chars=max_chunk_chars,
+            inline_headings=inline_headings,
+            div_is_prose=div_is_prose,
+        )
+        results = [detector(chunk) for chunk in chunks]
+        scores = [r.get("score") for r in results if r.get("score") is not None]
+        configured = any(r.get("configured") for r in results)
+        if not scores:
+            return {
+                "score": None,
+                "p_dan": None,
+                "configured": configured,
+                "n_chunks": len(chunks),
+                "sd": None,
+                **identity,
+            }
+        mean_score = mean(scores)
+        return {
+            "score": mean_score,
+            "p_dan": 1.0 - mean_score,
+            "configured": configured,
+            "n_chunks": len(scores),
+            "sd": (stdev(scores) if len(scores) > 1 else 0.0),
+            **identity,
+        }
+
+    detect.identity = dict(identity)
+    return detect
+
+
 def _identity_of_row(scores: dict) -> tuple | None:
     """The detector identity recorded on one score record, as a hashable tuple.
 
@@ -932,6 +1031,176 @@ def score_pairs_file(
                     fp.flush()
                     result.written += 1
     return result
+
+
+# ---------------------------------------------------------------------------
+# The isolated scoring pass — one process may not hold both OpenMP runtimes
+# ---------------------------------------------------------------------------
+#
+# `ai-style eval --documents` does two things in one command: it SAMPLES the
+# adapter (Tinker SDK) and then it SCORES the result (sentence-transformers /
+# torch, through `classify`). On 2026-09-03 it exited **139 (SIGSEGV)** after
+# the rewrite and before a single score was written, reproducibly, and a `|
+# tail` in the RUNBOOK meant the shell reported tail's 0.
+#
+# The diagnosis on the day was the libomp double-load that `index-blog` guards
+# against, and this isolation was built to it. **That diagnosis was wrong**, and
+# isolating the pass proved it: the child crashed too, on its own, with no
+# sampling SDK anywhere near it. The cause was concurrent forward passes through
+# one `SentenceTransformer` from `score_pairs_file`'s eight workers, and the fix
+# is the lock in `classify.sentence_transformers_batch_embed_fn`. With that lock
+# one process holds both the SDK and the embedder and scores 34 documents fine —
+# measured.
+#
+# The isolation stays anyway, for the reason it earned rather than the one it was
+# built for: **it is what made the crash legible**. An in-process segfault is
+# exit 139 into a half-written file with nothing said; a child's is a `RunError`
+# naming the status. That is the same posture the `index-blog-pipeline` skill
+# takes about its own subprocess — the guarantee is loudness, and the guard
+# against a double-load is defence-in-depth over a mechanism never reproduced.
+# A scoring pass has to cross the process boundary as DATA rather than as an
+# injected `Detector`, which is what `ScoreJob` is: the same run, in JSON.
+
+
+#: Set on the isolated scoring child, so it can be recognised in a process list
+#: and in its own logs (mirrors index-blog's `_LT_MAP_CHILD` sentinel).
+SCORE_CHILD_ENV = "STYLEBOT_SCORE_CHILD"
+
+
+@dataclass(frozen=True)
+class ScoreJob:
+    """A `score_pairs_file` run described entirely by data — no callables.
+
+    Everything `score_pairs_file` takes as an injected object (the detector, the
+    judge) becomes a path or a model id here, so the run can be handed to
+    another process. `chunk_scale` is the document-scale switch: given
+    ``{"max_chunk_chars": …, "inline_headings": …}`` the detector is wrapped in
+    `chunked_detector` and every field is scored chunk-wise and aggregated.
+
+    This is deliberately NOT the general scoring API — library callers inject
+    their own detector and call `score_pairs_file`. It exists because a
+    subprocess boundary cannot carry a closure.
+    """
+
+    pairs: str
+    out: str
+    fields: tuple[str, ...] = ("slop", "target")
+    detector_model: str | None = None
+    judge_model: str | None = None
+    vale_config: str | None = None
+    max_workers: int = 8
+    limit: int | None = None
+    prune_orphans: bool = True
+    allow_mixed_detector: bool = False
+    chunk_scale: dict | None = None
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["fields"] = list(self.fields)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ScoreJob:
+        data = dict(data)
+        data["fields"] = tuple(data.get("fields") or ("slop", "target"))
+        known = {f.name for f in dataclass_fields(cls)}
+        unknown = sorted(set(data) - known)
+        if unknown:
+            raise ConfigError(f"unknown ScoreJob key(s): {unknown}")
+        return cls(**data)
+
+
+def build_job_detector(job: ScoreJob) -> Detector:
+    """The detector a `ScoreJob` describes — this is where the embedder loads.
+
+    Called only in the child (or in-process by `run_score_job`), which is the
+    point: the parent of an isolated run must never reach here, or it has
+    already loaded torch beside the sampling SDK.
+    """
+    detector: Detector = null_detector
+    if job.detector_model:
+        from stylebot import classify
+
+        detector = classify.sklearn_detector(job.detector_model)
+    if job.chunk_scale is not None:
+        detector = chunked_detector(detector, **job.chunk_scale)
+    return detector
+
+
+def run_score_job(
+    job: ScoreJob, *, on_progress: Callable[[int, int], None] | None = None
+) -> ScoreResult:
+    """Run one `ScoreJob` IN THIS PROCESS (the child's body; also directly usable)."""
+    judge = openrouter_judge(model=job.judge_model) if job.judge_model else None
+    return score_pairs_file(
+        job.pairs,
+        job.out,
+        fields=job.fields,
+        judge=judge,
+        detector=build_job_detector(job),
+        vale_config=job.vale_config,
+        max_workers=job.max_workers,
+        limit=job.limit,
+        prune_orphans=job.prune_orphans,
+        allow_mixed_detector=job.allow_mixed_detector,
+        on_progress=on_progress,
+    )
+
+
+def run_score_job_isolated(
+    job: ScoreJob, *, run: Callable[..., object] | None = None
+) -> ScoreResult:
+    """Run a `ScoreJob` in a CHILD process; return its `ScoreResult`.
+
+    `python -m stylebot.eval --job … --result …`. The child's stdout/stderr are
+    inherited, so progress still streams live; the result crosses back as JSON
+    in a file rather than as parse-the-output. A crashing child — a SIGSEGV
+    included, which is the failure this exists to make legible — raises
+    `RunError` naming the exit status, instead of leaving an empty scores file
+    and a 0 exit code for a `| tail` to launder.
+
+    `run` is the subprocess seam, so tests exercise the marshalling without
+    spawning an interpreter.
+    """
+    import os
+    import sys
+
+    runner = run or subprocess.run
+    with tempfile.TemporaryDirectory(prefix="stylebot-score-") as tmp:
+        job_path = Path(tmp) / "job.json"
+        result_path = Path(tmp) / "result.json"
+        job_path.write_text(json.dumps(job.to_dict()), encoding="utf-8")
+        env = dict(os.environ, **{SCORE_CHILD_ENV: "1"})
+        completed = runner(
+            [
+                sys.executable,
+                "-m",
+                "stylebot.eval",
+                "--job",
+                str(job_path),
+                "--result",
+                str(result_path),
+            ],
+            env=env,
+            check=False,
+        )
+        code = getattr(completed, "returncode", 0)
+        if code != 0:
+            crashed = code in (-11, 139)
+            raise RunError(
+                f"the isolated scoring pass exited {code}"
+                + (" (SIGSEGV — the libomp double-load; see _plans/findings.md)" if crashed else "")
+                + f"; {job.out} holds only what it had flushed"
+            )
+        if not result_path.exists():
+            raise RunError(f"the isolated scoring pass wrote no result for {job.out}")
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    return ScoreResult(
+        written=payload.get("written", 0),
+        skipped_existing=payload.get("skipped_existing", 0),
+        pruned_orphans=payload.get("pruned_orphans", 0),
+        errors=[tuple(e) for e in payload.get("errors") or []],
+    )
 
 
 def load_scores(scores: str | Path | Iterable[dict]) -> list[dict]:
@@ -1656,3 +1925,52 @@ def write_covariate_table(
         "columns": columns,
         "constants": constants,
     }
+
+
+# ---------------------------------------------------------------------------
+# The child entry point — `python -m stylebot.eval --job … --result …`
+# ---------------------------------------------------------------------------
+#
+# Not a CLI and not a second entry point in the CLAUDE.md sense: it takes no
+# human-facing flags, it is spawned only by `run_score_job_isolated`, and it
+# exists so the scoring pass gets a process that never imported the sampling
+# SDK. Same shape as index-blog's `python -m livingthing.bin.index_blog map`
+# child. It lives HERE, in the module whose work it does, so the job schema and
+# the thing that reads it cannot drift.
+
+
+def _child_main(argv: Sequence[str] | None = None) -> int:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="python -m stylebot.eval",
+        description="Internal: run one stylebot.eval ScoreJob in this process.",
+    )
+    parser.add_argument("--job", required=True, help="Path to the ScoreJob JSON.")
+    parser.add_argument("--result", required=True, help="Where to write the ScoreResult JSON.")
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    job = ScoreJob.from_dict(json.loads(Path(args.job).read_text(encoding="utf-8")))
+
+    def _progress(i: int, total: int) -> None:
+        if i == 1 or i % 25 == 0 or i == total:
+            print(f"  ... {i}/{total} scored", file=sys.stderr, flush=True)
+
+    result = run_score_job(job, on_progress=_progress)
+    Path(args.result).write_text(
+        json.dumps(
+            {
+                "written": result.written,
+                "skipped_existing": result.skipped_existing,
+                "pruned_orphans": result.pruned_orphans,
+                "errors": [list(e) for e in result.errors],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised as a subprocess
+    raise SystemExit(_child_main())
