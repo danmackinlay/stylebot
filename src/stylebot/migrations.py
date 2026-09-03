@@ -43,17 +43,16 @@ Three live migrations:
 from __future__ import annotations
 
 import json
-import shutil
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from stylebot import corpus
 from stylebot.capture import read_archive, write_archive
 from stylebot.errors import RunError
 from stylebot.infer import invented_anchors
-from stylebot.jsonl import write_jsonl_atomic
-from stylebot.pairs import extract_slop, extract_target, iter_pairs
+from stylebot.pairs import backup_corpus, extract_slop, extract_target, iter_pairs
 from stylebot.splits import canonical_source, role_of
 from stylebot.targets import ChunkPolicy, iter_targets
 
@@ -300,16 +299,18 @@ def find_inventing(pairs_path: Path, *, include_real: bool) -> tuple[list[dict],
 
 
 def write_pruned(pairs_path: Path, keep: list[dict]) -> Path:
-    """Rewrite `pairs_path` with `keep`, returning the path of the `.bak`.
+    """Rewrite the corpus at `pairs_path` with `keep`, returning the backup path.
 
-    Atomic (a sibling temp file) and backed up, so an interrupted run cannot
-    leave a half-written corpus. Sidecars are NOT touched: `scores.jsonl` has
-    its own pruner (`eval.prune_orphan_scores`), and `reasoning.jsonl` is a
-    diagnostic whose orphans cost nothing.
+    Atomic (a sibling temp file per shard) and backed up, so an interrupted run
+    cannot leave a half-written corpus. Takes a `pairs.jsonl` or a shard
+    directory; on a sharded corpus only the shards whose content actually
+    changes are rewritten, and the backup is a `<corpus>.bak/` directory.
+    Sidecars are NOT touched: `scores.jsonl` has its own pruner
+    (`eval.prune_orphan_scores`), and `reasoning.jsonl` is a diagnostic whose
+    orphans cost nothing.
     """
-    backup = pairs_path.with_suffix(pairs_path.suffix + ".bak")
-    shutil.copy2(pairs_path, backup)
-    write_jsonl_atomic(pairs_path, keep)
+    backup = backup_corpus(pairs_path)
+    corpus.rewrite(pairs_path, keep)
     return backup
 
 

@@ -48,6 +48,7 @@ from pathlib import Path
 import click
 
 from stylebot.cli_options import opt
+from stylebot.corpus import content_sha256
 from stylebot.errors import ConfigError, MissingExtra, RunError
 from stylebot.jsonl import dumps_line
 from stylebot.pairs import iter_pairs, system_sha, validate_pairs_file
@@ -188,7 +189,7 @@ class TrainCorpus:
     val: list[dict] = field(default_factory=list)
     train_posts: list[str] = field(default_factory=list)
     val_posts: list[str] = field(default_factory=list)
-    pairs_sha256: str | None = None  # 16-hex content hash of the source file
+    pairs_sha256: str | None = None  # 16-hex content hash of the corpus (file, or shards)
     n_source_records: int = 0  # records in pairs.jsonl before any filter
     dropped: dict[str, int] = field(default_factory=dict)  # per-filter counts
 
@@ -419,7 +420,7 @@ def assemble_training_corpus(
             lineno, msgs = errors[0]
             raise RunError(
                 f"{pairs_path} fails the pairs contract on {len(errors)} record(s); "
-                f"first: line {lineno}: {'; '.join(msgs)} — refusing to train on a "
+                f"first at {lineno}: {'; '.join(msgs)} — refusing to train on a "
                 f"malformed corpus"
             )
 
@@ -463,7 +464,7 @@ def assemble_training_corpus(
     corpus = TrainCorpus(
         train_posts=sorted(set(posts) - val_posts),
         val_posts=sorted(val_posts),
-        pairs_sha256=file_sha256(pairs_path),
+        pairs_sha256=content_sha256(pairs_path),
         n_source_records=n_source,
         dropped=dropped,
     )

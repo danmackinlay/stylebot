@@ -16,9 +16,10 @@ import shutil
 import uuid
 from pathlib import Path
 
+from stylebot import corpus
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.errors import RunError
-from stylebot.jsonl import append_jsonl, read_jsonl, write_jsonl_atomic
+from stylebot.jsonl import append_jsonl
 from stylebot.lib import read_w_frontmatter_text, split_paragraphs
 from stylebot.markdown import is_heading_line
 from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content, system_sha
@@ -258,7 +259,7 @@ def build_pair_record(
 
 def remove_pairs_for_source(pairs_path: Path, source: str) -> int:
     """Drop every record whose meta.source matches. Returns count removed."""
-    records = read_jsonl(pairs_path, keep_undecodable=True)
+    records = corpus.read_records(pairs_path, keep_undecodable=True)
     kept: list[dict] = []
     removed = 0
     for rec in records:
@@ -268,7 +269,7 @@ def remove_pairs_for_source(pairs_path: Path, source: str) -> int:
         else:
             kept.append(rec)
     if removed:
-        write_jsonl_atomic(pairs_path, kept)
+        corpus.rewrite(pairs_path, kept)
     return removed
 
 
@@ -369,7 +370,7 @@ def capture_pairs(
             extra_meta=extra_meta,
             provenance=provenance,
         )
-        append_jsonl(pairs_path, record)
+        append_jsonl(corpus.shard_path_for(pairs_path, record), record)
         written.append(record)
     return written
 
@@ -593,9 +594,9 @@ def recut_archives(
     if not dry_run and records:
         kept = [
             rec
-            for rec in read_jsonl(pairs_path, keep_undecodable=True)
+            for rec in corpus.read_records(pairs_path, keep_undecodable=True)
             if (rec.get("meta", {}) if isinstance(rec, dict) else {}).get("capture_id")
             not in recut_ids
         ]
-        write_jsonl_atomic(pairs_path, kept + records)
+        corpus.rewrite(pairs_path, kept + records)
     return records

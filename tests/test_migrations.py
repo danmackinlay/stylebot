@@ -220,6 +220,7 @@ def test_data_group_is_hidden_from_the_help_tree():
         "migrate-captures",
         "prune-invented-anchors",
         "prune-stale",
+        "shard-pairs",
     }
 
 

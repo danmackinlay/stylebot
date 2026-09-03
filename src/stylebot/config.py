@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from stylebot import corpus
 from stylebot.errors import RunError
 
 #: The corpus directory's name under a project root, when nothing else says.
@@ -61,8 +62,21 @@ def pairs_path(data_dir: str | os.PathLike | None = None) -> Path:
     still hardcoded at `<blog-root>/_training_pairs`. Returned whether or not it
     exists; callers that treat an absent file as an empty corpus test for
     themselves.
+
+    **A corpus is one file or a directory of shards** (`stylebot.corpus`), and
+    this is the one place that decides which: `<data-dir>/pairs/` when that
+    directory is there, `<data-dir>/pairs.jsonl` otherwise. The sharded form is
+    opt-in by existing — nothing creates it but `ai-style data shard-pairs` —
+    so an install that never migrates keeps the single file forever and never
+    learns that shards are a thing. The directory is named so that
+    `pairs_path().parent` is the data dir under BOTH shapes, which is what the
+    eight `pairs_path.parent / "captures"`-style call sites rely on.
     """
-    return resolve_data_dir(data_dir) / DEFAULT_PAIRS_NAME
+    root = resolve_data_dir(data_dir)
+    sharded = root / corpus.PAIRS_DIR_NAME
+    if sharded.is_dir():
+        return sharded
+    return root / DEFAULT_PAIRS_NAME
 
 
 DEFAULT_SPLITS_NAME = "splits.json"

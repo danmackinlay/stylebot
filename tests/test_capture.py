@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from stylebot import capture
+from stylebot import capture, corpus
 from stylebot.errors import RunError
 from stylebot.jsonl import append_jsonl
 from stylebot.pairs import validate_pairs_file
@@ -170,7 +170,7 @@ def _capture(pairs_path, before, after, source):
 def test_recut_rederives_pairs_from_the_archive(tmp_path):
     pairs_path = tmp_path / "pairs.jsonl"
     _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")
-    assert len(capture.read_jsonl(pairs_path)) == 2  # default cut fragments
+    assert len(corpus.read_records(pairs_path)) == 2  # default cut fragments
 
     recut = capture.recut_archives(
         pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0
@@ -178,7 +178,7 @@ def test_recut_rederives_pairs_from_the_archive(tmp_path):
     assert len(recut) == 1  # bridged into one multi-paragraph pair
     assert recut[0]["meta"]["recut"] == {"gap_paras": 2, "gap_chars": 800}
     # The old fragmented pairs for this capture are gone, not stacked on.
-    on_disk = capture.read_jsonl(pairs_path)
+    on_disk = corpus.read_records(pairs_path)
     assert len(on_disk) == 1
     assert _KEPT in on_disk[0]["messages"][2]["content"]
 
@@ -188,9 +188,9 @@ def test_recut_is_idempotent(tmp_path):
     _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")
     kw = dict(coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0)
     capture.recut_archives(pairs_path, **kw)
-    first = capture.read_jsonl(pairs_path)
+    first = corpus.read_records(pairs_path)
     capture.recut_archives(pairs_path, **kw)
-    second = capture.read_jsonl(pairs_path)
+    second = corpus.read_records(pairs_path)
     assert len(first) == len(second) == 1
     assert first[0]["messages"] == second[0]["messages"]
 
@@ -214,7 +214,7 @@ def test_recut_leaves_unarchived_captures_alone(tmp_path):
     append_jsonl(pairs_path, legacy)
 
     capture.recut_archives(pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0)
-    ids = {r["meta"]["capture_id"] for r in capture.read_jsonl(pairs_path)}
+    ids = {r["meta"]["capture_id"] for r in corpus.read_records(pairs_path)}
     assert "deadbeef" in ids  # untouched
 
 
@@ -330,7 +330,7 @@ def test_hand_edited_archive_changes_what_recut_emits(tmp_path):
         encoding="utf-8",
     )
     capture.recut_archives(pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0)
-    targets = [r["messages"][2]["content"] for r in capture.read_jsonl(pairs_path)]
+    targets = [r["messages"][2]["content"] for r in corpus.read_records(pairs_path)]
     assert any("We dig in, properly." in t for t in targets)
 
 
@@ -341,7 +341,7 @@ def _ids_to_text(pairs_path) -> dict[str, str]:
     """`{record_id: target text}` for the corpus as it stands on disk."""
     from stylebot.eval import record_id
 
-    return {record_id(r): r["messages"][2]["content"] for r in capture.read_jsonl(pairs_path)}
+    return {record_id(r): r["messages"][2]["content"] for r in corpus.read_records(pairs_path)}
 
 
 def test_recut_does_not_reuse_the_previous_cuts_record_ids(tmp_path):

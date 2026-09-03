@@ -57,10 +57,80 @@ def migrate_captures_cmd(data_dir: Path, apply: bool) -> None:
     migrations.migrate_capture_archives(data_dir, apply=apply, log=click.echo)
 
 
-@main.command("prune-invented-anchors")
+@main.command("shard-pairs")
 @click.argument(
-    "pairs", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True
+    "data_dir", type=click.Path(exists=True, file_okay=False, path_type=Path), required=True
 )
+@click.option("--apply", is_flag=True, help="Actually write pairs/ (default: dry run).")
+@click.option(
+    "--keep-file/--remove-file",
+    default=False,
+    show_default=True,
+    help="With --apply, whether to leave the original pairs.jsonl in place. Removing it is "
+    "what makes the shards authoritative — `config.pairs_path` prefers pairs/ the moment it "
+    "exists, so a left-behind file is a stale copy nothing reads.",
+)
+def shard_pairs_cmd(data_dir: Path, apply: bool, keep_file: bool) -> None:
+    """Split `<data-dir>/pairs.jsonl` into the `<data-dir>/pairs/` shard layout.
+
+    One file becomes `captures.jsonl` plus one `synth-<YYYY-MM>.jsonl` per month
+    (`stylebot.corpus.shard_of` is the rule, and its docstring the argument).
+    Nothing else changes: same records, same order within a shard, same ids.
+
+    Committing a corpus means every append rewrites a whole blob, and git stores
+    each version at roughly its compressed size — measured on the blog,
+    2026-09-03: 122 versions of a 38 MB `pairs.jsonl`, 1.54 GB of a 1.8 GB
+    `.git`. Sharding makes the file a write TOUCHES small, which is the quantity
+    the commit count multiplies.
+
+    A one-off: run it once per corpus and never again. `config.pairs_path`
+    prefers `pairs/` from the moment it exists, so every reader and writer
+    follows without a flag.
+
+        uv run ai-style data shard-pairs _training_pairs --apply
+    """
+    from stylebot import corpus
+    from stylebot.jsonl import iter_jsonl
+
+    src = data_dir / "pairs.jsonl"
+    out = data_dir / corpus.PAIRS_DIR_NAME
+    if not src.exists():
+        raise click.ClickException(f"no {src} to shard")
+    if out.exists():
+        raise click.ClickException(f"{out} already exists — this corpus is already sharded")
+
+    counts: dict[str, int] = {}
+    total = 0
+    for rec in iter_jsonl(src, keep_undecodable=True):
+        total += 1
+        name = corpus.shard_of(rec)
+        counts[name] = counts.get(name, 0) + 1
+    click.echo(f"{src}: {total} record(s) -> {len(counts)} shard(s)")
+    for name, n in sorted(counts.items()):
+        click.echo(f"  {name:<26} {n:>6}")
+
+    if not apply:
+        click.echo("\ndry run — nothing written. Re-run with --apply to shard.")
+        return
+
+    written = corpus.shard_corpus(src, out)
+    round_tripped = sum(written.values())
+    if round_tripped != total:
+        raise click.ClickException(
+            f"round-trip mismatch: {total} in, {round_tripped} out — {out} left in place for "
+            "inspection, {src} untouched"
+        )
+    click.echo(f"\nwrote {round_tripped} record(s) -> {out}/")
+    if keep_file:
+        click.echo(f"left {src} in place; NOTHING READS IT NOW — delete it once you have checked")
+    else:
+        src.unlink()
+        click.echo(f"removed {src} (the shards are the corpus now)")
+    click.echo("next: `ai-style validate-pairs <data-dir>/pairs` to confirm 0 problems.")
+
+
+@main.command("prune-invented-anchors")
+@click.argument("pairs", type=click.Path(exists=True, path_type=Path), required=True)
 @click.option("--apply", is_flag=True, help="Rewrite pairs.jsonl (default: dry run).")
 @click.option(
     "--include-real",
@@ -156,9 +226,7 @@ def _echo_composition(label: str, comp: dict) -> None:
 
 
 @main.command("prune-stale")
-@click.argument(
-    "pairs", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True
-)
+@click.argument("pairs", type=click.Path(exists=True, path_type=Path), required=True)
 @click.option(
     "--blog-root",
     type=click.Path(exists=True, file_okay=False, path_type=Path),

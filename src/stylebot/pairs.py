@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
+from stylebot import corpus
 from stylebot.ai_core import STYLE_SYSTEM
-from stylebot.jsonl import iter_jsonl, read_jsonl, write_jsonl_atomic
 from stylebot.provenance import PROVENANCE_KEYS
 
 #: The `meta.schema_version` stamped on every record written from now on.
@@ -437,12 +437,19 @@ def validate_pair_record(rec: object) -> list[str]:
 
 def validate_pairs_file(
     path: str | Path, *, check_duplicates: bool = True
-) -> list[tuple[int, list[str]]]:
-    """Validate every line of a `pairs.jsonl`, and the file-level uniqueness rule.
+) -> list[tuple[int | str, list[str]]]:
+    """Validate every line of a corpus, and the corpus-level uniqueness rule.
 
-    Returns a list of `(line_number, errors)` for each invalid line (1-based,
-    skipping blank lines). An empty result means the whole file is valid.
-    Unparseable JSON is reported as a single error for that line.
+    Returns a list of `(location, errors)` for each invalid line. An empty
+    result means the whole corpus is valid. Unparseable JSON is reported as a
+    single error for that line.
+
+    `location` is a 1-based line number (blank lines skipped) for a single-file
+    corpus, and `"<shard>.jsonl:<line>"` for a sharded one — a global line
+    number over a concatenation of thirteen files would name a line nobody can
+    open. **Uniqueness is checked across the whole corpus, not per shard**,
+    which is the point of doing it here: two shards are one id space, and a
+    duplicate that straddles them is exactly the one a per-file check misses.
 
     **`record_id` uniqueness is a property of the FILE, not of a record**, so it
     is checked here and nowhere else. A repeat is reported against the *later*
@@ -455,28 +462,35 @@ def validate_pairs_file(
     `check_duplicates=False` for a partial file (a shard, a `--limit` slice)
     where the id space is legitimately shared with lines you are not looking at.
     """
-    path = Path(path)
-    problems: list[tuple[int, list[str]]] = []
-    first_seen: dict[str, int] = {}
-    with path.open(encoding="utf-8") as fp:
-        for lineno, line in enumerate(fp, start=1):
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError as exc:
-                problems.append((lineno, [f"invalid JSON: {exc}"]))
-                continue
-            errs = validate_pair_record(rec)
-            if check_duplicates and isinstance(rec, dict) and isinstance(rec.get("meta"), dict):
-                rid = record_id(rec)
-                if rid in first_seen:
-                    errs.append(f"duplicate record_id {rid!r} (first seen line {first_seen[rid]})")
-                else:
-                    first_seen[rid] = lineno
-            if errs:
-                problems.append((lineno, errs))
+    shards = corpus.shard_paths(path)
+    sharded = len(shards) > 1 or corpus.is_sharded(path)
+    problems: list[tuple[int | str, list[str]]] = []
+    first_seen: dict[str, int | str] = {}
+    for shard in shards:
+        if not shard.exists():
+            continue
+        with shard.open(encoding="utf-8") as fp:
+            for lineno, line in enumerate(fp, start=1):
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                where: int | str = f"{shard.name}:{lineno}" if sharded else lineno
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    problems.append((where, [f"invalid JSON: {exc}"]))
+                    continue
+                errs = validate_pair_record(rec)
+                if check_duplicates and isinstance(rec, dict) and isinstance(rec.get("meta"), dict):
+                    rid = record_id(rec)
+                    if rid in first_seen:
+                        errs.append(
+                            f"duplicate record_id {rid!r} (first seen line {first_seen[rid]})"
+                        )
+                    else:
+                        first_seen[rid] = where
+                if errs:
+                    problems.append((where, errs))
     return problems
 
 
@@ -511,12 +525,14 @@ def dedupe_pairs_file(
     Only one of them is the corpus's answer for that cell; the file order says
     which.
 
-    Dry-run by default. `apply` rewrites the file atomically, keeping a `.bak`
-    beside it unless `backup=False`; unparseable lines are round-tripped
-    verbatim rather than dropped (`iter_jsonl(keep_undecodable=True)`).
+    Dry-run by default. `apply` rewrites atomically, keeping a `.bak` beside the
+    corpus unless `backup=False` — `<corpus>.bak` for a single file, a
+    `<corpus>.bak/` directory of shard copies for a sharded one. Unparseable
+    lines are round-tripped verbatim rather than dropped
+    (`iter_jsonl(keep_undecodable=True)`).
     """
     path = Path(path)
-    records = read_jsonl(path, keep_undecodable=True)
+    records = corpus.read_records(path, keep_undecodable=True)
     report = DedupeReport(total=len(records))
     first_line: dict[str, int] = {}
     kept: list[dict] = []
@@ -535,20 +551,42 @@ def dedupe_pairs_file(
     report.duplicate_ids = len({rid for rid, _, _ in report.drops})
     if apply and report.dropped:
         if backup:
-            bak = path.with_suffix(path.suffix + ".bak")
-            bak.write_bytes(path.read_bytes())
-            report.backup = bak
-        write_jsonl_atomic(path, kept)
+            report.backup = backup_corpus(path)
+        corpus.rewrite(path, kept)
         report.applied = True
     return report
 
 
+def backup_corpus(path: str | Path) -> Path:
+    """Copy a corpus aside before a destructive rewrite. Returns the backup path.
+
+    `<corpus>.bak` for a single file — the shape every migration script and
+    `--fix` has always left. For a sharded corpus it is a `<corpus>.bak/`
+    directory holding a copy of each shard, rather than one concatenated file,
+    so restoring is `cp` and not a re-shard.
+    """
+    path = Path(path)
+    if not path.is_dir():
+        bak = path.with_suffix(path.suffix + ".bak")
+        bak.write_bytes(path.read_bytes())
+        return bak
+    bak_dir = path.with_name(path.name + ".bak")
+    bak_dir.mkdir(parents=True, exist_ok=True)
+    for shard in corpus.shard_paths(path):
+        (bak_dir / shard.name).write_bytes(shard.read_bytes())
+    return bak_dir
+
+
 def iter_pairs(path: str | Path) -> Iterator[dict]:
-    """Yield each JSON object from a `pairs.jsonl`, one per non-blank line.
+    """Yield every pair record in a corpus, one per non-blank line.
+
+    `path` is a `pairs.jsonl` **or a shard directory** (`stylebot.corpus`); this
+    is the seam that makes every reader in the package sharding-agnostic, since
+    all of them come through here. Shards are read in `shard_paths` order.
 
     Tolerant (`stylebot.jsonl` under the hood: UTF-8, blank / undecodable /
     non-object lines skipped, missing file yields nothing). Yields the raw
     parsed dict; callers validate with `validate_pair_record` if they need the
     contract enforced.
     """
-    yield from iter_jsonl(path)
+    yield from corpus.iter_records(path)

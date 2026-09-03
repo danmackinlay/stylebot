@@ -70,9 +70,11 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
   data`**, a hidden group: absent from `ai-style --help`, documented under
   `ai-style data --help`, and nameable by any error message or runbook step.
   Current membership: `migrate-captures` (the only path off the legacy
-  `captures/<id>.json` blobs) and `prune-invented-anchors` (the corpus that
-  predates `--drop-invented-anchors`). Both dry-run by default and need
-  `--apply`; the prune keeps a `.bak`; both carry a test in
+  `captures/<id>.json` blobs), `prune-invented-anchors` (the corpus that
+  predates `--drop-invented-anchors`), `prune-stale` (W12's orphan and
+  eval-contamination cull) and `shard-pairs` (the one-way move from a single
+  `pairs.jsonl` to the `pairs/` shard directory, D50). All dry-run by default
+  and need `--apply`; the prunes keep a `.bak`; all carry a test in
   `tests/test_migrations.py` — the claim that both were tested was made here
   while only one of them was, which is the sort of drift a directory outside the
   package makes easy. A migration is deleted once the only corpus that exists
@@ -125,7 +127,7 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
 - The **corpus** never enters **this repo** (`$STYLEBOT_DATA_DIR`, default
   `_training_pairs/` — gitignored except its README): stylebot is public
   tooling. The real corpus lives in the livingthing repo, where it *is*
-  committed (`_training_pairs/pairs.jsonl`, since 2026-07, for portability) —
+  committed (`_training_pairs/pairs/`, since 2026-07, for portability) —
   that's the backup story. The rule here is about *this* repo, not the data.
 - **Secrets.** Keys reach the process as ordinary environment variables; Dan's
   come from direnv (`direnv exec ~/Source/livingthing uv run ai-style …`).
@@ -135,14 +137,15 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
   the checkout's neighbourhood rather than the directory you ran from.
 
 Sanity-check before any commit in stylebot: `git status` must never show
-`.env` / `.envrc` or `pairs.jsonl`.
+`.env` / `.envrc`, a `pairs.jsonl`, or a `pairs/` directory.
 
 ## Validating corpus data
 
-`stylebot.pairs.validate_pairs_file(path)` checks a `pairs.jsonl` against the
-Phase 1 schema contract: roles, frozen system prompt, required `meta`, the
-types and domains of every meta key it knows, and **`record_id` uniqueness
-across the whole file**. Run it as the done-criteria gate for Phase 2 output and
+`stylebot.pairs.validate_pairs_file(path)` checks a corpus — a `pairs.jsonl`
+**or a `pairs/` shard directory** (`stylebot.corpus`, D50) — against the Phase 1
+schema contract: roles, frozen system prompt, required `meta`, the types and
+domains of every meta key it knows, and **`record_id` uniqueness across the
+whole corpus, every shard together**. Run it as the done-criteria gate for Phase 2 output and
 the Phase 3 input check; `ai-style validate-pairs PAIRS [--fix]` is the same
 thing on demand, `--fix` dropping duplicate cells (first occurrence wins).
 
@@ -169,9 +172,10 @@ The data-heavy phases need the prose corpus. Wired in against Dan's live blog:
       touched a post — `0` = pure human (1591 posts), `1` (58), `2` (61).
       `automation: 0` is the slop-free target prose. Auxiliary posts carry
       `type: digest`/`about` (see `livingthing.lib.is_auxiliary_post`).
-- [x] Where the **already-captured** `pairs.jsonl` lives:
-      `~/Source/livingthing/_training_pairs/pairs.jsonl` (254 records as of
-      2026-06-27, validates clean). Point downstream phases at it with
+- [x] Where the **already-captured** corpus lives:
+      `~/Source/livingthing/_training_pairs/pairs/` (a shard directory since
+      2026-09-03; a single `pairs.jsonl` before that, and still the default
+      shape for anyone who has not migrated). Point downstream phases at it with
       `STYLEBOT_DATA_DIR=~/Source/livingthing/_training_pairs` (or
       `--data-dir`).
 - [x] `is_human_authored` defaults (`field="automation"`, `max_level=0`) match

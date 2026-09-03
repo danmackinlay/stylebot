@@ -38,9 +38,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from stylebot import capture, config
+from stylebot import capture, config, corpus
 from stylebot.errors import ConfigError, RunError
-from stylebot.jsonl import read_jsonl, write_jsonl_atomic
 
 __all__ = [
     "Disposition",
@@ -319,7 +318,7 @@ def read_pairs(store: SessionStore) -> list[dict]:
     (`stylebot.jsonl.write_jsonl_atomic`) round-trips them instead of silently
     dropping them.
     """
-    return read_jsonl(store.pairs_path, keep_undecodable=True)
+    return corpus.read_records(store.pairs_path, keep_undecodable=True)
 
 
 @dataclass(frozen=True)
@@ -568,7 +567,7 @@ def save_session(
         raise ValueError(f"unknown disposition {disposition!r}")
 
     if len(records_to_keep) != len(all_records):
-        write_jsonl_atomic(store.pairs_path, records_to_keep)
+        corpus.rewrite(store.pairs_path, records_to_keep)
 
     # Report disposition before the save line.
     if disposition == "smart" and prior.same_session:
@@ -793,7 +792,7 @@ def tidy_pairs(
 
     applied = bool(removed) and not dry_run
     if applied:
-        write_jsonl_atomic(store.pairs_path, kept)
+        corpus.rewrite(store.pairs_path, kept)
     return TidyResult(kept=kept, removed=removed, empty=False, applied=applied)
 
 

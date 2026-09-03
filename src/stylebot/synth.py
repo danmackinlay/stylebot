@@ -23,11 +23,10 @@ import json
 import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from stylebot import config
+from stylebot import config, corpus
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.generators import (
     DEFAULT_REASONING_EFFORT,
@@ -561,7 +560,13 @@ class _RunState:
 
 
 class PairsWriter:
-    """An append handle for `pairs.jsonl` that will not duplicate a cell.
+    """An append handle for a corpus that will not duplicate a cell.
+
+    Takes a `pairs.jsonl` **or a shard directory** (`stylebot.corpus`). Each
+    record is routed to its own shard by `corpus.shard_of`, so a run appends
+    only to the current month's file and leaves every other shard byte-identical
+    — which is the property that makes `git diff --stat` after a synth run name
+    one file. Handles are opened lazily and kept, one per shard touched.
 
     **The defect this exists for.** `synthesize_pairs` loads
     `existing_synth_keys` once, plans, and appends with a bare `fp.write`. Two
@@ -583,75 +588,96 @@ class PairsWriter:
     processes *and* two handles in one process, and costs nothing when there is
     only one writer. Platforms without `fcntl` (Windows) degrade to the
     unlocked-but-still-tail-checking path rather than failing to write.
+
+    **Sharding does not reopen that hole.** The lock is `corpus.corpus_lock` —
+    one file for the whole corpus, not one per shard — and the catch-up reads
+    the tail of *every* shard, so two processes appending to different months
+    still serialise and still see each other's keys. Locking each shard
+    separately would have let two runs either side of a month boundary write the
+    same cell twice, which is precisely the 2026-08-12 defect wearing a hat.
     """
 
     def __init__(self, path: Path, seen: set[str]) -> None:
         self._path = Path(path)
         self._seen = seen
-        self._offset = 0
-        self._fp = None
+        self._offsets: dict[Path, int] = {}
+        self._handles: dict[Path, object] = {}
+        self._open = False
 
     def __enter__(self) -> PairsWriter:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        # BINARY "ab+", not text mode, for two reasons that both bite silently:
-        # a text handle raises on `tell()` after line iteration, and its `seek`
-        # takes an opaque cookie rather than a byte offset. Encoding one JSON
-        # line by hand is the cheaper half of that trade.
-        self._fp = self._path.open("ab+")
-        self._fp.seek(0, 2)
-        self._offset = self._fp.tell()
+        if self._path.is_dir():
+            self._path.mkdir(parents=True, exist_ok=True)
+        else:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+        for shard in corpus.shard_paths(self._path):
+            self._offsets[shard] = shard.stat().st_size if shard.exists() else 0
+        self._open = True
         return self
 
     def __exit__(self, *exc) -> None:
-        if self._fp is not None:
-            self._fp.close()
-            self._fp = None
+        for fp in self._handles.values():
+            fp.close()
+        self._handles.clear()
+        self._open = False
+
+    def _handle(self, shard: Path):
+        """The append handle for one shard, opened on first use."""
+        fp = self._handles.get(shard)
+        if fp is None:
+            # BINARY "ab+", not text mode, for two reasons that both bite
+            # silently: a text handle raises on `tell()` after line iteration,
+            # and its `seek` takes an opaque cookie rather than a byte offset.
+            # Encoding one JSON line by hand is the cheaper half of that trade.
+            fp = shard.open("ab+")
+            self._handles[shard] = fp
+            self._offsets.setdefault(shard, 0)
+        return fp
 
     def _catch_up(self) -> None:
-        """Fold every synth_key appended by anyone since our last look into `seen`."""
-        fp = self._fp
-        fp.seek(self._offset)
-        tail = fp.read()
-        self._offset = fp.tell()
-        for raw in tail.split(b"\n"):
-            if not raw.strip():
+        """Fold every synth_key appended by anyone since our last look into `seen`.
+
+        Across every shard, not just the one about to be written: a cell's key
+        does not know which month it landed in, so a per-shard catch-up would
+        answer "not seen" for a key another writer had just put in a neighbour.
+        The read is a tail from a remembered byte offset, so the cost is what was
+        appended since the last write, not the 38 MB corpus.
+        """
+        for shard in corpus.shard_paths(self._path):
+            size = shard.stat().st_size if shard.exists() else 0
+            start = self._offsets.get(shard, 0)
+            if size <= start:
+                self._offsets[shard] = size
                 continue
-            try:
-                rec = json.loads(raw.decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                continue
-            key = (rec.get("meta") or {}).get("synth_key") if isinstance(rec, dict) else None
-            if key:
-                self._seen.add(key)
+            with shard.open("rb") as fp:
+                fp.seek(start)
+                tail = fp.read()
+                self._offsets[shard] = fp.tell()
+            for raw in tail.split(b"\n"):
+                if not raw.strip():
+                    continue
+                try:
+                    rec = json.loads(raw.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                key = (rec.get("meta") or {}).get("synth_key") if isinstance(rec, dict) else None
+                if key:
+                    self._seen.add(key)
 
     def write(self, key: str, record: dict) -> bool:
-        """Append `record` unless `key` is already in the file. True if written."""
-        fp = self._fp
-        with _flock(fp):
+        """Append `record` to its shard unless `key` is already in the corpus."""
+        shard = corpus.shard_path_for(self._path, record)
+        with corpus.corpus_lock(self._path):
             self._catch_up()
             if key and key in self._seen:
                 return False
+            fp = self._handle(shard)
+            fp.seek(0, 2)
             fp.write((dumps_line(record) + "\n").encode("utf-8"))
             fp.flush()
-            self._offset = fp.tell()
+            self._offsets[shard] = fp.tell()
             if key:
                 self._seen.add(key)
         return True
-
-
-@contextmanager
-def _flock(fp):
-    """Exclusive advisory lock on `fp` for the block, a no-op without `fcntl`."""
-    try:
-        import fcntl
-    except ImportError:  # pragma: no cover — non-POSIX
-        yield
-        return
-    fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
-    try:
-        yield
-    finally:
-        fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
 
 
 def _session_token_cap(
