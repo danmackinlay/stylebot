@@ -101,33 +101,26 @@ def _blocks_with_separators(
     Leading/trailing blank runs stay attached to their neighbouring block, and
     `block_kinds[i]` is the per-line kind list of `blocks[i].split("\\n")`.
 
-    The fence STATE MACHINE runs alongside the mask and is not redundant with
-    it: `markdown.CODE_FENCE_RE` needs a closer, so an unclosed fence yields no
-    span at all, and only the state machine's run-to-EOF behaviour keeps a
-    runaway fence out of the styler's hands.
+    The mask is the WHOLE of the protection here. A line-wise fence state
+    machine used to run alongside it, because `markdown.CODE_FENCE_RE` needed a
+    closer and an unclosed fence therefore yielded no span: inference swallowed
+    a runaway fence and `editable_prose` — hence every training target — did
+    not. `CODE_FENCE_RE` now carries the run-to-EOF alternative itself, so both
+    sides read the same answer off `line_kinds` and the state machine is gone
+    (W2, 2026-09-03).
     """
     if not body:
         return [], [], []
-    # Segment lines into alternating runs: content (any line inside a fence or
-    # other protected block, or non-blank outside) vs separator (blank,
-    # unprotected lines).
+    # Segment lines into alternating runs: content (any protected line, or a
+    # non-blank unprotected one) vs separator (blank, unprotected lines).
     runs: list[tuple[bool, list[str], list[str | None]]] = []  # (is_sep, lines, kinds)
-    fence: str | None = None
-    for line, mask in zip(body.split("\n"), kinds, strict=True):
-        opener = markdown.FENCE_OPEN_RE.match(line)
-        in_fence = fence is not None or opener is not None
-        kind = mask if mask is not None else (markdown.FENCE if in_fence else None)
-        is_sep = not in_fence and kind is None and not line.strip()
+    for line, kind in zip(body.split("\n"), kinds, strict=True):
+        is_sep = kind is None and not line.strip()
         if runs and runs[-1][0] == is_sep:
             runs[-1][1].append(line)
             runs[-1][2].append(kind)
         else:
             runs.append((is_sep, [line], [kind]))
-        if not is_sep:
-            if fence is None and opener:
-                fence = opener.group("fence")
-            elif fence is not None and line.strip().startswith(fence):
-                fence = None
     # Fold a leading separator into the first block, a trailing one into the last.
     if runs and runs[0][0]:
         if len(runs) == 1:
@@ -490,10 +483,12 @@ def rewrite_candidates(
     nothing selected is not too much selected.
 
     Under `inline_headings` (the cross-heading diet) a selection MAY span
-    headings. Protected blocks still raise: they are absent from the corpus in
-    both diets, so the styler has never learned to reproduce one and would be
-    free to mangle it — and a styler quietly rewording somebody else's quoted
-    words is the worst outcome this package has.
+    headings, and **any `context` the caller passes is ignored** — those pairs
+    carry their headings as content and record no `meta.context`, so a heading
+    prefix is out of distribution. Protected blocks still raise: they are absent
+    from the corpus in both diets, so the styler has never learned to reproduce
+    one and would be free to mangle it — and a styler quietly rewording somebody
+    else's quoted words is the worst outcome this package has.
 
     Returns `{"input_score": float|None, "n_sampled": int,
               "candidates": [{"text", "score", "anchors_lost", "anchors_gained",
@@ -505,6 +500,16 @@ def rewrite_candidates(
     """
     from stylebot.pairs import build_pair_content, pair_body
 
+    # Defect A4, the editor half. `rewrite_text` has gated `context` on
+    # `inline_headings` since the cross-heading diet landed — those pairs carry
+    # headings as CONTENT and record no `meta.context` at all, so prepending one
+    # is a prefix training never saw. This seam did not, and it is the one that
+    # is live: the VS Code extension sends `headingAbove` on every request and
+    # the promoted run is cross-heading, so every editor rewrite was getting the
+    # prefix. Dropped here rather than in the caller because the caller is an
+    # editor extension in another language, and the rule belongs to the diet.
+    if inline_headings:
+        context = None
     frontmatter, body = split_frontmatter(text)
     if frontmatter:
         raise ValueError("selection includes YAML frontmatter — select prose only")

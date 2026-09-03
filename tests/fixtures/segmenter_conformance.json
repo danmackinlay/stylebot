@@ -1,6 +1,6 @@
 {
   "fixture": "segmenter_conformance.qmd",
-  "fixture_sha256": "4c8fe2881a7c79aa29e748e36f5c005dad9c86bd65215a90f5c84a430b5489fb",
+  "fixture_sha256": "fb7bb1c372ca1e095c3be92b22c16e7d70f22eb372bc95f2dc637d5d953d3265",
   "configurations": {
     "stylebot": {
       "block_only": true,
@@ -178,6 +178,16 @@
       "start": 1732,
       "end": 1762,
       "protected_in": []
+    },
+    {
+      "name": "unclosed_fence",
+      "needle": "an unclosed fence runs to end of document",
+      "start": 1801,
+      "end": 1842,
+      "protected_in": [
+        "stylebot",
+        "livingthing"
+      ]
     }
   ],
   "spans": {
@@ -235,6 +245,12 @@
         "end": 1600,
         "kind": "blockquote",
         "text": "  > And a quoted line, indented, which is not a blockquote of the author's.\n"
+      },
+      {
+        "start": 1764,
+        "end": 1844,
+        "kind": "fence",
+        "text": "```python\ndef runaway():\n    return \"an unclosed fence runs to end of document\"\n"
       }
     ],
     "livingthing": [
@@ -315,6 +331,12 @@
         "end": 1686,
         "kind": "html_comment",
         "text": "<!-- A trailing comment, opened mid-line. -->"
+      },
+      {
+        "start": 1764,
+        "end": 1844,
+        "kind": "fence",
+        "text": "```python\ndef runaway():\n    return \"an unclosed fence runs to end of document\"\n"
       }
     ]
   }

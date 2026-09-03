@@ -56,10 +56,32 @@ def test_protected_spans_label_each_construct():
     assert _kinds(doc) == [md.FENCE, md.MATH, md.BLOCKQUOTE, md.DIV]
 
 
-def test_unclosed_fence_yields_no_span():
-    # CODE_FENCE_RE needs a closer; consumers that must swallow a runaway fence
-    # keep their own state machine (infer._blocks_with_separators).
-    assert md.protected_spans("p\n\n```py\nnever closed\n") == []
+def test_unclosed_fence_runs_to_end_of_document():
+    # CommonMark: an unclosed fence's block "contains all of the lines after
+    # the opening fence". This lived in `infer._blocks_with_separators` as a
+    # separate state machine until 2026-09-03, so inference swallowed a runaway
+    # fence and `editable_prose` — every training target — did not.
+    doc = "p\n\n```py\nnever closed\n"
+    assert md.protected_spans(doc) == [(3, len(doc), md.FENCE)]
+
+
+def test_a_closed_fence_still_stops_at_its_closer():
+    # The run-to-EOF branch is an alternative of last resort: the closed form is
+    # tried first and its search is lazy, so nothing about a normal fence moves.
+    doc = "p\n\n```py\nx\n```\n\ntail\n"
+    assert md.protected_spans(doc) == [(3, 15, md.FENCE)]
+
+
+def test_a_four_backtick_fence_can_close_itself():
+    # The opener takes a bare three then `.*?$`, so ```` opens; the closer takes
+    # `{3,}` so it also CLOSES. With a bare-three closer it could not, and the
+    # fence ran to the end of the document instead — measured live in
+    # notebook/quarto.qmd, where one span overran by 999 chars and swallowed
+    # three callout divs.
+    doc = "p\n\n````markdown\n{{< include x.md >}}\n````\n\ntail\n"
+    spans = md.protected_spans(doc)
+    assert [k for _s, _e, k in spans] == [md.FENCE]
+    assert doc[spans[0][0] : spans[0][1]] == "````markdown\n{{< include x.md >}}\n````\n"
 
 
 def test_unclosed_div_yields_no_span():

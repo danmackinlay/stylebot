@@ -54,6 +54,19 @@ Callout prose paragraph two, still the author's voice.
 Trailing callout prose after the nested figure.
 :::
 
+A paragraph before a protected block, which training packs across.
+
+::: {#fig-packing}
+![](packing.png)
+:::
+
+A paragraph after it: TRAINING joins these two into one target once the figure
+is deleted, while inference sends them as two chunks. The packing-parity case.
+
 The closing paragraph of the document.
 
 ::: an-opener-that-is-never-closed
+
+```python
+def runaway():
+    return "an unclosed fence runs to end of document"

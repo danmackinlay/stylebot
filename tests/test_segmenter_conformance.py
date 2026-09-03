@@ -1,20 +1,29 @@
-"""The cross-implementation segmenter spec — stylebot's side of it.
+"""What the two named segmenter configurations mean, written down.
 
-`livingthing.qmd_core.segment_for_edit` is a **permanent** second implementation
-of `stylebot.markdown`: livingthing is making stylebot an optional dependency,
-so its blog-core editing path has to segment markdown with stylebot uninstalled.
-The duplication cannot be deleted, so it is pinned instead. This is the same
-idiom as `tests/test_marker_segmentation.py`, which pins the TypeScript port in
-the VS Code marker: one shared fixture, one checked-in expectation, asserted
-from both languages.
+This began as a *cross-implementation* spec: `livingthing.qmd_core` carried a
+second implementation, because stylebot was reachable only through an optional
+extra, and both repos asserted their own segmenter against one copied fixture
+with a `fixture_sha256` gate. That ended on 2026-09-03 (W3) — bare stylebot
+became a hard blog dependency, `segment_for_edit` became a thin call to
+`markdown.protected_spans`, and the blog's copy of these two files went with the
+duplication (stylebot `_plans/decisions.md` D28, superseded).
+
+**What is left is not a transcript, and the distinction is the point.** The
+`stylebot` and `livingthing` rows are not two runs of the same code; they are the
+two *policies* D29 says must stay expressible as keyword arguments rather than as
+forked code. Only one of them is exercised by anything else in this repo, so
+without this file the blog's configuration would be pinned by nothing at all —
+and `qmd_core` is the blog's editing path, `format-sentences` included. What the
+JSON records is which constructs each policy protects and where the two diverge;
+what it is for is making a change to either one arrive as a reviewable diff.
 
 **The artefacts.** `fixtures/segmenter_conformance.qmd` is the document;
-`fixtures/segmenter_conformance.json` is the expectation. Both are copied into
-the consuming repo, which asserts its own segmenter against the same JSON —
-hence `fixture_sha256`, so a stale copy of the document fails loudly instead of
-disagreeing subtly.
+`fixtures/segmenter_conformance.json` is the expectation. The `fixture_sha256`
+survives the deletion of the second copy for a smaller reason than it was added
+for: the document is a `.qmd` under `tests/`, and a blog-side frontmatter
+stamper walked into it twice (`128308fa55`, `2815a291fc`).
 
-**Two named configurations, because the two sides legitimately differ.**
+**Two named configurations, because the two callers legitimately differ.**
 
     stylebot     block_only=True,  raw_html=False
     livingthing  block_only=False, raw_html=True
@@ -28,19 +37,17 @@ here by `stylebot.markdown.protected_spans` alone — that is the point of the
 `raw_html` parameter, and it is what makes this file a spec rather than a
 transcript of one implementation's habits.
 
-**What a mismatch means.** A failure here is *drift*: the two implementations no
-longer agree about what a rewrite must never be handed. The consequence is
-silent — an editor quietly rewording somebody else's quoted words, or reflowing
-a `<script>` into a syntax error, looks like a successful edit. Do not
-regenerate the JSON to make a red test green.
+**What a mismatch means.** A failure here says what a rewrite may be handed has
+moved, in one repo or both. The consequence is silent — an editor quietly
+rewording somebody else's quoted words, or reflowing a `<script>` into a syntax
+error, looks like a successful edit — and it now moves the *training corpus* as
+well (`livingthing/tests/test_corpus_stability.py` is the other half of that
+answer). Do not regenerate the JSON to make a red test green.
 
 **When the change is deliberate**, `STYLEBOT_REGEN_SEGMENTS=1 uv run pytest
 tests/test_segmenter_conformance.py` rewrites the JSON — and the regenerated
 fixture belongs in the *same commit* as the policy change, so review sees the
-segmentation move next to the reason for it. Then re-run the other side.
-
-Consumers with no per-kind labels (livingthing's segmenter returns only
-``(text, editable)``) assert on ``start``/``end`` and ignore ``kind``.
+segmentation move next to the reason for it. Never edit the JSON by hand.
 """
 
 from __future__ import annotations
@@ -98,6 +105,7 @@ CASES: list[tuple[str, str]] = [
     ("html_comment_midline", "A trailing comment, opened mid-line."),
     ("prose_between_comments", "which must stay prose"),
     ("unclosed_div", "an-opener-that-is-never-closed"),
+    ("unclosed_fence", "an unclosed fence runs to end of document"),
 ]
 
 
@@ -292,7 +300,26 @@ def test_the_headings_are_not_swallowed_by_any_span(doc: str):
 
 
 def test_the_unclosed_div_protects_nothing(doc: str):
+    """A `:::` opener with no closer yields no span — the opposite of a fence.
+
+    Deliberately opposite, and both readings are pandoc's: a div's contents are
+    markdown that renders the same either way, so over-protecting to EOF would
+    cost the rest of the post for nothing, while an unclosed fence's contents
+    ARE code to the end of the document and a rewrite would destroy them.
+    """
+    opener = doc.index("::: an-opener-that-is-never-closed")
     for name in CONFIGURATIONS:
         spans = spans_for(doc, name)
         assert not _covered(spans, doc.index("an-opener"), len(doc))
-        assert spans[-1][1] < doc.index("::: an-opener-that-is-never-closed")
+        # Nothing covers the opener line itself. (Something does start *after*
+        # it — the unclosed fence below, which runs to EOF on its own merits.)
+        assert not any(s <= opener < e for s, e, _k in spans)
+
+
+def test_the_unclosed_fence_runs_to_end_of_document(doc: str):
+    runaway = doc.index("an unclosed fence runs to end of document")
+    for name in CONFIGURATIONS:
+        span = next(sp for sp in spans_for(doc, name) if sp[0] <= runaway < sp[1])
+        assert span[2] == md.FENCE, name
+        assert span[1] == len(doc), name
+        assert doc[span[0] :].startswith("```python\n"), name

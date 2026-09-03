@@ -27,6 +27,7 @@ from stylebot.lib import (
     gather_qmd_files,
     is_human_authored,
     read_w_frontmatter_text,
+    segment_for_edit,
     split_paragraphs,
 )
 from stylebot.markdown import DivIsProse, heading_title, is_heading_line
@@ -179,6 +180,11 @@ class ChunkPolicy:
         help="Pack across section boundaries with headings as chunk content (needs --merge; "
         "overrides --heading-context). This, not --merge-max-chars, is what buys chunk length.",
     )
+    # Library-only, and the one field here that is a *train/serve contract*
+    # rather than a hygiene knob. See `_prose_for_chunking` for what it does and
+    # `_plans/decisions.md` D27 (amended 2026-09-03) for why it defaults to the
+    # behaviour that does NOT match inference.
+    pack_across_protected: bool = True
     # Library-only, no flag. Target ORDER cannot change the corpus — arms are
     # assigned by content hash, so a chunk gets the same generator wherever it
     # sits in the list — which left `--sort` affecting only which chunks
@@ -338,6 +344,43 @@ def _split_sections(text: str) -> list[tuple[str, str]]:
     return sections
 
 
+#: Stands in for a deleted protected block while a post is being chunked, so
+#: packing can see where one was. Never reaches a target: `_pack` flushes on it
+#: and the unmerged path skips it. NUL-delimited because prose cannot contain it.
+PROTECTED_MARK = "\x00stylebot:protected\x00"
+
+
+def _prose_for_chunking(body: str, policy: ChunkPolicy) -> str:
+    """The text `_post_targets` chunks — protected blocks gone, one way or another.
+
+    Two spellings of "gone", and the difference is the train/serve packing
+    contract (D27, amended 2026-09-03):
+
+    - `pack_across_protected=True` (the default, and what the live corpus was
+      cut under): `editable_prose` — every protected span deleted and the
+      remnants **joined**. Paragraphs either side of a figure become adjacent,
+      so `_pack_paragraphs` packs them into one target. That target is a passage
+      the document does not contain, and `infer._segment` therefore cannot ever
+      present it: it breaks a run at every protected item.
+    - `pack_across_protected=False`: each span is replaced by `PROTECTED_MARK`,
+      which survives as its own paragraph and flushes the packer. Targets then
+      have the same boundaries inference does.
+
+    The mark rather than a list of runs, because `_split_sections` and
+    `Target.context` both need the heading structure of the *whole* body: a
+    protected block that interrupts a section must end a packed passage without
+    also losing the heading the rest of that section sits under.
+    """
+    if not policy.prose_only:
+        return body
+    if policy.pack_across_protected:
+        return editable_prose(body, div_is_prose=policy.div_is_prose)
+    return "".join(
+        seg if editable else f"\n\n{PROTECTED_MARK}\n\n"
+        for seg, editable in segment_for_edit(body, div_is_prose=policy.div_is_prose)
+    )
+
+
 def _pack_paragraphs(paras: Sequence[str], *, merge_max_chars: int) -> list[str]:
     """Greedily pack consecutive paragraphs into blocks up to a soft budget.
 
@@ -360,6 +403,25 @@ def _pack_paragraphs(paras: Sequence[str], *, merge_max_chars: int) -> list[str]
     return blocks
 
 
+def _pack(units: Sequence[str], *, merge_max_chars: int) -> list[str]:
+    """`_pack_paragraphs`, flushing at every `PROTECTED_MARK`.
+
+    Identical to `_pack_paragraphs` when no mark is present, which is every call
+    under the default policy — `_prose_for_chunking` only emits marks when
+    `pack_across_protected` is off.
+    """
+    blocks: list[str] = []
+    group: list[str] = []
+    for unit in units:
+        if unit == PROTECTED_MARK:
+            blocks.extend(_pack_paragraphs(group, merge_max_chars=merge_max_chars))
+            group = []
+        else:
+            group.append(unit)
+    blocks.extend(_pack_paragraphs(group, merge_max_chars=merge_max_chars))
+    return blocks
+
+
 def _post_targets(
     body: str, source: str, policy: ChunkPolicy, *, meta: dict | None = None
 ) -> list[Target]:
@@ -378,7 +440,7 @@ def _post_targets(
     body = _truncate_at_headers(body, policy.stop_at_headers)
     # Drop protected blocks before splitting, so they never become targets and
     # chunk boundaries match what the blog's own edit pipeline sees.
-    text = editable_prose(body, div_is_prose=policy.div_is_prose) if policy.prose_only else body
+    text = _prose_for_chunking(body, policy)
     cross = policy.cross_heading and policy.merge
     # An inline heading is content the styler rewrites, so it cannot also be
     # fixed context — cross-heading mode wins over heading_context.
@@ -403,8 +465,12 @@ def _post_targets(
         for heading, section in _split_sections(text):
             if heading:
                 units.append(heading)
-            units.extend(p for p in split_paragraphs(section) if _keep_chunk(p, **prepack_kw))
-        for block in _pack_paragraphs(units, merge_max_chars=policy.merge_max_chars):
+            units.extend(
+                p
+                for p in split_paragraphs(section)
+                if p == PROTECTED_MARK or _keep_chunk(p, **prepack_kw)
+            )
+        for block in _pack(units, merge_max_chars=policy.merge_max_chars):
             if _keep_chunk(
                 block, min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw
             ):
@@ -416,13 +482,17 @@ def _post_targets(
             ctx = heading if want_context else ""
             if not policy.merge:
                 for c in split_paragraphs(section):
-                    if _keep_chunk(
+                    if c != PROTECTED_MARK and _keep_chunk(
                         c, min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw
                     ):
                         chunks.append((c, ctx))
             else:
-                paras = [p for p in split_paragraphs(section) if _keep_chunk(p, **prepack_kw)]
-                for block in _pack_paragraphs(paras, merge_max_chars=policy.merge_max_chars):
+                paras = [
+                    p
+                    for p in split_paragraphs(section)
+                    if p == PROTECTED_MARK or _keep_chunk(p, **prepack_kw)
+                ]
+                for block in _pack(paras, merge_max_chars=policy.merge_max_chars):
                     if _keep_chunk(
                         block, min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw
                     ):
@@ -494,6 +564,12 @@ def iter_targets(
       callout stays out. Default None protects every div wholesale; which
       classes bear prose is the caller's policy, not stylebot's (blog/generic
       boundary — ``.callout-note`` is a Quarto convention).
+    - `pack_across_protected` (default True): whether a packed passage may span
+      a *deleted* protected block. True reproduces the live corpus and produces
+      targets `infer._segment` can never present — it breaks a chunk at every
+      protected item. False gives train/serve packing parity at the price of
+      re-cutting the corpus. The measurement and the verdict: `_plans/decisions.md`
+      D27, amended 2026-09-03.
     - `min_chars` / `max_chars`: oversized chunks are DROPPED, never truncated —
       truncating corrupts the target.
     - `ignore_markers`: drop chunks containing any of these literal strings.

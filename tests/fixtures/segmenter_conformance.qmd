@@ -71,3 +71,7 @@ Prose after the multi-line comment. <!-- A trailing comment, opened mid-line. --
 The closing paragraph of the document.
 
 ::: an-opener-that-is-never-closed
+
+```python
+def runaway():
+    return "an unclosed fence runs to end of document"

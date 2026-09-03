@@ -626,6 +626,42 @@ def test_rewrite_candidates_strips_heading_context_from_samples():
     assert result["candidates"][0]["text"] == "Rewritten body."
 
 
+def test_rewrite_candidates_drops_context_under_the_cross_heading_diet():
+    """Defect A4's editor half (W2, 2026-09-03).
+
+    `rewrite_text` has gated `context` on `inline_headings` since the diet
+    landed; this seam prepended it unconditionally. The VS Code extension sends
+    `headingAbove` on every request and the promoted run is cross-heading, so
+    every editor rewrite was getting a prefix the corpus never contains — while
+    the very same styler, driven from `dan-style run`, got none.
+    """
+    seen = []
+
+    def styler(messages, num_samples=1):
+        seen.append(messages[1]["content"])
+        return ["Rewritten body."]
+
+    result = infer.rewrite_candidates(
+        "Original body.", styler, context="## Topic", best_of=1, inline_headings=True
+    )
+    assert seen == ["Original body."]
+    assert result["candidates"][0]["text"] == "Rewritten body."
+
+
+def test_the_inference_and_training_chunk_budgets_are_the_same_number():
+    """`infer.STYLE_CHARS_PER_CHUNK` is the serving face of `MERGE_MAX_CHUNK_CHARS`.
+
+    A test rather than `STYLE_CHARS_PER_CHUNK = targets.MERGE_MAX_CHUNK_CHARS`,
+    because `targets` imports click and `infer` is the module `serve` and the
+    blog's lazy import paths keep light. The number is the *default* on both
+    sides: a real run reads its budget off the manifest (`backends.serving_diet`),
+    and this only pins the fallback the two share when nobody said.
+    """
+    from stylebot.targets import MERGE_MAX_CHUNK_CHARS
+
+    assert infer.STYLE_CHARS_PER_CHUNK == MERGE_MAX_CHUNK_CHARS
+
+
 def test_rewrite_candidates_enforces_the_single_prose_chunk_contract():
     import pytest
 
