@@ -49,7 +49,7 @@ import click
 
 from stylebot.cli_options import opt
 from stylebot.jsonl import dumps_line
-from stylebot.pairs import iter_pairs, validate_pairs_file
+from stylebot.pairs import iter_pairs, system_sha, validate_pairs_file
 from stylebot.provenance import file_sha256, git_sha  # file_sha256 re-exported: public here
 
 logger = logging.getLogger(__name__)
@@ -590,6 +590,11 @@ def build_manifest(
             "n_synthetic": corpus.n_synthetic,
             "dropped": corpus.dropped,
             "splits_path": str(splits_path) if splits_path else None,
+            # Which frozen system prompt the pairs behind this run were built
+            # against — the digest every record carries as `meta.system_sha`.
+            # `backends.manifest_mismatches` warns when a served adapter's
+            # manifest disagrees with the live STYLE_SYSTEM.
+            "style_system_sha": system_sha(),
             "splits_sha256": _splits_sha256(splits_path),
             "eval_version": (splits or {}).get("eval_version"),
             # Which RECORDS were kept, not merely which file they came from: the

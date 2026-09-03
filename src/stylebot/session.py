@@ -149,7 +149,7 @@ class SessionStore:
     @property
     def pairs_path(self) -> Path:
         """The corpus file itself — what every downstream phase reads."""
-        return self.data_dir / "pairs.jsonl"
+        return config.pairs_path(self.data_dir)
 
     def snapshot_path(self, source: Path | str) -> Path:
         """Where the snapshot for `source` lives.

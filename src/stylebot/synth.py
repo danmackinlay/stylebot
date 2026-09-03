@@ -28,6 +28,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from stylebot import config
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.generators import (
     DEFAULT_REASONING_EFFORT,
@@ -1239,7 +1240,7 @@ def synthesize_pairs(
     the record says what the frontmatter *said then*, not what it says now.
     """
     data_dir = Path(data_dir)
-    pairs_path = data_dir / "pairs.jsonl"
+    pairs_path = config.pairs_path(data_dir)
 
     skipped_covered = 0
     if skip_covered:

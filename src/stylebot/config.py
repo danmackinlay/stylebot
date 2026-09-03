@@ -24,6 +24,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+#: The corpus directory's name under a project root, when nothing else says.
+#: Named rather than spelled inline so a caller that has a *root* rather than a
+#: data dir (livingthing's `training_targets.data_dir`, whose default is
+#: `<blog-root>/_training_pairs`) composes the same name this module defaults to.
+DEFAULT_DATA_DIR_NAME = "_training_pairs"
+
 
 def resolve_data_dir(flag: str | os.PathLike | None = None) -> Path:
     """Resolve the corpus directory: ``flag`` > ``$STYLEBOT_DATA_DIR`` > the
@@ -37,7 +43,24 @@ def resolve_data_dir(flag: str | os.PathLike | None = None) -> Path:
     """
     if flag is not None:
         return Path(flag)
-    return Path(os.environ.get("STYLEBOT_DATA_DIR", "_training_pairs"))
+    return Path(os.environ.get("STYLEBOT_DATA_DIR", DEFAULT_DATA_DIR_NAME))
+
+
+DEFAULT_PAIRS_NAME = "pairs.jsonl"
+
+
+def pairs_path(data_dir: str | os.PathLike | None = None) -> Path:
+    """Where the corpus itself lives inside a corpus directory.
+
+    The `splits_path` treatment for `<data-dir>/pairs.jsonl`, and for the same
+    reason: the join was spelled out at four sites here and four more in
+    livingthing, so `$STYLEBOT_DATA_DIR` redirected the capture path (which went
+    through `resolve_data_dir`) while the blog's synth and train defaults were
+    still hardcoded at `<blog-root>/_training_pairs`. Returned whether or not it
+    exists; callers that treat an absent file as an empty corpus test for
+    themselves.
+    """
+    return resolve_data_dir(data_dir) / DEFAULT_PAIRS_NAME
 
 
 DEFAULT_SPLITS_NAME = "splits.json"

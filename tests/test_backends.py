@@ -126,6 +126,58 @@ def test_explicit_flags_beat_the_manifest():
     assert BackendOpts().inline_headings is None
 
 
+def test_renderer_falls_back_to_the_hyperparameter_when_the_run_left_none():
+    """A dry-run manifest (and three of the blog's real ones) records the
+    renderer only under `hyperparameters`. Filling from `result` alone left the
+    field None, so serving fell through to the cookbook recommendation for the
+    base model rather than the renderer the run actually pinned."""
+    dry = _manifest({"1500": 10}, {"None": 10},
+                    hyperparameters={"renderer_name": "qwen3_5_disable_thinking"},
+                    result={})
+    assert backends.manifest_renderer(dry) == "qwen3_5_disable_thinking"
+    assert backends.opts_from_manifest(dry).renderer_name == "qwen3_5_disable_thinking"
+
+
+# --- a manifest is a pin, and a violated pin is silent ----------------------
+
+
+def test_no_mismatch_when_nothing_disagrees():
+    assert backends.manifest_mismatches(_RUN, BackendOpts(backend="tinker")) == []
+    assert backends.manifest_mismatches(None, BackendOpts()) == []
+
+
+def test_style_system_pin_is_checked_only_when_the_manifest_carries_one():
+    from stylebot.pairs import system_sha
+
+    stale = json.loads(json.dumps(_RUN))
+    stale["data"]["style_system_sha"] = "deadbeefdeadbeef"
+    notes = backends.manifest_mismatches(stale, BackendOpts())
+    assert len(notes) == 1 and "STYLE_SYSTEM has changed" in notes[0]
+
+    current = json.loads(json.dumps(_RUN))
+    current["data"]["style_system_sha"] = system_sha()
+    assert backends.manifest_mismatches(current, BackendOpts()) == []
+    # A manifest predating the pin answers "cannot say", not "mismatch".
+    assert "style_system_sha" not in _RUN["data"]
+    assert backends.manifest_mismatches(_RUN, BackendOpts()) == []
+
+
+def test_renderer_and_base_model_overrides_are_reported():
+    pinned = BackendOpts(backend="tinker", renderer_name="llama3", base_model="Qwen/Other")
+    notes = backends.manifest_mismatches(_RUN, pinned)
+    assert any("renderer mismatch" in n for n in notes)
+    assert any("base-model mismatch" in n for n in notes)
+
+
+def test_opts_from_manifest_logs_the_mismatch_it_did_not_override(caplog):
+    pinned = BackendOpts(backend="tinker", renderer_name="llama3")
+    with caplog.at_level("WARNING", logger="stylebot.backends"):
+        opts = backends.opts_from_manifest(_RUN, pinned)
+    # The explicit flag still wins — filling is silent, overriding is not.
+    assert opts.renderer_name == "llama3"
+    assert any("renderer mismatch" in r.getMessage() for r in caplog.records)
+
+
 # --- the CLI is only translation -------------------------------------------
 
 

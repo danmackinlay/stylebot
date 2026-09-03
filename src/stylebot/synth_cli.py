@@ -46,7 +46,7 @@ from pathlib import Path
 
 import click
 
-from stylebot import synth
+from stylebot import config, synth
 from stylebot.cli_options import (
     Emitter,
     SectionedCommand,
@@ -1145,7 +1145,7 @@ def run_synth(
 
     _report_result(
         result,
-        resolved_dir / "pairs.jsonl",
+        config.pairs_path(resolved_dir),
         dry_run=gen.dry_run,
         session_turns=session.session_turns,
         emit=say,

@@ -28,6 +28,7 @@ fallback constant it supplies as policy.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -37,6 +38,8 @@ import click
 
 from stylebot import config
 from stylebot.cli_options import bundle_options, opt
+
+logger = logging.getLogger(__name__)
 
 # Minimum share of the training corpus a chunk budget needs before `serving_diet`
 # will serve at it. One-sided on purpose — see the function.
@@ -243,6 +246,69 @@ def serving_diet(
     return max_chars, inline
 
 
+def manifest_renderer(manifest: Mapping[str, Any] | None) -> str | None:
+    """The renderer the manifest's run actually trained under.
+
+    `result.renderer_name` is what the run resolved (the cookbook recommendation
+    when the flag was None); `hyperparameters.renderer_name` is what was asked
+    for, and is all a dry-run manifest has. One reader, so the two spellings
+    cannot drift between the filler and the checker below.
+    """
+    manifest = manifest or {}
+    return ((manifest.get("result") or {}).get("renderer_name")
+            or (manifest.get("hyperparameters") or {}).get("renderer_name"))
+
+
+def manifest_mismatches(
+    manifest: Mapping[str, Any] | None, opts: BackendOpts | None = None
+) -> list[str]:
+    """Ways the styler about to be built disagrees with the manifest it claims.
+
+    A manifest is a *pin*, and three of the things it pins are silent when
+    violated: serve a tinker adapter against the wrong base model or the wrong
+    chat renderer and it produces plausible-looking garbage rather than an
+    error, and serve it under a system prompt that is not the one its pairs were
+    built against and it is out of distribution in the one way nothing
+    downstream measures. So say so, loudly, at the moment the backend is built.
+
+    `style_system_sha` is the prompt pin (`pairs.system_sha`, W8's spelling —
+    the same digest every pair record carries as `meta.system_sha`). It is
+    checked when the manifest carries one and skipped when it does not, so a
+    manifest written before the pin existed reads as "cannot answer" rather than
+    as a mismatch. Warnings, never errors: STYLE_SYSTEM is frozen, so a
+    disagreement means somebody unfroze it deliberately and the corpus is
+    already the bigger problem.
+    """
+    from stylebot.pairs import system_sha
+
+    manifest = manifest or {}
+    opts = opts or BackendOpts()
+    notes: list[str] = []
+
+    pinned_sha = (manifest.get("data") or {}).get("style_system_sha")
+    if pinned_sha and pinned_sha != system_sha():
+        notes.append(
+            f"STYLE_SYSTEM has changed since run {manifest.get('run_id') or '?'} was trained "
+            f"(manifest {pinned_sha}, current {system_sha()}); the styler is being served under "
+            f"a system prompt its pairs were never built against"
+        )
+
+    trained_renderer = manifest_renderer(manifest)
+    if opts.renderer_name and trained_renderer and opts.renderer_name != trained_renderer:
+        notes.append(
+            f"renderer mismatch: serving with {opts.renderer_name!r}, run "
+            f"{manifest.get('run_id') or '?'} trained with {trained_renderer!r}"
+        )
+
+    trained_base = (manifest.get("hyperparameters") or {}).get("base_model")
+    if opts.base_model and trained_base and opts.base_model != trained_base:
+        notes.append(
+            f"base-model mismatch: serving with {opts.base_model!r}, run "
+            f"{manifest.get('run_id') or '?'} trained on {trained_base!r}"
+        )
+    return notes
+
+
 def opts_from_manifest(
     manifest: Mapping[str, Any] | None,
     opts: BackendOpts | None = None,
@@ -255,6 +321,10 @@ def opts_from_manifest(
     soup — is where the checkpoint, base model, renderer and serving diet come
     from. Fields the caller already pinned (a flag the user passed) win; only
     the unset ones are filled, which is why `inline_headings` is tri-state.
+
+    Whatever the caller *did* pin is then checked against the manifest
+    (`manifest_mismatches`) and disagreements are logged: filling a field
+    silently is right, overriding one silently is not.
     """
     opts = opts or BackendOpts()
     manifest = manifest or {}
@@ -263,9 +333,11 @@ def opts_from_manifest(
     from_manifest = {
         "sampler_path": (result.get("checkpoints") or {}).get("sampler_path"),
         "base_model": (manifest.get("hyperparameters") or {}).get("base_model"),
-        "renderer_name": result.get("renderer_name"),
+        "renderer_name": manifest_renderer(manifest),
         "max_chunk_chars": diet_chars,
         "inline_headings": diet_inline,
     }
     fill = {k: v for k, v in from_manifest.items() if v is not None and getattr(opts, k) is None}
+    for note in manifest_mismatches(manifest, opts):
+        logger.warning("%s", note)
     return replace(opts, **fill)
