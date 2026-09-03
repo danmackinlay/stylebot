@@ -52,7 +52,7 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
   at the 2000-token floor while the promoted run served a 4500-char diet (D35).
   A library that can only be reached through `CliRunner` will be copied.
 - **One entry point, subcommands** (`ai-style
-  check-splits|eval|export-table|extend-eval|log|make-splits|merge-adapter|run|serve|synth|train|train-clf|validate-pairs`).
+  check-splits|eval|export-table|extend-eval|log|make-splits|merge-adapter|run|serve|status|synth|train|train-clf|validate-pairs`).
   Not a scatter of loose scripts: Phase 1's logger shipped as a standalone
   `ai-style-log` script until 2026-07-20, and was folded in. One console script,
   one `--help` tree. **No carve-out, and there is no `scripts/` directory**
@@ -181,25 +181,41 @@ The data-heavy phases need the prose corpus. Wired in against Dan's live blog:
 - [x] `is_human_authored` defaults (`field="automation"`, `max_level=0`) match
       the real frontmatter exactly — no retarget needed.
 
-## Current status (as of 2026-08-11)
+## Current status (as of 2026-09-03)
 
 **The pipeline runs end-to-end**: capture → gated synth → Tinker LoRA train →
-guarded inference → multi-signal eval. Two trained runs exist (manifests in the
-blog's `_training_pairs/runs/`; run 2 is the serving default). The 2026-08-11
-pass harmonised segmentation across training and inference (defects A1–A5, see
-[`decisions.md`](_plans/decisions.md) D26–D28) and pruned the 29 pairs the
-unanchored `$$` rule had mangled; the corpus stands at **4595 pairs (4140
-synthetic)**, and neither trained run has been re-run against it.
+guarded inference → multi-signal eval.
+
+**No count, run number or "serving default" is written down here any more.**
+Those facts live in the *blog's* `_training_pairs/` — a different repo on a
+different commit clock — and they move on every capture, synth run and
+promotion, so no stylebot file can stay true about them. This section said two
+trained runs and 4,595 pairs, unchanged, while the blog reached five runs and
+8,182 records. Ask the pipeline instead:
+
+```sh
+uv run ai-style status --pairs … --splits … --runs … --detector-model … --blog-root …
+cd ~/Source/livingthing && uv run dan-style status   # the same, every path from policy
+```
+
+It prints corpus size and composition, the eval stratum version and
+`splits_sha256`, the promoted run id and the chunk diet it serves, the detector
+artifact's `git_sha`, and the cross-checks between them — a detector fit under a
+stratum `splits.json` has since moved past is the failure no single artifact can
+see (`stylebot.status`, [`decisions.md`](_plans/decisions.md) D52). The
+authoritative record of what serves is the newest promoted manifest in the
+blog's `_training_pairs/runs/`; dated measurements are in
+[`findings.md`](_plans/findings.md).
 
 | Piece | State |
 | --- | --- |
 | Phase 0 scaffolding + Phase 1 `ai-style log` | done; daily-used; captures heading context (contract enforced in `stylebot.pairs`; mechanics in `_training_pairs/README.md`) |
-| Phase 2 `ai-style synth` / `dan-style synth` | shipped; corpus settled ~4.6k pairs with identity + inflation hygiene gates (`--max-transform-sim` / `--max-length-ratio`). `stylebot.synth_cli` is the library seam; the CLI translates its `Synth*Error`s |
+| Phase 2 `ai-style synth` / `dan-style synth` | shipped, with identity + inflation hygiene gates (`--max-transform-sim` / `--max-length-ratio`). `stylebot.synth_cli` is the library seam; the CLI translates its `Synth*Error`s |
 | Segmentation `stylebot.markdown` | one implementation, 2026-08-11; training and inference now agree, pinned by `tests/test_protection_parity.py` and the cross-implementation `tests/fixtures/segmenter_conformance.*`. The corpus-stability floor (does today's segmenter still cut the corpus we paid to generate?) is the blog's `tests/test_corpus_stability.py` — it needs the corpus, the policy and a git pin, all three of which live there |
 | Eval harness `ai-style eval` | built: four signals (Vale, LLM judge, detector, eyeball) + the Phase-4 `output` field; JSONL-batched + resumable ([`_plans/eval-harness.md`](_plans/eval-harness.md)) |
 | Voice classifier (the detector signal) | built: StyleDistance embedding + logistic head; dep-free runtime `stylebot.classify`; artifact at livingthing `_models/voice-clf/` |
 | Splits contract | `stylebot.splits` → blog's committed `splits.json`: frozen eval posts, styler posts, hash-stable detector pool |
-| Phase 3 `ai-style train` / `dan-style train` | shipped: Tinker cookbook LoRA SFT behind the `[trainer]` extra; runs 1–2 trained (numbers in [`_plans/findings.md`](_plans/findings.md)) |
+| Phase 3 `ai-style train` / `dan-style train` | shipped: Tinker cookbook LoRA SFT behind the `[trainer]` extra; per-passage grouping and integer-replication weight hooks (D43). Which runs exist and which one serves: `dan-style status`; what they measured: [`findings.md`](_plans/findings.md) |
 | Phase 4 `ai-style run` / `dan-style run` | shipped: training-protocol-faithful chunking — blockquotes, display math and `:::` divs are now protected at inference too, not just headings/fences — do-no-harm + anchor-integrity guards (inline anchors opt-in via `--strict-anchors`), best-of-N; Tinker-sampling backend v1, MLX exit verified, Fireworks open |
 
 **Naming rule:** `dan-style X` is the blog-policy mirror of `ai-style X` — same

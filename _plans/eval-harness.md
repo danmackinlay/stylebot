@@ -1,9 +1,22 @@
-# Eval harness — 🔧 BUILT (library + CLI; trained detector wired)
+# Eval harness — ✅ BUILT (library + CLI; trained detector wired)
 
 How we know the styler works. Runs **offline** — it scores candidate output and
 is *not* wired into the trainer or baked into the served adapter. Built early and
 in parallel: it's the ground truth every later phase reports against, and it
 needs only sample prose, not a trained model.
+
+**Status (2026-09-03):** the harness passed its own integrity audit and changed
+because of it, and none of those changes are in the 2026-06-30 note below. A
+score now carries the detector artifact that produced it and two shas are never
+averaged together (D39); the paired interval clusters by post rather than
+treating chunks as independent (D40); the headline verdict is the *real* facet
+with the synthetic one reported separately (D41); and the frozen eval stratum is
+versioned and add-only, with `dan-style extend-eval` the only way it grows and
+`splits_sha256` pinned into every manifest (D42). The Pangram cross-check this
+document has always described was finally *run* — see
+[`findings.md`](findings.md), including why "built and tested, not run" was
+worth less than it sounded. Live stratum size and composition:
+`dan-style status`, never a number here.
 
 **Status (2026-06-30):** `stylebot.eval` ships the four-signal scorer as typed
 library functions + the thin `ai-style eval` CLI. Runs keyless by default (Vale

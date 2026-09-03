@@ -1,4 +1,4 @@
-# VS Code paragraph marker — 🔧 IN PROGRESS (design settled 2026-07-06)
+# VS Code paragraph marker — ✅ BUILT (design settled 2026-07-06; segmenter removed 2026-09-03)
 
 Mark paragraphs **dan-or-bot** live in the editor, using the trained voice
 classifier. A paragraph's `P(slop)` shows as a graded background tint +

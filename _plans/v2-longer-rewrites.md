@@ -6,6 +6,19 @@ we actually want. This doc records what blocks longer rewrites, the
 groundwork ALREADY LAID so the data problem stops compounding, and the
 path to a v2 run.
 
+> **Status 2026-09-03 — the v2 adapter trained, and the scale question is now
+> also a weighting question.** Run 4 trained the mixed diet later on 2026-08-17
+> (two arms, 4a anchor-filtered and 4b the ablation); which of them serves, and
+> on what corpus, is `dan-style status`, not a sentence here. Two things this
+> doc did not anticipate: the 2026-09-03 re-analysis clustered run 4's paired
+> interval by post and the headline gain over the previous run stopped being
+> distinguishable from zero ([`findings.md`](findings.md)); and the budget sweep
+> that produced the curriculum is *also* the reason one stretch of prose carries
+> ~4 training pairs, which up-weights the synthetic side 4× against real
+> captures ([`decisions.md`](decisions.md) D43). A scale facet and a
+> multiplicity cap are the same knob seen from two sides. **Counts below are as
+> measured on their date and are not maintained.**
+>
 > **Status 2026-08-17 — generation RAN; no v2 adapter trained yet.** The blog
 > corpus holds 4,532 pairs stamped `chunk_mode: cross-heading` at
 > `merge_max_chars` 1500 / 3000 / 4500 (2,629 / 1,096 / 807), median anchors per
@@ -199,11 +212,13 @@ blog repo: `*.qmd` there is reformatted by the pre-commit hook (which would
 destroy the verbatim record the archive exists to keep), indexed by `qmd`
 search, and sampled by `iter_targets` as a synthesis target — and a
 verbatim frontmatter copy passes every selector gate, so captured slop
-would be trained on as human prose. `scripts/migrate_capture_archives.py`
-converts the old blobs (verified byte-identical `recut` output across the
-migration). **Compatibility dropped in 0.3:** `iter_archives` read legacy
+would be trained on as human prose. `ai-style data migrate-captures` converts
+the old blobs (verified byte-identical `recut` output across the migration; it
+lived at `scripts/migrate_capture_archives.py` until 2026-09-03, when the
+`scripts/` carve-out was replaced by the hidden `data` group — `decisions.md`
+D38). **Compatibility dropped in 0.3:** `iter_archives` read legacy
 blobs — warning each time — for one release; it now reads directories only
-and *raises* on a leftover `captures/*.json`, naming the migration script.
+and *raises* on a leftover `captures/*.json`, naming the migration command.
 Raising, not skipping: a silent skip is indistinguishable from "that
 capture had no changed regions", so an archive could drop out of the corpus
 unnoticed. The migration script parses the blobs itself and still works.

@@ -24,10 +24,15 @@ public — see [Data & secrets](#data--secrets) below.
 | 4 | 🔧 built | `ai-style run` — inference CLI (chunked, structure-protected, best-of-N with do-no-harm + anchor guards) |
 | E | 🔧 built | `ai-style eval` — multi-signal eval (Vale + LLM-judge + trained voice classifier) |
 | — | 🔧 built | `ai-style serve` + [VS Code voice marker](#vs-code-voice-marker) — live P(slop) paragraph marks |
+| — | 🔧 built | `ai-style status` — corpus, splits health, promoted run, detector sha, and the cross-checks between them |
 
 ## What it does
 
-The first trained styler (Qwen3.5-9B + LoRA, one epoch, ~$2 of compute)
+One worked example, from the **first** trained styler (2026-07; Qwen3.5-9B +
+LoRA, one epoch, ~$2 of compute) — kept because it is a clean illustration, not
+because it is the current adapter. What is serving today, and on what corpus,
+is what `ai-style status` prints; the dated numbers are in
+[`_plans/findings.md`](_plans/findings.md). The styler is shown
 de-slopping a machine-inflated paragraph of — fittingly — Dan's AI-usage
 policy. A held-out validation pair; the styler never saw this post in
 training:
@@ -47,11 +52,14 @@ training:
 > what "value" means and where the line is. […] I think it might be worthwhile
 > mentioning where I _don't_ use AI, and why.
 
-Measured on the trained voice classifier, the rewrite moves `P(slop)` from
+Measured on the voice classifier of the day, the rewrite moves `P(slop)` from
 0.56 to 0.27 against the original's 0.26; the LLM judge moves 2 → 3 (Dan's
-original: 4). Across 40 held-out pairs the styler closes about half the
+original: 4). Across 40 held-out pairs that styler closed about half the
 slop→Dan gap on every signal, where the same base model with the same prompt
-but no LoRA makes prose *more* AI-flavoured than the input.
+but no LoRA makes prose *more* AI-flavoured than the input. Later runs, a
+larger corpus and a frozen eval stratum are all in `findings.md` — including
+the 2026-09 re-analysis that took a later run's headline gain back to
+"indistinguishable" once the interval was clustered by post.
 
 ## Quickstart
 
@@ -59,10 +67,14 @@ but no LoRA makes prose *more* AI-flavoured than the input.
 uv sync
 uv run ai-style log --help
 uv run ai-style --help
+uv run ai-style status --pairs _training_pairs/pairs  # what the corpus holds
 ```
 
 The pair-logger is run from inside the prose working tree (e.g. the blog repo),
-where it writes captured pairs to `$STYLEBOT_DATA_DIR/pairs.jsonl`.
+where it writes captured pairs to the corpus under `$STYLEBOT_DATA_DIR` —
+`pairs.jsonl` by default, or into `pairs/captures.jsonl` once you have sharded
+(`ai-style data shard-pairs`). Both shapes are first-class; `stylebot.config.pairs_path`
+picks whichever exists.
 
 ## Specializing stylebot for your own blog
 
@@ -115,8 +127,9 @@ that marks each prose paragraph of a markdown/Quarto document with a graded
 hover — so suspect paragraphs get noticed, rewritten, and captured as training
 pairs by the existing `ai-style log` tasks. It is the front-end of the capture
 loop, not a verdict machine: the classifier is a soft signal (held-out AUC
-~0.72), so the marks are framed as *suspicion* and your eyeball stays the
-arbiter. Design and caveats: [`_plans/vscode-marker.md`](_plans/vscode-marker.md).
+~0.7 on real pairs, and it moves with every refit — `ai-style status` prints
+the artifact's own honest number), so the marks are framed as *suspicion* and
+your eyeball stays the arbiter. Design and caveats: [`_plans/vscode-marker.md`](_plans/vscode-marker.md).
 
 ### How it works
 
@@ -150,7 +163,7 @@ corrections. The remaining cross-implementation fixture, pinning
 ```sh
 cd vscode-voice-marker
 npm install && npm test && npm run package
-code --install-extension voice-marker-0.0.1.vsix
+code --install-extension voice-marker-*.vsix   # the version npm run package just built
 ```
 
 The extension is **dormant** until `voiceMarker.command` is set, so configure
@@ -207,11 +220,14 @@ reinstall.
 
 ## Data & secrets
 
-- **Corpus** — `pairs.jsonl` and open editing sessions are written under
-  `STYLEBOT_DATA_DIR` (default `./_training_pairs`). That directory is
-  **gitignored here**: the corpus never enters this public repo. Its
-  canonical home is the (livingthing) blog repo, where it *is* committed
-  (since 2026-07, for portability). See
+- **Corpus** — the pairs corpus and open editing sessions are written under
+  `STYLEBOT_DATA_DIR` (default `./_training_pairs`). The corpus is one
+  `pairs.jsonl`, or a `pairs/` directory of append-only shards once it is big
+  enough that rewriting it whole on every append bloats git history —
+  `ai-style data shard-pairs` is the one-way move, and every reader takes
+  either shape. That directory is **gitignored here**: the corpus never enters
+  this public repo. Its canonical home is the (livingthing) blog repo, where it
+  *is* committed (since 2026-07, for portability). See
   [`_training_pairs/README.md`](_training_pairs/README.md).
 - **API keys** — read from the process environment (`OPENROUTER_API_KEY`,
   `TINKER_API_KEY`, …). Export them, or let [direnv](https://direnv.net) do it:

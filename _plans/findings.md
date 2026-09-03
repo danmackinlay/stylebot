@@ -102,6 +102,12 @@ section wall long before the byte budget, and two runs differing only in
 4624 records, 4169 synthetic (2026-08-10 audit) → **4595 records, 4140
 synthetic** (2026-08-11, after the A5 prune below). Distinct
 (source, target-body) cells among the synthetic pairs: 3710 → **3686**.
+Continued: 8,319 (2026-08-17, run 4's input, after the v2 scale batches) →
+8,265 → 8,244 (2026-09-03, after W8's 21 duplicate cells and 5 pending capture
+records) → **8,182, 398 real / 7,784 synthetic over 497 posts** (2026-09-03,
+after the 62-pair eval-contamination prune). *This series stops here on
+purpose.* It is a record of what was measured on each date, not a running
+total — for the current figure run `dan-style status`.
 
 **Inline markup is a fifth of the target side** (2026-08-11, over the
 then-4624-pair corpus): **749,629 of 3,649,320 target-side characters —
@@ -622,8 +628,6 @@ construction — eval-role pairs never enter the styler set; it protects the
 
 ---
 
----
-
 ## Training runs
 
 **Base model rate**: `Qwen/Qwen3.5-9B` at **$1.463/1M train tokens**
@@ -647,7 +651,10 @@ inflation tail excised): corpus sha `ea9f5981f8074cb3`, val NLL **0.952**
 marginally softer (detector 0.425 vs 0.415, judge 3.48 vs 3.70) but the
 over-compression tail retreats (p10 output/slop **0.76 vs 0.60**) and content
 fidelity improves (anchor losses **1 vs 2**). Fidelity was chosen over voice
-score; run 2 is the serving default.
+score, and run 2 served from 2026-07-22 until run 4a was promoted on 2026-08-21.
+(What serves *now* is not recorded in this file, or in any other: ask
+`dan-style status`, or read the newest promoted manifest in the blog's
+`_training_pairs/runs/`.)
 
 **Run 4, the anchor-filter ablation** (2026-08-17, blog-side; two arms on the
 recut 8,319-pair corpus, first mixed-scale diet). **4a** = `styler_pair_ok`

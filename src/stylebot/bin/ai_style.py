@@ -8,8 +8,11 @@ typed library function: `log` (Phase 1 capture), `synth` (Phase 2), `make-splits
 `train-clf` (the voice classifier),
 `train` (Phase 3 LoRA SFT), `run` (Phase 4 inference), `eval` (the offline
 scorer, `stylebot.eval`), `export-table` (scores -> tidy CSV), `merge-adapter`
-(adapter + base -> one merged checkpoint, `stylebot.export`) and `serve` (the
-NDJSON editor sidecar, `stylebot.serve`).
+(adapter + base -> one merged checkpoint, `stylebot.export`), `serve` (the
+NDJSON editor sidecar, `stylebot.serve`), `validate-pairs` (the record
+contract on demand) and `status` (`stylebot.status` — what the corpus holds,
+which run serves, which detector scored it, and where those three disagree;
+the numbers documentation is no longer allowed to carry, D52).
 
 Phase 1's capture logger is `ai-style log` — a subcommand like every other, not
 a separate console script. It shipped as a standalone `ai-style-log` until
@@ -132,7 +135,7 @@ def _load_manifest(manifest_path: Path | None) -> dict:
     "--data-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Read/write state: where pairs.jsonl is appended. Required (no default) "
+    help="Read/write state: where the corpus is appended. Required (no default) "
     "unless $STYLEBOT_DATA_DIR is set — never silently grow the wrong corpus.",
 )
 @click.option(
@@ -292,7 +295,8 @@ def _echo_verdict(verdict: dict, a_path: Path, b_path: Path) -> None:
     "pairs_path",
     required=True,
     type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
-    help="The pairs.jsonl corpus to score (slop + Dan sides of every pair).",
+    help="The pairs corpus to score (slop + Dan sides of every pair): a "
+    "pairs.jsonl or a pairs/ shard directory.",
 )
 @click.option(
     "--field",
@@ -417,7 +421,7 @@ def eval_cmd(
     sample_n: int | None,
     **kw,
 ) -> None:
-    """Score a pairs.jsonl corpus across the eval signals (offline, batched).
+    """Score a pairs corpus across the eval signals (offline, batched).
 
     Reads the corpus, scores the slop and Dan sides of each pair, and appends one
     id-keyed record per pair to scores.jsonl (joinable back to the corpus, and
@@ -732,7 +736,7 @@ def _echo_clf_metrics(metrics: dict, indent: str = "") -> None:
     "pairs_path",
     required=True,
     type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
-    help="The pairs.jsonl corpus whose posts get partitioned.",
+    help="The pairs corpus whose posts get partitioned (pairs.jsonl or a pairs/ directory).",
 )
 @click.option(
     "--out",
@@ -941,7 +945,7 @@ def extend_eval_cmd(**kw) -> None:
     "pairs_path",
     required=True,
     type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
-    help="The content-matched pairs.jsonl corpus to train on.",
+    help="The content-matched pairs corpus to train on (pairs.jsonl or a pairs/ directory).",
 )
 @click.option(
     "--out",
@@ -1109,8 +1113,9 @@ def train_clf_cmd(
     "data_dir",
     required=True,
     type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Corpus directory holding pairs.jsonl. Required, no default: the explicit path is the "
-    "reproducibility record — never silently train on the wrong corpus.",
+    help="Data dir holding the corpus (pairs/ or pairs.jsonl). Required, no default: "
+    "the explicit path is the reproducibility record — never silently train on the "
+    "wrong corpus.",
 )
 @click.option(
     "--manifest-out",
@@ -1189,7 +1194,7 @@ def train_cmd(
     """
     pairs_path = config.pairs_path(data_dir)
     if not pairs_path.exists():
-        raise click.ClickException(f"no pairs.jsonl in {data_dir}")
+        raise click.ClickException(f"no corpus (pairs/ or pairs.jsonl) in {data_dir}")
 
     kwargs = dict(
         hp=bundles_from_kwargs(kw, {"hp": tr.Hyperparameters})["hp"],
@@ -1486,6 +1491,101 @@ def run_cmd(
         click.echo(f"rewrote {file} (backup at {file}.bak)", err=True)
     else:
         click.echo(result.text, nl=not result.text.endswith("\n"))
+
+
+@main.command("status")
+@click.option(
+    "--data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Resolves --pairs and --splits when they are not given. "
+    "[default: --data-dir > $STYLEBOT_DATA_DIR > ./_training_pairs]",
+)
+@click.option(
+    "--pairs",
+    "pairs_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="The corpus: a pairs.jsonl or a pairs/ shard directory.",
+)
+@click.option(
+    "--splits",
+    "splits_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="The splits.json whose eval stratum and role table to report.",
+)
+@click.option(
+    "--runs",
+    "runs_dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory of committed run manifests. No default: stylebot writes a "
+    "manifest wherever `train --manifest-out` says, and invents no convention.",
+)
+@click.option(
+    "--detector-model",
+    "detector_dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="A trained voice-classifier artifact directory (head.json + meta.json).",
+)
+@click.option(
+    "--blog-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Source tree the pinned eval posts must still exist in. Without it, "
+    "post presence is not checked.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the raw Status as JSON.")
+def status_cmd(
+    data_dir: Path | None,
+    pairs_path: Path | None,
+    splits_path: Path | None,
+    runs_dir: Path | None,
+    detector_dir: Path | None,
+    blog_root: Path | None,
+    as_json: bool,
+) -> None:
+    """Where this pipeline stands: corpus, splits, promoted run, detector.
+
+    The command the documentation points at instead of carrying numbers it
+    cannot keep true. Read-only, keyless, and free.
+
+    Nothing is discovered: stylebot does not know where your blog, runs or
+    detector artifact are, so `--runs` / `--detector-model` / `--blog-root` have
+    no defaults and unnamed artifacts are reported as "not given" rather than
+    guessed at. `--pairs`/`--splits` fall back to the usual `--data-dir` >
+    `$STYLEBOT_DATA_DIR` > `./_training_pairs` precedence. A policy mirror like
+    `dan-style status` is this command with all five filled in.
+
+    The last block is the cross-check: a detector fit under a different
+    `splits_sha256` than `splits.json` now carries, a promoted run that trained
+    on a different partition, plus the `check-splits` danger report.
+    """
+    from dataclasses import asdict
+
+    from stylebot import status as st
+
+    resolved = config.resolve_data_dir(data_dir)
+    if pairs_path is None:
+        candidate = config.pairs_path(resolved)
+        pairs_path = candidate if candidate.exists() else None
+    if splits_path is None:
+        candidate = config.splits_path(resolved)
+        splits_path = candidate if candidate.exists() else None
+
+    report = st.collect(
+        pairs=pairs_path,
+        splits=splits_path,
+        runs_dir=runs_dir,
+        detector=detector_dir,
+        blog_root=blog_root,
+    )
+    if as_json:
+        click.echo(json.dumps(asdict(report), indent=2, default=str))
+        return
+    click.echo(st.format_status(report))
 
 
 @main.command("validate-pairs")

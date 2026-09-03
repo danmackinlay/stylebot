@@ -11,6 +11,13 @@ per-phase design plans that were retired once their work shipped: what we
 thought, what happened, what we concluded. D26 onward return to the full shape.
 Measurements live in [`findings.md`](findings.md).
 
+**This file and [`findings.md`](findings.md) are the two that keep their
+numbers.** Everywhere else in the repo, a corpus count or a run id is a claim
+about the present that git cannot keep true, and D52 removed them in favour of
+`ai-style status`. Here they are dated records of what was measured or believed
+on a day, and editing one to match today would destroy the thing the file is
+for.
+
 Everything numbered `D…` was **decided and acted on**. A `P…` entry is a
 *proposal*, written in the same shape so that accepting one is an edit rather
 than a rewrite, and followed by its own verdict entry once one lands. None are
@@ -2120,3 +2127,140 @@ what D50's shard-level rewrite avoids — or if a genuinely large binary
 (a merged adapter, a `.joblib`) is committed by accident, where a targeted
 filter-repo on that one path is the right tool and the argument above does not
 apply.
+
+---
+
+## D52: documentation carries no mutable operational state — `status` answers instead
+
+**Decision (W7, 2026-09-03).** stylebot's prose — `CLAUDE.md`, `README.md` and
+`_plans/OVERVIEW.md` — states **no** corpus count, run number, "serving
+default" or artifact sha. Those facts move under git's feet, so a new
+subcommand computes them on demand: `stylebot.status.collect()` sweeps the five
+artifacts that answer "where is this pipeline?" — corpus, `splits.json`, the
+runs directory, the detector artifact, and the *cross-checks between them* —
+and `ai-style status` / `dan-style status` print it.
+
+`findings.md` and `decisions.md` are explicitly **exempt**, and the distinction
+is the whole design. A dated measurement ("over the live 4,595-pair corpus,
+2026-08-11") is a record of what was true then and must not be edited to match
+today; a status sentence ("the corpus stands at 4,595 pairs") claims to be true
+now and cannot stay so. The W7 brief's done-criterion — `rg "run 2|4595|455
+real" stylebot/_plans` returns nothing — is therefore wrong as literally
+written: satisfying it means deleting the measurements the file exists to hold.
+What was applied instead is that every surviving occurrence of such a number is
+attached to the date it was measured, and every *current-state* sentence is
+gone. Where run 2 appears as "the serving default", the sentence now says it
+served from 2026-07-22 to 2026-08-21 and points at `status` for now.
+
+**The evidence.** Six prose surfaces describe this system across two repos. On
+2026-09-03 the stylebot half said two trained runs existed, run 2 was serving,
+and the corpus was 4,595 pairs (4,140 synthetic). The blog held five completed
+runs with 4a (`20260817-170037`) promoted on 2026-08-21, and 8,182 records (398
+real / 7,784 synthetic) sharded across three files. Every one of those sentences
+was correct when written, three weeks earlier. None of them could have been kept
+correct: the facts live in the *blog's* `_training_pairs/`, a different repo on
+a different commit clock, and a stylebot commit is not what changes them.
+
+**Why `ai-style status` exists and not only the blog mirror.** stylebot cannot
+discover where a blog, a runs directory or a detector artifact is — that is the
+one-way dependency arrow, and inventing a `<data-dir>/runs` convention to make
+`status` self-configuring would have broken it for cosmetic convenience. So the
+generic command takes each artifact as an explicit flag, reports "not given" for
+anything unnamed, and reports absence rather than raising for anything named but
+missing (status has to run on a half-built pipeline; that is when it is most
+useful). `dan-style status` is the same function with all five filled in from
+`livingthing.training_targets` — a 25-line policy shell, the same shape as every
+other mirror.
+
+**The cross-checks are why this is one function rather than four commands.**
+Corpus size, a promoted run and a detector sha are each printable from their own
+artifact. What no artifact can see is the *disagreement between them*: a
+detector fit under `splits_sha256=X` while `splits.json` now says `Y` is
+internally consistent and jointly wrong — every verdict it produced held out a
+different set of posts (D39, D42). Same for a promoted run trained under a
+partition that has since moved, and for a run that predates the pins entirely,
+which is what run 4a's manifest reports today. `check_splits`' danger report is
+folded into the same list.
+
+**The `promoted` rule moved into the library** (`status.promoted_manifest`):
+newest manifest with a `result` and without `"promoted": false`. The blog's
+`style_file.latest_manifest` had owned it, and `status` had to answer "which run
+serves" identically or it would be lying in exactly the way this entry exists to
+stop. `latest_manifest` is now that call plus a click error for the empty case.
+
+*Alternatives.* **A section of `ai-style log list`** (the W7 brief's other
+option): rejected because `log` is the capture session group — its `list` shows
+open snapshots, and a pipeline-wide report is not a session. **Keeping the
+numbers and adding a CI check** that greps docs against the live corpus:
+rejected because the check can only run where the blog is checked out, which is
+the coupling the arrow forbids, and because it would fail on `findings.md`'s
+legitimate history. **A generated section written back into the docs by a
+script**: a committed artifact of a machine reading another repo, stale between
+runs, and a merge conflict on every capture.
+
+*The deciding constraint.* A document that cannot be kept true is worse than no
+document, because it is believed. Six surfaces × two repos × a corpus that
+changes daily is not a discipline problem to be solved by remembering harder.
+
+**Re-evaluate if** the corpus and the tooling ever live in one repo (then a
+number in a doc can be updated by the commit that changes it, and a test can
+pin it), or if `status` grows past what one screen can carry — at which point
+the split is by artifact, not by moving facts back into prose.
+
+---
+
+## D53: the orphan prune is built and declined; the eval prune is applied and now needs a second pass
+
+**Decision (W12, 2026-09-03).** `ai-style data prune-stale` ships, dry-runs by
+default, keeps a `.bak` and carries a test. Its **eval-contamination** half was
+applied (blog `c0e2ac85be`: 62 synthetic pairs cut from frozen-eval prose, 41
+real captures spared). Its **orphan** half was measured and **not run**, and
+that is the decision rather than a postponement. Full numbers:
+[`findings.md`](findings.md) §"What a stale-corpus prune would cost and buy".
+
+**W12's stated premise turned out to be false, and that is what settled it.**
+The item was written expecting W2's segmentation change to have orphaned cells
+the corpus would keep paying for. Re-cutting every source at its pinned revision
+under the composed blog policy: W2's fence rule orphaned **zero** cells — the
+two files whose protected spans it moved carry no corpus cells at all. Of the
+606 orphaned cells (672 pairs, 8.6% of the synthetic corpus), **492 are prose
+Dan has edited since the pair was generated**. That is the corpus being a frozen
+record of prose that moved, which is neither damage nor a reason to delete
+anything. Only 97 come from a policy change, and 70 of those are `div_is_prose`
+charged against the **section-bounded** arm — frozen policy, so no future synth
+run will refill those cells and pruning them is permanent loss of paid-for data.
+
+**And it would not have bought what it was wanted for.** The orphan prune moves
+the effective per-passage weight D43 measured from **4.06 to 4.04**, because
+orphans are spread across 124 posts roughly in proportion to the corpus: it
+thins passages and pairs together. Dilution is a weighting problem
+(`per_passage` / `pair_weight`), and a prune is not a substitute for one.
+
+*Alternatives.* **Prune orphans anyway**, on tidiness grounds: rejected — it
+deletes 672 paid-for pairs to buy a 0.02 change in the number that motivated it,
+and 349 of them can never be regenerated. **Delete the command** now that it has
+been declined once: rejected — unlike the migrations D38 keeps, this one is a
+*measuring* instrument as much as a destructive one, and "how much of the corpus
+would today's policy no longer produce?" is a question worth being able to ask
+before every retrain. It stays in `ai-style data` and dry-runs by default.
+
+**The open half: the eval stratum is 16% synthetic again.** The two W10/W12
+changes landed in the order that undoes one of them. `c0e2ac85be` pruned the
+frozen stratum to 0% synthetic; `5bf689fa5a` then grew it (eval_v2, six
+real-capture posts) and `notebook/ai_search.qmd` brought **28 synthetic pairs**
+in with it. So `check-splits` today reports eval at 177 pairs, 149 real / 28
+synthetic. It is well under the `EVAL PURITY` threshold and the headline verdict
+is the real facet by construction (D41), so nothing computed is wrong — but the
+clean-stratum invariant W12 established is not currently held, and
+`extend-eval` does not prune. **Not fixed here**, because it is a corpus write
+and W7 is a documentation item. The fix is one `prune-stale --no-orphans
+--apply` followed by a detector refit (the refit is not optional — the head
+currently in `_models/voice-clf` was fit *after* eval_v2, so it already holds
+those posts out, but its `splits_sha256` would move with the corpus). The
+durable fix is for `extend-eval` to offer the prune for the posts it is about
+to freeze, which is where this belongs: the two operations are one intent.
+
+**Re-evaluate if** a synth run's `--skip-covered` accounting starts disagreeing
+with the corpus (orphans are exactly the cells that make it), or if the corpus
+stops being cut at multiple budgets — at which point orphan pairs stop being
+cheap to leave lying about and the 4.06 stops being the dominant term.

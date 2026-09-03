@@ -7,8 +7,11 @@ Measured 2026-08-11 in the **livingthing** repo, during a model-roster bench for
 `ai-preen`. The experiments ran against livingthing's `pandoc_mask`, but the
 problem is identical to stylebot's: hand a model text containing regions it must
 not touch, and get those regions back intact. The findings transfer; the code
-does not, since the two segmenters are a deliberate double implementation (see
-the `segment_for_edit` conformance note in livingthing's CLAUDE.md).
+does not. (When this was written the two segmenters were a deliberate double
+implementation. They are not any more: the blog's copy became a call into
+`stylebot.markdown` on 2026-09-03, and D28/D30 are marked superseded. What
+still differs is the *masker* — livingthing's `pandoc_mask` is pandoc-AST-based
+and stylebot ships none.)
 
 Source data and reproduction scripts are in the livingthing checkout
 (`_tmp/model-roster/`, gitignored — copy anything wanted before it is swept).
