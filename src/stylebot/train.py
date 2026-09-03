@@ -29,6 +29,7 @@ Needs the ``trainer`` extra for the paid path —
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import random
@@ -345,6 +346,53 @@ def estimate_tokens(records: Sequence[dict]) -> int:
 # ---------------------------------------------------------------------------
 
 
+#: Packages whose version silently changes what a training run does. Recorded by
+#: name so a manifest says which stack produced it; absent ones read `None`
+#: rather than being omitted, so "not installed" is distinguishable from "this
+#: manifest predates the pin".
+PINNED_DEPENDENCIES = (
+    "stylebot",
+    "tinker",
+    "tinker-cookbook",
+    "torch",
+    "transformers",
+    "datasets",
+)
+
+
+def dependency_versions(names: Sequence[str] = PINNED_DEPENDENCIES) -> dict[str, str | None]:
+    """Installed versions of the packages a run's behaviour depends on."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    out: dict[str, str | None] = {}
+    for name in names:
+        try:
+            out[name] = version(name)
+        except PackageNotFoundError:
+            out[name] = None
+    return out
+
+
+def _splits_sha256(splits_path: Path | None) -> str | None:
+    if splits_path is None or not Path(splits_path).exists():
+        return None
+    return file_sha256(splits_path)
+
+
+def _record_ids_sha256(corpus: TrainCorpus) -> str:
+    """16-hex hash of the SORTED kept `record_id`s (train + val).
+
+    Sorted, so it is invariant to corpus order and to the train/val partition
+    within one selection — it answers "which pairs were in this run", and the
+    split itself is recorded separately as `val_posts`.
+    """
+    from stylebot.pairs import record_id
+
+    ids = sorted(record_id(rec) for rec in [*corpus.train, *corpus.val])
+    digest = hashlib.sha256("\n".join(ids).encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
 def build_manifest(
     *,
     run_id: str,
@@ -355,10 +403,24 @@ def build_manifest(
     dry_run: bool,
     train_price_per_mtok: float | None = None,
     filters: dict | None = None,
+    splits: dict | None = None,
+    selector_constants: dict | None = None,
+    base_model_revision: str | None = None,
 ) -> dict:
     """The pre-run manifest: everything reproducibility needs *before* any
     paid call. The run appends `result` (tinker paths, real tokens, cost,
-    losses) via `run_training`."""
+    losses) via `run_training`.
+
+    Four pins were added 2026-09 (`_plans/decisions.md` D38), because the
+    manifest named the corpus and both git trees but not the things that
+    actually differed between two runs of "the same" recipe: `splits_sha256` +
+    `eval_version` (which partition held out which posts), `record_ids_sha256`
+    (which records survived the filters — the corpus hash covers the file, not
+    the selection), `dependencies` (tinker/cookbook/transformers versions, which
+    move under you), and `selector_constants` (the caller's policy literals:
+    `RETIRED_ARMS` is a set whose membership changes the diet while
+    `filters.selector` keeps saying `styler_pair_ok`).
+    """
     est = estimate_tokens(corpus.train) * hp.num_epochs
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -380,9 +442,17 @@ def build_manifest(
             "n_synthetic": corpus.n_synthetic,
             "dropped": corpus.dropped,
             "splits_path": str(splits_path) if splits_path else None,
+            "splits_sha256": _splits_sha256(splits_path),
+            "eval_version": (splits or {}).get("eval_version"),
+            # Which RECORDS were kept, not merely which file they came from: the
+            # selector, the role filter and the multiplicity hook all run after
+            # `pairs_sha256` is taken, so two runs over one corpus can (and did)
+            # train on different data under identical hashes.
+            "record_ids_sha256": _record_ids_sha256(corpus),
             "n_train_posts": len(corpus.train_posts),
             "val_posts": corpus.val_posts,
             "filters": filters or {"selector": None, "per_target": None},
+            "selector_constants": selector_constants,
             # The chunk diet, so serving can follow it instead of hard-coding a
             # budget that goes stale the next time the corpus is re-cut.
             "chunk_scale": corpus.chunk_scale,
@@ -391,6 +461,11 @@ def build_manifest(
         # -> model_info recommendation; the run records what it resolved them to
         # under `result`.
         "hyperparameters": hp.as_manifest(),
+        # The base weights are named by `hyperparameters.base_model`; a revision
+        # says WHICH upload of them. None when nothing can answer offline — the
+        # tinker runner fills it in when the service reports one.
+        "base_model_revision": base_model_revision,
+        "dependencies": dependency_versions(),
         "estimate": {
             "train_tokens": est,
             "basis": f"~{_CHARS_PER_TOKEN} chars/token heuristic x {hp.num_epochs} epoch(s)",
@@ -440,6 +515,8 @@ def run_training(
     val_frac: float = DEFAULT_VAL_FRAC,
     run_id: str | None = None,
     train_price_per_mtok: float | None = None,
+    selector_constants: dict | None = None,
+    base_model_revision: str | None = None,
     dry_run: bool = False,
     download_adapter: bool = True,
     runner: Callable[..., dict] | None = None,
@@ -496,9 +573,12 @@ def run_training(
         corpus=corpus,
         hp=hp,
         splits_path=Path(splits_path) if splits_path else None,
+        splits=splits,
         dry_run=dry_run,
         train_price_per_mtok=train_price_per_mtok,
         filters=filters,
+        selector_constants=selector_constants,
+        base_model_revision=base_model_revision,
     )
     manifest_path = write_manifest(manifest, manifest_out)
     if dry_run:

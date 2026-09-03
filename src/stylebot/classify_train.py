@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -161,6 +161,7 @@ def assemble_dataset(
     *,
     extra_positives: Iterable[object] | None = None,
     max_transform_sim: float | None = 0.85,
+    pair_ok: Callable[[dict], bool] | None = None,
 ) -> Dataset:
     """Build the slop-vs-author dataset from a content-matched pairs corpus.
 
@@ -177,13 +178,23 @@ def assemble_dataset(
     `.source`) or a `(text, source)` tuple. They are flagged `is_free` and
     excluded from the headline metric, because free positives reintroduce a
     topic signal that would inflate it.
+
+    `pair_ok` is the **caller's** pair-level policy hook (record -> keep?),
+    mirroring `train.assemble_training_corpus`'s `selector`. Selection is never
+    hardcoded here: the case it exists for is "how AI-touched was the post this
+    Dan side came from" (`automation` frontmatter), which is a blog convention
+    stylebot must not know about. Dropped pairs are counted in the log line.
     """
     ds = Dataset()
     n_near_identity = 0
+    n_selector = 0
     for rec in iter_pairs(pairs_path):
         slop = extract_slop(rec).strip()
         author = extract_target(rec).strip()
         if not slop or not author:
+            continue
+        if pair_ok is not None and not pair_ok(rec):
+            n_selector += 1
             continue
         meta = rec.get("meta") or {}
         sim = meta.get("transform_sim")
@@ -197,6 +208,12 @@ def assemble_dataset(
             "dropped %d near-identity pair(s) (transform_sim > %s) — label noise",
             n_near_identity,
             max_transform_sim,
+        )
+    if n_selector:
+        logger.info(
+            "dropped %d pair(s) by the caller's pair_ok policy (%s)",
+            n_selector,
+            getattr(pair_ok, "__name__", repr(pair_ok)),
         )
 
     if extra_positives is not None:
@@ -640,6 +657,8 @@ def write_artifact(
     git_repo: str | Path | None = None,
     split: dict | None = None,
     head_C: dict | None = None,
+    pair_ok_name: str | None = None,
+    splits_sha256: str | None = None,
 ) -> Path:
     """Write `head.json` (the runtime contract) + `meta.json`.
 
@@ -670,7 +689,12 @@ def write_artifact(
         "n_pairs_synthetic": ds.n_pairs_synthetic,
         "n_posts": ds.n_posts,
         "n_free_positives": sum(ds.is_free),
+        # The caller's pair-level selector, by name — without it two artifacts
+        # fit under different data policies are indistinguishable in the file
+        # that is supposed to identify them.
+        "pair_ok": pair_ok_name,
         "head_C": head_C,  # how the shipped head's regularization was chosen
+        "splits_sha256": splits_sha256,
         "split": split
         or {
             "mode": "fit_all",
@@ -775,6 +799,11 @@ def _train_splits_mode(
         "mode": "splits",
         "path": str(splits_path),
         "seed": sp.get("seed"),
+        # The partition this head was fit under, pinned by content and by
+        # version: `eval_v2 = eval_v1 ∪ new posts` moves posts INTO the frozen
+        # stratum, so an artifact fit before the extension saw prose that a
+        # later verdict treats as held out.
+        "eval_version": sp.get("eval_version"),
         "rest_rule": sp["rest_rule"],
         "roles": splits_mod.summarize_roles(sp, ds),
         "warnings": warnings,
@@ -787,7 +816,7 @@ def _train_splits_mode(
         head_C_info=head_C_info,
         metrics=metrics,
         split=split,
-        ship_kw=ship_kw,
+        ship_kw={**ship_kw, "splits_sha256": splits_mod.splits_sha256(splits_path)},
     )
 
 
@@ -867,6 +896,7 @@ def train(
     holdout_seed: int = 0,
     holdout_posts=None,
     splits_path: str | Path | None = None,
+    pair_ok: Callable[[dict], bool] | None = None,
 ) -> tuple[Path, dict]:
     """End-to-end: assemble → embed → evaluate → fit → write artifact.
 
@@ -887,7 +917,7 @@ def train(
       danger-report warnings, and the rest-rule are recorded in `meta.split` so
       styler-train + eval consume the same partition.
     """
-    ds = assemble_dataset(pairs_path, extra_positives=extra_positives)
+    ds = assemble_dataset(pairs_path, extra_positives=extra_positives, pair_ok=pair_ok)
     if ds.n_pairs == 0:
         raise ValueError(f"no content-matched pairs found in {pairs_path}")
 
@@ -896,6 +926,7 @@ def train(
         embed_model=embed_model,
         normalize=normalize,
         git_repo=git_repo,
+        pair_ok_name=getattr(pair_ok, "__name__", None) if pair_ok else None,
     )
 
     if splits_path is not None:

@@ -30,6 +30,16 @@ from pathlib import Path
 # here — livingthing supplies a sentence-transformers one; tests supply a stub.
 EmbedFn = Callable[[str], Sequence[float]]
 
+#: What identifies the *instrument* on a score, as opposed to the score itself.
+#: One classifier is the best-of reranker, the do-no-harm guard AND the verdict
+#: metric, and it gets refit whenever the corpus grows — so "P(slop) went down"
+#: is meaningless unless the two numbers came from the same head. `name` and
+#: `embed_model` were already carried; the artifact's `git_sha` / `trained_at` /
+#: `n_pairs` are what actually distinguish two refits of the same recipe, and
+#: they were the three that went unrecorded (run 4a's detector was refit the same
+#: day as the verdict it produced — `_plans/findings.md`, "Run 4").
+DETECTOR_IDENTITY_KEYS = ("name", "embed_model", "git_sha", "trained_at", "n_pairs")
+
 
 def _sigmoid(z: float) -> float:
     """Numerically-stable logistic sigmoid (no overflow on large |z|)."""
@@ -83,8 +93,12 @@ def embedding_classifier_detector(
     """Compose an embedder + a linear head into a `stylebot.eval.Detector`.
 
     The returned callable embeds the passage, applies the logistic head, and
-    returns ``{"score": P(slop), "p_dan": 1 - P(slop), "name", "configured",
-    "embed_model"}``.
+    returns ``{"score": P(slop), "p_dan": 1 - P(slop), "configured"}`` plus every
+    `DETECTOR_IDENTITY_KEYS` field the artifact's `meta` could answer — so a
+    `scores.jsonl` row says which head produced it, not merely that some head
+    did. The same dict (minus the score) is attached to the callable as
+    ``.identity``, which is how `eval.detector_identity` asks the question
+    without spending an embed.
 
     The embedding dimension MUST match ``len(head["coef"])`` — a mismatch means
     the wrong embedder was wired, which would score garbage, so it raises
@@ -93,7 +107,10 @@ def embedding_classifier_detector(
     coef = head["coef"]
     intercept = float(head["intercept"])
     dim = len(coef)
-    embed_model = (meta or {}).get("embed_model")
+    meta = meta or {}
+    embed_model = meta.get("embed_model")
+    identity = {key: meta.get(key) for key in DETECTOR_IDENTITY_KEYS}
+    identity["name"] = name
 
     def detect(prose: str) -> dict:
         vec = embed_fn(prose)
@@ -106,11 +123,11 @@ def embedding_classifier_detector(
         return {
             "score": p_slop,
             "p_dan": 1.0 - p_slop,
-            "name": name,
             "configured": True,
-            "embed_model": embed_model,
+            **identity,
         }
 
+    detect.identity = dict(identity)
     return detect
 
 

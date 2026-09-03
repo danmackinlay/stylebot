@@ -24,6 +24,12 @@ def _dataset(posts_pairs: dict[str, int], synth_posts: set | None = None) -> Dat
     return ds
 
 
+def _counts(entry: dict) -> dict:
+    """Just the tallies — `summarize_roles` also carries the concentration
+    diagnostic (`top_post*`), which these assertions are not about."""
+    return {k: entry[k] for k in ("posts", "pairs", "pairs_real", "pairs_synthetic")}
+
+
 def test_make_splits_deterministic_and_pinned():
     posts = [f"post/p{i}.qmd" for i in range(20)]
     s1 = sp.make_splits(posts, eval_frac=0.2, seed=7)
@@ -160,7 +166,7 @@ def test_summarize_roles_counts_posts_pairs_and_provenance():
         synth_posts={"post/e2.qmd", "post/x2.qmd"},
     )
     roles = sp.summarize_roles(splits, ds)
-    assert roles["eval"] == {"posts": 2, "pairs": 3, "pairs_real": 2, "pairs_synthetic": 1}
+    assert _counts(roles["eval"]) == {"posts": 2, "pairs": 3, "pairs_real": 2, "pairs_synthetic": 1}
     assert roles["detector"]["pairs"] + roles["styler"]["pairs"] == 5
 
 
@@ -267,7 +273,7 @@ def test_eval_stratum_is_counted_by_identity_not_by_spelling():
     }
     # Pairs keyed under either spelling are one eval post, and neither is STALE.
     ds = _dataset({"notebook/old.qmd": 2, "notebook/new.qmd": 2, "post/x.qmd": 2})
-    assert sp.summarize_roles(splits, ds)["eval"] == {
+    assert _counts(sp.summarize_roles(splits, ds)["eval"]) == {
         "posts": 1,
         "pairs": 4,
         "pairs_real": 4,

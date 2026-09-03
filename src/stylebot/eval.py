@@ -30,6 +30,7 @@ from __future__ import annotations
 import csv
 import datetime as _dt
 import json
+import random
 import re
 import shutil
 import subprocess
@@ -41,6 +42,17 @@ from pathlib import Path
 from statistics import mean
 from typing import Protocol
 
+# click is an unconditional dependency, and `VerdictOpts` below is a
+# `cli_options` bundle for the same reason `train.Hyperparameters` is: the
+# comparison flags have two CLIs (`ai-style eval` and the blog's mirror) and one
+# declaration, so neither can silently drop one.
+import click
+
+# `classify` is ML-dependency-free at import (that is its whole design), so
+# taking the detector-identity contract from it here costs nothing and keeps one
+# definition of "which head scored this".
+from stylebot.classify import DETECTOR_IDENTITY_KEYS
+from stylebot.cli_options import opt
 from stylebot.jsonl import dumps_line, iter_jsonl, read_jsonl, write_jsonl_atomic
 
 # The pair-text extractors and the score join key live in `stylebot.pairs`; this
@@ -51,7 +63,11 @@ from stylebot.jsonl import dumps_line, iter_jsonl, read_jsonl, write_jsonl_atomi
 from stylebot.pairs import FIELD_EXTRACTORS, GEN_FACET_KEYS, iter_pairs, record_id
 from stylebot.provenance import file_sha256
 
-SCHEMA_VERSION = 2
+# 3 (2026-09-03, W10): the summary gained `by_provenance` + `headline_facet` (the
+# headline is the REAL facet) and `detectors` (which artifact produced the
+# readings). Additive, but the headline convention changed, so consumers keying
+# on the version should see it move.
+SCHEMA_VERSION = 3
 
 # ---------------------------------------------------------------------------
 # Signal 1 — Vale (mechanical slop)
@@ -371,6 +387,159 @@ def null_detector(prose: str) -> dict:
     return {"score": None, "name": "null", "configured": False}
 
 
+null_detector.identity = {key: None for key in DETECTOR_IDENTITY_KEYS} | {"name": "null"}
+
+
+#: Pangram's text endpoint. Overridable so the one-shot cross-check can be
+#: pointed at a mock or a future path without editing this module.
+PANGRAM_URL = "https://text.api.pangram.com/predict"
+
+
+def pangram_detector(
+    *,
+    api_key: str | None = None,
+    url: str = PANGRAM_URL,
+    timeout: float = 30.0,
+    post: Callable[[str, dict, dict], dict] | None = None,
+) -> Detector:
+    """The **optional, one-shot** independent cross-check (`_plans/eval-harness.md`).
+
+    Pangram is a *different model family* with different blind spots, which is
+    the entire point: the voice classifier cannot self-certify that a styler
+    lowered AI-ness rather than learning its embedding's blind spots. It is a
+    paid API (~$0.05/1k words, `PANGRAM_API_KEY`) and it must **never** be the
+    default detector and **never** run in a hot loop — best-of-N reranking or a
+    whole-corpus pass would spend real money per draw. Use it once, over a
+    bounded sample, to confirm the free detector's direction; the judge and
+    Dan's eyeball supply the same orthogonality more cheaply the rest of the
+    time.
+
+    Polarity matches the house convention: ``score = fraction_ai`` (higher =
+    more AI-like), so it drops into `mean_detector_score` unchanged. `post` is
+    the transport seam — ``(url, payload, headers) -> response dict`` — so tests
+    (and a dry run) exercise everything but the spend.
+
+    Networking is `urllib` from the stdlib rather than the `openai` SDK: this is
+    a plain JSON POST to a non-OpenAI endpoint, and eval must stay importable
+    with no SDK installed.
+    """
+    from stylebot import config
+
+    key = api_key or config.require_key("PANGRAM_API_KEY")
+    transport = post or _urllib_post_json
+
+    def detect(prose: str) -> dict:
+        payload = {"text": prose}
+        headers = {"Content-Type": "application/json", "x-api-key": key}
+        body = transport(url, payload, headers)
+        # `fraction_ai` is the documented field; `ai_likelihood` is what some
+        # responses call it. Neither present = no signal, said out loud rather
+        # than defaulted to 0.0, which would read as "certainly human".
+        score = body.get("fraction_ai")
+        if score is None:
+            score = body.get("ai_likelihood")
+        return {
+            "score": float(score) if score is not None else None,
+            "name": "pangram",
+            "configured": True,
+            "embed_model": None,
+            "git_sha": None,
+            "trained_at": None,
+            "n_pairs": None,
+            "prediction": body.get("prediction"),
+        }
+
+    detect.identity = {key_: None for key_ in DETECTOR_IDENTITY_KEYS} | {"name": "pangram"}
+    return detect
+
+
+def _urllib_post_json(url: str, payload: dict, headers: dict, *, timeout: float = 30.0) -> dict:
+    import urllib.request
+
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310 - fixed https URL
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def detector_identity(detector: Detector) -> dict:
+    """Which head is this — `DETECTOR_IDENTITY_KEYS`, without spending an embed.
+
+    Reads the ``.identity`` attribute `classify.embedding_classifier_detector`
+    attaches. A detector that carries none (a test stub, a hand-rolled
+    callable) answers all-None with its ``__name__`` for `name`, so callers get
+    a comparable shape from anything satisfying the protocol.
+    """
+    identity = getattr(detector, "identity", None)
+    if isinstance(identity, dict):
+        return {key: identity.get(key) for key in DETECTOR_IDENTITY_KEYS}
+    fallback = {key: None for key in DETECTOR_IDENTITY_KEYS}
+    fallback["name"] = getattr(detector, "__name__", None)
+    return fallback
+
+
+def _identity_of_row(scores: dict) -> tuple | None:
+    """The detector identity recorded on one score record, as a hashable tuple.
+
+    None when the row carries no *configured* detector — an unconfigured or
+    pre-contract row is not evidence of a different instrument, so it must not
+    trip the mixing guard.
+    """
+    for signals in (scores or {}).values():
+        detector = (signals or {}).get("detector") or {}
+        if detector.get("configured") and detector.get("score") is not None:
+            return tuple(detector.get(key) for key in DETECTOR_IDENTITY_KEYS)
+    return None
+
+
+def detector_identities(scores: str | Path | Iterable[dict]) -> list[dict]:
+    """Every distinct detector identity present in a `scores.jsonl`.
+
+    More than one means the file mixes instruments: some rows were scored by a
+    head that no longer exists, and any mean over the file is a blend. Order is
+    first-seen, so the head of the list is the file's original instrument.
+    """
+    seen: dict[tuple, dict] = {}
+    for rec in load_scores(scores):
+        key = _identity_of_row(rec.get("scores") or {})
+        if key is not None and key not in seen:
+            seen[key] = dict(zip(DETECTOR_IDENTITY_KEYS, key, strict=True))
+    return list(seen.values())
+
+
+def _identity_label(identity: dict) -> str:
+    return (
+        f"{identity.get('name')}@{identity.get('git_sha')} "
+        f"(trained_at={identity.get('trained_at')}, n_pairs={identity.get('n_pairs')})"
+    )
+
+
+def assert_single_detector(
+    scores: str | Path | Iterable[dict], *, allow_mixed: bool = False
+) -> list[dict]:
+    """Refuse a scores file written by more than one detector; return what it has.
+
+    `allow_mixed=True` downgrades to "return them all" for the deliberate case
+    (a file being migrated, a diagnostic). Everything that *compares* numbers
+    goes through here first, because a refit head moves P(slop) by more than the
+    effects being measured — run 4a's headline moved 0.038 while its detector was
+    refit the same day.
+    """
+    identities = detector_identities(scores)
+    if len(identities) > 1 and not allow_mixed:
+        labels = "; ".join(_identity_label(i) for i in identities)
+        raise ValueError(
+            f"scores mix {len(identities)} detector artifacts — every mean over them is a "
+            f"blend of instruments: {labels}. Re-score with one head, or pass "
+            f"allow_mixed=True / --allow-mixed-detector to say you meant it"
+        )
+    return identities
+
+
 # ---------------------------------------------------------------------------
 # Orchestration + schema
 # ---------------------------------------------------------------------------
@@ -498,6 +667,29 @@ def prune_orphan_scores(pairs_path: str | Path, out_path: str | Path) -> int:
     return pruned
 
 
+def _guard_detector_continuity(
+    out_path: str | Path, detector: Detector, *, allow_mixed: bool
+) -> None:
+    """Refuse to append rows from a different head than the file already holds."""
+    identities = assert_single_detector(out_path, allow_mixed=allow_mixed)
+    if not identities or allow_mixed:
+        return
+    incoming = detector_identity(detector)
+    if incoming.get("name") is None and all(v is None for v in incoming.values()):
+        return  # an unidentifiable detector cannot be shown to differ
+    existing = identities[0]
+    # An unconfigured (null) detector adds no detector scores at all, so it can
+    # never blend the file's means; only a *scoring* head has to match.
+    if incoming == existing or incoming.get("name") in (None, "null"):
+        return
+    raise ValueError(
+        f"{out_path} was scored by {_identity_label(existing)} but this run uses "
+        f"{_identity_label(incoming)} — resume skips by pair id, so appending would "
+        f"blend two instruments into one mean. Point --out at a fresh file, or pass "
+        f"--allow-mixed-detector"
+    )
+
+
 @dataclass
 class ScoreResult:
     """Outcome of a `score_pairs_file` run."""
@@ -599,6 +791,7 @@ def score_pairs_file(
     max_workers: int = 8,
     limit: int | None = None,
     prune_orphans: bool = True,
+    allow_mixed_detector: bool = False,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> ScoreResult:
     """Score a `pairs.jsonl` corpus -> an id-keyed `scores.jsonl` (batched).
@@ -624,6 +817,12 @@ def score_pairs_file(
     narrow that: the live id set is the WHOLE corpus regardless of how many
     pairs this run scores. Set `prune_orphans=False` when `out_path` belongs to
     a *different* corpus, where every record would read as orphaned.
+
+    Resume is keyed on the pair id and says nothing about *what did the
+    scoring*, so appending with a refit head silently yields a file whose means
+    blend two instruments — a bigger effect than most of what gets measured
+    across them. On entry the existing rows' detector identity is compared with
+    this run's; a mismatch raises `ValueError` unless `allow_mixed_detector`.
     """
     pairs_path = Path(pairs_path)
     out_path = Path(out_path)
@@ -635,6 +834,8 @@ def score_pairs_file(
     # Prune before reading `seen`: an orphan id would otherwise both survive in
     # the file and count as already-scored.
     pruned = prune_orphan_scores(pairs_path, out_path) if prune_orphans else 0
+
+    _guard_detector_continuity(out_path, detector, allow_mixed=allow_mixed_detector)
 
     seen = existing_scored_ids(out_path)
     todo: list[dict] = []
@@ -715,19 +916,55 @@ def _aggregate_fields(records: list[dict]) -> dict:
     }
 
 
-def summarize_scores(scores: str | Path | Iterable[dict], *, by: str | None = None) -> dict:
+def split_by_provenance(records: Sequence[dict]) -> dict[str, list[dict]]:
+    """Score records split `real` / `synthetic` on `meta.synthetic`.
+
+    The headline number must come from the real facet. Synthetic pairs are our
+    own generators' paraphrases: a verdict computed over them largely measures
+    how well the styler undoes the slop model we happen to be running this
+    month, and on the frozen eval stratum they are the *majority* of the rows
+    (measured 2026-09-03: 62 of 103). Reporting them is fine; letting them into
+    the headline is how "the adapter closes 90% of the gap" stops meaning
+    anything about Dan's prose.
+    """
+    facets: dict[str, list[dict]] = {"real": [], "synthetic": []}
+    for rec in records:
+        facets["synthetic" if (rec.get("meta") or {}).get("synthetic") else "real"].append(rec)
+    return facets
+
+
+def summarize_scores(
+    scores: str | Path | Iterable[dict],
+    *,
+    by: str | None = None,
+    facet_provenance: bool = True,
+) -> dict:
     """Aggregate a `scores.jsonl` (path or records) per field, optionally faceted.
 
     Fields-across-rows are the "groups" the styler is judged by movement across
     (slop vs target vs output). `by` additionally facets by a carried `meta` key
     — `by="slop_strategy"` gives per-strategy means.
+
+    `facet_provenance` (default on) adds `by_provenance.real` / `.synthetic` and
+    names `headline_facet: "real"`, mirroring what the classifier trainer
+    already does with `metrics.by_provenance`. It also records the file's
+    `detector` identities, so a summary carries the instrument that produced it
+    rather than only the reading.
     """
     records = load_scores(scores)
     summary: dict = {
         "schema_version": SCHEMA_VERSION,
         "pairs": len(records),
         "fields": _aggregate_fields(records),
+        "detectors": detector_identities(records),
     }
+    if facet_provenance:
+        facets = split_by_provenance(records)
+        summary["by_provenance"] = {
+            name: {"pairs": len(rows), "fields": _aggregate_fields(rows)}
+            for name, rows in facets.items()
+        }
+        summary["headline_facet"] = "real"
     if by is not None:
         buckets: dict[str, list[dict]] = {}
         for rec in records:
@@ -735,6 +972,530 @@ def summarize_scores(scores: str | Path | Iterable[dict], *, by: str | None = No
             buckets.setdefault("null" if key is None else str(key), []).append(rec)
         summary["by"] = {k: _aggregate_fields(v) for k, v in sorted(buckets.items())}
     return summary
+
+
+# ---------------------------------------------------------------------------
+# The verdict — paired comparison with a cluster bootstrap
+# ---------------------------------------------------------------------------
+#
+# Two adapters scored on the same chunks are compared paired; the question is
+# what the CI around the paired mean is allowed to assume. Treating chunks as
+# independent assumes 127 independent observations when 77 of them come from one
+# post (`notebook/automatic_coding.qmd`, re-measured 2026-09-03: 77 of 103 eval
+# pairs, 75%). Chunks within a post share topic, register, and whatever the
+# generator did to that post, so the effective sample size is nearer the 6 posts
+# than the 103 chunks, and a chunk-level CI is too narrow by roughly the square
+# root of the average cluster size. Resampling POSTS — not chunks — is the fix,
+# and it is a dozen lines of stdlib.
+
+
+#: How to pull one scalar out of a scored field. Vale reports `null` when the
+#: binary is absent rather than 0, so an unavailable run drops out of the
+#: comparison instead of scoring perfect.
+SIGNAL_EXTRACTORS: dict[str, Callable[[dict], float | None]] = {
+    "detector": lambda signals: (signals.get("detector") or {}).get("score"),
+    "judge": lambda signals: (signals.get("judge") or {}).get("score"),
+    "vale": lambda signals: (
+        (signals.get("vale") or {}).get("alerts")
+        if (signals.get("vale") or {}).get("available")
+        else None
+    ),
+}
+
+
+def paired_delta(
+    a: Sequence[float | None],
+    b: Sequence[float | None],
+    *,
+    clusters: Sequence[object] | None = None,
+    n_boot: int = 2000,
+    seed: int = 0,
+    alpha: float = 0.05,
+) -> dict | None:
+    """Mean of `a - b` with a confidence interval; clustered when asked.
+
+    `a`, `b` and `clusters` are aligned; a position where either value is None
+    drops out. With `clusters`, the CI is a **cluster bootstrap**: whole
+    clusters are resampled with replacement `n_boot` times and the interval is
+    the percentile interval of the resampled means — the honest interval when
+    observations inside a cluster are not independent. Without them every
+    observation is its own cluster, which is the ordinary paired bootstrap and
+    reproduces (to Monte-Carlo error) the normal-approximation interval the
+    ad-hoc run-4 script computed.
+
+    Returns None when fewer than two usable differences remain; the interval is
+    None when they all fall in one cluster — one post is not an interval.
+    """
+    clustered = clusters is not None
+    if clusters is None:
+        clusters = range(len(a))
+    diffs: list[float] = []
+    labels: list[object] = []
+    for x, y, cluster in zip(a, b, clusters, strict=True):
+        if x is None or y is None:
+            continue
+        diffs.append(float(x) - float(y))
+        labels.append(cluster)
+    if len(diffs) < 2:
+        return None
+
+    grouped: dict[object, list[float]] = {}
+    for label, diff in zip(labels, diffs, strict=True):
+        grouped.setdefault(label, []).append(diff)
+    point = mean(diffs)
+    base = {
+        "mean": point,
+        "n": len(diffs),
+        "n_clusters": len(grouped),
+    }
+
+    if len(grouped) < 2:
+        return {**base, "ci_low": None, "ci_high": None, "method": "single-cluster", "n_boot": 0}
+
+    keys = list(grouped)
+    rng = random.Random(seed)
+    means: list[float] = []
+    for _ in range(n_boot):
+        drawn: list[float] = []
+        for _ in keys:
+            drawn.extend(grouped[keys[rng.randrange(len(keys))]])
+        if drawn:
+            means.append(mean(drawn))
+    means.sort()
+    lo = means[max(0, int(alpha / 2 * len(means)) - 1)]
+    hi = means[min(len(means) - 1, int((1 - alpha / 2) * len(means)))]
+    return {
+        **base,
+        "ci_low": lo,
+        "ci_high": hi,
+        "method": "cluster_bootstrap" if clustered else "bootstrap",
+        "n_boot": len(means),
+        "alpha": alpha,
+    }
+
+
+@dataclass(frozen=True)
+class VerdictOpts:
+    """The comparison surface, declared once for every CLI that offers it.
+
+    `ai-style eval` and the blog's `dan-style eval` are the two today, and the
+    mirror test (`tests/test_dan_style_cli.py`) asserts the second carries every
+    flag of the first — so these are a `cli_options` bundle rather than six
+    `click.option` lines retyped in two repos, the same reason `Hyperparameters`
+    and `BackendOpts` are.
+    """
+
+    cli_section = "Verdict / comparison"
+
+    allow_mixed_detector: bool = opt(
+        False,
+        "--allow-mixed-detector",
+        is_flag=True,
+        help="Append to a scores file written by a DIFFERENT detector artifact. Off by default: "
+        "resume skips by pair id, so a refit head would blend two instruments into one mean.",
+    )
+    compare_path: Path | None = opt(
+        None,
+        "--compare",
+        "compare_path",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        help="A second scores.jsonl to compare against, paired on pair id: prints the mean "
+        "difference with a bootstrap CI clustered by POST. Refuses a cross-detector comparison.",
+    )
+    compare_field: str = opt(
+        "output",
+        "--compare-field",
+        show_default=True,
+        help="Which scored field --compare pits against the other file.",
+    )
+    compare_signal: str = opt(
+        "detector",
+        "--compare-signal",
+        show_default=True,
+        type=click.Choice(["detector", "judge", "vale"]),
+        help="Which signal --compare reports.",
+    )
+    cluster_by: str = opt(
+        "source",
+        "--cluster-by",
+        show_default=True,
+        help="Meta key the --compare bootstrap resamples (the POST). Empty string = treat every "
+        "chunk as independent, which over a concentrated stratum makes the CI too narrow.",
+    )
+    allow_cross_detector: bool = opt(
+        False,
+        "--allow-cross-detector",
+        is_flag=True,
+        help="Let --compare span two detector artifacts. A refit head moves P(slop) on its own, "
+        "so the delta then measures the instrument as much as the adapter.",
+    )
+
+
+@dataclass(frozen=True)
+class DocumentOpts:
+    """The document-scale eval surface — `rewrite_documents_file`'s flags.
+
+    Deliberately only four: the styler is configured entirely by the training
+    manifest (`backends.opts_from_manifest`), because the whole point of
+    document-scale eval is to exercise the diet the manifest records. A flag
+    soup here would let you score a diet no adapter was trained on.
+    """
+
+    cli_section = "Document-scale eval"
+
+    documents: bool = opt(
+        False,
+        "--documents",
+        is_flag=True,
+        help="Rewrite WHOLE capture-archive documents through the styler instead of scoring "
+        "pre-cut chunks, then score the result. This is the only mode that exercises "
+        "segmentation, protected blocks and the chunk diet — a diet switch cannot move a "
+        "number computed on chunks that were cut before it. PAID: it samples the adapter.",
+    )
+    documents_manifest: Path | None = opt(
+        None,
+        "--documents-manifest",
+        "documents_manifest",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        help="Training manifest whose adapter and chunk diet --documents serves.",
+    )
+    documents_out: Path | None = opt(
+        None,
+        "--documents-out",
+        "documents_out",
+        type=click.Path(dir_okay=False, path_type=Path),
+        help="Where --documents writes its output JSONL. Default: documents.jsonl beside --out.",
+    )
+    documents_role: str = opt(
+        "eval",
+        "--documents-role",
+        show_default=True,
+        help="Restrict --documents to this splits role. 'all' takes every archive; anything but "
+        "'eval' is measuring memorisation, since the styler trained on those posts.",
+    )
+
+
+VERDICT_PARAMS: dict[str, type] = {"verdict": VerdictOpts, "documents": DocumentOpts}
+
+
+def verdict_options(**kw):
+    """The shared verdict/comparison + document-scale flags.
+
+    One decorator for both bundles: `ai-style eval` and the blog's `dan-style
+    eval` mirror each other flag for flag (pinned by the blog's mirror test), so
+    a surface split across two decorators is two chances to add one and forget
+    the other. `defaults=`/`exclude=` as elsewhere.
+    """
+    from stylebot.cli_options import bundle_options
+
+    return bundle_options([VerdictOpts, DocumentOpts], **kw)
+
+
+def format_summary(summary: dict) -> list[str]:
+    """The aggregate as printable lines, **headline facet first**.
+
+    A renderer, not a printer, so `ai-style eval` and the blog's mirror show the
+    same thing without either owning the layout. The headline is the REAL facet:
+    on the frozen eval stratum most rows are our own generators' paraphrases (62
+    of 103, measured 2026-09-03), and a mean over those says how well the styler
+    undoes this month's slop model, not how Dan-shaped its prose is.
+    """
+    lines: list[str] = []
+
+    def block(prefix: str, fields: dict) -> None:
+        for name, agg in fields.items():
+            lines.append(
+                f"{prefix}{name}: n={agg['n']} judge={agg['mean_judge_score']} "
+                f"vale_alerts={agg['mean_vale_alerts']} detector={agg['mean_detector_score']}"
+            )
+
+    facets = summary.get("by_provenance") or {}
+    real, synthetic = facets.get("real") or {}, facets.get("synthetic") or {}
+    if real.get("pairs") and synthetic.get("pairs"):
+        lines.append(f"HEADLINE — real pairs only ({real['pairs']}):")
+        block("  ", real["fields"])
+        lines.append(f"synthetic pairs, reported separately ({synthetic['pairs']}):")
+        block("  ", synthetic["fields"])
+        lines.append(f"all pairs ({summary['pairs']}):")
+        block("  ", summary["fields"])
+    else:
+        block("", summary["fields"])
+    for identity in summary.get("detectors") or []:
+        lines.append(f"detector: {_identity_label(identity)}")
+    return lines
+
+
+def format_verdict(verdict: dict, a_label: object = "a", b_label: object = "b") -> list[str]:
+    """The paired comparison as printable lines, CI and cluster count included."""
+    delta = verdict["delta"]
+    lines = [
+        f"verdict — {verdict['signal']} on '{verdict['field']}', "
+        f"{verdict['provenance'] or 'all'} pairs, clustered by {verdict['cluster_by']}",
+        f"  a = {a_label}  mean {verdict['mean_a']}",
+        f"  b = {b_label}  mean {verdict['mean_b']}",
+    ]
+    if delta is None:
+        lines.append("  not enough shared, scored ids to compare")
+        return lines
+    ci = (
+        f"[{delta['ci_low']:+.4f}, {delta['ci_high']:+.4f}]"
+        if delta.get("ci_low") is not None
+        else "[no interval: one cluster]"
+    )
+    lines.append(
+        f"  paired a-b: {delta['mean']:+.4f}  95% CI {ci}  "
+        f"n={delta['n']} over {delta['n_clusters']} cluster(s) [{delta['method']}]"
+        f"  -> {verdict['verdict']}"
+    )
+    if verdict["cross_detector"]:
+        lines.append(
+            "  WARNING: the two sides were scored by DIFFERENT detector artifacts; "
+            "this delta measures the instrument as well as the adapter"
+        )
+    return lines
+
+
+def _verdict_label(delta: dict | None, *, lower_is_better: bool) -> str:
+    if delta is None or delta.get("ci_low") is None:
+        return "undetermined"
+    if delta["ci_high"] < 0:
+        return "a better" if lower_is_better else "b better"
+    if delta["ci_low"] > 0:
+        return "b better" if lower_is_better else "a better"
+    return "indistinguishable"
+
+
+def compare_scores(
+    scores_a: str | Path | Iterable[dict],
+    scores_b: str | Path | Iterable[dict],
+    *,
+    field: str = "output",
+    signal: str = "detector",
+    cluster_by: str | None = "source",
+    provenance: str | None = "real",
+    n_boot: int = 2000,
+    seed: int = 0,
+    allow_cross_detector: bool = False,
+) -> dict:
+    """Paired verdict between two scored runs over the same ids.
+
+    Joins on the score `id`, keeps the ids both files carry, and reports the
+    paired difference with a bootstrap clustered on `meta[cluster_by]` (the
+    POST, by default). `provenance` restricts the comparison to one facet —
+    `"real"` by default, because the headline must not be computed over our own
+    generators' paraphrases; pass None for all rows.
+
+    **Refuses a cross-detector comparison.** Both files must have been written
+    by the same detector artifact; a refit head moves P(slop) on its own, so a
+    delta across two heads measures the instrument. `allow_cross_detector=True`
+    says you mean it, and the returned dict records that you did.
+    """
+    if signal not in SIGNAL_EXTRACTORS:
+        raise ValueError(f"unknown signal {signal!r}; known: {sorted(SIGNAL_EXTRACTORS)}")
+    rows_a = {str(r["id"]): r for r in load_scores(scores_a) if r.get("id") is not None}
+    rows_b = {str(r["id"]): r for r in load_scores(scores_b) if r.get("id") is not None}
+
+    ids_a = assert_single_detector(rows_a.values(), allow_mixed=allow_cross_detector)
+    ids_b = assert_single_detector(rows_b.values(), allow_mixed=allow_cross_detector)
+    if not allow_cross_detector and ids_a and ids_b and ids_a[0] != ids_b[0]:
+        raise ValueError(
+            f"refusing to compare verdicts across detector artifacts: "
+            f"{_identity_label(ids_a[0])} vs {_identity_label(ids_b[0])} — a refit head moves "
+            f"P(slop) by more than most effects being measured. Re-score both sides with one "
+            f"head, or pass allow_cross_detector=True / --allow-cross-detector"
+        )
+
+    extract = SIGNAL_EXTRACTORS[signal]
+    shared = sorted(set(rows_a) & set(rows_b))
+    a_vals: list[float | None] = []
+    b_vals: list[float | None] = []
+    clusters: list[object] = []
+    for rid in shared:
+        meta = rows_a[rid].get("meta") or {}
+        facet = "synthetic" if meta.get("synthetic") else "real"
+        if provenance is not None and facet != provenance:
+            continue
+        a_vals.append(extract((rows_a[rid].get("scores") or {}).get(field) or {}))
+        b_vals.append(extract((rows_b[rid].get("scores") or {}).get(field) or {}))
+        clusters.append(meta.get(cluster_by) if cluster_by else rid)
+
+    delta = paired_delta(
+        a_vals,
+        b_vals,
+        clusters=clusters if cluster_by else None,
+        n_boot=n_boot,
+        seed=seed,
+    )
+    usable_a = [v for v in a_vals if v is not None]
+    usable_b = [v for v in b_vals if v is not None]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "field": field,
+        "signal": signal,
+        "provenance": provenance,
+        "cluster_by": cluster_by,
+        "n_shared_ids": len(shared),
+        "mean_a": mean(usable_a) if usable_a else None,
+        "mean_b": mean(usable_b) if usable_b else None,
+        "delta": delta,
+        "verdict": _verdict_label(delta, lower_is_better=(signal != "judge")),
+        "detector_a": ids_a[0] if ids_a else None,
+        "detector_b": ids_b[0] if ids_b else None,
+        "cross_detector": bool(allow_cross_detector and ids_a and ids_b and ids_a[0] != ids_b[0]),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Document-scale eval — whole posts through `infer.rewrite_text`
+# ---------------------------------------------------------------------------
+#
+# Everything above scores PRE-CUT chunks: `infer.rewrite_pairs_file` hands
+# `messages[:2]` straight to the styler, so the chunking that `rewrite_text`
+# actually performs at serving time — segmentation, protected blocks, the
+# heading-context rule, the cross-heading diet, the do-no-harm guard — is never
+# exercised by the verdict. A diet switch like run 4a's (`inline_headings`,
+# 4500-char budget) therefore cannot move the number that decides whether to
+# promote it, which is the wrong way round.
+#
+# The material for a document-scale eval already exists: a capture archive holds
+# `before.md` (the slop-bearing draft) and `after.md` (Dan's edit) as WHOLE
+# documents. Rewriting `before.md` and scoring it against both is the same
+# slop → output → Dan movement view, one post at a time.
+
+
+@dataclass
+class DocumentRewriteResult:
+    """Outcome of a `rewrite_documents_file` run."""
+
+    written: int = 0
+    skipped_existing: int = 0
+    n_chunks: int = 0
+    n_kept_input: int = 0
+    errors: list[tuple[str, str]] = field(default_factory=list)
+
+
+def iter_document_pairs(pairs_path: str | Path, *, splits: dict | None = None, role: str = "eval"):
+    """Whole-document (before, after) captures, optionally restricted to a role.
+
+    Yields `{"capture_id", "source", "before", "after"}` per capture archive
+    beside `pairs_path`. With `splits`, only archives whose post resolves to
+    `role` are yielded — `role="eval"` being the frozen stratum, the only one a
+    verdict may be computed on. `role=None` yields every archive.
+    """
+    from stylebot.capture import iter_archives
+
+    for archive in iter_archives(Path(pairs_path)):
+        source = archive.get("source")
+        if splits is not None and role is not None:
+            from stylebot import splits as splits_mod
+
+            if splits_mod.role_of(source or "?", splits) != role:
+                continue
+        yield {
+            "capture_id": archive.get("capture_id"),
+            "source": source,
+            "before": archive.get("before_text") or "",
+            "after": archive.get("after_text") or "",
+        }
+
+
+def rewrite_documents_file(
+    pairs_path: str | Path,
+    out_path: str | Path,
+    styler,
+    *,
+    splits: dict | None = None,
+    role: str = "eval",
+    limit: int | None = None,
+    rewrite: Callable[..., object] | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    **rewrite_kwargs,
+) -> DocumentRewriteResult:
+    """Rewrite whole eval-stratum documents; emit a scorable output JSONL.
+
+    Each record is pair-shaped — `messages` = (frozen system, the before
+    document, the after document) plus a top-level `output` — so
+    `score_pairs_file(fields=("slop", "target", "output"))` scores it with no
+    change, and `report.render_scores_report` renders it. `meta.capture_id` is
+    prefixed `doc:` so a document row's `record_id` can never be mistaken for
+    the chunk-level pair cut from the same capture.
+
+    `rewrite` is the seam onto `infer.rewrite_text` — imported lazily, injected
+    by tests as a stub so the whole path is exercised with no sampling spend.
+    Remaining keywords (`max_chunk_chars`, `inline_headings`, `best_of`,
+    `scorer`, `div_is_prose`, …) go straight through to it, which is the point:
+    THIS is where a diet switch gets exercised.
+
+    Resumable by record id. The output belongs to a different corpus than
+    `pairs.jsonl`, so score it with `prune_orphans=False`.
+    """
+    from stylebot.ai_core import STYLE_SYSTEM
+
+    if rewrite is None:
+        from stylebot.infer import rewrite_text as rewrite
+
+    out_path = Path(out_path)
+    done = {record_id(rec) for rec in iter_pairs(out_path) if rec.get("messages")}
+
+    docs = []
+    for doc in iter_document_pairs(pairs_path, splits=splits, role=role):
+        if not doc["before"].strip() or not doc["after"].strip():
+            continue
+        if f"doc:{doc['capture_id']}:0" in done:
+            continue
+        docs.append(doc)
+        if limit is not None and len(docs) >= limit:
+            break
+
+    result = DocumentRewriteResult(skipped_existing=len(done))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("a", encoding="utf-8") as fp:
+        for i, doc in enumerate(docs, start=1):
+            try:
+                rewritten = rewrite(doc["before"], styler, **rewrite_kwargs)
+            except Exception as exc:  # noqa: BLE001 - one bad post must not end the pass
+                result.errors.append((str(doc["capture_id"]), f"{type(exc).__name__}: {exc}"))
+                continue
+            text = getattr(rewritten, "text", rewritten)
+            result.n_chunks += int(getattr(rewritten, "n_chunks", 0) or 0)
+            result.n_kept_input += int(getattr(rewritten, "n_kept_input", 0) or 0)
+            fp.write(
+                dumps_line(
+                    {
+                        "messages": [
+                            {"role": "system", "content": STYLE_SYSTEM},
+                            {"role": "user", "content": doc["before"]},
+                            {"role": "assistant", "content": doc["after"]},
+                        ],
+                        "output": text,
+                        "meta": {
+                            "source": doc["source"],
+                            "capture_id": f"doc:{doc['capture_id']}",
+                            "chunk_index": 0,
+                            "synthetic": False,
+                            "scale": "document",
+                        },
+                    }
+                )
+                + "\n"
+            )
+            fp.flush()
+            result.written += 1
+            if on_progress is not None:
+                on_progress(i, len(docs))
+    return result
+
+
+def verdict_dir(runs_dir: str | Path, run_id: str) -> Path:
+    """Where a run's verdict outputs live: `<runs_dir>/<run_id>/`.
+
+    Run 4a's verdict was computed in `_tmp/eval/` and never committed, so the
+    manifest records a training run whose evidence is on one laptop. Verdicts
+    belong beside the manifest that names the adapter they judge.
+    """
+    path = Path(runs_dir) / run_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 # --- the publishable artifact -------------------------------------------------

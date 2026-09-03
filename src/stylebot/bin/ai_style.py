@@ -36,9 +36,11 @@ import click
 # and 4.5 ms for click. `infer` stays lazy — it owns no default declared here.
 from stylebot import backends, config, pairs, synth, synth_cli
 from stylebot import classify_train as ct
+from stylebot import eval as ev
 from stylebot import splits as sp
 from stylebot import train as tr
 from stylebot.backends import BACKEND_PARAMS, BackendOpts, backend_options
+from stylebot.bin.ai_style_data import main as _data
 from stylebot.bin.ai_style_log import main as _log
 from stylebot.cli_options import SectionedCommand, bundle_options, bundles_from_kwargs
 from stylebot.jsonl import append_jsonl
@@ -53,6 +55,9 @@ def main() -> None:
 # Phase 1 capture — the group defined in bin/ai_style_log.py, mounted here as
 # its only entry point.
 main.add_command(_log, name="log")
+
+# One-off data migrations — hidden; see CLAUDE.md's carve-out paragraph.
+main.add_command(_data, name="data")
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +236,67 @@ def synth_cmd(
         )
 
 
+def _document_pass(pairs_path: Path, out: Path, doc_opts, score_fields):
+    """Rewrite whole eval-stratum documents; return what to score instead.
+
+    Returns `(pairs_path, fields, prune_orphans)` for the scoring pass that
+    follows: the output JSONL is a DIFFERENT corpus from `pairs.jsonl`, so orphan
+    pruning must be off (every row would read as orphaned) and `output` joins the
+    scored fields.
+    """
+    if doc_opts.documents_manifest is None:
+        raise click.UsageError("--documents needs --documents-manifest (the adapter to serve)")
+    manifest = _load_manifest(doc_opts.documents_manifest)
+    styler = build_styler(backends.opts_from_manifest(manifest, BackendOpts(backend="tinker")))
+    max_chunk_chars, inline_headings = backends.serving_diet(manifest)
+
+    splits_file = config.splits_path(pairs_path.parent)
+    splits_doc = sp.load_splits(splits_file) if splits_file.exists() else None
+    role = None if doc_opts.documents_role == "all" else doc_opts.documents_role
+    if role is not None and splits_doc is None:
+        raise click.UsageError(
+            f"--documents-role {role} needs a splits contract; none at {splits_file}"
+        )
+
+    docs_out = doc_opts.documents_out or (out.parent / "documents.jsonl")
+
+    def _doc_progress(i: int, total: int) -> None:
+        click.echo(f"  ... {i}/{total} documents rewritten", err=True)
+
+    result = ev.rewrite_documents_file(
+        pairs_path,
+        docs_out,
+        styler,
+        splits=splits_doc,
+        role=role,
+        max_chunk_chars=max_chunk_chars,
+        inline_headings=inline_headings,
+        on_progress=_doc_progress,
+    )
+    click.echo(
+        f"rewrote {result.written} document(s) ({result.n_chunks} chunks, "
+        f"{result.n_kept_input} kept verbatim) -> {docs_out}"
+    )
+    for capture_id, message in result.errors[:10]:
+        click.secho(f"  {capture_id}: {message}", fg="yellow", err=True)
+    fields = (*score_fields, *(() if "output" in score_fields else ("output",)))
+    return docs_out, fields, False
+
+
+def _echo_summary(summary: dict) -> None:
+    for line in ev.format_summary(summary):
+        click.echo(line)
+
+
+def _echo_verdict(verdict: dict, a_path: Path, b_path: Path) -> None:
+    click.echo("")
+    for line in ev.format_verdict(verdict, a_path, b_path):
+        if line.lstrip().startswith("WARNING:"):
+            click.secho(line, fg="yellow", err=True)
+        else:
+            click.echo(line)
+
+
 @main.command("eval")
 @click.option(
     "--pairs",
@@ -342,6 +408,7 @@ def synth_cmd(
     default=None,
     help="Print N random scored pairs (slop vs Dan + scores) to stdout.",
 )
+@ev.verdict_options()
 def eval_cmd(
     pairs_path: Path,
     fields: tuple[str, ...],
@@ -359,6 +426,7 @@ def eval_cmd(
     report_max_rows: int,
     facet_by: str,
     sample_n: int | None,
+    **kw,
 ) -> None:
     """Score a pairs.jsonl corpus across the eval signals (offline, batched).
 
@@ -373,7 +441,8 @@ def eval_cmd(
     reasoning), faceted and sortable. A Phase-4 styler run scores the same way
     once it emits an output-bearing JSONL (add an "output" field then).
     """
-    from stylebot import eval as ev
+    parsed = bundles_from_kwargs(kw, ev.VERDICT_PARAMS)
+    verdict_opts, doc_opts = parsed["verdict"], parsed["documents"]
 
     out = out_path or (pairs_path.parent / "scores.jsonl")
     score_fields = fields or ("slop", "target")
@@ -401,18 +470,27 @@ def eval_cmd(
         if i == 1 or i % 25 == 0 or i == total:
             click.echo(f"  ... {i}/{total} scored", err=True)
 
-    result = ev.score_pairs_file(
-        pairs_path,
-        out,
-        fields=score_fields,
-        judge=judge_fn,
-        detector=detector_fn,
-        vale_config=vale_config,
-        max_workers=max_workers,
-        limit=limit,
-        prune_orphans=prune_orphans,
-        on_progress=_progress,
-    )
+    if doc_opts.documents:
+        pairs_path, score_fields, prune_orphans = _document_pass(
+            pairs_path, out, doc_opts, score_fields
+        )
+
+    try:
+        result = ev.score_pairs_file(
+            pairs_path,
+            out,
+            fields=score_fields,
+            judge=judge_fn,
+            detector=detector_fn,
+            vale_config=vale_config,
+            max_workers=max_workers,
+            limit=limit,
+            prune_orphans=prune_orphans,
+            allow_mixed_detector=verdict_opts.allow_mixed_detector,
+            on_progress=_progress,
+        )
+    except ValueError as exc:  # a detector-continuity refusal, or an unknown field
+        raise click.ClickException(str(exc)) from exc
     # Loud, never silent: the prune REWROTE a file the operator may have
     # committed, and a big count usually means --out belongs to another corpus.
     if result.pruned_orphans:
@@ -431,11 +509,7 @@ def eval_cmd(
             click.echo(f"  {rid}: {msg}", err=True)
 
     summary = ev.summarize_scores(out, by=by)
-    for name, agg in summary["fields"].items():
-        click.echo(
-            f"{name}: n={agg['n']} judge={agg['mean_judge_score']} "
-            f"vale_alerts={agg['mean_vale_alerts']} detector={agg['mean_detector_score']}"
-        )
+    _echo_summary(summary)
     if by is not None:
         click.echo(f"by {by}:")
         for facet, fld in summary["by"].items():
@@ -444,6 +518,20 @@ def eval_cmd(
     if summary_path is not None:
         summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
         click.echo(f"wrote summary -> {summary_path}")
+
+    if verdict_opts.compare_path is not None:
+        try:
+            verdict = ev.compare_scores(
+                out,
+                verdict_opts.compare_path,
+                field=verdict_opts.compare_field,
+                signal=verdict_opts.compare_signal,
+                cluster_by=verdict_opts.cluster_by or None,
+                allow_cross_detector=verdict_opts.allow_cross_detector,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        _echo_verdict(verdict, out, verdict_opts.compare_path)
 
     # Read-only visualisations over the (just-written) scores.jsonl + the corpus.
     # No extra scoring — re-rendering an already-scored corpus is a no-op pass.
@@ -803,6 +891,10 @@ def check_splits_cmd(splits_path: Path, blog_root: Path, pairs_path: Path | None
     spellings = sp.eval_post_spellings(splits_doc)
     missing = set(sp.missing_eval_posts(splits_doc, blog_root))
     click.echo(
+        f"eval stratum v{sp.eval_version(splits_doc)}  "
+        f"splits_sha256={sp.splits_sha256(splits_path)}"
+    )
+    click.echo(
         f"eval posts on disk: {len(spellings) - len(missing)}/{len(spellings)} "
         f"(under {blog_root})"
     )
@@ -817,9 +909,14 @@ def check_splits_cmd(splits_path: Path, blog_root: Path, pairs_path: Path | None
         roles = sp.summarize_roles(splits_doc, ds)
         for role in sp.ROLES:
             entry = roles[role]
+            top = (
+                f"; top post {entry['top_post']} {entry['top_post_share']:.0%}"
+                if entry["top_post"]
+                else ""
+            )
             click.echo(
                 f"{role:>8}: {entry['posts']} post(s), {entry['pairs']} pair(s) "
-                f"({entry['pairs_real']} real / {entry['pairs_synthetic']} synthetic)"
+                f"({entry['pairs_real']} real / {entry['pairs_synthetic']} synthetic){top}"
             )
         report = sp.check_splits(splits_doc, ds, blog_root=blog_root)
     else:

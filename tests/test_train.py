@@ -183,3 +183,44 @@ def test_presplit_builder_seed_has_no_silent_default():
 def test_estimate_tokens_scales_with_text():
     recs = [{"messages": [{"role": "user", "content": "x" * 400}]}]
     assert tr.estimate_tokens(recs) == 100
+
+
+def test_manifest_pins_the_partition_the_selection_and_the_stack(tmp_path, write_pairs_corpus):
+    """W10 item 5: what actually differed between two runs of "the same" recipe.
+
+    `pairs_sha256` covers the FILE; the selection out of it, the partition that
+    held posts back, the caller's policy literals and the installed stack were
+    all unrecorded, so two manifests could agree on every field and describe
+    different training data.
+    """
+    corpus_path = write_pairs_corpus(n_posts=6, **CORPUS)
+    splits_path = tmp_path / "splits.json"
+    sp.save_splits(sp.make_splits([f"post/p{i}.qmd" for i in range(6)], seed=0), splits_path)
+
+    def keep_even_chunks(rec):
+        return (rec.get("meta") or {}).get("chunk_index", 0) % 2 == 0
+
+    def run(**kw):
+        return tr.run_training(
+            corpus_path,
+            tmp_path / "work",
+            tmp_path / "runs" / "r.json",
+            dry_run=True,
+            splits_path=splits_path,
+            **kw,
+        ).manifest
+
+    full = run()
+    data = full["data"]
+    assert data["splits_sha256"] == sp.splits_sha256(splits_path)
+    assert data["eval_version"] == 1
+    assert len(data["record_ids_sha256"]) == 16
+    assert full["dependencies"]["stylebot"]  # the installed stack, by name
+    assert "tinker" in full["dependencies"]  # absent -> None, never omitted
+    assert full["base_model_revision"] is None
+
+    # Two selections over one corpus file: same pairs_sha256, different records.
+    filtered = run(selector=keep_even_chunks, selector_constants={"RETIRED_ARMS": ["m1"]})
+    assert filtered["data"]["pairs_sha256"] == data["pairs_sha256"]
+    assert filtered["data"]["record_ids_sha256"] != data["record_ids_sha256"]
+    assert filtered["data"]["selector_constants"] == {"RETIRED_ARMS": ["m1"]}

@@ -355,6 +355,67 @@ not just on-save.
 
 ---
 
+## Eval-stratum composition — re-measured 2026-09-03 (W10)
+
+The frozen eval stratum, against the live 8,244-pair corpus:
+
+| view | posts | pairs | real | synthetic |
+|---|---:|---:|---:|---:|
+| the corpus (`iter_pairs`, every record) | 6 | **103** | **41** | 62 |
+| the detector dataset (after the `transform_sim > 0.85` gate) | 6 | **89** | **41** | 48 |
+
+Both numbers are right and they answer different questions: `check-splits`
+prints the second because it reports through `classify_train.assemble_dataset`.
+14 synthetic eval pairs are near-identity and never reach the classifier.
+
+**The stratum is one post wearing five hats.** Per pinned post, alias-resolved:
+
+| post | pairs | real | `automation` |
+|---|---:|---:|---:|
+| `notebook/automatic_coding.qmd` | **77 (75%)** | 15 | 1 |
+| `notebook/adhd.qmd` | 10 | 10 | 2 |
+| `notebook/empowerment.qmd` (now `informational_empowerment`) | 6 | 6 | 2 |
+| `notebook/learning_from_madness_of_crowds.qmd` (now `wisdom_from_…`) | 4 | 4 | 0 |
+| `notebook/ai_economics_knowledge.qmd` | 4 | 4 | 2 |
+| `notebook/multi_agent_reinforcement_learning.qmd` | 2 | 2 | 1 |
+
+Run 4's verdict called this "127 chunks, paired" and gave it a chunk-level
+interval. It is 6 clusters (D40). `MIN_POSTS_PER_ROLE = 5` passes at 6 — the
+plan's "passes silently at 4" was counting spellings before W0's alias map
+folded the two renamed posts back onto their identities.
+
+**Real captures live on AI-touched posts, by construction.** Pairs by source-post
+`automation`, alias-resolved, 2026-09-03:
+
+| role | automation 0 | 1 | 2 | of which REAL: 0 / 1 / 2 |
+|---|---:|---:|---:|---|
+| eval | 4 | 79 | 20 | 4 / 17 / 20 |
+| detector | 2,596 | 517 | 139 | 11 / 30 / 138 |
+| styler | 4,112 | 569 | 208 | 11 / 33 / 134 |
+
+**168 of the detector pool's 179 real pairs (94%) sit on `automation: 1/2`
+posts** — the post is marked AI-touched *because* Dan captured himself
+de-slopping it. Capping detector targets at `automation: 0` outright, as the QA
+list proposed, would leave the honest `real` facet with 11 pairs. Capping only
+the **synthetic** ones drops 488 of 3,252 detector pairs (15%) and costs no real
+pair at all. That is what shipped (D41).
+
+**What an eval re-cut would buy, and take** (D42). 52 posts carry ≥1 real pair;
+6 are eval, 16 detector, 30 styler.
+
+| eval_v2 | posts | pairs | real | top-post pair share | detector real left | styler real left |
+|---|---:|---:|---:|---:|---:|---:|
+| v1 (today) | 6 | 103 | 41 | 75% | 179 | 178 |
+| + top 4 styler-role | 10 | 190 | 128 | 41% | 179 | 91 |
+| **+ top 6 styler-role (recommended)** | **12** | **245** | **149** | **31%** | **179** | **70** |
+| + all 30 styler-role | 36 | 544 | 219 | 14% | 179 | 0 |
+| + all 46 real-pair posts (maximal) | 52 | 1,025 | 398 | 8% | **0** | **0** |
+
+The maximal cut is the one the QA list describes and it zeroes both other roles'
+real strata. Not applied — see D42.
+
+---
+
 ## Training runs
 
 **Base model rate**: `Qwen/Qwen3.5-9B` at **$1.463/1M train tokens**
@@ -403,6 +464,37 @@ CI [−0.0576, +0.0016], which does not. Vale −0.087 [−0.194, +0.021] and an
 damage 7/127 vs run 2's 6/127 (4a loses more, invents fewer: 6+2 against 4+5),
 median output/input length 0.99 vs 1.00 — so the gain is not bought with
 deletion, which is what killed run 1.
+
+### Run 4's verdict, re-analysed 2026-09-03 (W10) — the gain over run 2 does not survive
+
+Same score files (`_tmp/eval-run4/scores-full-*.jsonl`, 127 chunks from the
+2026-08-17 corpus: 65 real / 62 synthetic, 85 of the 127 from
+`notebook/automatic_coding.qmd`), re-read through `eval.compare_scores` with the
+POST cluster bootstrap and the real/synthetic facet:
+
+| comparison | facet | paired Δ | 95% CI | verdict |
+|---|---|---:|---|---|
+| 4a − 4b | all 127 | −0.0096 | [−0.0168, −0.0017] | (see caveat) |
+| 4a − 4b | **real (65)** | +0.0011 | [−0.0168, +0.0116] | indistinguishable |
+| 4a − run 2 | all 127 | −0.0376 | **[−0.0507, +0.0021]** | indistinguishable |
+| 4a − run 2 | **real (65)** | **−0.0033** | [−0.0143, +0.0033] | indistinguishable |
+
+**The headline above — "paired 4a − run 2 = −0.0376, 95% CI [−0.0616, −0.0136]
+— excludes zero" — was computed with a chunk-level normal-approximation
+interval.** Clustered by post the same point estimate straddles zero, and on the
+*real* pairs alone the effect is **eleven times smaller** and nowhere near
+significant. Run 4a's promotion over run 2 therefore rests on (a) treating 127
+chunks from 6 posts as 127 independent observations and (b) counting our own
+generators' paraphrases in the headline. Neither is a reason to un-promote it —
+4a is not *worse*, its length and anchor behaviour are fine, and it was trained
+on a corpus run 2 never saw — but "a real gain" is not what this data supports.
+
+**Caveat on the 4a − 4b row.** A percentile bootstrap over **6** clusters is
+coarse and mildly anti-conservative; a tight interval there means the six
+per-post differences happened to agree in sign, not that the effect is
+established. The real-facet row, where the same comparison is indistinguishable,
+is the one to believe. Both point at D42: the stratum needs more posts before
+any of these intervals mean much.
 
 **Every signal says the two run-4 arms are indistinguishable.** The filter costs 15% of the scarce
 real pairs (31 of 172) and buys nothing measurable at n=127 — including on

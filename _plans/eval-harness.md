@@ -141,11 +141,44 @@ independent** sanity check — useful precisely because it's a *different model
 family* with different blind spots, so it's the one thing the voice-clf (and the
 judge) can't self-certify: run it once before trusting the detector as a *reward*
 to confirm the styler lowers AI-ness independently rather than gaming our
-embedding. It is a paid API (~$0.05/1k words, `PANGRAM_API_KEY`); if ever wired,
-do it as a bounded one-shot pass via an opt-in `pangram_detector(...)` factory
-(`score = fraction_ai`) — **never** the default, **never** in a hot loop. The
-judge + eyeball already supply the orthogonality more cheaply, so Pangram is a
+embedding. It is a paid API (~$0.05/1k words, `PANGRAM_API_KEY`). The judge +
+eyeball already supply the orthogonality more cheaply, so Pangram is a
 nice-to-have, not a dependency.
+
+**Built 2026-09-03, not yet run.** `eval.pangram_detector(...)` is the opt-in
+factory: `score = fraction_ai` (the house polarity, higher = more AI-like), a
+stdlib `urllib` POST rather than the OpenAI SDK, and a `post=` transport seam so
+tests exercise everything but the spend. It is **never** the default and
+**never** goes in a hot loop — best-of-N reranking would draw it per candidate.
+`_flatten_scores` treats a missing `fraction_ai` as `None`, not 0.0: no signal is
+said out loud rather than read as "certainly human".
+
+The one-shot pass, when Dan wants it (a `--detector-model`-shaped hook is not
+enough here — the detector is injected, so this is a short library call):
+
+```sh
+# The 41 REAL eval pairs, both sides = 82 calls. Corpus median target is
+# ~1.2k chars ≈ 200 words, so ~16k words ≈ $0.80 at $0.05/1k words.
+direnv exec . uv run python -c "
+from stylebot import eval as ev
+from stylebot import splits as sp
+from stylebot.pairs import iter_pairs
+from stylebot.jsonl import write_jsonl_atomic
+S = sp.load_splits('_training_pairs/splits.json')
+keep = [r for r in iter_pairs('_training_pairs/pairs.jsonl')
+        if sp.role_of((r.get('meta') or {}).get('source') or '?', S) == 'eval'
+        and not (r.get('meta') or {}).get('synthetic')]
+write_jsonl_atomic('_tmp/pangram-eval-pairs.jsonl', keep)
+ev.score_pairs_file('_tmp/pangram-eval-pairs.jsonl', '_tmp/pangram-scores.jsonl',
+                    detector=ev.pangram_detector(), prune_orphans=False)
+print(ev.format_summary(ev.summarize_scores('_tmp/pangram-scores.jsonl')))
+"
+```
+
+What it answers: does an *independent* detector also rank Dan's side below the
+slop side, on the same pairs where ours does? Record the pairwise number in
+`findings.md` beside the voice-clf's `real`-facet 0.734, and stop — this is a
+one-shot instrument check, not a signal to add to the loop.
 
 ## Planned — synthetic↔real distribution match (a fifth capability)
 
@@ -179,10 +212,17 @@ it consumes the `meta.gen` covariates synth records per pair.
   records whose pair is gone before it scores (atomic rewrite; count in
   `ScoreResult.pruned_orphans`, reported loudly by the CLI). `--no-prune-orphans`
   is the escape hatch for `--out` belonging to a *different* corpus.
-- **A summary** (`summarize_scores`, `schema_version: 2`) aggregating per field
+- **A summary** (`summarize_scores`, `schema_version: 3`) aggregating per field
   across rows (fields-across-rows = the movement view: slop vs target vs output),
   optionally faceted `by` a meta key — `by="slop_strategy"` turns "is `casual`
   slop better than `polish`?" into per-strategy mean judge/vale/detector scores.
+  Since v3 it also carries `by_provenance.real` / `.synthetic` with
+  `headline_facet: "real"`, and `detectors` — the artifact identities present in
+  the file (see "Eval integrity" below).
+- **A verdict** (`compare_scores`) when two runs are scored over the same ids:
+  the paired difference on one field/signal with a bootstrap CI **clustered by
+  POST**, restricted to the real facet by default, and refusing to span two
+  detector artifacts.
 
 ## Done-criteria
 
@@ -202,6 +242,12 @@ it consumes the `meta.gen` covariates synth records per pair.
       slop|target] [--judge --judge-model …] [--vale-config …] [--max-workers N]
       [--out scores.jsonl] [--summary summary.json] [--by slop_strategy] [--limit N]
       [--report scores.html] [--sample N]`. Batched, concurrent, resumable.
+- [x] **Eval integrity** (2026-09-03, W10; D39-D42): every score row names the
+      detector artifact that produced it and mixing two is refused; the paired
+      verdict bootstraps over POSTs; the headline is the real facet; the eval
+      stratum is versioned and add-only; manifests pin the splits sha, the kept
+      record-id list, the selector's constants and the installed stack. Tests:
+      `tests/test_eval_integrity.py` (19, no network/key/model).
 - [x] A read-only **scores visualiser** (`stylebot.report.render_scores_report` /
       `--report`): self-contained HTML joining `pairs.jsonl` + `scores.jsonl` by id —
       slop↔Dan text + judge score + rationale per pair, sortable by the slop→Dan
@@ -234,6 +280,63 @@ it consumes the `meta.gen` covariates synth records per pair.
   above; the generic trainer is `stylebot.classify_train` (`ai-style train-clf`,
   `stylebot[classifier]` extra); blog policy + the artifact live in livingthing
   (`voice_classifier.py` / `_models/voice-clf/`).
+
+## Eval integrity — the instrument, the interval, the stratum (2026-09-03, W10)
+
+Four things a verdict has to say besides the number. Decisions D39–D42; measured
+composition in `findings.md`, "Eval-stratum composition".
+
+1. **Which head produced it.** Every detector result carries
+   `classify.DETECTOR_IDENTITY_KEYS` (`name`, `embed_model`, `git_sha`,
+   `trained_at`, `n_pairs`) onto every `scores.jsonl` row.
+   `score_pairs_file` refuses to *resume* a file written by a different head
+   (`--allow-mixed-detector`) and `compare_scores` refuses a verdict spanning two
+   (`--allow-cross-detector`). Resume is keyed on the pair id and says nothing
+   about the instrument, so a refit head plus a resumed run used to blend two
+   instruments into one mean with nothing to show for it.
+2. **What the effective n is.** `paired_delta(clusters=…)` bootstraps over POSTs;
+   `compare_scores` clusters on `meta.source` by default (`--cluster-by`).
+   77 of the 103 frozen-eval pairs come from one post, so a chunk-level interval
+   over the stratum is too narrow by roughly √(mean cluster size).
+3. **Real or synthetic.** `summarize_scores` facets `by_provenance` and names
+   `headline_facet: "real"`; `compare_scores` compares the real facet by default
+   (`provenance=None` for everything). 62 of the 103 are our own paraphrases.
+4. **At what scale it was scored.** `rewrite_documents_file` runs
+   `infer.rewrite_text` over whole **capture archives** — `before.md` rewritten,
+   scored against `before` (slop) and `after.md` (Dan) — and emits the same
+   pair-shaped `output` JSONL the chunk path does, so nothing downstream changes.
+   `--documents` on both CLIs. Everything else scores chunks that were cut before
+   the diet under test existed, which is why a diet switch could not move its own
+   verdict.
+
+Verdict outputs belong under `runs/<run_id>/` (`eval.verdict_dir`,
+`dan-style eval --run-id`), beside the manifest of the adapter they judge. Run
+4a's lived in `_tmp/eval/` and were never committed.
+
+### Document-scale eval — the command, and what it costs
+
+```sh
+# Free: what would be rewritten. Measured 2026-09-03: 3 documents, 86,820 chars
+# (86 capture archives exist; only 3 sit on eval-role posts).
+uv run python -c "
+from stylebot import eval as ev, splits as sp
+S = sp.load_splits('_training_pairs/splits.json')
+docs = list(ev.iter_document_pairs('_training_pairs/pairs.jsonl', splits=S, role='eval'))
+print(len(docs), 'documents,', sum(len(d['before']) for d in docs), 'chars in')
+"
+
+# PAID: rewrite them through the promoted adapter, then score with the detector.
+direnv exec . uv run dan-style eval --documents --run-id <run-id> --field slop --field target
+```
+
+Sizing, at the promoted 4500-char cross-heading diet: 86,820 chars is ~20 prose
+chunks and ~22k output tokens, so at Tinker's ~$0.60/1M that is **≈ $0.015 and a
+few minutes**. The reason to think before running it is that it is a *paid* pass
+and that three documents is a thin verdict — not that it is expensive. Both
+observations point the same way as D42: the eval stratum wants more posts, and
+document-scale eval wants more of them to be *captured* posts. Score with
+`prune_orphans=False` (the CLI does): the output is a different corpus from
+`pairs.jsonl` and every id would otherwise read as orphaned.
 
 ## Guardrail (policy, not optional)
 

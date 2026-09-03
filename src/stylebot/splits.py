@@ -49,6 +49,20 @@ MIN_POSTS_PER_ROLE = 5
 MIN_PAIRS_PER_ROLE = 20
 MIN_DETECTOR_POSTS_FOR_CV = 10
 
+# A stratum where one post supplies more than this share of the pairs is not the
+# n it claims to be: chunks inside a post share topic, register and whatever the
+# generator did to it, so a chunk-level confidence interval over such a stratum
+# is too narrow. Measured 2026-09-03: `notebook/automatic_coding.qmd` is 77 of
+# the 103 eval pairs (75%), which is what run 4a's "127 chunks, paired" CI
+# treated as 127 independent observations. Every comparison over the stratum
+# should cluster by post (`eval.paired_delta(clusters=…)`), and the stratum
+# itself should be extended (`extend_eval`) rather than merely bootstrapped.
+MAX_POST_SHARE_PER_ROLE = 0.5
+
+# The frozen eval stratum is versioned so a verdict can name the stratum it was
+# computed on. v1 is the original `make_splits` cut; extensions bump it.
+DEFAULT_EVAL_VERSION = 1
+
 # `check_splits` returns one flat list of report lines. Lines starting with this
 # prefix are *errors*, not warnings: a pinned eval post that is not on disk is a
 # broken contract (the post was renamed and its role has silently moved), and a
@@ -91,9 +105,69 @@ def make_splits(
         "schema_version": SCHEMA_VERSION,
         "created_at": datetime.now(UTC).isoformat(),
         "seed": seed,
+        "eval_version": DEFAULT_EVAL_VERSION,
         "eval_posts": eval_posts,
         "rest_rule": {"kind": "hash", "detector_frac": detector_frac, "salt": str(seed)},
     }
+
+
+def eval_version(splits: dict) -> int:
+    """Which cut of the frozen stratum this is. Unversioned files read as v1."""
+    return int(splits.get("eval_version") or DEFAULT_EVAL_VERSION)
+
+
+def extend_eval(splits: dict, posts, *, note: str | None = None) -> dict:
+    """`eval_v(n+1) = eval_v(n) ∪ posts` — add-only, and refuses anything else.
+
+    The frozen stratum may **grow** and may never shrink. Growing it re-roles
+    the added posts out of `styler`/`detector` and into `eval`, which is the
+    safe direction: prose leaves the training pools, it never enters them. The
+    opposite move (dropping a post out of eval) would retroactively license
+    training on prose an existing verdict was computed over, so it is not
+    expressible here at all — you would cut a new file with `make_splits`.
+
+    Returns a NEW splits dict with `eval_version` bumped and an `eval_history`
+    entry recording what was added, by whom (the note) and when. Adding nothing
+    new is a no-op that returns the input unchanged rather than churning the
+    version.
+
+    Two things this deliberately does NOT do. It does not touch `aliases`: a
+    renamed post is the same identity and is already handled (D34). And it does
+    not renumber or re-key any pair — role is derived from the recorded
+    `meta.source` at read time, so extending the stratum needs no migration.
+    """
+    known = {canonical_source(p, splits) for p in splits["eval_posts"]}
+    additions = sorted({p for p in posts if canonical_source(p, splits) not in known})
+    if not additions:
+        return splits
+    out = dict(splits)
+    out["eval_posts"] = sorted({*splits["eval_posts"], *additions})
+    out["eval_version"] = eval_version(splits) + 1
+    history = list(splits.get("eval_history") or [])
+    history.append(
+        {
+            "eval_version": out["eval_version"],
+            "at": datetime.now(UTC).isoformat(),
+            "added": additions,
+            "note": note,
+        }
+    )
+    out["eval_history"] = history
+    return out
+
+
+def splits_sha256(path: str | Path) -> str:
+    """16-hex content hash of a `splits.json` — the manifest pin.
+
+    A run manifest already pins the corpus hash and both repos' SHAs but not the
+    partition, so "which posts were held out of this run" was answerable only by
+    trusting that the file had not moved since. It moves: D34 added `aliases`,
+    and `extend_eval` moves posts into the frozen stratum. Same 16-hex
+    convention as `provenance.file_sha256`, which this delegates to.
+    """
+    from stylebot.provenance import file_sha256
+
+    return file_sha256(path)
 
 
 def unit_from_digest(digest: bytes) -> float:
@@ -245,18 +319,34 @@ def summarize_roles(splits: dict, ds) -> dict:
     summary = {
         role: {"posts": set(), "pairs": 0, "pairs_real": 0, "pairs_synthetic": 0} for role in ROLES
     }
+    per_post: dict[str, dict[str, int]] = {role: {} for role in ROLES}
     for k, (s_row, _) in enumerate(ds.pair_rows):
         # Count by identity, not by spelling: a corpus holding pairs under both
         # a post's old and new path is one post, in one role.
         post = canonical_source(ds.groups[s_row], splits)
-        entry = summary[role_of(post, splits)]
+        role = role_of(post, splits)
+        entry = summary[role]
         entry["posts"].add(post)
         entry["pairs"] += 1
+        per_post[role][post] = per_post[role].get(post, 0) + 1
         if ds.pair_is_synthetic(k):
             entry["pairs_synthetic"] += 1
         else:
             entry["pairs_real"] += 1
-    return {role: {**entry, "posts": len(entry["posts"])} for role, entry in summary.items()}
+    out = {}
+    for role, entry in summary.items():
+        counts = per_post[role]
+        top_post, top_pairs = max(counts.items(), key=lambda kv: kv[1]) if counts else (None, 0)
+        out[role] = {
+            **entry,
+            "posts": len(entry["posts"]),
+            # The concentration diagnostic: what fraction of this stratum comes
+            # from its single largest post. See MAX_POST_SHARE_PER_ROLE.
+            "top_post": top_post,
+            "top_post_pairs": top_pairs,
+            "top_post_share": (top_pairs / entry["pairs"]) if entry["pairs"] else 0.0,
+        }
+    return out
 
 
 def check_splits(splits: dict, ds, *, blog_root: str | Path | None = None) -> list[str]:
@@ -295,10 +385,26 @@ def check_splits(splits: dict, ds, *, blog_root: str | Path | None = None) -> li
                 f"(< {MIN_PAIRS_PER_ROLE})"
             )
 
+    for role in ROLES:
+        entry = roles[role]
+        if entry["pairs"] and entry["top_post_share"] > MAX_POST_SHARE_PER_ROLE:
+            warnings.append(
+                f"CONCENTRATED: role '{role}' draws {entry['top_post_share']:.0%} of its "
+                f"{entry['pairs']} pair(s) from one post ({entry['top_post']}) — a chunk-level "
+                f"confidence interval over it is too narrow; cluster by post and extend the "
+                f"stratum"
+            )
+
     if roles["eval"]["pairs"] and roles["eval"]["pairs_real"] == 0:
         warnings.append(
             "EVAL PURITY: the eval stratum contains only synthetic pairs — the frozen "
             "eval would measure detection of our own paraphrase generator, not slop"
+        )
+    elif roles["eval"]["pairs_synthetic"] > roles["eval"]["pairs_real"]:
+        warnings.append(
+            f"EVAL PURITY: {roles['eval']['pairs_synthetic']} of {roles['eval']['pairs']} eval "
+            f"pairs are synthetic — the headline verdict must be the REAL facet "
+            f"({roles['eval']['pairs_real']} pairs), with the synthetic one reported separately"
         )
 
     corpus_posts = {canonical_source(g, splits) for g in ds.groups}

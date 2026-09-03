@@ -429,3 +429,22 @@ def test_assemble_drops_near_identity_pairs(tmp_path):
     assert ds.n_pairs == 2
     ds_all = assemble_dataset(path, max_transform_sim=None)  # gate off
     assert ds_all.n_pairs == 3
+
+
+def test_assemble_dataset_pair_ok_is_the_callers_policy(write_pairs_corpus):
+    """The detector's data policy is the caller's, never hardcoded here.
+
+    The case it exists for is the blog's `automation:` frontmatter — a synthetic
+    pair on an AI-touched post teaches the detector that AI-assisted prose IS
+    the author — which is a blog convention stylebot must not know about.
+    """
+    corpus = write_pairs_corpus(n_posts=4, chunks=2, n_synth_posts=2)
+    everything = ct.assemble_dataset(corpus)
+
+    def drop_synthetic(rec):
+        return not (rec.get("meta") or {}).get("synthetic")
+
+    kept = ct.assemble_dataset(corpus, pair_ok=drop_synthetic)
+    assert everything.n_pairs_synthetic > 0
+    assert kept.n_pairs_synthetic == 0
+    assert kept.n_pairs == everything.n_pairs_real
