@@ -35,6 +35,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time as _time
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -391,17 +392,31 @@ def null_detector(prose: str) -> dict:
 null_detector.identity = {key: None for key in DETECTOR_IDENTITY_KEYS} | {"name": "null"}
 
 
-#: Pangram's text endpoint. Overridable so the one-shot cross-check can be
+#: Pangram's async task API base. Overridable so the one-shot cross-check can be
 #: pointed at a mock or a future path without editing this module.
-PANGRAM_URL = "https://text.api.pangram.com/predict"
+#:
+#: There is no synchronous `/predict` any more: Pangram 3.0 replaced it with
+#: `POST /task` -> task id -> `GET /task/{id}` polled until a terminal stage.
+#: The old URL this module shipped answered 404, which nothing noticed because
+#: the detector had only ever been exercised through its `post=` seam. That is
+#: the argument for the live-call test below, not for a better stub.
+PANGRAM_URL = "https://text.external-api.pangram.com/task"
+
+#: Terminal stages of a Pangram task; anything else means keep polling.
+PANGRAM_DONE = "STAGE_SUCCESS"
+PANGRAM_FAILED = "STAGE_FAILED"
 
 
 def pangram_detector(
     *,
     api_key: str | None = None,
     url: str = PANGRAM_URL,
+    model: str = "pangram-4",
     timeout: float = 30.0,
+    poll_interval: float = 1.0,
+    poll_timeout: float = 180.0,
     post: Callable[[str, dict, dict], dict] | None = None,
+    fetch: Callable[[str, dict], dict] | None = None,
 ) -> Detector:
     """The **optional, one-shot** independent cross-check (`_plans/eval-harness.md`).
 
@@ -430,9 +445,29 @@ def pangram_detector(
     transport = post or _urllib_post_json
 
     def detect(prose: str) -> dict:
-        payload = {"text": prose}
+        payload = {"text": prose, "model": model}
         headers = {"Content-Type": "application/json", "x-api-key": key}
         body = transport(url, payload, headers)
+        # `POST /task` answers with an id, not a verdict. Poll the task until a
+        # terminal stage; `fetch` is the GET seam, so a fake `post` that already
+        # returns a scored body (the shape the tests use) still short-circuits
+        # here rather than needing a second stub.
+        task_id = body.get("task_id") or body.get("id")
+        if task_id and "fraction_ai" not in body:
+            deadline = _time.monotonic() + poll_timeout
+            get = fetch or _urllib_get_json
+            while True:
+                body = get(f"{url}/{task_id}", headers)
+                stage = body.get("stage")
+                if stage == PANGRAM_DONE:
+                    break
+                if stage == PANGRAM_FAILED:
+                    raise RunError(f"pangram task {task_id} failed: {body.get('error') or stage}")
+                if _time.monotonic() > deadline:
+                    raise RunError(
+                        f"pangram task {task_id} still {stage} after {poll_timeout:.0f}s"
+                    )
+                _time.sleep(poll_interval)
         # `fraction_ai` is the documented field; `ai_likelihood` is what some
         # responses call it. Neither present = no signal, said out loud rather
         # than defaulted to 0.0, which would read as "certainly human".
@@ -452,6 +487,14 @@ def pangram_detector(
 
     detect.identity = {key_: None for key_ in DETECTOR_IDENTITY_KEYS} | {"name": "pangram"}
     return detect
+
+
+def _urllib_get_json(url: str, headers: dict, *, timeout: float = 30.0) -> dict:
+    import urllib.request
+
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310 - fixed https URL
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def _urllib_post_json(url: str, payload: dict, headers: dict, *, timeout: float = 30.0) -> dict:

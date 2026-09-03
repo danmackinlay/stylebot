@@ -9,6 +9,59 @@ Each entry: date, what was measured, sample size, the number.
 
 ---
 
+## Pangram cross-check — run 2026-09-03, PARTIAL (W10 item 6)
+
+The one-shot independent-detector check `eval-harness.md` has described since
+the first draft. Run against the eval_v2 stratum. **Two things went wrong before
+a number came out, and both are the finding.**
+
+**The shipped endpoint was dead.** `PANGRAM_URL` was
+`https://text.api.pangram.com/predict`, which answers **404**: Pangram 3.0
+replaced the synchronous endpoint with an async task API (`POST /task` -> id ->
+`GET /task/{id}` polled to `STAGE_SUCCESS`). Nothing had caught it because the
+detector had only ever been exercised through its `post=` transport seam,
+returning an already-scored body. A stub that returns the shape you expect
+cannot tell you the URL is wrong. The fix added a `fetch=` seam for the poll
+loop and two tests over it, but the honest lesson is that "built and tested,
+not run" was worth less than it sounded.
+
+**The account ran out of credit mid-run**: HTTP **402 Payment Required** after
+92 of 149 records. The numbers below are that 92-record sample, 11 of the 12
+eval posts. Re-running is a top-up away and is resumable — scores are id-keyed,
+so it costs only the missing 57.
+
+| | |
+|---|---|
+| complete pairs (both sides scored) | 92, across 11 posts |
+| mean P(AI), slop side | 0.8735 |
+| mean P(AI), Dan's side | **0.6300** |
+| mean delta | **+0.2434** |
+| pairwise, all pairs | 36 / 92 = 0.391 |
+| pairwise, **excluding ties** | **36 / 41 = 0.878** |
+| wins / losses / **ties** | 36 / 5 / **51** |
+
+**The direction holds.** When Pangram distinguishes the two sides at all it
+agrees with the voice classifier 88% of the time, against the voice-clf's own
+real-facet 0.784. That is the question the check was for, and the answer is yes.
+
+**But it is a blunt instrument on this corpus, and that is the more useful
+result.** 153 of 184 answers (83%) sit exactly on a rail — 121 at 1.0, 32 at
+0.0 — which is why 51 of 92 pairs tie. Most starkly: **47 of the 92 chunks of
+Dan's own human-written prose scored exactly 1.0**, "certainly AI". Read that
+with the caveats it deserves — these are ~200-word chunks of technical prose
+with citations and code-adjacent register, the hardest case for a general
+detector, and a general detector has no notion of a particular human's voice.
+It is nonetheless a 51% false-positive rate on the ground truth we care about.
+
+**Verdict: this stays a one-shot instrument check and does not become a
+signal**, which is what `eval-harness.md` already concluded on cost grounds and
+what D-series decisions assume. It cannot serve as the orthogonal channel for
+best-of-N or a reward: at an 83% saturation rate it has no gradient to give, and
+it would veto half of Dan's real prose. The judge and the eyeball remain the
+orthogonality. What it does buy, once, is the confirmation above: our detector's
+ranking is not an artefact of its own embedding.
+
+
 ## Corpus and target selection
 
 **Blog frontmatter partition** (2026-06-27, live blog). `automation:` levels —
