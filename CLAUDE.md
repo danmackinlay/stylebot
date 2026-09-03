@@ -34,6 +34,57 @@ pinned version and `uv`-installed env, so it's non-reproducible and can't import
 the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
 `uv run python -c …`. This applies to subagents too.
 
+## Budgets and layers
+
+Adopted 2026-09-04, after one day added 12,277 lines to `src/` and `tests/`.
+Why, and what was rejected: [`decisions.md`](_plans/decisions.md) D58; the
+measurement and the repair list are the blog's
+`_plans/stylebot-seam-followup-2026-09.md`.
+
+- **P1. Every "why" lives in exactly one layer; the others point at it.**
+  Durable to ephemeral: `decisions.md` (why, alternatives, re-evaluate-if) →
+  `findings.md` (numbers, one table per measurement) → code (what, as a
+  contract) → commit message (what changed, one line why, a pointer). A
+  docstring may cite `D57` and may not restate it; a decision may cite a finding
+  and may not reproduce its table. **Test for a violation: if the same sentence
+  could be pasted into two of the four layers, it is in the wrong one or both.**
+- **P2. Size budgets, enforced by `tests/test_budget.py`.** Module ≤ 800 lines,
+  function ≤ 80, docstring ≤ 15, module docstring ≤ 30, package-wide
+  (docstring + comment) / code ≤ 0.40. Everything over budget today is
+  allowlisted at its exact size; a recorded number may only ever be lowered, and
+  the entry is deleted the moment its module comes under budget. **Adding an
+  allowlist entry needs a D-entry.** The blog runs the same test over
+  `src/livingthing`.
+- **P3. A `decisions.md` entry is ≤ 30 lines in the D26 shape** — decision,
+  alternatives one line each, deciding constraint, re-evaluate-if. Numbers are a
+  citation into `findings.md`, never a copy. A superseded entry collapses to
+  three lines: title, "superseded by Dn on <date>", one sentence of what
+  changed. Past 1,200 lines, D1–D33 move to `decisions-archive.md` and the index
+  at the top keeps their one-line summaries.
+- **P4. A `findings.md` entry is one table plus ≤ 12 lines of reading** — date,
+  the command, the artifact it read, the table, the D-number it decided. How a
+  measurement went wrong before it went right is a decision's "alternatives", or
+  nothing. A superseded measurement keeps its table and gets a one-line strike.
+- **P5. Commits: subject ≤ 72 chars, body ≤ 12 lines, one concern.** The body
+  says what changed and cites the decision or work item. No commit touches a
+  file its subject does not cover. "Could not be separated in the working tree"
+  is the working tree's problem — P8.
+- **P6. This file is an operating manual ≤ 160 lines.** Every bullet is a rule
+  plus a pointer; how the rule was learned belongs in `decisions.md`.
+- **P7. A plan retires when its work ships** — within a week of the last item
+  landing, to a ≤ 40-line stub: what it was, what shipped (commit range), what
+  was refuted (D-numbers), what stayed open (the successor). Git holds the rest.
+- **P8. Dispatch rules for agents.**
+  - One worktree per agent, or one committer. Named pathspecs only — never
+    `git add -A`/`.`/`-u`.
+  - Report anything out of scope rather than fixing it.
+  - **No new mechanism without a budget.** A new thread, lock, process,
+    fallback path, module, or file over 300 lines needs its D-entry *before* the
+    code, and the entry names the number it clears (P2's size, or D56's measured
+    win). "Kept out of caution" is not a justification.
+  - Measure before deleting, measure before building, write the number once (P1).
+  - Nothing is pushed by an agent.
+
 ## Architecture rules (don't violate without updating the plan)
 
 - **`asyncio` first; threading must stringently justify itself.** Set
