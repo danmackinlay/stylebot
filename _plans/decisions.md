@@ -575,8 +575,10 @@ a transcript rather than a spec, and the module docstring of
 implementation. Both are stylebot-side, and neither is load-bearing; the fixture
 is still the honest place to record what the two configurations mean, so the
 question is whether it earns its regeneration hatch now that only one repo reads
-it. (`tests/test_marker_segmentation.py` pins a genuinely separate
-implementation and is untouched — until W4 deletes that one too.)
+it. (`tests/test_marker_segmentation.py` pinned a genuinely separate
+implementation; W4 deleted that one the same day — D44 — so no fixture in either
+repo now stands between two implementations of block segmentation, because there
+are no longer two.)
 
 ## D29: policy differences are parameters — `block_only`, `raw_html`, `div_is_prose`
 
@@ -1542,3 +1544,283 @@ can fill it from what the training service reports.
 and `eval_history` records the event), or the corpus gains enough real captures
 that all three roles can be fed — at which point the sizing argument above
 dissolves and the maximal extension is simply right.
+
+## D43: a passage is a stretch of prose, not a string — and weight is replication
+
+**Decision (2026-09-03, W9)**: `train.assemble_training_corpus`'s multiplicity
+hook groups by **source post + character-span containment**
+(`train.passage_groups`), not by exact target body, and is renamed
+`per_target` → `per_passage` to say so. A second hook, `pair_weight`, stamps
+`meta.weight` and is honoured as **integer replication of the train rows** in
+`_write_conversations`. Manifests record the resulting shape under
+`data.chunk_scale.passages` / `.pair_weights` / `.n_train_examples`, and both
+`ai-style train --dry-run` and `dan-style train --dry-run` print it
+(`train.format_passage_scale`, one renderer so the two shells cannot drift).
+`ChunkPolicy.sort_name` / `sort_key()` and `iter_targets(sort_key=)` are deleted.
+
+**The measurement that forced it.** Re-measured on the 8,244-record corpus:
+5,325 distinct targets are strict substrings of another target in the *same
+post*, carrying 6,157 pairs (74.7%); 883 targets carry more than one pair; 92.4%
+of the corpus sits in some containment-or-repeat group. Reproducing run 4a's
+selection against today's corpus gives 3,981 styler-role train pairs — and the
+decomposition is what settles the design:
+
+| | count | mean |
+| --- | --- | --- |
+| train pairs | 3,981 | |
+| distinct target bodies | 3,533 | 1.13 pairs each |
+| **passages** (containment groups) | **982** | **4.05 pairs each**, max 15 |
+
+So exact-body grouping had almost nothing to group: 3.6 of every 4.05 duplicates
+were invisible to it, and that is why every manifest ever written records
+`per_target: null` — switching it on would not have helped. 653 of the 678
+multi-pair passages span two or more of the four cut diets
+(`merge_max_chars` null / 1500 / 3000 / 4500), which confirms W5's reading: the
+`dan-style synth` budget sweep is the mechanism, not generator replicates.
+
+**The consequence is a diet nobody chose.** A manifest saying `num_epochs: 1`
+describes ~4 gradient steps per stretch of prose, unevenly — 304 passages get
+one and one passage gets fifteen. And it silently re-weights the axis that
+matters most: real captures were cut once, synthetic pairs went through the
+sweep, so real pairs are **3.09% of train pairs but 12.2% of train passages**.
+The scarce human side is diluted 4× by an artifact of how the corpus was
+generated.
+
+**Why the by-post val split cannot see it.** The split is by POST, which is the
+right guard for leakage and useless here: val inflates by the same mechanism
+(392 pairs on 95 passages, mean 4.13), so held-out loss is computed over the
+same skew and reads normal. That is the whole reason this needed measuring
+rather than watching.
+
+**Rejected: delete the promise.** The honest option, and the one W9 offered.
+Rejected because the measurement turned a speculative knob into a live defect:
+`meta.weight` and `pair_weight` were promised in OVERVIEW and this module's
+docstring since the first draft, and `_write_conversations` stripped `meta` one
+line before the trainer could see it — the promise was not merely unimplemented,
+it was silently unimplementable. Deleting it would leave no way to state
+"real captures count triple" short of physically duplicating corpus lines, and
+no way to see the 4.05 at all.
+
+**Rejected: dedupe by budget at assembly** (keep only the widest cut per
+passage). It is one line and it fixes the count, but it throws away the
+short-chunk diet the adapter is also served at, and picking which budget
+survives is exactly the policy call that belongs to the blog rather than to
+stylebot. The hook plus the histogram gives the caller the same power and
+records what they chose.
+
+**Rejected: a per-example loss scale.** The cookbook's
+`SupervisedDatasetFromHFDataset` maps rows to data through
+`conversation_to_datum` and has no field for a weight; a fractional weight would
+mean forking the builder. Integer replication expresses the same thing through
+the interface that exists, and separate rows get scattered by the builder's
+epoch shuffle rather than presenting one passage N times in a row. The cost is
+that weight cannot go below 1 — down-weighting is spelled as up-weighting
+everything else, or as `per_passage` dropping pairs.
+
+**Val is never replicated.** A weighted held-out loss is an average over a
+distribution nobody chose, and it would stop being comparable across two runs
+whose weights differ. `_write_conversations(..., replicate=False)`.
+
+**Why `per_target` was renamed rather than kept.** The grouping key changed
+meaning, and a caller written against the old one would keep working while
+grouping 3.6× too finely. A `TypeError` is the correct outcome; there is no
+alias. Nothing in either repo passed it (`filters.per_target: null` in all five
+manifests), so the break costs nothing today and is loud if it ever would.
+
+**`sort_name` went with it, and cost nothing.** `--sort` retired 0.3.1 because
+arms are assigned by content hash, so target order cannot change the corpus;
+the library-only field survived for a caller ordering in code, and no such
+caller ever appeared in either repo. Deleting it shifts every
+`provenance.policy_digest` — which is free precisely today, because W8 landed
+this morning and **0 records carry a `policy_digest` yet**. A week from now it
+would have been a corpus-wide re-stamp.
+
+**Not applied: an actual weighting policy.** Nothing is re-weighted or re-cut.
+The mechanism, the accounting and the histogram are in; choosing the diet
+(a `per_passage` cap, a real-pair `pair_weight`, or a narrower budget sweep at
+synth time) costs a paid retrain and is Dan's call. The obvious candidate, from
+the numbers above, is capping `per_passage` so the effective corpus is ~1,660
+pairs at cap 2 or ~2,212 at cap 3, which would lift the real share from 3.1%
+toward 12%.
+
+**Re-evaluate if**: a run is trained with a non-uniform weight (then this entry
+records what it bought), or the corpus stops being cut at multiple budgets over
+the same prose — at which point passages and target bodies converge and the
+containment grouping costs string searches for nothing.
+
+---
+
+## D44: the editor asks the sidecar where the prose is
+
+**Decision** (2026-09-03, W4). `stylebot.serve` grows a `segment` op —
+`{"op": "segment", "text": <document>, "min_chars": n}` →
+`{"segments": [{start, end, kind, context}]}` — backed by
+`stylebot.serve.prose_paragraphs`, which composes `stylebot.markdown` with the
+`div_is_prose` policy `serve_loop` was started with. The VS Code extension's
+TypeScript segmenter (`vscode-voice-marker/src/segment.ts`), its test, and the
+fixture pair that pinned it (`tests/fixtures/segmentation.qmd` +
+`expected_segments.json`, with `tests/test_marker_segmentation.py`) are deleted.
+The extension also stops computing `headingAbove` and takes each segment's
+`context` from the sidecar.
+
+`prose_paragraphs` lives in `serve` rather than in `markdown` because it needs
+the two things that module refuses on purpose: frontmatter knowledge, and a
+paragraph granularity that is the *editor's* unit rather than the chunk
+budget's. It is the editor seam's composition, and `serve` is the editor seam.
+
+**What the port had actually drifted into.** Measured before deleting it, over
+all 1,757 `.qmd` files in the blog, comparing the port's paragraph offsets with
+`prose_paragraphs`': **1,728 files identical, 29 differing.** Every one of the 29
+is a correction, and they fall in two groups:
+
+- **28 files: the heading rule.** The port split paragraphs on blank lines and
+  then dropped a paragraph whose *first* line was a heading. So `## H` glued to
+  the prose under it (no blank line) took the prose down with it — 24 files,
+  including every `digest/`, where `### [Title](link)` sits directly on its
+  paragraph and the marker therefore scored **nothing at all** in a whole
+  document — and prose glued to a heading *below* it was scored with the heading
+  text inside the string. `line_kinds` ends a run at a heading line, which both
+  keeps the prose and keeps the heading out of it.
+- **1 file: the unclosed fence.** `notebook/vs_code.qmd` ends on a bare ```` ``` ````
+  with no closer. The port's `CODE_FENCE_RE` needed a closer, found none,
+  matched nothing, and scored the fence line as the tail of the paragraph above.
+  W2 gave `markdown.CODE_FENCE_RE` a run-to-EOF alternative, which is
+  CommonMark's own reading.
+
+Two further differences are real but latent in this corpus. The port's closer
+was a bare three backticks, so a ```` ```` ````-opened block never closed and
+swallowed the rest of the document; W2's `` `{3,} `` closer fixes it, and the
+blog happens to contain no such block today. And the extension's *third*
+heading spelling — `headingAbove`'s `/^[ \t]{0,3}#{1,6}[ \t]/`, which accepted a
+tab indent and rejected a bare `##` — disagrees with `ATX_HEADING_RE` on
+**0 of 36,034** contexts in the live corpus. Both are deleted anyway: a
+difference that is latent is a difference waiting for one post.
+
+**And the one the port could not have got right at all:** `div_is_prose`. It had
+no hook, so a `.callout-note` paragraph was never scored and `rewriteTarget`
+returned null inside one — while the styler had been trained on callout prose
+since 2026-08-10. Under the blog's policy the op returns **385 more paragraphs,
+96,796 more characters, across 148 files**. This is not a bug the port had; it is
+a bug the port's *location* had. Which div classes bear prose is blog policy,
+and the extension has no way to learn it.
+
+**Latency: one NDJSON hop per document change, on the already-debounced path.**
+Measured through the real `Sidecar` client against a stub-detector `serve_loop`,
+50 timed round trips each, warm:
+
+| document | chars | segments | median | p95 |
+|---|---|---|---|---|
+| `notebook/music_loopers.qmd` (corpus median) | 5,428 | 9 | **0.30 ms** | 0.38 ms |
+| `digest/2026-04-24.qmd` (p90) | 17,662 | 22 | 0.65 ms | 0.71 ms |
+| `notebook/automatic_coding.qmd` | 30,496 | 67 | 1.07 ms | 1.10 ms |
+| `notebook/local_llm_mac.qmd` (largest in the repo) | 116,774 | 212 | **4.20 ms** | 4.36 ms |
+
+Nearly all of it is the segmentation itself (0.28 / 0.50 / 0.90 / 3.71 ms
+in-process), so the hop — JSON both ways plus the pipe — costs tens of
+microseconds. Against the 34 ms the *score* op already spends on the same
+document and the 500 ms debounce, it is not measurable by a typist. The
+document travels up the pipe once more per change; at 117 kB that is the largest
+payload in the protocol and still under a millisecond to encode.
+
+**Alternatives.**
+
+*Keep the port, fix its three defects.* Rejected: the same argument D28/D30 lost
+on 2026-09-03. Fixing it means porting `div_is_prose` (a *callable* policy) into
+TypeScript, then keeping two implementations and a hand-copied fixture in step
+by hand. The fixture had already failed at that once (blog `2815a291fc`), and
+the port's boundaries were the ones that won, because `rewrite_candidates`
+re-segments only to veto.
+
+*Fold segmentation into the `score` op* (send the document, get spans and scores
+in one hop). Cheaper by one round trip — a round trip that costs 0.02 ms — and it
+welds two questions together, so a client that wants ranges without scores (the
+rewrite command does) has to pay the detector.
+
+*Return the paragraph text as well as the offsets.* Rejected as redundant: the
+client sent the document, so it can slice it. The response stays small
+(4 fields × ~200 segments at worst) while the request carries the document.
+
+**Offsets are UTF-16 code units, converted server-side.** Python indexes code
+points and every editor this protocol will meet indexes UTF-16 — VS Code, and
+the LSP spec it follows. One astral character above a paragraph and every
+decoration below it lands a character short. `serve._utf16_mapper` converts,
+with a fast path for the documents (nearly all of them) that contain none. The
+client then does no arithmetic at all: `positionAt(start)` just works.
+
+**The `context` is provenance, not a prompt — and that is the diet's call, not
+the client's.** W2 made `rewrite_candidates` drop `context` outright under
+`inline_headings`, and the promoted run (`20260817-170037`, `modes:
+{cross-heading: 2591, None: 1799}`) is cross-heading, so the heading the sidecar
+reports is *not* seen by the styler today. It is still sent back on `rewrite`
+and recorded in the `prefer` record, because it is the true discourse context of
+the chunk and a section-bounded arm may yet be promoted. What changed is who
+decides: the client no longer has an opinion, and `rewrite_candidates` is the one
+place that knows whether the diet wants it.
+
+**Known wart, inherited not introduced:** an *unclosed* `:::` opener produces no
+div span (`markdown._div_spans` documents this), so a stray `::: something` line
+is offered as a scoreable paragraph. The deleted port did the same. Left alone
+rather than special-cased here, since the fix belongs in `markdown` and would
+move training targets.
+
+**Re-evaluate if**: the marker is ever distributed as a standalone `.vsix` with
+no Python sidecar (parked alternative B in `_plans/vscode-marker.md` — then the
+segmenter has to be in TypeScript again, and this entry is the list of what it
+must get right); or the `segment` round trip stops being free, which on these
+numbers means a document an order of magnitude past the largest one Dan has.
+
+## D45: one corpus location, resolved once — and the synth walker keeps its blog root
+
+**Decision.** `stylebot.config` owns every spelling of a path inside the corpus
+directory (`pairs_path`, beside W0's `splits_path`), and livingthing composes
+its blog-root default on top of it in ONE function,
+`training_targets.data_dir(flag, blog_root)`, with the precedence `--data-dir` >
+`$STYLEBOT_DATA_DIR` > `<blog-root>/_training_pairs`. Every `dan-style` default
+— corpus, splits, run manifests, the preference log — routes through it, and the
+click defaults that need it are **callables**, not paths frozen at import.
+
+*Alternatives.* Leave the blog's literals alone (they were "obviously" the same
+directory — except `STYLEBOT_DATA_DIR` redirected `ai-style log`'s captures,
+which go through `resolve_data_dir`, while synth/train/train-clf/run/serve kept
+writing the live corpus, so pointing a scratch run at a scratch directory
+silently half-worked). Or teach `resolve_data_dir` about a blog root, which puts
+a caller's `--blog-root` convention inside generic tooling.
+
+*Constraint.* `resolve_data_dir`'s own fallback is **cwd**-relative and must
+stay that way; only the blog has a `--blog-root`, so only the blog folds it in.
+
+## D46: the synth walker's blog exclusions stay pinned, not routed around
+
+**Decision.** `dan-style synth` keeps calling `iter_targets(blog_root=…)` and
+walking with stylebot's predicate. The QA list (W11.f) proposed handing it a
+pre-selected `files=` list from `livingthing.lib.gather_qmd_files`, so the walk
+would honour the blog's `LOCAL_SKIP_DIRS` (`src`, `bin`, `tests`). Refused on
+two measurements.
+
+*The gap is empty.* The two walkers agree on all **1757** `.qmd` in the live
+tree (measured 2026-09-03) — `LOCAL_SKIP_DIRS` and `QUARTO_SKIP_DIRS` are
+disjoint, and no `.qmd` has ever lived under `renv`/`packrat`/`rsconnect`/
+`node_modules`. Exactly one file ever fell in the gap,
+`tests/fixtures/segmenter_conformance.qmd`, deleted with the second segmenter
+(W3); and even at its worst historical frontmatter (`{}`, and later
+`{quality-net: 5.0}`) `make_selector` rejected it, so it could never have become
+a target.
+
+*The fix costs more than the gap.* `files=` and `blog_root=` are mutually
+exclusive in `iter_targets`, and without `blog_root` `_source_label` falls back
+to `str(path)`. Measured on `notebook/automatic_coding.qmd`: `blog_root=` gives
+`notebook/automatic_coding.qmd`, `files=` gives the absolute path, and
+`splits.role_of` then answers **`styler` instead of `eval`** — reopening the
+leak W0 had just closed, and orphaning every pair keyed on the relative source.
+`files=` also skips the selector, so the blog would re-implement the frontmatter
+gates it currently passes as a callable.
+
+*So instead:* the divergence is asserted. `tests/test_qmd_walker.py::
+test_the_synth_walker_sees_exactly_what_this_repo_calls_a_post` compares the two
+walks over the live tree and names any file either side has that the other does
+not.
+
+**Re-evaluate if** a `.qmd` ever needs to live under `src/`, `bin/` or `tests/`
+again, or if `iter_targets` grows a label-only `blog_root` companion to `files=`
+(the one-line change that would make the pre-selected form safe: use `blog_root`
+for `_source_label` while `files` supplies the walk).
