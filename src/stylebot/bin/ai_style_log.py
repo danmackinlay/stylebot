@@ -29,12 +29,14 @@ pairs, the `--replace`/`--append`/`--keep-open`/`--redo` flags, editing
 cadence, the one-shot `pair` entry point, and the on-disk layout — is
 documented for users in `_training_pairs/README.md`.
 
-Errors follow the one `ai-style` idiom: `click.UsageError` when the flags
-themselves are wrong (contradictory or missing a companion — click exits 2),
-`click.ClickException` when the flags are fine but the world is not (no open
-session, nothing changed — exit 1). The library says which is which by raising
-`ValueError` for the first and `session.SessionError` for the second; the
-translation is the `except` clauses here. Never a bare `sys.exit` after an
+Errors follow the one `ai-style` idiom, which since 2026-09-03 is the whole
+package's: the library raises `errors.ConfigError` when the flags themselves
+are wrong (contradictory or missing a companion — exit 2) and
+`session.SessionError`, a `errors.RunError`, when the flags are fine but the
+world is not (no open session, nothing changed — exit 1). The translation is
+`ErrorTranslatingGroup` on the group below, not `except` clauses in each
+command; what stays here is the handful of `click.UsageError`s for flag
+*combinations*, which only click can see. Never a bare `sys.exit` after an
 `echo(err=True)`: raising leaves the exit code and the "Error:" prefix to
 click, which is what makes the two classes distinguishable to a caller.
 """
@@ -51,8 +53,14 @@ import click
 from stylebot import session
 from stylebot import splits as splits_mod
 from stylebot.capture import diff_chunks  # noqa: F401 — callers/tests reach it as log.diff_chunks
-from stylebot.cli_options import SectionedCommand, bundle_options, bundles_from_kwargs, opt
-from stylebot.session import SessionError, SessionStore, SnapshotEntry, humanize_age
+from stylebot.cli_options import (
+    ErrorTranslatingGroup,
+    SectionedCommand,
+    bundle_options,
+    bundles_from_kwargs,
+    opt,
+)
+from stylebot.session import SessionStore, SnapshotEntry, humanize_age
 
 
 @dataclass(frozen=True)
@@ -217,7 +225,9 @@ def _remind_open_sessions(ctx: click.Context) -> None:
     )
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.group(
+    cls=ErrorTranslatingGroup, context_settings={"help_option_names": ["-h", "--help"]}
+)
 @click.option(
     "--quiet",
     "-q",
@@ -247,10 +257,7 @@ def open_session(ctx: click.Context, file: Path):
     A later `save` diffs the current contents against this recorded state.
     """
     store = _store()
-    try:
-        snapshot = session.open_session(store, file)
-    except SessionError as exc:
-        raise click.ClickException(str(exc)) from exc
+    snapshot = session.open_session(store, file)
     click.echo(f"opened session for {file} ({snapshot.chars} chars) -> {store.snapshot_path(file)}")
     _remind_open_sessions(ctx)
 
@@ -272,10 +279,7 @@ def reopen_session(ctx: click.Context, file: Path):
 
     Also recovers an accidental `drop`.
     """
-    try:
-        snapshot = session.reopen_session(_store(), file)
-    except SessionError as exc:
-        raise click.ClickException(str(exc)) from exc
+    snapshot = session.reopen_session(_store(), file)
     # Surface the age: resurrecting a weeks-old base against a much-changed
     # file produces a huge, unrepresentative diff, and that should be visible.
     click.echo(
@@ -354,20 +358,17 @@ def save_session(
     disposition = "append" if force_append else ("replace-all" if force_replace else "smart")
 
     store = _store()
-    try:
-        result = session.save_session(
-            store,
-            file,
-            keep_open=keep_open,
-            disposition=disposition,
-            redo=redo,
-            tags=cap.tags,
-            whole=cap.whole,
-            heading_context=cap.heading_context,
-            notify=click.echo,
-        )
-    except SessionError as exc:
-        raise click.ClickException(str(exc)) from exc
+    result = session.save_session(
+        store,
+        file,
+        keep_open=keep_open,
+        disposition=disposition,
+        redo=redo,
+        tags=cap.tags,
+        whole=cap.whole,
+        heading_context=cap.heading_context,
+        notify=click.echo,
+    )
 
     _warn_if_eval_post(store, file)
 
@@ -414,10 +415,7 @@ def save_session(
 @click.pass_context
 def drop_session(ctx: click.Context, file: Path):
     """Drop the open session for FILE without saving any pair."""
-    try:
-        session.drop_session(_store(), file)
-    except SessionError as exc:
-        raise click.ClickException(str(exc)) from exc
+    session.drop_session(_store(), file)
     click.echo(f"dropped session for {file} (`reopen` restores it if that was a mistake)")
     _remind_open_sessions(ctx)
 
@@ -536,21 +534,19 @@ def recut_pairs(ctx, gap_paras, gap_chars, max_chars, min_chars, max_similarity,
     from a re-cut capture (original or previous re-cut) is replaced, not
     stacked. Captures with no archive keep their native cut.
     """
-    try:
-        result = session.recut(
-            _store(),
-            gap_paras=gap_paras,
-            gap_chars=gap_chars,
-            # 0 / 1.0 are the flags' "disable" sentinels; the library takes None.
-            max_chars=max_chars or None,
-            min_chars=min_chars,
-            max_similarity=None if max_similarity >= 1 else max_similarity,
-            dry_run=dry_run,
-        )
-    except SessionError as exc:
-        # e.g. unmigrated legacy JSON archives — a legible instruction, not a
-        # traceback, since the fix is a command the user has to run.
-        raise click.ClickException(str(exc)) from exc
+    # A `SessionError` here (e.g. unmigrated legacy JSON archives) reaches the
+    # user as a legible instruction rather than a traceback: the group
+    # translates it, and the fix is a command they have to run.
+    result = session.recut(
+        _store(),
+        gap_paras=gap_paras,
+        gap_chars=gap_chars,
+        # 0 / 1.0 are the flags' "disable" sentinels; the library takes None.
+        max_chars=max_chars or None,
+        min_chars=min_chars,
+        max_similarity=None if max_similarity >= 1 else max_similarity,
+        dry_run=dry_run,
+    )
     if not result.records:
         click.echo("no archives to re-cut (captures/ is empty or holds only --whole captures)")
         return
@@ -619,23 +615,17 @@ def pair(
         raise click.UsageError("only one of --before/--after may be '-'")
 
     store = _store()
-    try:
-        result = session.capture_pair(
-            store,
-            before_text=_read_source(before_spec),
-            after_text=_read_source(after_spec),
-            source=source,
-            replace=replace,
-            tags=cap.tags,
-            whole=cap.whole,
-            heading_context=cap.heading_context,
-            notify=click.echo,
-        )
-    except ValueError as exc:
-        # The arguments contradict (--replace with no --source): exit 2.
-        raise click.UsageError(str(exc)) from exc
-    except SessionError as exc:
-        raise click.ClickException(str(exc)) from exc
+    result = session.capture_pair(
+        store,
+        before_text=_read_source(before_spec),
+        after_text=_read_source(after_spec),
+        source=source,
+        replace=replace,
+        tags=cap.tags,
+        whole=cap.whole,
+        heading_context=cap.heading_context,
+        notify=click.echo,
+    )
 
     mode = "whole-input" if result.whole else "chunk-by-chunk"
     click.echo(

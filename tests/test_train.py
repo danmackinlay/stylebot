@@ -15,6 +15,7 @@ import pytest
 from stylebot import provenance
 from stylebot import splits as sp
 from stylebot import train as tr
+from stylebot.errors import RunError
 
 # The styler-corpus shape: contract-complete (assemble_training_corpus validates
 # by default), two chunks per post, the last two posts synthetic and carrying the
@@ -214,7 +215,7 @@ def test_validation_gate_refuses_malformed_corpus(tmp_path):
         json.dumps({"messages": [{"role": "user", "content": "no system"}], "meta": {}}) + "\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="pairs contract"):
+    with pytest.raises(RunError, match="pairs contract"):
         tr.assemble_training_corpus(bad)
 
 

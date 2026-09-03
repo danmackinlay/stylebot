@@ -38,6 +38,7 @@ import click
 
 from stylebot import config
 from stylebot.cli_options import bundle_options, opt
+from stylebot.errors import ConfigError, RunError
 
 logger = logging.getLogger(__name__)
 
@@ -177,14 +178,14 @@ def build_styler(opts: BackendOpts):
 
     tokens = opts.tokens()
     if opts.backend is None:
-        raise ValueError("no --backend given, so there is no styler to build")
+        raise ConfigError("no --backend given, so there is no styler to build")
     if opts.backend == "tinker":
         if not opts.sampler_path or not opts.base_model:
-            raise ValueError(
+            raise ConfigError(
                 "--backend tinker needs --sampler-path and --base-model (see the training manifest)"
             )
         if not config.get_key("TINKER_API_KEY"):
-            raise RuntimeError("TINKER_API_KEY is not set")
+            raise RunError("TINKER_API_KEY is not set")
         return infer.tinker_backend(
             opts.sampler_path,
             opts.base_model,
@@ -193,10 +194,10 @@ def build_styler(opts: BackendOpts):
             max_tokens=tokens,
         )
     if not opts.base_url or not opts.model:
-        raise ValueError("--backend openai needs --base-url and --model")
+        raise ConfigError("--backend openai needs --base-url and --model")
     api_key = config.get_key(opts.api_key_env) if opts.api_key_env else None
     if opts.api_key_env and not api_key:
-        raise RuntimeError(f"{opts.api_key_env} is not set")
+        raise RunError(f"{opts.api_key_env} is not set")
     return infer.openai_backend(
         opts.base_url,
         opts.model,
@@ -298,6 +299,20 @@ def manifest_mismatches(
         notes.append(
             f"renderer mismatch: serving with {opts.renderer_name!r}, run "
             f"{manifest.get('run_id') or '?'} trained with {trained_renderer!r}"
+        )
+    elif opts.backend == "openai" and trained_renderer:
+        # The renderer pin is UNCHECKABLE on this backend, which is a different
+        # thing from checked-and-fine, and the two used to look identical (both
+        # silent). `openai_backend` hands the message list to a server that
+        # applies its OWN chat template; stylebot never sees the tokens. Skew
+        # there does not error, it just puts the adapter out of distribution,
+        # where it returns its input. `infer.Styler` types the call and cannot
+        # reach this (D48), so the warning is the mechanism.
+        notes.append(
+            f"renderer unverifiable: run {manifest.get('run_id') or '?'} trained with "
+            f"{trained_renderer!r}, but an OpenAI-compatible endpoint applies its own chat "
+            f"template and stylebot cannot see it — score a parity sample against the tinker "
+            f"backend before trusting {opts.model or 'this endpoint'}"
         )
 
     trained_base = (manifest.get("hyperparameters") or {}).get("base_model")

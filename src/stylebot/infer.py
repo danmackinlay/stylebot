@@ -1,6 +1,7 @@
 """Phase 4: inference — rewrite prose through the trained styler.
 
-Library-first (`ai-style run` is the thin CLI): a `Styler` is any callable
+Library-first (`ai-style run` is the thin CLI): a `Styler` is the `Protocol`
+below —
 
     styler(messages, num_samples=1) -> list[str]
 
@@ -17,6 +18,8 @@ assistant texts. Two bundled backends:
   scoring the same inputs through both backends before trusting a new endpoint
   (the MLX exit did exactly that: `_plans/findings.md` "MLX local-serving
   parity" for the numbers and gates, `_plans/decisions.md` D8 for the caveats).
+  Conforming to `Styler` does not make that check unnecessary: see the
+  Protocol's docstring, and D48.
 
 `rewrite_text` chunks at inference the way training saw data: blank-line
 paragraph regions, grouped to ~STYLE_CHARS_PER_CHUNK chars, with chunk
@@ -38,9 +41,11 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from stylebot import markdown
 from stylebot.ai_core import STYLE_SYSTEM
+from stylebot.errors import ConfigError, MissingExtra
 from stylebot.jsonl import dumps_line
 
 logger = logging.getLogger(__name__)
@@ -68,8 +73,40 @@ def max_tokens_for(max_chunk_chars: int) -> int:
     return max(DEFAULT_MAX_TOKENS, int(max_chunk_chars * _TOKENS_PER_CHAR))
 
 
-# A styler: (messages, num_samples) -> candidate assistant texts.
-Styler = Callable[..., list[str]]
+@runtime_checkable
+class Styler(Protocol):
+    """The trained rewriter, as everything downstream of it sees one.
+
+    `rewrite_text`, `rewrite_candidates`, `rewrite_pairs_file` and the sidecar
+    all take a `Styler`; `tinker_backend` / `openai_backend` return one, and a
+    test stub or a second repo's backend is a `Styler` by having this shape and
+    nothing else. It was a bare `Callable[..., list[str]]` until 2026-09-03,
+    which typed the return and neither argument — so passing a scorer, or a
+    styler that took `n=` instead of `num_samples=`, type-checked fine.
+
+    **What this does not promise.** A `Styler` says how it is *called*, not how
+    the prompt is *rendered*. `tinker_backend` renders with the cookbook
+    renderer that training used, so the token sequence is built by the same
+    code; `openai_backend` hands the message list to a server that applies its
+    own chat template, and a template that wraps the system turn differently,
+    injects a reasoning block, or prepends a default system prompt puts the
+    adapter out of distribution — where it stops transforming and returns its
+    input, silently, with no error anywhere. Both conform to this Protocol
+    while feeding the model different tokens. So the Protocol closes the
+    argument-shape hole and *documents* the parity one; the things that
+    actually bear on parity are `backends.manifest_mismatches` (which warns
+    that stylebot cannot check a server's template at all) and a measured
+    parity sample (`_plans/findings.md`, "MLX local-serving parity").
+
+    `@runtime_checkable` is worth little here and is not load-bearing:
+    `isinstance` on a call-only Protocol checks that `__call__` exists, which
+    every function has. `tests/test_backends.py` checks the signature instead.
+    """
+
+    def __call__(self, messages: list[dict], num_samples: int = 1) -> list[str]:
+        """Candidate assistant texts for one chat-message list."""
+        ...
+
 
 _FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
 
@@ -512,7 +549,7 @@ def rewrite_candidates(
         context = None
     frontmatter, body = split_frontmatter(text)
     if frontmatter:
-        raise ValueError("selection includes YAML frontmatter — select prose only")
+        raise ConfigError("selection includes YAML frontmatter — select prose only")
     items, _seps = _segment(
         body,
         max_chars=max_chunk_chars,
@@ -523,14 +560,14 @@ def rewrite_candidates(
     # Nothing selected is its own failure: it is not an over-budget selection,
     # and saying so (the old fall-through) told the user something false.
     if not kinds:
-        raise ValueError("selection is empty — select some prose")
+        raise ConfigError("selection is empty — select some prose")
     # Headings are content under the cross-heading diet; fences never are.
     allowed = {"prose", "heading"} if inline_headings else {"prose"}
     if any(k not in allowed for k in kinds):
         bad = next(k for k in kinds if k not in allowed)
-        raise ValueError(f"selection contains a {bad} — select prose only")
+        raise ConfigError(f"selection contains a {bad} — select prose only")
     if len(kinds) != 1:
-        raise ValueError(
+        raise ConfigError(
             f"selection is {len(body)} chars — over the {max_chunk_chars}-char "
             "chunk budget; select less (a paragraph or two)"
         )
@@ -875,7 +912,7 @@ def tinker_backend(
         from tinker_cookbook import model_info, renderers
         from tinker_cookbook.tokenizer_utils import get_tokenizer
     except ImportError as exc:  # pragma: no cover - needs the extra
-        raise ImportError(
+        raise MissingExtra(
             "tinker_backend needs the 'trainer' extra: uv add 'stylebot[trainer]'"
         ) from exc
 

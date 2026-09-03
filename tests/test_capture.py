@@ -13,6 +13,7 @@ import json
 import pytest
 
 from stylebot import capture
+from stylebot.errors import RunError
 from stylebot.jsonl import append_jsonl
 from stylebot.pairs import validate_pairs_file
 
@@ -67,7 +68,7 @@ def test_capture_pairs_archives_full_texts_for_rechunking(tmp_path):
 
 
 def test_capture_pairs_raises_when_nothing_changed(tmp_path):
-    with pytest.raises(ValueError, match="no changed text chunks"):
+    with pytest.raises(RunError, match="no changed text chunks"):
         capture.capture_pairs(
             "same text",
             "same text",
@@ -303,7 +304,7 @@ def test_iter_archives_refuses_legacy_json(tmp_path):
     pairs_path = tmp_path / "pairs.jsonl"
     _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")  # a valid archive alongside
 
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(RunError) as excinfo:
         list(capture.iter_archives(pairs_path))
     msg = str(excinfo.value)
     assert "1 legacy JSON capture archive" in msg
@@ -312,7 +313,7 @@ def test_iter_archives_refuses_legacy_json(tmp_path):
 
     # And the same refusal reaches the caller through recut, which is how a user
     # would actually hit it.
-    with pytest.raises(ValueError, match="migrate-captures"):
+    with pytest.raises(RunError, match="migrate-captures"):
         capture.recut_archives(pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800)
 
 

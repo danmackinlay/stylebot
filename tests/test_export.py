@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from stylebot import export
+from stylebot.errors import RunError
 
 SERVING_KEYS = {
     "base_model.model.model.language_model.layers.0.self_attn.q_proj.lora_A.weight": 1,
@@ -67,12 +68,12 @@ def test_equal_alpha_and_r_is_accepted():
 
 
 def test_unequal_scaling_is_refused_and_says_why():
-    with pytest.raises(ValueError, match="lora_alpha=64 != r=32"):
+    with pytest.raises(RunError, match="lora_alpha=64 != r=32"):
         export.check_adapter_scaling({"r": 32, "lora_alpha": 64})
 
 
 def test_missing_scaling_fields_are_refused():
-    with pytest.raises(ValueError, match="cannot be verified"):
+    with pytest.raises(RunError, match="cannot be verified"):
         export.check_adapter_scaling({"r": 32})
 
 
@@ -80,7 +81,7 @@ def test_base_model_of_manifest():
     assert export.base_model_of({"hyperparameters": {"base_model": "Qwen/Qwen3.5-9B"}}) == (
         "Qwen/Qwen3.5-9B"
     )
-    with pytest.raises(ValueError, match="hyperparameters.base_model"):
+    with pytest.raises(RunError, match="hyperparameters.base_model"):
         export.base_model_of({"hyperparameters": {}})
 
 
@@ -128,14 +129,14 @@ def test_normalize_leaves_an_already_raw_adapter_alone(tmp_path):
 
 def test_normalize_refuses_a_misscaled_adapter(tmp_path):
     src = _adapter(tmp_path, SERVING_KEYS, r=32, alpha=64)
-    with pytest.raises(ValueError, match="wrong scale"):
+    with pytest.raises(RunError, match="wrong scale"):
         export.normalize_adapter(src, tmp_path / "raw")
 
 
 def test_normalize_names_the_missing_file(tmp_path):
     empty = tmp_path / "adapter"
     empty.mkdir()
-    with pytest.raises(ValueError, match=export.ADAPTER_WEIGHTS):
+    with pytest.raises(RunError, match=export.ADAPTER_WEIGHTS):
         export.normalize_adapter(empty, tmp_path / "raw")
 
 

@@ -11,9 +11,12 @@ per-phase design plans that were retired once their work shipped: what we
 thought, what happened, what we concluded. D26 onward return to the full shape.
 Measurements live in [`findings.md`](findings.md).
 
-Everything numbered `D…` was **decided and acted on**. A trailing
-[Open proposals](#open-proposals-not-decided) section holds `P…` entries that are
-written up but still awaiting a call — do not read them as settled.
+Everything numbered `D…` was **decided and acted on**. A `P…` entry is a
+*proposal*, written in the same shape so that accepting one is an edit rather
+than a rewrite, and followed by its own verdict entry once one lands. None are
+open as of 2026-09-03: P1, the last, was rejected. It had lived under an "Open
+proposals" heading placed mid-file, which silently swallowed D31 onward as its
+subsections; the heading is gone and P1 now files beside its verdict.
 
 ## D1: Train on Tinker, serve on Fireworks (fallback: local MLX → Modal)
 
@@ -747,75 +750,6 @@ conclusion there is structurally impossible here), and anchor failure fails
 *closed*, keeping the input verbatim, where the source pipeline failed open. The
 one warning that did land was truncation-vs-damage attribution, now fixed in
 `infer.rewrite_text`.
-
----
-
-# Open proposals (not decided)
-
-Entries below are **awaiting a call from the repo owner**. They are written in the
-same shape as the decisions above so that accepting one is an edit, not a rewrite,
-but nothing here has been acted on.
-
-## P1 (PROPOSAL, 2026-08-10): move `openai` to an `[api]` extra
-
-**Proposal**: demote `openai>=1.60.0` from `[project].dependencies` to a new
-`[project.optional-dependencies] api` extra, alongside `classifier` and `trainer`,
-and give the three lazy import sites a friendly "install `stylebot[api]`" error
-instead of a bare `ModuleNotFoundError`.
-
-**The observation**: every `openai` import in the package is lazy, at exactly
-three sites — `eval.openrouter_judge`, `infer.openai_backend`, and
-`generators.openai_generator` (which `openrouter_generator` is built on).
-Verified by blocking the module on `sys.meta_path`: all 14 stylebot modules,
-including `bin.ai_style`, still import, so the whole `--help` tree survives. Only
-those three factories raise. So the SDK plus its 8 transitive packages (anyio,
-distro, httpx, jiter, pydantic, sniffio, tqdm, typing-extensions) is currently
-mandatory for installers who never touch a network model.
-
-**What would actually break** without the extra installed:
-
-| breaks | survives |
-| --- | --- |
-| `ai-style synth` (every generator factory is OpenAI-compatible) | `log`, `make-splits`, `export-table` |
-| `ai-style eval --judge` | `eval` without `--judge` (Vale / detector / eyeball) |
-| `run` / `serve` with `--backend openai` | `run --backend tinker` (the default), `serve` score-only (backend default `None`) |
-| | `train` (tinker), `train-clf` (classifier extra), `stylebot.classify` |
-
-**Not a packaging break for livingthing** — the thing that looked like the
-blocker, and isn't. livingthing declares `openai>=1.108.0` as its own direct
-dependency and imports it in ~9 of its own modules (`ai_core`, `refs/*`,
-`workflow_preen`, `diagnostics`), so it gets the SDK regardless of what stylebot
-declares. Its `stylebot[classifier,trainer]` line would need no change, and
-`dan-style synth` would keep working. Any *other* consumer that installs plain
-`stylebot` and calls `synth` would break, and there are none known.
-
-**Alternatives considered**: (a) status quo — one fewer failure mode, at the cost
-of making the SDK mandatory for the score-only path; (b) finer-grained extras
-(`[judge]` / `[synth]` / `[serve-openai]`) — three extras for one wheel is worse
-ergonomics than the problem; (c) declaring `stylebot[api]` the documented default
-install so only deliberate minimal installs feel it.
-
-**Deciding constraint (unresolved, hence a proposal)**: `synth` is a
-first-class subcommand, not an add-on, and an extra makes the plain
-`uv add stylebot` install unable to run it. That is a real ergonomic regression
-traded against a leaner `classify`/`serve` install. Worth noting the docstring
-framing is narrower than it first reads: `classify.py` claims
-"ML-dependency-free **at import**", scoped to numpy/sklearn/sentence-transformers,
-and that claim is literally true today. The gap is at the *package* level, not the
-module level.
-
-**Ruled out — `ruamel-yaml` is not the same case.** It is imported eagerly at
-`lib.py:5`, module top level, and the frontmatter path is core to `log` /
-`targets` / `synth`. It stays a hard dependency.
-
-**Re-evaluate if**: stylebot acquires an installer other than livingthing (a PyPI
-release, or a second consumer that only wants the classifier runtime); or a
-non-OpenAI generator backend lands, which would make `synth` survivable without
-the SDK and remove the main objection.
-
-**Note for whoever accepts this**: the friendly-error half touches `eval.py`,
-`infer.py` and `generators.py`, so it cannot ship from a `pyproject.toml`-only
-change.
 
 ## D31: stylebot merges the adapter; it does not quantize, patch configs, or bake templates
 
@@ -1824,3 +1758,257 @@ not.
 again, or if `iter_targets` grows a label-only `blog_root` companion to `files=`
 (the one-line change that would make the pre-selected form safe: use `blog_root`
 for `_source_label` while `files` supplies the walk).
+
+## D47: two error classes for the whole package, translated once at the group
+
+**Decision.** `stylebot.errors` declares `ConfigError` (the arguments are wrong;
+exit 2), `RunError` (the arguments are fine, the world is not; exit 1) and
+`MissingExtra` (a `RunError` whose unready world is an uninstalled extra).
+`cli_options.translate_errors()` turns them into click exceptions, and
+`ErrorTranslatingGroup` — the class of `ai-style` and of `ai-style log` —
+applies it to the whole subtree. `Synth*Error` (D-era: synth's own hierarchy)
+and W11.b's `SessionError` became named subclasses rather than a third and
+fourth scheme, keeping the codes they chose; `capture`'s "no changed chunks" is
+still exit 1, as W11.b decided.
+
+*The defect.* `bin/ai_style.py` had six `except ValueError:` blocks, every one
+mapping to `click.ClickException` (exit 1), while `synth` — the only module with
+a real hierarchy — mapped its config failures to exit 2. So `train`'s "no
+training pairs left after filtering" exited 1 and the same class of mistake in
+`synth` exited 2, and which you got depended on which `except` clause a
+command's author had written. That message now exits 2:
+`tests/test_errors.py::test_no_pairs_left_after_filtering_now_exits_2`.
+
+*Alternatives.* (a) A decorator on each command callback — the item's own
+proposal. Rejected: it is exactly the thing a new subcommand forgets, and the
+Done criterion ("config errors exit 2 from *every* subcommand") then depends on
+a test noticing an omission rather than on the omission being impossible.
+`Group.invoke` is the funnel every descendant's body passes through, so one
+`try` there covers subgroups and anything added later at any depth. (b) Leave
+`click.ClickException` at each raise site inside the libraries — rejected years
+ago and re-rejected here: a library reachable without click must not hand its
+caller a CLI exception (this is why `synth_cli` grew its hierarchy at all). (c)
+One class with a `code` attribute — a number at every raise site is a worse
+prompt than a name that says which *kind* of wrong it is.
+
+*Constraint — every class subclasses the builtin it replaces.* `ConfigError` is
+a `ValueError`, `RunError` a `RuntimeError`, `MissingExtra` also an
+`ImportError`. That is what let ~90 raise sites across 14 modules move in one
+pass without breaking a single `except`: `serve` still turns a bad editor
+selection into an NDJSON `{"error"}` field with `except ValueError`, `session`
+still wraps `capture`'s refusals, and livingthing's front-ends kept working
+before they were switched over.
+
+*Constraint — the vocabulary is for failures the user can act on.* A violated
+contract between stylebot's own functions (`select_targets: role= requires
+splits=`, an option claimed by two bundles, an unknown `disposition` no flag can
+produce) stays a bare `ValueError`. Those are bugs, and a traceback is the right
+report; `translate_errors` deliberately lets them through, pinned by
+`test_a_bare_builtin_is_not_translated`. This is what kept the sweep from
+becoming a mechanical s/ValueError/ConfigError/ over every raise in `src/`.
+
+*Blog side.* `dan-style synth`/`run`/`style`/`serve`/`eval`/`train` had five
+hand-written copies of the same translation, and the `synth` one had already
+lost `param_hint` — a bad `--slop-strategy` named the flag under `ai-style` and
+said a bare "Error:" under `dan-style`. All five now call `translate_errors()`.
+
+**Re-evaluate if** a third class earns its place — the candidate is a
+"partial success" that wants a distinct code (today `SynthGenerationError`
+handles it as a `quiet` `RunError`: exit 1 with nothing further printed, because
+`run_synth` has already rendered every error and the summary).
+
+## D48: `Styler` is a Protocol, and it types the call, not the tokens
+
+**Decision.** `stylebot.infer.Styler` is a `Protocol` declaring
+`__call__(messages: list[dict], num_samples: int = 1) -> list[str]`, replacing
+`Callable[..., list[str]]` — which typed the return value and neither argument,
+so a scorer, or a backend taking `n=` instead of `num_samples=`, checked fine.
+`tests/test_backends.py` checks the real backends' signatures against the
+Protocol's own, rather than against a copy of it.
+
+*What the Protocol does not close, said out loud.* `tinker_backend` renders the
+prompt with the cookbook renderer training used, so the tokens are built by the
+same code. `openai_backend` hands the message list to a server that applies its
+**own** chat template; a template that wraps the system turn differently,
+injects a reasoning block, or prepends a default system prompt puts the adapter
+out of distribution, where it stops transforming and returns its input —
+silently, with no error anywhere. Both conform to `Styler`. So the Protocol
+closes the argument-shape hole and *documents* the parity one. Anyone reading it
+as a parity guarantee is reading it wrong, which is why the docstring says so
+and `test_the_protocol_cannot_see_the_chat_template` pins it.
+
+*What was built instead, because it is cheap and it fires at the right moment.*
+`backends.manifest_mismatches` now emits `renderer unverifiable` when the
+backend is `openai` and the manifest pins a renderer. Serving a manifest-pinned
+adapter through an OpenAI-compatible endpoint used to look identical to serving
+it correctly — both silent — and "not checked" is a different claim from
+"checked and fine".
+
+*Rejected: the raw-completion mode* (render with the cookbook renderer, POST to
+`/v1/completions` with a `prompt=` string). Costed, not hand-waved:
+
+1. `Renderer.build_generation_prompt` returns a `tinker.ModelInput` — **tokens**,
+   not text. Feeding an OpenAI-compatible endpoint means detokenising and
+   letting the server re-tokenise, so the mode trades a chat-template question
+   for a detokenise/retokenise-fidelity question. It does not close the gap; it
+   moves it somewhere with no measurement behind it.
+2. The renderer lives in `tinker_cookbook`, i.e. the `trainer` extra — so the
+   backend whose entire appeal is "serve locally without tinker" would acquire
+   tinker to be trustworthy.
+3. `/v1/completions` is not universal across the endpoints this backend exists
+   for (`mlx_lm.server` and vLLM have it; not every target does).
+4. The half that is testable without a paid call is the rendering, which is the
+   half that was never in doubt. Whether a real server agrees is exactly what
+   cannot be tested for free — and *is* what
+   `findings.md` "MLX local-serving parity" already measured, once, by scoring
+   the same inputs through both backends.
+
+**Re-evaluate if** a second endpoint has to be trusted without a parity sample,
+or if the cookbook grows a text-level `build_generation_prompt` (which would
+remove objection 1, leaving only the extra).
+
+## D49: asyncio is deferred; the rest of the eager import block stays
+
+**Decision.** `stylebot.synth` imports `asyncio` inside the four coroutine
+functions that use it, not at module scope. Everything else in
+`bin/ai_style.py`'s import block stays eager.
+
+*Measured 2026-09-03*, `ai-style --help`, median of 12 subprocess runs on Dan's
+laptop (interpreter floor 9.0 ms; `import click` alone 18.7 ms):
+
+| | median |
+| --- | --- |
+| before (this branch's starting point) | **49.8 ms** |
+| after | **43.7 ms** |
+| hypothetical: `synth`/`synth_cli` also gone | 38.4 ms |
+
+A/B'd on the finished tree — `-c "from stylebot.bin.ai_style import main"` with
+and without a preceding `import asyncio`, 15 runs each — asyncio alone is
+**4.9 ms** (48.5 → 43.7); the rest of the 6.1 ms is run-to-run drift and the
+other items on this branch. Either way it is ~10-12% of the command for a
+five-line change. The whole of `synth` + `synth_cli` is a further 4.2 ms.
+
+W11.i's premise ("`synth`/`asyncio` cost ~30 ms of a 70 ms `--help`") does not
+reproduce: `--help` was 49.8 ms here, not 70, and the two together were ~9 ms,
+not ~30. The win is real but it is a third of what was claimed, and saying so is
+the point of the item.
+
+*Rejected: a lazy-command group for `synth`.* `synth_cli.synth_options()` is a
+**decorator**, so the option bundles must exist when the module is imported;
+deferring them needs a `click.Group` subclass that overrides `format_commands`
+to render a hand-declared short help without calling `get_command` — because
+click's own `--help` path imports every subcommand to ask it for one. That is a
+reimplementation of click's help rendering, plus a second place the command list
+is written down, plus a `list_commands`/`commands` divergence that
+`tests/test_errors.py`'s tree walk and `test_smoke.py`'s `_params()` both reach
+into. 4.2 ms of 43.7 does not buy that.
+
+*And the eager block is not an accident.* `classify_train`, `splits`, `train`
+and `eval` are imported at module scope precisely so click owns their defaults
+directly (`default=tr.DEFAULT_LORA_RANK`) instead of the triple declaration that
+preceded it. Deferring them would undo a deliberate earlier choice to buy back
+~10 ms; `stylebot.lib` (3.9 ms, almost all `ruamel.yaml`) is unavoidable anyway
+because `is_human_authored` is a click default here.
+
+*Cost of the deferral, recorded so it is not a surprise.* `synth.asyncio` is no
+longer an attribute, so `monkeypatch.setattr(synth.asyncio, "sleep", …)` had to
+become `monkeypatch.setattr(asyncio, "sleep", …)` — the same module object,
+patched one level out.
+
+**Re-evaluate if** `--help` latency is ever measured as a real irritation (it is
+not today: 43.7 ms is below the ~100 ms threshold where a shell feels slow), or
+if click gains first-class lazy subcommands, which would remove the whole
+objection above.
+
+## P1 (PROPOSAL, 2026-08-10): move `openai` to an `[api]` extra — REJECTED, see below
+
+**Proposal**: demote `openai>=1.60.0` from `[project].dependencies` to a new
+`[project.optional-dependencies] api` extra, alongside `classifier` and `trainer`,
+and give the three lazy import sites a friendly "install `stylebot[api]`" error
+instead of a bare `ModuleNotFoundError`.
+
+**The observation**: every `openai` import in the package is lazy, at exactly
+three sites — `eval.openrouter_judge`, `infer.openai_backend`, and
+`generators.openai_generator` (which `openrouter_generator` is built on).
+Verified by blocking the module on `sys.meta_path`: all 14 stylebot modules,
+including `bin.ai_style`, still import, so the whole `--help` tree survives. Only
+those three factories raise. So the SDK plus its 8 transitive packages (anyio,
+distro, httpx, jiter, pydantic, sniffio, tqdm, typing-extensions) is currently
+mandatory for installers who never touch a network model.
+
+**What would actually break** without the extra installed:
+
+| breaks | survives |
+| --- | --- |
+| `ai-style synth` (every generator factory is OpenAI-compatible) | `log`, `make-splits`, `export-table` |
+| `ai-style eval --judge` | `eval` without `--judge` (Vale / detector / eyeball) |
+| `run` / `serve` with `--backend openai` | `run --backend tinker` (the default), `serve` score-only (backend default `None`) |
+| | `train` (tinker), `train-clf` (classifier extra), `stylebot.classify` |
+
+**Not a packaging break for livingthing** — the thing that looked like the
+blocker, and isn't. livingthing declares `openai>=1.108.0` as its own direct
+dependency and imports it in ~9 of its own modules (`ai_core`, `refs/*`,
+`workflow_preen`, `diagnostics`), so it gets the SDK regardless of what stylebot
+declares. Its `stylebot[classifier,trainer]` line would need no change, and
+`dan-style synth` would keep working. Any *other* consumer that installs plain
+`stylebot` and calls `synth` would break, and there are none known.
+
+**Alternatives considered**: (a) status quo — one fewer failure mode, at the cost
+of making the SDK mandatory for the score-only path; (b) finer-grained extras
+(`[judge]` / `[synth]` / `[serve-openai]`) — three extras for one wheel is worse
+ergonomics than the problem; (c) declaring `stylebot[api]` the documented default
+install so only deliberate minimal installs feel it.
+
+**Deciding constraint (unresolved, hence a proposal)**: `synth` is a
+first-class subcommand, not an add-on, and an extra makes the plain
+`uv add stylebot` install unable to run it. That is a real ergonomic regression
+traded against a leaner `classify`/`serve` install. Worth noting the docstring
+framing is narrower than it first reads: `classify.py` claims
+"ML-dependency-free **at import**", scoped to numpy/sklearn/sentence-transformers,
+and that claim is literally true today. The gap is at the *package* level, not the
+module level.
+
+**Ruled out — `ruamel-yaml` is not the same case.** It is imported eagerly at
+`lib.py:5`, module top level, and the frontmatter path is core to `log` /
+`targets` / `synth`. It stays a hard dependency.
+
+**Re-evaluate if**: stylebot acquires an installer other than livingthing (a PyPI
+release, or a second consumer that only wants the classifier runtime); or a
+non-OpenAI generator backend lands, which would make `synth` survivable without
+the SDK and remove the main objection.
+
+**Note for whoever accepts this**: the friendly-error half touches `eval.py`,
+`infer.py` and `generators.py`, so it cannot ship from a `pyproject.toml`-only
+change.
+
+## P1: REJECTED 2026-09-03 — `openai` stays a hard dependency
+
+The proposal above (move `openai>=1.60.0` to an `[api]` extra) is closed. Its
+analysis is left intact because the rejection is about the balance, not the
+facts, and the facts are still true: re-verified 2026-09-03 by blocking `openai`
+on `sys.meta_path` — all **30** modules in the package still import, so the
+entire `--help` tree survives without the SDK, and only the three lazy factories
+(`eval.openrouter_judge`, `infer.openai_backend`, `generators.openai_generator`)
+raise.
+
+*Neither re-evaluate-if trigger has fired.* There is still no installer other
+than livingthing — no `.github/workflows` in this repo, no PyPI publish path,
+version still 0.3.0 — and there is still no non-OpenAI generator backend
+(`generators.py` defines exactly `openai_generator` and `openrouter_generator`).
+
+*And W3 moved the balance further against it.* Bare `stylebot` is now a **hard**
+livingthing dependency rather than a member of the `styler` extra, so the lean
+`uv sync --no-group styler` install pulls it — but livingthing declares
+`openai>=1.108.0` itself and imports it in ~9 of its own modules, so the extra
+would save that install exactly nothing. The only beneficiary is a third
+consumer that wants `stylebot.classify`'s runtime and nothing else, which is
+precisely the trigger that has not fired. The ergonomic cost is certain (`uv add
+stylebot` gives you a `synth` subcommand that cannot run) and the benefit is
+hypothetical.
+
+**Re-evaluate if** either original trigger fires — a PyPI release or a second
+consumer, or a non-OpenAI generator backend. The friendly-error half is the
+cheap part and can land alone: `eval.py`, `infer.py` and `generators.py` would
+raise `MissingExtra("… needs the 'api' extra")` (D47) at their three lazy import
+sites, which is a strict improvement over a bare `ModuleNotFoundError` whether
+or not the packaging ever changes.

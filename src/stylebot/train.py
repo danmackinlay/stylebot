@@ -48,6 +48,7 @@ from pathlib import Path
 import click
 
 from stylebot.cli_options import opt
+from stylebot.errors import ConfigError, MissingExtra, RunError
 from stylebot.jsonl import dumps_line
 from stylebot.pairs import iter_pairs, system_sha, validate_pairs_file
 from stylebot.provenance import file_sha256, git_sha  # file_sha256 re-exported: public here
@@ -416,7 +417,7 @@ def assemble_training_corpus(
         errors = validate_pairs_file(pairs_path)
         if errors:
             lineno, msgs = errors[0]
-            raise ValueError(
+            raise RunError(
                 f"{pairs_path} fails the pairs contract on {len(errors)} record(s); "
                 f"first: line {lineno}: {'; '.join(msgs)} — refusing to train on a "
                 f"malformed corpus"
@@ -744,7 +745,7 @@ def run_training(
         seed=hp.seed,
     )
     if corpus.n_train == 0:
-        raise ValueError(f"no training pairs left after filtering {pairs_path}")
+        raise ConfigError(f"no training pairs left after filtering {pairs_path}")
 
     filters = {
         "selector": _hook_name(selector),
@@ -916,7 +917,7 @@ def _tinker_runner(
         from tinker_cookbook.supervised import train as sft
         from tinker_cookbook.supervised.types import ChatDatasetBuilderCommonConfig
     except ImportError as exc:
-        raise ImportError(_EXTRA_HINT) from exc
+        raise MissingExtra(_EXTRA_HINT) from exc
 
     base_model = hp.base_model
     renderer_name = hp.renderer_name or model_info.get_recommended_renderer_name(base_model)

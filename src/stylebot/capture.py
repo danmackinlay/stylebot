@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 
 from stylebot.ai_core import STYLE_SYSTEM
+from stylebot.errors import RunError
 from stylebot.jsonl import append_jsonl, read_jsonl, write_jsonl_atomic
 from stylebot.lib import read_w_frontmatter_text, split_paragraphs
 from stylebot.markdown import is_heading_line
@@ -336,7 +337,7 @@ def capture_pairs(
         )
 
     if not chunk_pairs:
-        raise ValueError(
+        raise RunError(
             "no changed text chunks to capture "
             "(only whitespace, frontmatter, pure inserts, or pure deletes changed)"
         )
@@ -484,7 +485,7 @@ def iter_archives(pairs_path: Path):
         elif path.suffix == ".json":
             legacy.append(path)
     if legacy:
-        raise ValueError(
+        raise RunError(
             f"{len(legacy)} legacy JSON capture archive(s) in {cap_dir} "
             f"(e.g. {legacy[0].name}). Support was removed in stylebot 0.3; "
             "migrate them with:\n"

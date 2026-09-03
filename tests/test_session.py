@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from stylebot import session
+from stylebot.errors import ConfigError
 from stylebot.jsonl import write_jsonl_atomic
 from stylebot.session import SessionError, SessionStore, Snapshot
 
@@ -457,8 +458,8 @@ def test_capture_pair_identical_texts_are_an_unready_world(store):
 
 
 def test_capture_pair_replace_without_a_source_is_an_argument_error(store):
-    """A ValueError, not a SessionError: the CLI turns this one into exit 2."""
-    with pytest.raises(ValueError, match="--replace requires --source") as exc:
+    """A ConfigError, not a SessionError: the CLI turns this one into exit 2."""
+    with pytest.raises(ConfigError, match="--replace requires --source") as exc:
         session.capture_pair(
             store, before_text="slop here", after_text="terse", replace=True, whole=True
         )
@@ -466,7 +467,7 @@ def test_capture_pair_replace_without_a_source_is_an_argument_error(store):
 
 
 def test_capture_pair_with_no_changed_chunk_is_an_unready_world(store):
-    """Pure insert: nothing to pair. `capture`'s ValueError becomes a SessionError."""
+    """Pure insert: nothing to pair. `capture`'s RunError becomes a SessionError."""
     with pytest.raises(SessionError, match="no changed text chunks"):
         session.capture_pair(
             store,
@@ -585,7 +586,7 @@ def test_tidy_with_nothing_to_remove_does_not_rewrite(store):
 def test_recut_refuses_legacy_archives_as_a_session_error(store):
     """`capture.iter_archives` refuses unmigrated `captures/<id>.json` blobs.
 
-    The refusal is a library `ValueError`; `session.recut` re-raises it as the
+    The refusal is a library `RunError`; `session.recut` re-raises it as the
     unready-world class so the CLI prints an instruction, not a traceback.
     """
     cap_dir = store.data_dir / "captures"

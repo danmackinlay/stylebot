@@ -213,3 +213,82 @@ def test_run_manifest_threads_the_diet_and_the_token_budget(tmp_path, monkeypatc
 # The CLI's own exit-code translation (usage -> 2, environment -> 1) is pinned
 # by `test_smoke.test_run_backend_errors_keep_their_exit_codes`; what is tested
 # here is that the library raises the two kinds it distinguishes them by.
+
+
+# --- the Styler seam: what the Protocol types, and what it cannot -----------
+
+
+def _styler_signature(fn):
+    import inspect
+
+    return list(inspect.signature(fn).parameters)
+
+
+def test_both_backends_return_the_shape_the_protocol_declares(monkeypatch):
+    """`Styler` was `Callable[..., list[str]]` until 2026-09-03 — a return type
+    and no arguments at all. This is the argument half, checked against the
+    Protocol's own signature rather than a copy of it.
+
+    Both backends are constructed with their clients stubbed: the point is the
+    closure's shape, which costs nothing to build and no API call to inspect.
+    """
+    import inspect
+
+    declared = list(inspect.signature(infer.Styler.__call__).parameters)[1:]
+    assert declared == ["messages", "num_samples"]
+
+    class _Resp:
+        choices = [type("C", (), {"message": type("M", (), {"content": "terse."})()})()]
+
+    class _FakeOpenAI:
+        def __init__(self, **kw):
+            self.chat = type(
+                "Chat", (), {"completions": type("Comp", (), {"create": lambda *a, **k: _Resp()})()}
+            )()
+
+    import openai
+
+    monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
+    styler = infer.openai_backend("http://x/v1", "m")
+    assert _styler_signature(styler) == declared
+    assert styler([{"role": "user", "content": "hi"}]) == ["terse."]
+
+
+def test_the_protocol_cannot_see_the_chat_template(monkeypatch):
+    """The honest limit, pinned so nobody reads the Protocol as a parity claim.
+
+    A backend that renders with a *different* template — the whole failure mode
+    the openai path carries — is still a perfectly good `Styler`. Only the
+    warning below distinguishes them.
+    """
+
+    def wrong_template(messages: list[dict], num_samples: int = 1) -> list[str]:
+        return ["<|im_start|>whatever the server felt like<|im_end|>"] * num_samples
+
+    assert isinstance(wrong_template, infer.Styler)
+    assert _styler_signature(wrong_template) == ["messages", "num_samples"]
+
+
+def test_an_openai_backend_warns_that_the_renderer_pin_is_uncheckable():
+    """Serving a manifest-pinned adapter through an OpenAI-compatible endpoint
+    used to look exactly like serving it correctly: both silent. The renderer
+    is not *checked* there, it is *unverifiable*, and that is worth a line."""
+    notes = backends.manifest_mismatches(_RUN, BackendOpts(backend="openai", model="local-q4"))
+    assert len(notes) == 1
+    assert "renderer unverifiable" in notes[0]
+    assert "qwen3_disable_thinking" in notes[0] and "local-q4" in notes[0]
+
+    # Not a second complaint on top of a real mismatch, and never on tinker.
+    both = backends.manifest_mismatches(
+        _RUN, BackendOpts(backend="openai", renderer_name="llama3")
+    )
+    assert [n for n in both if "renderer" in n] == [n for n in both if "renderer mismatch" in n]
+    assert backends.manifest_mismatches(_RUN, BackendOpts(backend="tinker")) == []
+
+
+def test_the_warning_is_skipped_when_the_manifest_pins_no_renderer():
+    """No pin, nothing to be unable to check — silence, not noise."""
+    unpinned = json.loads(json.dumps(_RUN))
+    unpinned["result"].pop("renderer_name", None)
+    unpinned["hyperparameters"].pop("renderer_name", None)
+    assert backends.manifest_mismatches(unpinned, BackendOpts(backend="openai")) == []

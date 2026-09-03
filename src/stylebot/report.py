@@ -33,6 +33,7 @@ import statistics
 from collections.abc import Sequence
 from pathlib import Path
 
+from stylebot.errors import ConfigError
 from stylebot.eval import load_scores, summarize_scores
 from stylebot.pairs import FIELD_EXTRACTORS, build_pair_content, iter_pairs, record_id
 from stylebot.targets import Target
@@ -792,7 +793,7 @@ def render_comparison_report(
     """
     out_path = Path(out_path)
     if len(arms) < 2:
-        raise ValueError("a comparison needs at least two arms")
+        raise ConfigError("a comparison needs at least two arms")
 
     loaded: list[tuple[str, dict[str, dict], str]] = []
     for label, pairs_path, scores, field in arms:

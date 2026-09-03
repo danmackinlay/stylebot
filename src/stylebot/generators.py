@@ -18,6 +18,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
+from stylebot.errors import ConfigError, RunError
+
 # Shared tail for every strategy, so only the *flavour* of slop varies. Mirrors
 # STYLE_SYSTEM's structure-preservation clause: the synthetic source must differ
 # from the target in style, not markdown shape, or the styler learns reformatting.
@@ -158,7 +160,7 @@ def resolve_strategy(name: str, system: str | None = None) -> ResolvedStrategy:
         strat = STRATEGIES[name]
     except KeyError:
         known = ", ".join(sorted(STRATEGIES))
-        raise ValueError(
+        raise ConfigError(
             f"unknown slop strategy {name!r}; known: {known} "
             f"(or pass an explicit system prompt / --slop-system-file)"
         ) from None
@@ -382,7 +384,7 @@ def openai_generator(
             # Some providers return choices=None/[] on an upstream error rather than
             # raising — surface a clear, catchable message, not an opaque TypeError.
             if not resp.choices:
-                raise RuntimeError(f"{model}: provider returned no choices (upstream error?)")
+                raise RunError(f"{model}: provider returned no choices (upstream error?)")
             choice = resp.choices[0]
             # A truncated slop (finish_reason "length") is a broken pair — fail loudly,
             # and say where the tokens went: reasoning eating the whole budget wants
@@ -394,7 +396,7 @@ def openai_generator(
                 # ("wait, let me reconsider...") vs a genuinely long rewrite.
                 trace = _reasoning_text_of(choice.message)
                 tail = f"; reasoning tail: ...{trace[-240:]}" if trace else ""
-                raise RuntimeError(
+                raise RunError(
                     f"slop truncated at max_tokens={max_tokens} "
                     f"(completion={getattr(trunc_usage, 'completion_tokens', '?')}, "
                     f"reasoning={getattr(trunc_details, 'reasoning_tokens', '?')} — "

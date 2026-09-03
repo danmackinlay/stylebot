@@ -53,6 +53,7 @@ import click
 # definition of "which head scored this".
 from stylebot.classify import DETECTOR_IDENTITY_KEYS
 from stylebot.cli_options import opt
+from stylebot.errors import ConfigError, RunError
 from stylebot.jsonl import dumps_line, iter_jsonl, read_jsonl, write_jsonl_atomic
 
 # The pair-text extractors and the score join key live in `stylebot.pairs`; this
@@ -532,7 +533,7 @@ def assert_single_detector(
     identities = detector_identities(scores)
     if len(identities) > 1 and not allow_mixed:
         labels = "; ".join(_identity_label(i) for i in identities)
-        raise ValueError(
+        raise ConfigError(
             f"scores mix {len(identities)} detector artifacts — every mean over them is a "
             f"blend of instruments: {labels}. Re-score with one head, or pass "
             f"allow_mixed=True / --allow-mixed-detector to say you meant it"
@@ -682,7 +683,7 @@ def _guard_detector_continuity(
     # never blend the file's means; only a *scoring* head has to match.
     if incoming == existing or incoming.get("name") in (None, "null"):
         return
-    raise ValueError(
+    raise ConfigError(
         f"{out_path} was scored by {_identity_label(existing)} but this run uses "
         f"{_identity_label(incoming)} — resume skips by pair id, so appending would "
         f"blend two instruments into one mean. Point --out at a fresh file, or pass "
@@ -829,7 +830,7 @@ def score_pairs_file(
 
     unknown = [f for f in fields if f not in FIELD_EXTRACTORS]
     if unknown:
-        raise ValueError(f"unknown field(s) {unknown}; known: {sorted(FIELD_EXTRACTORS)}")
+        raise ConfigError(f"unknown field(s) {unknown}; known: {sorted(FIELD_EXTRACTORS)}")
 
     # Prune before reading `seen`: an orphan id would otherwise both survive in
     # the file and count as already-scored.
@@ -1291,14 +1292,14 @@ def compare_scores(
     says you mean it, and the returned dict records that you did.
     """
     if signal not in SIGNAL_EXTRACTORS:
-        raise ValueError(f"unknown signal {signal!r}; known: {sorted(SIGNAL_EXTRACTORS)}")
+        raise ConfigError(f"unknown signal {signal!r}; known: {sorted(SIGNAL_EXTRACTORS)}")
     rows_a = {str(r["id"]): r for r in load_scores(scores_a) if r.get("id") is not None}
     rows_b = {str(r["id"]): r for r in load_scores(scores_b) if r.get("id") is not None}
 
     ids_a = assert_single_detector(rows_a.values(), allow_mixed=allow_cross_detector)
     ids_b = assert_single_detector(rows_b.values(), allow_mixed=allow_cross_detector)
     if not allow_cross_detector and ids_a and ids_b and ids_a[0] != ids_b[0]:
-        raise ValueError(
+        raise ConfigError(
             f"refusing to compare verdicts across detector artifacts: "
             f"{_identity_label(ids_a[0])} vs {_identity_label(ids_b[0])} — a refit head moves "
             f"P(slop) by more than most effects being measured. Re-score both sides with one "
@@ -1583,7 +1584,7 @@ def write_covariate_table(
     out_path = Path(out_path)
     rows, constants = covariate_table(scores)
     if not rows:
-        raise ValueError(f"no score records in {scores} — nothing to export")
+        raise RunError(f"no score records in {scores} — nothing to export")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     columns = list(rows[0])

@@ -10,6 +10,7 @@ import pytest
 
 from stylebot import splits as sp
 from stylebot.classify_train import Dataset
+from stylebot.errors import RunError
 
 
 def _dataset(posts_pairs: dict[str, int], synth_posts: set | None = None) -> Dataset:
@@ -146,12 +147,12 @@ def test_save_load_roundtrip_and_validation(tmp_path):
     assert loaded["rest_rule"] == splits["rest_rule"]
 
     (tmp_path / "bad_version.json").write_text('{"schema_version": 99}')
-    with pytest.raises(ValueError, match="schema_version"):
+    with pytest.raises(RunError, match="schema_version"):
         sp.load_splits(tmp_path / "bad_version.json")
     (tmp_path / "bad_rule.json").write_text(
         '{"schema_version": 1, "eval_posts": [], "rest_rule": {"kind": "coin-flip"}}'
     )
-    with pytest.raises(ValueError, match="rest_rule"):
+    with pytest.raises(RunError, match="rest_rule"):
         sp.load_splits(tmp_path / "bad_rule.json")
 
 
@@ -248,7 +249,7 @@ def test_alias_chains_resolve_and_cycles_raise():
     }
     assert sp.role_of("c.qmd", chained) == "eval"
     cyclic = {**chained, "aliases": {"a.qmd": "b.qmd", "b.qmd": "a.qmd"}}
-    with pytest.raises(ValueError, match="cycle"):
+    with pytest.raises(RunError, match="cycle"):
         sp.role_of("a.qmd", cyclic)
 
 
@@ -258,11 +259,11 @@ def test_load_splits_rejects_a_malformed_alias_map(tmp_path):
     path = tmp_path / "splits.json"
     doc = _renamed_splits()
     path.write_text(json.dumps({**doc, "aliases": {"a.qmd": ["b.qmd"]}}))
-    with pytest.raises(ValueError, match="aliases"):
+    with pytest.raises(RunError, match="aliases"):
         sp.load_splits(path)
     # A cycle is caught at load, not deep inside a training run.
     path.write_text(json.dumps({**doc, "aliases": {"a.qmd": "b.qmd", "b.qmd": "a.qmd"}}))
-    with pytest.raises(ValueError, match="cycle"):
+    with pytest.raises(RunError, match="cycle"):
         sp.load_splits(path)
 
 

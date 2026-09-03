@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Literal
 
 from stylebot import capture, config
+from stylebot.errors import ConfigError, RunError
 from stylebot.jsonl import read_jsonl, write_jsonl_atomic
 
 __all__ = [
@@ -98,7 +99,7 @@ SNAPSHOT_CONTENT = "content.md"
 SNAPSHOT_META = "meta.json"
 
 
-class SessionError(RuntimeError):
+class SessionError(RunError):
     """The arguments are fine; the world is not ready.
 
     No open session, nothing changed since the snapshot, no archive to reopen.
@@ -596,7 +597,7 @@ def save_session(
             extra_meta=extra or None,
             heading_context=heading_context,
         )
-    except ValueError as exc:
+    except RunError as exc:
         raise SessionError(str(exc)) from exc
 
     if not keep_open:
@@ -665,7 +666,7 @@ def capture_pair(
         if source is None:
             # A contradiction in the arguments, not an unready world: the CLI
             # turns this into a UsageError (exit 2), so keep it a ValueError.
-            raise ValueError("--replace requires --source")
+            raise ConfigError("--replace requires --source")
         replaced = capture.remove_pairs_for_source(store.pairs_path, source)
         if replaced:
             say(f"replaced {replaced} prior pair(s) for {source}")
@@ -681,7 +682,7 @@ def capture_pair(
             extra_meta={"tags": list(tags)} if tags else None,
             heading_context=heading_context,
         )
-    except ValueError as exc:
+    except RunError as exc:
         raise SessionError(str(exc)) from exc
     return PairResult(written=written, replaced=replaced, whole=whole)
 
@@ -843,7 +844,7 @@ def recut(
 
     Thin over `capture.recut_archives`, adding the before/after corpus counts and
     the length distribution a caller reports. `capture.iter_archives` refuses
-    unmigrated legacy archives with a `ValueError`; that becomes a `SessionError`
+    unmigrated legacy archives with a `RunError`; that becomes a `SessionError`
     here, because the fix is a command the user has to run, not a traceback.
     """
     pairs_before = len(read_pairs(store))
@@ -857,7 +858,7 @@ def recut(
             max_similarity=max_similarity,
             dry_run=dry_run,
         )
-    except ValueError as exc:
+    except RunError as exc:
         raise SessionError(str(exc)) from exc
 
     captures = len({r["meta"]["capture_id"] for r in records}) if records else 0

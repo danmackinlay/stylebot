@@ -16,7 +16,6 @@ tics.
 
 from __future__ import annotations
 
-import asyncio
 import difflib
 import hashlib
 import inspect
@@ -898,6 +897,8 @@ async def _attempt(fn, text: str, history: Sequence[dict]) -> tuple[str, dict]:
 async def _draw(
     call, gen: Generator, turn: _Turn, history: Sequence[dict], st: _RunState
 ) -> tuple[str, dict, object]:
+    import asyncio
+
     """One paid draw, retried across providers. Raises once it gives up.
 
     Returns `(slop, gen_meta, call)` — the callable comes back because a retry
@@ -943,6 +944,8 @@ async def _draw(
 async def _draw_past_gates(
     call, gen: Generator, turn: _Turn, history: Sequence[dict], st: _RunState
 ) -> tuple[str, dict, tuple[str, str] | None, int, object]:
+    import asyncio
+
     """Draw for one turn, redrawing while a hygiene gate rejects the sample.
 
     Returns `(slop, gen_meta, verdict, redraws, call)`. `verdict` is None once a
@@ -1020,6 +1023,8 @@ async def _run_session(sess: _Session, writer: PairsWriter, st: _RunState) -> li
     session always attempts its first turn — every reflow either writes a pair or
     sheds an errored turn, strictly shrinking the leftover list.
     """
+    import asyncio
+
     gen = sess.generator
     # Multi-turn sessions get a per-session callable when the generator offers
     # one (sticky provider routing state); stateless stays on the plain path.
@@ -1145,6 +1150,8 @@ async def _run_sessions(
     same worker slot until the work list is empty, so the run finishes with every
     planned turn either written or individually errored.
     """
+    import asyncio
+
     sem = asyncio.Semaphore(max(1, max_workers))
 
     async def _gated(sess: _Session, writer: PairsWriter) -> None:
@@ -1312,5 +1319,7 @@ def synthesize_pairs(
         repo_prov=repo_provenance(blog_root if blog_root is not None else data_dir),
         disk_keys=disk_keys,
     )
+    import asyncio
+
     asyncio.run(_run_sessions(sessions, pairs_path, st, max_workers))
     return result

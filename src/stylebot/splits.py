@@ -37,6 +37,8 @@ import random
 from datetime import UTC, datetime
 from pathlib import Path
 
+from stylebot.errors import ConfigError, RunError
+
 SCHEMA_VERSION = 1
 ROLES = ("eval", "styler", "detector")
 
@@ -86,15 +88,15 @@ def make_splits(
     synthetic paraphrases. Deterministic in `seed`.
     """
     if not 0 < eval_frac < 1:
-        raise ValueError(f"eval_frac must be in (0,1), got {eval_frac}")
+        raise ConfigError(f"eval_frac must be in (0,1), got {eval_frac}")
     if not 0 < detector_frac < 1:
-        raise ValueError(f"detector_frac must be in (0,1), got {detector_frac}")
+        raise ConfigError(f"detector_frac must be in (0,1), got {detector_frac}")
     posts = sorted(set(posts))
     if not posts:
-        raise ValueError("no posts to split")
+        raise ConfigError("no posts to split")
     candidates = sorted(set(eval_candidates)) if eval_candidates is not None else posts
     if not candidates:
-        raise ValueError("no eval candidates (pass posts with real pairs, or None for all)")
+        raise ConfigError("no eval candidates (pass posts with real pairs, or None for all)")
 
     shuffled = list(candidates)
     random.Random(seed).shuffle(shuffled)
@@ -201,7 +203,7 @@ def canonical_source(source: str, splits: dict) -> str:
     while source in aliases:
         source = aliases[source]
         if source in seen:
-            raise ValueError(f"splits aliases: rename cycle through {source!r}")
+            raise RunError(f"splits aliases: rename cycle through {source!r}")
         seen.add(source)
     return source
 
@@ -225,7 +227,7 @@ def role_of(source: str, splits: dict) -> str:
         return "eval"
     rule = splits["rest_rule"]
     if rule["kind"] != "hash":  # future-proof the schema
-        raise ValueError(f"unknown rest_rule kind: {rule['kind']!r}")
+        raise RunError(f"unknown rest_rule kind: {rule['kind']!r}")
     u = unit_from_digest(hashlib.sha256(f"{rule['salt']}:{source}".encode()).digest())
     return "detector" if u < rule["detector_frac"] else "styler"
 
@@ -240,18 +242,18 @@ def save_splits(splits: dict, path: str | Path) -> Path:
 def load_splits(path: str | Path) -> dict:
     splits = json.loads(Path(path).read_text(encoding="utf-8"))
     if splits.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError(f"unsupported splits schema_version: {splits.get('schema_version')!r}")
+        raise RunError(f"unsupported splits schema_version: {splits.get('schema_version')!r}")
     for key in ("eval_posts", "rest_rule"):
         if key not in splits:
-            raise ValueError(f"splits file missing {key!r}")
+            raise RunError(f"splits file missing {key!r}")
     if splits["rest_rule"].get("kind") != "hash":
-        raise ValueError(f"unknown rest_rule kind: {splits['rest_rule'].get('kind')!r}")
+        raise RunError(f"unknown rest_rule kind: {splits['rest_rule'].get('kind')!r}")
     aliases = splits.get("aliases")
     if aliases is not None:
         if not isinstance(aliases, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in aliases.items()
         ):
-            raise ValueError("splits 'aliases' must be a {path: path} map")
+            raise RunError("splits 'aliases' must be a {path: path} map")
         for alias in aliases:  # fail at load, not deep inside a training run
             canonical_source(alias, splits)
     return splits

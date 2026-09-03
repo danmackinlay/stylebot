@@ -24,6 +24,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from stylebot.errors import RunError
+
 #: The corpus directory's name under a project root, when nothing else says.
 #: Named rather than spelled inline so a caller that has a *root* rather than a
 #: data dir (livingthing's `training_targets.data_dir`, whose default is
@@ -88,7 +90,7 @@ def require_key(name: str) -> str:
     """Return an API key, or raise a clear, actionable error if it's missing."""
     val = get_key(name)
     if not val:
-        raise RuntimeError(
+        raise RunError(
             f"Missing required secret {name!r}. "
             f"Export {name} in your shell, or run under direnv "
             f"(`direnv exec <dir-with-an-.envrc> uv run ai-style ...`). "

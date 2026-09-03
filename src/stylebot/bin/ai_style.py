@@ -13,6 +13,15 @@ NDJSON editor sidecar, `stylebot.serve`).
 Phase 1's capture logger is `ai-style log` — a subcommand like every other, not
 a separate console script. It shipped as a standalone `ai-style-log` until
 2026-07-20; that alias is gone, one canonical spelling.
+
+**Exit codes are not written here.** The libraries raise `stylebot.errors`'
+two classes and `ErrorTranslatingGroup` (on `main`, so the whole subtree
+inherits it) turns them into 2 and 1. Until 2026-09-03 this file had six
+hand-written `except ValueError:` blocks, all mapping to exit 1, which is how
+"no training pairs left after filtering" came to exit 1 while the same class of
+mistake in `synth` exited 2. What is still written here is what click alone can
+know: flag *combinations* (`--pairs` with a FILE, `--best-of` without a
+detector), which are `click.UsageError` at the point of parsing.
 """
 
 from __future__ import annotations
@@ -20,7 +29,6 @@ from __future__ import annotations
 import datetime
 import json
 import sys
-from contextlib import contextmanager
 from dataclasses import replace
 from functools import cache, partial
 from pathlib import Path
@@ -32,8 +40,14 @@ import click
 # triple declaration: `default=None`, a hand-written `[default: X]` in the help
 # string, and an `x if x is not None else DEFAULT_X` at the call site. All three
 # import free (tinker/sklearn/sentence-transformers stay lazy) and reuse the
-# substrate `synth` already pulls in: 344 µs measured, against 9 ms for asyncio
-# and 4.5 ms for click. `infer` stays lazy — it owns no default declared here.
+# substrate `synth` already pulls in: 344 µs measured, against 4.5 ms for click.
+# `infer` stays lazy — it owns no default declared here.
+#
+# `synth`/`synth_cli` are here for the same reason (`synth_options()` is a
+# decorator; a default cannot be lazy), and cost 4.2 ms of a 43.7 ms `--help`
+# measured 2026-09-03. asyncio was the other 6 ms and is gone — `synth` imports
+# it inside the four coroutine functions that use it. D49 has the numbers and
+# why the remaining 4.2 ms is not worth a lazy-command group.
 from stylebot import backends, config, pairs, synth, synth_cli
 from stylebot import classify_train as ct
 from stylebot import eval as ev
@@ -42,12 +56,20 @@ from stylebot import train as tr
 from stylebot.backends import BACKEND_PARAMS, BackendOpts, backend_options
 from stylebot.bin.ai_style_data import main as _data
 from stylebot.bin.ai_style_log import main as _log
-from stylebot.cli_options import SectionedCommand, bundle_options, bundles_from_kwargs
+from stylebot.cli_options import (
+    ErrorTranslatingGroup,
+    SectionedCommand,
+    bundle_options,
+    bundles_from_kwargs,
+)
+from stylebot.errors import ConfigError, RunError
 from stylebot.jsonl import append_jsonl
 from stylebot.lib import is_human_authored
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.group(
+    cls=ErrorTranslatingGroup, context_settings={"help_option_names": ["-h", "--help"]}
+)
 def main() -> None:
     """stylebot tooling — capture, synthetic pairs, training, eval (subcommands)."""
 
@@ -68,27 +90,14 @@ main.add_command(_data, name="data")
 # surface itself (`BackendOpts`, `build_styler`, the token-scaling rule and the
 # manifest diet) is `stylebot.backends`, a LIBRARY: it lived here until
 # 2026-09-03, where livingthing could not import it, reimplemented it, and lost
-# `max_tokens` in the copy. All that is left here is the click translation.
+# `max_tokens` in the copy. Nothing of it is left here — not even the exit-code
+# translation, which `ErrorTranslatingGroup` now does for the whole tree.
 #
 # The per-command differences below are deliberate and stay per-command:
 # `run` defaults --backend to tinker (serve omits it for score-only serving),
 # `serve` defaults --temperature hotter, and serve's --detector-model is
 # required (it IS the service) where run's only feeds --best-of.
 # ---------------------------------------------------------------------------
-
-
-def build_styler(opts: BackendOpts):
-    """`backends.build_styler` with this repo's exit codes attached.
-
-    A flag combination the user must fix exits 2 (`UsageError`); a fine
-    invocation against an unready world — no key, no extra — exits 1.
-    """
-    try:
-        return backends.build_styler(opts)
-    except ValueError as exc:
-        raise click.UsageError(str(exc)) from exc
-    except (RuntimeError, ImportError) as exc:
-        raise click.ClickException(str(exc)) from exc
 
 
 MANIFEST_HELP = (
@@ -107,29 +116,6 @@ def _load_manifest(manifest_path: Path | None) -> dict:
         return json.loads(manifest_path.read_text(encoding="utf-8"))
     except ValueError as exc:
         raise click.ClickException(f"{manifest_path}: not valid JSON ({exc})") from exc
-
-
-@contextmanager
-def _synth_errors():
-    """Translate `stylebot.synth_cli`'s domain errors into click's.
-
-    The synth kit is a library — it raises the `SynthError` family and never
-    exits — so this is the one place the process consequences are decided, and
-    they are the repo's usual idiom: a configuration the user must fix exits 2,
-    a fine invocation against an unready world exits 1. A run whose generations
-    failed also exits 1, silently: `run_synth` has already printed every error
-    and the summary, so re-rendering the exception would only add noise.
-    """
-    try:
-        yield
-    except synth_cli.SynthConfigError as exc:
-        if exc.param_hint:
-            raise click.BadParameter(str(exc), param_hint=exc.param_hint) from exc
-        raise click.UsageError(str(exc)) from exc
-    except synth_cli.SynthGenerationError as exc:
-        raise SystemExit(1) from exc
-    except synth_cli.SynthRunError as exc:
-        raise click.ClickException(str(exc)) from exc
 
 
 @main.command("synth", cls=synth_cli.SectionedCommand)
@@ -203,37 +189,36 @@ def synth_cmd(
             )
         return config.resolve_data_dir(data_dir)
 
-    with _synth_errors():
-        targets = synth.iter_targets(
-            files=list(files) or None,
-            blog_root=blog_root,
-            selector=selector,
-            glob=glob,
-            policy=opts.pop("chunk"),
-        )
+    targets = synth.iter_targets(
+        files=list(files) or None,
+        blog_root=blog_root,
+        selector=selector,
+        glob=glob,
+        policy=opts.pop("chunk"),
+    )
 
-        # The read-only inspection modes (--sample/--report) exit before generation:
-        # they write nothing, so they need no corpus location. Deciding that HERE —
-        # above the resolution — is what keeps `run_synth`'s data_dir a plain path
-        # while this command keeps its own tailored refusal message.
-        inspection = opts["inspection"]
-        inspecting = inspection.sample_n is not None or inspection.report_path is not None
+    # The read-only inspection modes (--sample/--report) exit before generation:
+    # they write nothing, so they need no corpus location. Deciding that HERE —
+    # above the resolution — is what keeps `run_synth`'s data_dir a plain path
+    # while this command keeps its own tailored refusal message.
+    inspection = opts["inspection"]
+    inspecting = inspection.sample_n is not None or inspection.report_path is not None
 
-        # Still resolved for inspection runs when it IS available, so the inspection
-        # hints can name the real pairs path.
-        # `run_synth` is silent unless handed a sink — this is the CLI, so it
-        # gets the click one (stream + colour routing lives in
-        # `cli_options.EMIT_LEVELS`, shared with livingthing's `dan-style synth`
-        # so the two front-ends cannot render a run differently).
-        # No `extra_tags=` here: provenance tagging is a library parameter
-        # (`run_synth(extra_tags=…)`), which is how the one tag on the live
-        # corpus was ever set. A wrapper that wants tags passes them in code.
-        synth_cli.run_synth(
-            targets,
-            data_dir=_data_dir(required=not inspecting),
-            emit=synth_cli.click_emitter(),
-            **opts,
-        )
+    # Still resolved for inspection runs when it IS available, so the inspection
+    # hints can name the real pairs path.
+    # `run_synth` is silent unless handed a sink — this is the CLI, so it
+    # gets the click one (stream + colour routing lives in
+    # `cli_options.EMIT_LEVELS`, shared with livingthing's `dan-style synth`
+    # so the two front-ends cannot render a run differently).
+    # No `extra_tags=` here: provenance tagging is a library parameter
+    # (`run_synth(extra_tags=…)`), which is how the one tag on the live
+    # corpus was ever set. A wrapper that wants tags passes them in code.
+    synth_cli.run_synth(
+        targets,
+        data_dir=_data_dir(required=not inspecting),
+        emit=synth_cli.click_emitter(),
+        **opts,
+    )
 
 
 def _document_pass(pairs_path: Path, out: Path, doc_opts, score_fields):
@@ -247,7 +232,9 @@ def _document_pass(pairs_path: Path, out: Path, doc_opts, score_fields):
     if doc_opts.documents_manifest is None:
         raise click.UsageError("--documents needs --documents-manifest (the adapter to serve)")
     manifest = _load_manifest(doc_opts.documents_manifest)
-    styler = build_styler(backends.opts_from_manifest(manifest, BackendOpts(backend="tinker")))
+    styler = backends.build_styler(
+        backends.opts_from_manifest(manifest, BackendOpts(backend="tinker"))
+    )
     max_chunk_chars, inline_headings = backends.serving_diet(manifest)
 
     splits_file = config.splits_path(pairs_path.parent)
@@ -447,10 +434,7 @@ def eval_cmd(
     out = out_path or (pairs_path.parent / "scores.jsonl")
     score_fields = fields or ("slop", "target")
 
-    try:
-        judge_fn = ev.openrouter_judge(model=judge_model) if judge else None
-    except RuntimeError as exc:  # missing key, surfaced by config.require_key
-        raise click.ClickException(str(exc)) from exc
+    judge_fn = ev.openrouter_judge(model=judge_model) if judge else None
 
     # A trained voice-classifier artifact, if given, supplies a real detector
     # (P(slop)); else the null detector. The embedder is rebuilt lazily from the
@@ -475,22 +459,19 @@ def eval_cmd(
             pairs_path, out, doc_opts, score_fields
         )
 
-    try:
-        result = ev.score_pairs_file(
-            pairs_path,
-            out,
-            fields=score_fields,
-            judge=judge_fn,
-            detector=detector_fn,
-            vale_config=vale_config,
-            max_workers=max_workers,
-            limit=limit,
-            prune_orphans=prune_orphans,
-            allow_mixed_detector=verdict_opts.allow_mixed_detector,
-            on_progress=_progress,
-        )
-    except ValueError as exc:  # a detector-continuity refusal, or an unknown field
-        raise click.ClickException(str(exc)) from exc
+    result = ev.score_pairs_file(
+        pairs_path,
+        out,
+        fields=score_fields,
+        judge=judge_fn,
+        detector=detector_fn,
+        vale_config=vale_config,
+        max_workers=max_workers,
+        limit=limit,
+        prune_orphans=prune_orphans,
+        allow_mixed_detector=verdict_opts.allow_mixed_detector,
+        on_progress=_progress,
+    )
     # Loud, never silent: the prune REWROTE a file the operator may have
     # committed, and a big count usually means --out belongs to another corpus.
     if result.pruned_orphans:
@@ -520,17 +501,14 @@ def eval_cmd(
         click.echo(f"wrote summary -> {summary_path}")
 
     if verdict_opts.compare_path is not None:
-        try:
-            verdict = ev.compare_scores(
-                out,
-                verdict_opts.compare_path,
-                field=verdict_opts.compare_field,
-                signal=verdict_opts.compare_signal,
-                cluster_by=verdict_opts.cluster_by or None,
-                allow_cross_detector=verdict_opts.allow_cross_detector,
-            )
-        except ValueError as exc:
-            raise click.ClickException(str(exc)) from exc
+        verdict = ev.compare_scores(
+            out,
+            verdict_opts.compare_path,
+            field=verdict_opts.compare_field,
+            signal=verdict_opts.compare_signal,
+            cluster_by=verdict_opts.cluster_by or None,
+            allow_cross_detector=verdict_opts.allow_cross_detector,
+        )
         _echo_verdict(verdict, out, verdict_opts.compare_path)
 
     # Read-only visualisations over the (just-written) scores.jsonl + the corpus.
@@ -669,8 +647,6 @@ def serve_cmd(
         raise click.ClickException(
             f"--detector-model needs the embedder installed (sentence-transformers): {exc}"
         ) from exc
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
 
     chunk_chars = opts.chunk_chars()
 
@@ -685,10 +661,11 @@ def serve_cmd(
             try:
                 return backends.build_styler(opts)
             except (RuntimeError, ImportError) as exc:
-                # A sidecar answers, it does not exit: re-raised as ValueError so
-                # the failing rewrite request gets an {"error"} and scoring lives.
-                # (`build_styler`'s own ValueErrors already have that shape.)
-                raise ValueError(str(exc)) from exc
+                # A sidecar answers, it does not exit: a `RunError`/`MissingExtra`
+                # is re-raised as a `ConfigError` so the failing rewrite request
+                # gets an {"error"} and scoring lives. (`build_styler`'s own
+                # `ConfigError`s are already caught by serve's `except ValueError`.)
+                raise ConfigError(str(exc)) from exc
 
         scorer = infer.detector_scorer(detector)
 
@@ -1074,23 +1051,18 @@ def train_clf_cmd(
         holdout_list = [ln.strip() for ln in holdout_posts.read_text().splitlines() if ln.strip()]
 
     click.echo(f"embedding with {embed_model} (downloads on first use) ...")
-    try:
-        out, metrics = ct.train(
-            pairs_path,
-            out_dir,
-            test_size=test_size,
-            n_splits=n_splits,
-            C=C,
-            embed_model=embed_model,
-            holdout_frac=holdout_frac,
-            holdout_seed=holdout_seed,
-            holdout_posts=holdout_list,
-            splits_path=splits_path,
-        )
-    except ImportError as exc:
-        raise click.ClickException(str(exc)) from exc
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+    out, metrics = ct.train(
+        pairs_path,
+        out_dir,
+        test_size=test_size,
+        n_splits=n_splits,
+        C=C,
+        embed_model=embed_model,
+        holdout_frac=holdout_frac,
+        holdout_seed=holdout_seed,
+        holdout_posts=holdout_list,
+        splits_path=splits_path,
+    )
 
     _echo_clf_metrics(metrics)
     if "styler_holdout" in metrics:
@@ -1207,10 +1179,7 @@ def train_cmd(
     )
 
     # Always preview first: the dry-run manifest is also the pre-spend estimate.
-    try:
-        preview = tr.run_training(pairs_path, work_dir, manifest_out, dry_run=True, **kwargs)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+    preview = tr.run_training(pairs_path, work_dir, manifest_out, dry_run=True, **kwargs)
     data = preview.manifest["data"]
     est = preview.manifest["estimate"]
     click.echo(
@@ -1237,12 +1206,7 @@ def train_cmd(
     if not assume_yes:
         click.confirm("Launch the paid Tinker run?", abort=True)
 
-    try:
-        result = tr.run_training(pairs_path, work_dir, manifest_out, dry_run=False, **kwargs)
-    except ImportError as exc:
-        raise click.ClickException(str(exc)) from exc
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+    result = tr.run_training(pairs_path, work_dir, manifest_out, dry_run=False, **kwargs)
 
     run_result = result.manifest["result"] or {}
     for key in ("train_mean_nll", "test/nll", "train_tokens"):
@@ -1318,21 +1282,16 @@ def merge_adapter_cmd(
             raise click.UsageError("pass --base-model, or --manifest to read it from")
         try:
             base_model = export.base_model_of(json.loads(manifest_path.read_text(encoding="utf-8")))
-        except ValueError as exc:
+        except RunError as exc:
             raise click.ClickException(f"{manifest_path}: {exc}") from exc
 
     click.echo(f"merging {adapter_dir} into {base_model} ...")
-    try:
-        out = export.merge_adapter(
-            adapter_dir,
-            out_dir,
-            base_model=base_model,
-            work_dir=work_dir,
-        )
-    except ImportError as exc:
-        raise click.ClickException(str(exc)) from exc
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+    out = export.merge_adapter(
+        adapter_dir,
+        out_dir,
+        base_model=base_model,
+        work_dir=work_dir,
+    )
     click.echo(f"merged model -> {out} (never commit this)")
     click.echo("quantize it for local serving with e.g. `mlx_lm.convert --hf-path <it> -q`")
 
@@ -1442,7 +1401,7 @@ def run_cmd(
     elif out_path is not None or limit is not None:
         raise click.UsageError("--out/--limit only apply in corpus mode (--pairs)")
 
-    styler = build_styler(opts)
+    styler = backends.build_styler(opts)
 
     scorer = None
     if best_of > 1:

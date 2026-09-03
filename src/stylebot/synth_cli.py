@@ -57,6 +57,7 @@ from stylebot.cli_options import (
     opt,
     silent,
 )
+from stylebot.errors import ConfigError, RunError, StylebotError
 from stylebot.splits import ROLES as SPLIT_ROLES
 from stylebot.targets import ChunkPolicy
 
@@ -94,45 +95,45 @@ _HEARTBEAT_SECS = 20.0
 # here raises `click.UsageError` / `click.BadParameter` / `click.ClickException`
 # or `SystemExit`.
 #
-# The split mirrors the repo's established error idiom (see
-# `tests/test_ai_style_log.py`): a configuration the caller must fix is a usage
-# error, a fine configuration against an unready world is not. `bin/ai_style.py`
-# maps the former to exit 2 and the latter to exit 1.
+# These three were synth's own hierarchy until 2026-09-03; they are now three
+# named specializations of `stylebot.errors`' two classes, which every other
+# module raises too. `cli_options.translate_errors` is the one place any of
+# them becomes an exit code (config 2, run 1), so `synth`'s codes and
+# `train`'s can no longer differ by which `except` clause a command happened to
+# write.
 # ---------------------------------------------------------------------------
 
 
-class SynthError(Exception):
+class SynthError(StylebotError):
     """Base for every failure this kit raises on purpose."""
 
 
-class SynthConfigError(SynthError, ValueError):
-    """The arguments are wrong or incoherent — the caller must change them.
+class SynthConfigError(SynthError, ConfigError):
+    """A synth-shaped `stylebot.errors.ConfigError` — exit 2.
 
-    `param_hint`, when set, names the flag a CLI wrapper should blame (it
-    becomes `click.BadParameter`'s hint); without it the wrapper raises a plain
-    usage error. Either way: exit 2.
+    Kept as a name so `except SynthConfigError` can mean "this run's flags",
+    not "some flag somewhere"; the exit code and the `param_hint` come from the
+    package vocabulary.
     """
 
-    def __init__(self, message: str, *, param_hint: str | None = None) -> None:
-        super().__init__(message)
-        self.param_hint = param_hint
+
+class SynthRunError(SynthError, RunError):
+    """A synth-shaped `stylebot.errors.RunError` — exit 1.
+
+    A missing API key, an unreachable model registry.
+    """
 
 
-class SynthRunError(SynthError, RuntimeError):
-    """The configuration is fine but the world isn't — a missing API key, an
-    unreachable model registry. Exit 1."""
-
-
-class SynthGenerationError(SynthError, RuntimeError):
+class SynthGenerationError(SynthRunError):
     """The run completed but some pairs failed to generate.
 
-    Carries the `SynthResult` so a library caller can still see what landed;
-    the per-error detail and the run summary have already been reported by the
-    time this is raised. Exit 1, with nothing further to print.
+    Carries the `SynthResult` so a library caller can still see what landed.
+    `quiet`, because the per-error detail and the run summary have already been
+    reported by the time this is raised: exit 1 with nothing further to print.
     """
 
     def __init__(self, result: synth.SynthResult) -> None:
-        super().__init__(f"{len(result.errors)} generation error(s)")
+        super().__init__(f"{len(result.errors)} generation error(s)", quiet=True)
         self.result = result
 
 

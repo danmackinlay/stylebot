@@ -13,6 +13,8 @@ and chunk hygiene), `test_synth_generator.py` (the OpenRouter wire),
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from synth_helpers import _fake, _targets
 
@@ -732,7 +734,10 @@ class _Boom(Exception):
 def test_transient_provider_error_is_redrawn(tmp_path, monkeypatch):
     """The 502-from-Cloudflare case. One flaky draw must not cost the cell —
     that is the difference between finishing a run and re-running it."""
-    monkeypatch.setattr(synth.asyncio, "sleep", lambda _d: asyncio_noop())
+    # `asyncio`, not `synth.asyncio`: `synth` imports it inside the four
+    # coroutine functions that use it (W11.i), so the module has no such
+    # attribute — and patching the stdlib module reaches the same object.
+    monkeypatch.setattr(asyncio, "sleep", lambda _d: asyncio_noop())
     calls = {"n": 0}
 
     def flaky(text: str) -> str:

@@ -26,6 +26,8 @@ import math
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from stylebot.errors import RunError
+
 # An embedder: maps a passage to a fixed-length vector. Injected, never imported
 # here — livingthing supplies a sentence-transformers one; tests supply a stub.
 EmbedFn = Callable[[str], Sequence[float]]
@@ -73,13 +75,13 @@ def load_linear_head(path: str | Path) -> dict:
     with path.open(encoding="utf-8") as fp:
         head = json.load(fp)
     if not isinstance(head, dict):
-        raise ValueError(f"{path}: head.json must be a JSON object")
+        raise RunError(f"{path}: head.json must be a JSON object")
     coef = head.get("coef")
     intercept = head.get("intercept")
     if not isinstance(coef, list) or not coef or not all(isinstance(c, (int, float)) for c in coef):
-        raise ValueError(f"{path}: head.json 'coef' must be a non-empty list of numbers")
+        raise RunError(f"{path}: head.json 'coef' must be a non-empty list of numbers")
     if not isinstance(intercept, (int, float)):
-        raise ValueError(f"{path}: head.json 'intercept' must be a number")
+        raise RunError(f"{path}: head.json 'intercept' must be a number")
     return head
 
 
@@ -115,7 +117,7 @@ def embedding_classifier_detector(
     def detect(prose: str) -> dict:
         vec = embed_fn(prose)
         if len(vec) != dim:
-            raise ValueError(
+            raise RunError(
                 f"embedding dim {len(vec)} != head dim {dim} "
                 f"(embed_model={embed_model!r}); the embedder does not match the trained head"
             )
@@ -137,7 +139,7 @@ def load_artifact_meta(artifact_dir: str | Path) -> dict:
     with meta_path.open(encoding="utf-8") as fp:
         meta = json.load(fp)
     if not isinstance(meta, dict) or not meta.get("embed_model"):
-        raise ValueError(f"{meta_path}: meta.json must carry an 'embed_model' id")
+        raise RunError(f"{meta_path}: meta.json must carry an 'embed_model' id")
     return meta
 
 

@@ -21,15 +21,22 @@ surface with `bundle_options([*SOME_BUNDLES, MyOpts], defaults=[GenOpts(...)])`.
 rather than input: a library takes an emitter and defaults it to silence, the
 CLI hands it `click_emitter()`. One adapter, so two front-ends (here and
 livingthing's `dan-style`) cannot drift in how they render the same run.
+
+`translate_errors()` / `ErrorTranslatingGroup` are the third: the libraries
+raise `stylebot.errors`' two classes and never exit, and this is where those
+become click exceptions and exit codes.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import Field, field, fields
 from typing import Any, Protocol
 
 import click
+
+from stylebot.errors import ConfigError, RunError
 
 # Metadata key under which a field carries its click declaration.
 CLI = "cli"
@@ -246,3 +253,52 @@ class SectionedCommand(click.Command):
         for title, records in sections.items():
             with formatter.section(title):
                 formatter.write_dl(records)
+
+
+# ---------------------------------------------------------------------------
+# The error boundary.
+#
+# Every library module in stylebot raises `stylebot.errors`' vocabulary and
+# never exits; this is the one place the process consequences are decided.
+# Installing it on the *group* rather than decorating each callback is
+# deliberate: a subcommand added tomorrow inherits the contract instead of
+# having to remember it, which is what `tests/test_errors.py` enumerates the
+# command tree to prove.
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def translate_errors():
+    """Turn `stylebot.errors` into click exceptions: config 2, run 1.
+
+    A `ConfigError` carrying `param_hint` becomes `click.BadParameter` so the
+    offending flag is named; without one it is a plain `UsageError`. A
+    `RunError` becomes `click.ClickException` — except a `quiet` one, which has
+    already printed everything it has to say and only needs the exit code.
+
+    Anything else propagates untouched: a bare `ValueError` from a violated
+    internal contract is a bug, and click's traceback is the right report.
+    """
+    try:
+        yield
+    except ConfigError as exc:
+        if exc.param_hint:
+            raise click.BadParameter(str(exc), param_hint=exc.param_hint) from exc
+        raise click.UsageError(str(exc)) from exc
+    except RunError as exc:
+        if exc.quiet:
+            raise SystemExit(1) from exc
+        raise click.ClickException(str(exc)) from exc
+
+
+class ErrorTranslatingGroup(click.Group):
+    """A `click.Group` that applies `translate_errors` to its whole subtree.
+
+    `Group.invoke` is the funnel every descendant command's body passes
+    through, so one `try` here covers subgroups (`ai-style log`, `ai-style
+    data`) and any command added later, at any depth.
+    """
+
+    def invoke(self, ctx: click.Context):
+        with translate_errors():
+            return super().invoke(ctx)

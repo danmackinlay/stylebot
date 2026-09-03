@@ -15,6 +15,7 @@ import math
 import pytest
 
 from stylebot import classify
+from stylebot.errors import RunError
 
 
 def test_logreg_p_slop_matches_sigmoid():
@@ -65,7 +66,7 @@ def test_detector_dim_mismatch_raises():
     det = classify.embedding_classifier_detector(
         embed_fn=lambda _p: [1.0, 1.0], head=head, meta={"embed_model": "x"}
     )
-    with pytest.raises(ValueError, match="does not match"):
+    with pytest.raises(RunError, match="does not match"):
         det("anything")
 
 
@@ -78,7 +79,7 @@ def test_load_linear_head_roundtrip_and_validation(tmp_path):
 
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({"intercept": 0.0}))  # missing coef
-    with pytest.raises(ValueError, match="coef"):
+    with pytest.raises(RunError, match="coef"):
         classify.load_linear_head(bad)
 
 

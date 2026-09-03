@@ -34,6 +34,8 @@ import shutil
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+from stylebot.errors import RunError
+
 logger = logging.getLogger(__name__)
 
 _EXTRA_HINT = (
@@ -97,12 +99,12 @@ def check_adapter_scaling(config: dict) -> None:
     """
     r, alpha = config.get("r"), config.get("lora_alpha")
     if r is None or alpha is None:
-        raise ValueError(
+        raise RunError(
             f"{ADAPTER_CONFIG} is missing 'r' or 'lora_alpha', so the LoRA scaling "
             "cannot be verified — refusing to merge an adapter of unknown scale"
         )
     if r != alpha:
-        raise ValueError(
+        raise RunError(
             f"adapter has lora_alpha={alpha} != r={r} (scaling {alpha / r:g}), but the "
             "serving->raw key inversion assumes a scaling of 1. Merging would apply the "
             "wrong scale. Merge it with PEFT directly, or re-export with alpha == r."
@@ -124,10 +126,10 @@ def normalize_adapter(adapter_dir: Path | str, out_dir: Path | str) -> Path:
     adapter_dir = Path(adapter_dir)
     weights = adapter_dir / ADAPTER_WEIGHTS
     if not weights.is_file():
-        raise ValueError(f"no {ADAPTER_WEIGHTS} in {adapter_dir}")
+        raise RunError(f"no {ADAPTER_WEIGHTS} in {adapter_dir}")
     config_path = adapter_dir / ADAPTER_CONFIG
     if not config_path.is_file():
-        raise ValueError(f"no {ADAPTER_CONFIG} in {adapter_dir}")
+        raise RunError(f"no {ADAPTER_CONFIG} in {adapter_dir}")
     check_adapter_scaling(json.loads(config_path.read_text(encoding="utf-8")))
 
     try:
@@ -178,7 +180,7 @@ def base_model_of(manifest: dict) -> str:
     """The base model a training manifest was trained against."""
     base_model = (manifest.get("hyperparameters") or {}).get("base_model")
     if not base_model:
-        raise ValueError("manifest has no hyperparameters.base_model")
+        raise RunError("manifest has no hyperparameters.base_model")
     return str(base_model)
 
 
@@ -228,7 +230,7 @@ def merge_adapter(
         trust_remote_code=True,
     )
     if not (partial / "config.json").is_file():
-        raise RuntimeError(f"the merge left no config.json in {partial} — inspect it")
+        raise RunError(f"the merge left no config.json in {partial} — inspect it")
     partial.rename(out_dir)
 
     if raw_adapter != adapter_dir:

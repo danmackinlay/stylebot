@@ -42,6 +42,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from stylebot import classify
+from stylebot.errors import ConfigError, MissingExtra
 from stylebot.pairs import extract_slop, extract_target, iter_pairs
 from stylebot.provenance import git_sha
 
@@ -91,7 +92,7 @@ def _np():
     try:
         import numpy as np
     except ImportError as exc:  # pragma: no cover - exercised only without the extra
-        raise ImportError(_EXTRA_HINT) from exc
+        raise MissingExtra(_EXTRA_HINT) from exc
     return np
 
 
@@ -280,7 +281,7 @@ def embed_texts(
     try:
         encode = classify.sentence_transformers_batch_embed_fn(model_id, normalize=normalize)
     except ImportError as exc:
-        raise ImportError(_EXTRA_HINT) from exc
+        raise MissingExtra(_EXTRA_HINT) from exc
     return encode(texts, batch_size=batch_size).astype(np.float32, copy=False)
 
 
@@ -293,7 +294,7 @@ def _make_logreg(C: float = DEFAULT_C):
     try:
         from sklearn.linear_model import LogisticRegression
     except ImportError as exc:
-        raise ImportError(_EXTRA_HINT) from exc
+        raise MissingExtra(_EXTRA_HINT) from exc
 
     # class_weight='balanced' guards the small/imbalanced negative set.
     return LogisticRegression(max_iter=2000, class_weight="balanced", C=C)
@@ -779,7 +780,7 @@ def _train_splits_mode(
     work_ds, _ = subset_dataset(ds, det_groups | sty_groups)
     det_ds, det_rows = subset_dataset(work_ds, det_groups)
     if det_ds.n_pairs == 0:
-        raise ValueError("splits: the detector pool has no pairs — nothing to train on")
+        raise ConfigError("splits: the detector pool has no pairs — nothing to train on")
     logger.info(
         "embedding %d passages with %s (%d eval-role posts excluded)",
         len(work_ds.texts),
@@ -919,7 +920,7 @@ def train(
     """
     ds = assemble_dataset(pairs_path, extra_positives=extra_positives, pair_ok=pair_ok)
     if ds.n_pairs == 0:
-        raise ValueError(f"no content-matched pairs found in {pairs_path}")
+        raise ConfigError(f"no content-matched pairs found in {pairs_path}")
 
     ship_kw = dict(
         out_dir=out_dir,
@@ -931,7 +932,7 @@ def train(
 
     if splits_path is not None:
         if holdout_frac or holdout_posts:
-            raise ValueError("splits_path is mutually exclusive with holdout_frac/holdout_posts")
+            raise ConfigError("splits_path is mutually exclusive with holdout_frac/holdout_posts")
         return _train_splits_mode(
             ds,
             splits_path,
