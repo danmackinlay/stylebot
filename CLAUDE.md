@@ -52,7 +52,7 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
   at the 2000-token floor while the promoted run served a 4500-char diet (D35).
   A library that can only be reached through `CliRunner` will be copied.
 - **One entry point, subcommands** (`ai-style
-  check-splits|eval|export-table|log|make-splits|merge-adapter|run|serve|synth|train|train-clf|validate-pairs`).
+  check-splits|eval|export-table|extend-eval|log|make-splits|merge-adapter|run|serve|synth|train|train-clf|validate-pairs`).
   Not a scatter of loose scripts: Phase 1's logger shipped as a standalone
   `ai-style-log` script until 2026-07-20, and was folded in. One console script,
   one `--help` tree. **No carve-out, and there is no `scripts/` directory**

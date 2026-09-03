@@ -3,7 +3,8 @@
 Per OVERVIEW "Interfaces": one command, subcommands — not a scatter of loose
 scripts. Each subcommand is a thin `click` wrapper that parses flags and calls a
 typed library function: `log` (Phase 1 capture), `synth` (Phase 2), `make-splits`
-(the shared by-post splits contract) and `check-splits` (its health check),
+(the shared by-post splits contract), `check-splits` (its health check) and
+`extend-eval` (the add-only re-cut of the frozen eval stratum),
 `train-clf` (the voice classifier),
 `train` (Phase 3 LoRA SFT), `run` (Phase 4 inference), `eval` (the offline
 scorer, `stylebot.eval`), `export-table` (scores -> tidy CSV), `merge-adapter`
@@ -61,6 +62,7 @@ from stylebot.cli_options import (
     SectionedCommand,
     bundle_options,
     bundles_from_kwargs,
+    click_emitter,
 )
 from stylebot.errors import ConfigError, RunError
 from stylebot.jsonl import append_jsonl
@@ -289,7 +291,7 @@ def _echo_verdict(verdict: dict, a_path: Path, b_path: Path) -> None:
     "--pairs",
     "pairs_path",
     required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
     help="The pairs.jsonl corpus to score (slop + Dan sides of every pair).",
 )
 @click.option(
@@ -729,7 +731,7 @@ def _echo_clf_metrics(metrics: dict, indent: str = "") -> None:
     "--pairs",
     "pairs_path",
     required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
     help="The pairs.jsonl corpus whose posts get partitioned.",
 )
 @click.option(
@@ -851,7 +853,7 @@ def make_splits_cmd(
 @click.option(
     "--pairs",
     "pairs_path",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
     default=None,
     help="Also print the per-role post/pair table for this corpus, and the danger report.",
 )
@@ -913,12 +915,32 @@ def check_splits_cmd(splits_path: Path, blog_root: Path, pairs_path: Path | None
         raise click.ClickException(f"{len(errors)} pinned eval post(s) missing from {blog_root}")
 
 
+@main.command("extend-eval", cls=SectionedCommand)
+@sp.extend_eval_options()
+def extend_eval_cmd(**kw) -> None:
+    """Grow the frozen eval stratum: `eval_v(n+1) = eval_v(n) u posts`.
+
+    Add-only and dry-run by default. Posts named here move OUT of the styler /
+    detector pools and INTO the frozen eval — the safe direction, since prose
+    only ever leaves training. It bumps `eval_version`, appends an
+    `eval_history` entry, and needs no migration of existing pairs: role is
+    derived from each record's `meta.source` at read time.
+
+    Shrinking the stratum is not expressible: dropping a post out of eval would
+    retroactively license training on prose an existing verdict was computed
+    over. Anything already trained under the old stratum (the detector head
+    above all) must be refit afterwards.
+    """
+    opts = bundles_from_kwargs(kw, {"opts": sp.ExtendEvalOpts})["opts"]
+    sp.apply_eval_extension(opts, emit=click_emitter())
+
+
 @main.command("train-clf")
 @click.option(
     "--pairs",
     "pairs_path",
     required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
     help="The content-matched pairs.jsonl corpus to train on.",
 )
 @click.option(
@@ -1333,7 +1355,7 @@ def merge_adapter_cmd(
 @click.option(
     "--pairs",
     "pairs_path",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
     help="Corpus mode: rewrite the slop side of every pair in this pairs.jsonl instead of a "
     "file, writing an output-bearing JSONL for `ai-style eval --field output`. This is how a "
     "trained adapter gets a number rather than an impression. Needs --out.",
@@ -1467,7 +1489,7 @@ def run_cmd(
 
 
 @main.command("validate-pairs")
-@click.argument("pairs_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument("pairs_file", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--fix",
     is_flag=True,
@@ -1481,21 +1503,27 @@ def run_cmd(
 )
 @click.option("--limit", type=int, default=20, show_default=True, help="Problem lines to print.")
 def validate_pairs_cmd(pairs_file: Path, fix: bool, backup: bool, limit: int) -> None:
-    """Check a pairs.jsonl against the record contract, and optionally de-duplicate.
+    """Check a corpus against the record contract, and optionally de-duplicate.
 
     The gate `train` runs on its input, exposed so it can be run on demand: the
     message triple and the frozen system prompt, meta types and domains, and
-    `record_id` uniqueness across the whole file. `--fix` addresses only the
+    `record_id` uniqueness across the whole corpus. `--fix` addresses only the
     last of those — a duplicate is mechanically removable, a malformed record
     is not.
+
+    PAIRS_FILE is a `pairs.jsonl` or a `pairs/` shard directory. Uniqueness is
+    checked across every shard, which is the reason to point this at the
+    directory rather than at each file in turn.
     """
     problems = pairs.validate_pairs_file(pairs_file)
     dupes = [(ln, e) for ln, e in problems if any("duplicate record_id" in x for x in e)]
     click.echo(
         f"{pairs_file}: {len(problems)} problem line(s), {len(dupes)} duplicate record_id(s)"
     )
-    for lineno, errs in problems[:limit]:
-        click.echo(f"  line {lineno}: {'; '.join(errs)}")
+    for where, errs in problems[:limit]:
+        # int for a single file, "<shard>.jsonl:<line>" for a sharded corpus.
+        loc = f"line {where}" if isinstance(where, int) else where
+        click.echo(f"  {loc}: {'; '.join(errs)}")
     if len(problems) > limit:
         click.echo(f"  ... and {len(problems) - limit} more")
 

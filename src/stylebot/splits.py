@@ -25,8 +25,10 @@ source post's role via `meta.source`.
 pinned eval post stops being pinned; a hash-assigned one re-hashes into the
 other pool). The optional `aliases` map fixes that — see `canonical_source`.
 
-Stdlib-only by design: Phase 3 and the eval harness import this without the
-`stylebot[classifier]` extra.
+Extra-free by design: Phase 3 and the eval harness import this without the
+`stylebot[classifier]` extra. The only non-stdlib import is `click`, an
+unconditional dependency, for the CLI option bundle at the bottom; the
+role-assignment core above it touches nothing but the standard library.
 """
 
 from __future__ import annotations
@@ -34,9 +36,17 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+# click is an unconditional dependency (never an extra), and `ExtendEvalOpts`
+# below is a `cli_options` bundle for the same reason `eval.VerdictOpts` is:
+# extending the frozen stratum has two CLIs — `ai-style extend-eval` and the
+# blog's `dan-style extend-eval` — and must have one declaration.
+import click
+
+from stylebot.cli_options import Emitter, opt, silent
 from stylebot.errors import ConfigError, RunError
 
 SCHEMA_VERSION = 1
@@ -312,29 +322,44 @@ def is_error(message: str) -> bool:
     return message.startswith(ERROR_PREFIX)
 
 
-def summarize_roles(splits: dict, ds) -> dict:
-    """Per-role post/pair counts (with real/synth breakdown) for a Dataset.
+def post_pair_counts(splits: dict, ds) -> dict[str, dict[str, int]]:
+    """`{canonical post: {pairs, pairs_real, pairs_synthetic}}` for a Dataset.
 
-    `ds` is a `classify_train.Dataset` (duck-typed: needs `groups`, `pair_rows`,
-    `pair_is_synthetic`). Free positives are ignored — roles govern pairs.
+    Counted by *identity*, not by spelling: a corpus holding pairs under both a
+    post's old and new path is one post. `ds` is a `classify_train.Dataset`
+    (duck-typed: needs `groups`, `pair_rows`, `pair_is_synthetic`); free
+    positives are ignored — roles govern pairs.
+
+    The per-post view `summarize_roles` aggregates and `apply_eval_extension`
+    prices a candidate post with, so "how many pairs does this post carry" is
+    answered once.
     """
-    summary = {
-        role: {"posts": set(), "pairs": 0, "pairs_real": 0, "pairs_synthetic": 0} for role in ROLES
-    }
-    per_post: dict[str, dict[str, int]] = {role: {} for role in ROLES}
+    counts: dict[str, dict[str, int]] = {}
     for k, (s_row, _) in enumerate(ds.pair_rows):
-        # Count by identity, not by spelling: a corpus holding pairs under both
-        # a post's old and new path is one post, in one role.
         post = canonical_source(ds.groups[s_row], splits)
-        role = role_of(post, splits)
-        entry = summary[role]
-        entry["posts"].add(post)
+        entry = counts.setdefault(post, {"pairs": 0, "pairs_real": 0, "pairs_synthetic": 0})
         entry["pairs"] += 1
-        per_post[role][post] = per_post[role].get(post, 0) + 1
         if ds.pair_is_synthetic(k):
             entry["pairs_synthetic"] += 1
         else:
             entry["pairs_real"] += 1
+    return counts
+
+
+def summarize_roles(splits: dict, ds) -> dict:
+    """Per-role post/pair counts (with real/synth breakdown) for a Dataset."""
+    summary = {
+        role: {"posts": set(), "pairs": 0, "pairs_real": 0, "pairs_synthetic": 0} for role in ROLES
+    }
+    per_post: dict[str, dict[str, int]] = {role: {} for role in ROLES}
+    for post, counts in post_pair_counts(splits, ds).items():
+        role = role_of(post, splits)
+        entry = summary[role]
+        entry["posts"].add(post)
+        entry["pairs"] += counts["pairs"]
+        entry["pairs_real"] += counts["pairs_real"]
+        entry["pairs_synthetic"] += counts["pairs_synthetic"]
+        per_post[role][post] = counts["pairs"]
     out = {}
     for role, entry in summary.items():
         counts = per_post[role]
@@ -424,3 +449,213 @@ def check_splits(splits: dict, ds, *, blog_root: str | Path | None = None) -> li
             f"C-selection will be high-variance"
         )
     return warnings
+
+
+# ---------------------------------------------------------------------------
+# Extending the frozen stratum — the CLI surface for `extend_eval`.
+#
+# `extend_eval` above is the pure add-only transform; this is the operation
+# around it: read the file, price what would move out of the training pools,
+# refuse a post that is not on disk, print the before/after, and only then
+# write. It is a *subcommand* rather than a flag on `make-splits` because the
+# two have opposite safety rules — `make-splits --force` re-cuts (and thereby
+# un-freezes) the partition, while this may only ever grow it — and putting
+# both behind one command would sit "never unfreeze eval" next to the one flag
+# that does. See stylebot CLAUDE.md: anything a user runs as part of the
+# pipeline is a subcommand.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExtendEvalOpts:
+    """The eval-extension surface, declared once for both CLIs.
+
+    `ai-style extend-eval` and the blog's `dan-style extend-eval` (which pins
+    the corpus/blog paths) are the two, and the blog's mirror test asserts the
+    second carries every flag of the first — so this is a `cli_options` bundle
+    rather than eight `click.option` lines retyped in two repos.
+    """
+
+    cli_section = "Eval stratum"
+
+    splits_path: Path | None = opt(
+        None,
+        "--splits",
+        "splits_path",
+        required=True,
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        help="The splits.json to extend, in place.",
+    )
+    posts: tuple[str, ...] = opt(
+        (),
+        "--post",
+        "posts",
+        multiple=True,
+        help="A POST source path (blog-root-relative, as `meta.source` spells it) to move into "
+        "the frozen eval stratum. Repeatable.",
+    )
+    posts_file: Path | None = opt(
+        None,
+        "--posts-file",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        help="File of POST source paths, one per line (# comments and blanks ignored), added to "
+        "any --post.",
+    )
+    pairs_path: Path | None = opt(
+        None,
+        "--pairs",
+        "pairs_path",
+        # A file OR a shard directory: `stylebot.corpus` makes both first-class
+        # and every reader comes through `pairs.iter_pairs`, so refusing a
+        # directory here would refuse the shape the blog's corpus now has.
+        type=click.Path(exists=True, path_type=Path),
+        help="Corpus to price the move against (a pairs.jsonl or a shard directory): per-post "
+        "pair counts and the before/after role table + danger report. Strongly recommended — "
+        "without it you are extending blind.",
+    )
+    blog_root: Path | None = opt(
+        None,
+        "--blog-root",
+        type=click.Path(exists=True, file_okay=False, path_type=Path),
+        help="Source tree the added posts must exist in (a typo'd path would pin a post that is "
+        "not there). Skipped when unset.",
+    )
+    note: str | None = opt(
+        None,
+        "--note",
+        help="Why this cut happened; recorded in the eval_history entry.",
+    )
+    apply: bool = opt(
+        False,
+        "--apply",
+        is_flag=True,
+        help="Write the extended splits.json. Without it this is a dry run: the stratum is "
+        "frozen, so the default is to show the move and change nothing.",
+    )
+
+
+def read_posts_file(path: str | Path) -> list[str]:
+    """POST source paths from a file, one per line; `#` comments and blanks out."""
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    return [s for s in (line.split("#", 1)[0].strip() for line in lines) if s]
+
+
+def extend_eval_options(**kw):
+    """The shared `extend-eval` flags. `defaults=`/`exclude=` as elsewhere."""
+    from stylebot.cli_options import bundle_options
+
+    return bundle_options([ExtendEvalOpts], **kw)
+
+
+def apply_eval_extension(opts: ExtendEvalOpts, *, emit: Emitter = silent) -> dict:
+    """Preview (and with `opts.apply`, write) `eval_v(n+1) = eval_v(n) ∪ posts`.
+
+    The whole operation, so the two CLIs cannot drift in what they refuse or in
+    what they print before writing. Returns the report as data:
+    `additions` (each with the role it is leaving and its pair counts),
+    `already_eval`, `roles_before`/`roles_after` when a corpus was given, and
+    the eval version and file hash on each side.
+
+    Refuses: an empty post list; a post that is not on disk under `blog_root`.
+    Adding only posts that are already pinned is a no-op — it returns the report
+    with `applied: False` and does not churn `eval_version`.
+    """
+    splits_path = Path(opts.splits_path)
+    splits = load_splits(splits_path)
+    posts = [*opts.posts, *(read_posts_file(opts.posts_file) if opts.posts_file else [])]
+    if not posts:
+        raise ConfigError("no posts to add — pass --post (repeatable) and/or --posts-file")
+
+    if opts.blog_root is not None:
+        root = Path(opts.blog_root)
+        absent = [p for p in posts if not (root / p).exists()]
+        if absent:
+            raise ConfigError(
+                f"{len(absent)} post(s) to add are not on disk under {root}: "
+                f"{', '.join(absent)} — pinning a path that does not exist is the leak "
+                f"check-splits exists to catch"
+            )
+
+    pinned = {canonical_source(p, splits) for p in splits["eval_posts"]}
+    additions, already = [], []
+    for post in dict.fromkeys(posts):  # de-dup, order preserved
+        (already if canonical_source(post, splits) in pinned else additions).append(post)
+
+    counts: dict[str, dict[str, int]] = {}
+    ds = None
+    if opts.pairs_path is not None:
+        from stylebot import classify_train
+
+        ds = classify_train.assemble_dataset(opts.pairs_path)
+        counts = post_pair_counts(splits, ds)
+
+    extended = extend_eval(splits, additions, note=opts.note) if additions else splits
+    report = {
+        "splits_path": str(splits_path),
+        "splits_sha256_before": splits_sha256(splits_path),
+        "eval_version_before": eval_version(splits),
+        "eval_version_after": eval_version(extended),
+        "already_eval": already,
+        "additions": [
+            {
+                "post": post,
+                "from_role": role_of(post, splits),
+                **counts.get(canonical_source(post, splits), {"pairs": 0}),
+            }
+            for post in additions
+        ],
+        "roles_before": summarize_roles(splits, ds) if ds is not None else None,
+        "roles_after": summarize_roles(extended, ds) if ds is not None else None,
+        "applied": False,
+    }
+
+    emit(
+        f"eval stratum v{report['eval_version_before']} "
+        f"splits_sha256={report['splits_sha256_before']}  ({splits_path})"
+    )
+    for post in already:
+        emit(f"  already eval: {post}")
+    if not additions:
+        emit("nothing to add — every post given is already pinned; eval_version unchanged")
+        return report
+    emit(f"would re-role {len(additions)} post(s) into the frozen eval stratum:")
+    for entry in report["additions"]:
+        pairs = (
+            f"{entry['pairs']} pair(s) ({entry.get('pairs_real', 0)} real / "
+            f"{entry.get('pairs_synthetic', 0)} synthetic)"
+            if ds is not None
+            else "pair counts unknown (pass --pairs)"
+        )
+        emit(f"  {entry['from_role']:>8} -> eval  {entry['post']}  [{pairs}]")
+
+    if ds is not None:
+        for role in ROLES:
+            before, after = report["roles_before"][role], report["roles_after"][role]
+            emit(
+                f"{role:>8}: {before['posts']} -> {after['posts']} post(s), "
+                f"{before['pairs']} -> {after['pairs']} pair(s) "
+                f"({before['pairs_real']} -> {after['pairs_real']} real / "
+                f"{before['pairs_synthetic']} -> {after['pairs_synthetic']} synthetic); "
+                f"top-post share {before['top_post_share']:.0%} -> {after['top_post_share']:.0%}"
+            )
+        for warning in check_splits(extended, ds):
+            emit(f"WARNING (after): {warning}", level="warn")
+
+    if not opts.apply:
+        emit("dry run — nothing written; pass --apply to write", level="note")
+        return report
+
+    save_splits(extended, splits_path)
+    report["applied"] = True
+    report["splits_sha256_after"] = splits_sha256(splits_path)
+    emit(
+        f"wrote {splits_path} -> eval stratum v{report['eval_version_after']} "
+        f"splits_sha256={report['splits_sha256_after']} "
+        f"({len(extended['eval_posts'])} pinned path(s))"
+    )
+    emit(
+        "the detector artifact and any verdict computed under the previous stratum are now "
+        "stale: refit (`train-clf --splits`) before comparing anything",
+        level="note",
+    )
+    return report

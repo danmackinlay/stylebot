@@ -157,8 +157,9 @@ The one-shot pass, when Dan wants it (a `--detector-model`-shaped hook is not
 enough here — the detector is injected, so this is a short library call):
 
 ```sh
-# The 41 REAL eval pairs, both sides = 82 calls. Corpus median target is
-# ~1.2k chars ≈ 200 words, so ~16k words ≈ $0.80 at $0.05/1k words.
+# The REAL eval pairs, both sides = 2 calls each. Under eval_v2 that is 149
+# pairs / 298 calls; the corpus median target is ~1.2k chars ≈ 200 words, so
+# ~60k words ≈ $3.00 at $0.05/1k words (it was ~$0.80 under eval_v1's 41).
 direnv exec . uv run python -c "
 from stylebot import eval as ev
 from stylebot import splits as sp
@@ -245,9 +246,11 @@ it consumes the `meta.gen` covariates synth records per pair.
 - [x] **Eval integrity** (2026-09-03, W10; D39-D42): every score row names the
       detector artifact that produced it and mixing two is refused; the paired
       verdict bootstraps over POSTs; the headline is the real facet; the eval
-      stratum is versioned and add-only; manifests pin the splits sha, the kept
-      record-id list, the selector's constants and the installed stack. Tests:
-      `tests/test_eval_integrity.py` (19, no network/key/model).
+      stratum is versioned and add-only (`splits.extend_eval`, driven by
+      `ai-style extend-eval` / `dan-style extend-eval` — dry-run by default);
+      manifests pin the splits sha, the kept record-id list, the selector's
+      constants and the installed stack. Tests: `tests/test_eval_integrity.py`
+      (25, no network/key/model).
 - [x] A read-only **scores visualiser** (`stylebot.report.render_scores_report` /
       `--report`): self-contained HTML joining `pairs.jsonl` + `scores.jsonl` by id —
       slop↔Dan text + judge score + rationale per pair, sortable by the slop→Dan
@@ -284,7 +287,12 @@ it consumes the `meta.gen` covariates synth records per pair.
 ## Eval integrity — the instrument, the interval, the stratum (2026-09-03, W10)
 
 Four things a verdict has to say besides the number. Decisions D39–D42; measured
-composition in `findings.md`, "Eval-stratum composition".
+composition in `findings.md`, "Eval-stratum composition" and "eval_v2 — applied
+2026-09-03". **The blog's stratum is at `eval_version: 2`
+(`splits_sha256=05b495adac68cdc4`, 2026-09-03): 12 posts, 177 pairs, 149 real /
+28 synthetic, largest post 22%.** The counts in the four points below are the
+v1 measurements the design was written against; the shape of each argument is
+unchanged and v2 is what made two of them survivable.
 
 1. **Which head produced it.** Every detector result carries
    `classify.DETECTOR_IDENTITY_KEYS` (`name`, `embed_model`, `git_sha`,
@@ -296,11 +304,16 @@ composition in `findings.md`, "Eval-stratum composition".
    instruments into one mean with nothing to show for it.
 2. **What the effective n is.** `paired_delta(clusters=…)` bootstraps over POSTs;
    `compare_scores` clusters on `meta.source` by default (`--cluster-by`).
-   77 of the 103 frozen-eval pairs come from one post, so a chunk-level interval
-   over the stratum is too narrow by roughly √(mean cluster size).
+   77 of eval_v1's 103 frozen-eval pairs came from one post, so a chunk-level
+   interval over the stratum is too narrow by roughly √(mean cluster size).
+   eval_v2 takes the bootstrap from 6 clusters to 12, which is where the
+   clustered interval stops being *narrower* than the chunk-level one — the
+   inversion that means "too few clusters to say" (`findings.md`).
 3. **Real or synthetic.** `summarize_scores` facets `by_provenance` and names
    `headline_facet: "real"`; `compare_scores` compares the real facet by default
-   (`provenance=None` for everything). 62 of the 103 are our own paraphrases.
+   (`provenance=None` for everything). 62 of eval_v1's 103 were our own
+   paraphrases; the W12 prune took that to 0 and eval_v2 brought 28 back with
+   `notebook/ai_search.qmd`, so the facet still earns its keep.
 4. **At what scale it was scored.** `rewrite_documents_file` runs
    `infer.rewrite_text` over whole **capture archives** — `before.md` rewritten,
    scored against `before` (slop) and `after.md` (Dan) — and emits the same
@@ -316,8 +329,9 @@ Verdict outputs belong under `runs/<run_id>/` (`eval.verdict_dir`,
 ### Document-scale eval — the command, and what it costs
 
 ```sh
-# Free: what would be rewritten. Measured 2026-09-03: 3 documents, 86,820 chars
-# (86 capture archives exist; only 3 sit on eval-role posts).
+# Free: what would be rewritten. Measured 2026-09-03 under eval_v2:
+# 35 documents, 1,561,740 chars (86 capture archives exist; under eval_v1 only
+# 3 sat on eval-role posts, for 86,820 chars).
 uv run python -c "
 from stylebot import eval as ev, splits as sp
 S = sp.load_splits('_training_pairs/splits.json')
@@ -329,12 +343,13 @@ print(len(docs), 'documents,', sum(len(d['before']) for d in docs), 'chars in')
 direnv exec . uv run dan-style eval --documents --run-id <run-id> --field slop --field target
 ```
 
-Sizing, at the promoted 4500-char cross-heading diet: 86,820 chars is ~20 prose
-chunks and ~22k output tokens, so at Tinker's ~$0.60/1M that is **≈ $0.015 and a
-few minutes**. The reason to think before running it is that it is a *paid* pass
-and that three documents is a thin verdict — not that it is expensive. Both
-observations point the same way as D42: the eval stratum wants more posts, and
-document-scale eval wants more of them to be *captured* posts. Score with
+Sizing, at the promoted 4500-char cross-heading diet: 1,561,740 chars is ~350
+prose chunks and ~390k output tokens, so at Tinker's ~$0.60/1M that is **≈ $0.27
+and the better part of an hour** (under eval_v1 it was 86,820 chars, ≈ $0.015 and
+a few minutes). Still not expensive; it is a *paid* pass, which is the reason to
+think before running it. D42's other half — "document-scale eval wants more of
+its posts to be *captured* posts" — is what eval_v2 delivered: the thin
+three-document verdict is gone. Score with
 `prune_orphans=False` (the CLI does): the output is a different corpus from
 `pairs.jsonl` and every id would otherwise read as orphaned.
 

@@ -1451,9 +1451,21 @@ six styler-role real-capture posts with ≥9 real pairs —
 (12), `notebook/ai_search.qmd` (11), `notebook/ai_reasoning.qmd` (10) — gives a
 **12-post, 245-pair, 149-real** stratum: 3.6× the real pairs, the dominant post's
 share down from 75% to 31%, the detector's real facet untouched at 179, and the
-styler left with 70 real pairs. That is the trade this file records; **it has not
-been applied**, because it re-roles 441 pairs and obsoletes the current detector
-artifact and every verdict computed with it, which is Dan's call and a retrain.
+styler left with 70 real pairs.
+
+**Applied 2026-09-03** with Dan's approval, through the CLI this decision was
+missing: `ai-style extend-eval` / `dan-style extend-eval` (dry-run by default,
+`--apply` to write, and it prints what it would re-role first). A separate
+subcommand rather than a flag on `make-splits`, because the two have opposite
+safety rules — `make-splits --force` re-cuts and thereby un-freezes the
+partition, while this may only ever grow it, and one command carrying both would
+sit "never unfreeze eval" beside the single flag that does. Re-measured against
+the post-prune corpus the stratum went 6 → 12 posts, 41 → 149 real pairs, top
+post 37% → 22%, `splits_sha256` `c8c319578707bb5b` → `05b495adac68cdc4`; the
+detector was refit the same day (`git_sha` `da335af66d` → `c0e2ac85be`) and its
+pool did not move by a pair, since all six added posts were styler-role. Numbers,
+including what the clustered CI did and the 0.026 the refit alone moves the
+metric, in `findings.md` "eval_v2 — applied 2026-09-03".
 
 **Why the manifest needed four more pins.** It named the corpus file and both git
 trees, so two runs of "the same" recipe could agree on every recorded field and
@@ -2012,3 +2024,99 @@ cheap part and can land alone: `eval.py`, `infer.py` and `generators.py` would
 raise `MissingExtra("… needs the 'api' extra")` (D47) at their three lazy import
 sites, which is a strict improvement over a bare `ModuleNotFoundError` whether
 or not the packaging ever changes.
+
+## D50: a corpus is a directory of shards, split by producer and then by month
+
+**Decision (W6, 2026-09-03).** `pairs.jsonl` becomes `pairs/`: one
+`captures.jsonl` for real edit captures, one `synth-<YYYY-MM>.jsonl` per month
+of synthesis. `stylebot.corpus` owns the routing rule (`shard_of`), the
+shard-aware rewrite (`rewrite`, which does not touch a shard whose bytes would
+not change), the one-per-corpus write lock, and the manifest content hash.
+`config.pairs_path` — D45's single spelling — resolves to the directory when it
+exists and to the single file otherwise, so **sharding is opt-in by existing**:
+a plain `ai-style` install never migrates and never learns shards are a thing.
+`ai-style data shard-pairs` is the one-off (D38's hidden group). Every `--pairs`
+option now accepts either shape, and `iter_pairs` is the seam that makes every
+reader agnostic.
+
+*Why anything changed.* Committing the corpus is right — it is the backup story
+for 398 irreplaceable human captures — but every append rewrote 38 MB whole, so
+124 versions of the file carry 1.51 GB of logical blob content. Sharding does
+not shrink the corpus. It shrinks *the file a write touches*, which is the
+quantity the commit count multiplies: `log save` (which read-modify-writes on
+every save, to apply its replace rule) now rewrites 1.7 MB, and a synth run
+appends to one month and leaves the rest byte-identical.
+
+*Alternatives.*
+
+- **git-lfs on `pairs.jsonl` and `captures/`.** No code change, but GitHub's LFS
+  bandwidth quota is charged on every clone of a Pages repo whose build does not
+  need the file at all, and it makes the corpus unreadable to anyone without the
+  LFS client. Rejected.
+- **Shard by generator** (`synth-<model>.jsonl`), which the W6 brief offered
+  first. Rejected on three counts. A generator shard grows forever, so the
+  active blob is unbounded and every future run rewrites a bigger one; a month
+  shard is sealed when the month ends. Generator identity is a *facet*, already
+  in `meta.gen.model` where it can be selected on — putting it in a filename
+  makes a second, weaker copy that a retired arm strands and a model rename
+  forks. And generator ids are not filenames (`openrouter/qwen/qwen3.6-35b-a3b`),
+  so it needs a lossy sanitiser and a collision rule that `2026-08` does not.
+- **Route on read-identity rather than content** (write each record back to the
+  shard it was read from). Rejected: routing by content makes `rewrite`
+  idempotent and self-healing, and makes the migration the same function every
+  rewrite already calls, at the cost of needing a home for a line that does not
+  parse (`unparsed.jsonl`).
+
+*Constraint — and the one thing sharding could have broken.* D36's
+no-duplicate-cell guarantee is enforced by `PairsWriter`, which locked
+`pairs.jsonl` itself. Locking each shard instead would let two runs either side
+of a month boundary write the same cell twice, which is the 2026-08-12 defect
+wearing a hat. So the lock is one file per **corpus** (`.pairs.lock`) and the
+catch-up tail-reads **every** shard before deciding. `record_id` uniqueness is
+likewise checked across the corpus, not per shard, which is why
+`validate-pairs` wants the directory rather than each file in turn.
+
+*What did NOT change.* No record was altered: the live migration round-tripped
+8,182 records with an identical `record_id` set and an identical content
+multiset, 0 problems and 0 duplicates. Shard membership is derived from
+`meta`, so it is recomputed, never stored — nothing in a record knows which file
+it is in.
+
+**Re-evaluate if** a month's synthesis grows past a few hundred MB (split by
+half-month, or by producer within the month — the routing rule is one function),
+or if the corpus stops being committed at all, which would make the whole
+question moot.
+
+## D51: `git filter-repo` on the corpus is not worth a force-push — measured
+
+**Decision (W6, 2026-09-03).** Do not rewrite livingthing's history to purge old
+`pairs.jsonl` blobs. Delete `.git/subtree-cache` instead.
+
+*The measurement that decided it.* The W6 brief cited "1.56 GB of blobs under
+`_training_pairs/`, 1.54 GB of it 122 versions of a 38 MB `pairs.jsonl`, in a
+repo whose `.git` is 1.8 GB" — which reads as the corpus being ~85% of the
+repository. That figure is **logical (uncompressed) blob size**
+(`cat-file --batch-check='%(objectsize)'`). On disk, in the packfile
+(`%(objectsize:disk)`), the same 124 versions cost **49.5 MiB**, because an
+append-only JSONL deltifies almost perfectly. Everything under
+`_training_pairs/` is 52 MiB of the 1,107 MiB of packed blob content: **4.7%**.
+
+Meanwhile `.git` is 1.9 GB, of which `.git/objects` is 1.2 GB and
+**`.git/subtree-cache` is 683 MB** — a `git subtree` scratch directory, not
+history at all. `rm -rf .git/subtree-cache` reclaims 13× what a filter-repo pass
+on the corpus would, needs no rewrite, no force-push, and no coordination with
+anyone who has a clone.
+
+*Alternatives.* Run the filter-repo pass anyway: ~50 MiB reclaimed for a
+force-push to a GitHub Pages repo, every commit sha in the blog's own prose and
+in stylebot's run manifests invalidated (manifests pin `blog_sha` — D36), and
+every existing clone and worktree needing re-cloning. The script is written and
+reviewable (see the W6 handover) so the option stays open; it is simply not
+worth exercising for 4.7%.
+
+**Re-evaluate if** the corpus stops deltifying — a change that reorders or
+rewrites records wholesale on every commit would defeat it, which is exactly
+what D50's shard-level rewrite avoids — or if a genuinely large binary
+(a merged adapter, a `.joblib`) is committed by accident, where a targeted
+filter-repo on that one path is the right tool and the argument above does not
+apply.

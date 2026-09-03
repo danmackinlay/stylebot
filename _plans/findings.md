@@ -412,7 +412,81 @@ pair at all. That is what shipped (D41).
 | + all 46 real-pair posts (maximal) | 52 | 1,025 | 398 | 8% | **0** | **0** |
 
 The maximal cut is the one the QA list describes and it zeroes both other roles'
-real strata. Not applied — see D42.
+real strata. The sized row is the one that shipped — see below.
+
+## eval_v2 — applied 2026-09-03 (W10 item 4 / D42)
+
+The sized extension above, applied with `dan-style extend-eval --apply` against
+the post-prune corpus (8,182 records; the 62 synthetic eval pairs had gone in
+blog `c0e2ac85be`). The re-measured numbers differ from the table above because
+that table was computed before the prune: the stratum was already at 41 real /
+0 synthetic and 37% concentration, not 75%.
+
+| stratum, as `check-splits` reports it | posts | pairs | real | synthetic | top-post share |
+|---|---:|---:|---:|---:|---:|
+| eval v1 (`splits_sha256=c8c319578707bb5b`) | 6 | 41 | 41 | 0 | 37% (`automatic_coding`) |
+| **eval v2 (`splits_sha256=05b495adac68cdc4`)** | **12** | **177** | **149** | **28** | **22%** (`ai_search`) |
+| styler | 290 → 284 | 4,138 → 4,002 | 178 → **70** | 3,960 → 3,932 | 3% |
+| detector | 198 → 198 | 2,709 → 2,709 | 179 → **179** | 2,530 → 2,530 | 2% |
+
+**The whole cost falls on the styler's real pairs, by construction**: all six
+added posts were styler-role, so the detector pool does not move by a single
+pair. The styler keeps 70 real pairs out of 4,002 — real prose was 4.3% of its
+pairs and is now 1.7%, which is a real thinning but not the failure mode D42
+refused (the maximal cut, which takes the detector's real facet to zero).
+
+**Two things the extension brings back that the W12 prune had just removed.**
+`notebook/ai_search.qmd` carries 28 synthetic pairs, so the frozen stratum is no
+longer 0% synthetic; it is 16%, well under the `EVAL PURITY` threshold and
+reported separately by `headline_facet: "real"`, but the clean-stratum invariant
+W12 established now needs one more prune pass to restore. And document-scale
+eval goes from **3 documents / 86,820 chars to 35 documents / 1,561,740 chars**
+(`iter_document_pairs(role="eval")`) — 18× the prose, so the ≈$0.015 sizing in
+`eval-harness.md` becomes ≈$0.27.
+
+**The detector was refit against the new partition** (`dan-style train-clf`,
+local, ~4 min). Identity and honest numbers, old vs new:
+
+| | old | new |
+|---|---|---|
+| `git_sha` | `da335af66d` | `c0e2ac85be` |
+| `trained_at` | 2026-08-17T18:41:14Z | 2026-09-03T08:37:11Z |
+| `n_pairs` (real / synthetic) | 2,751 (215 / 2,536) | 2,341 (179 / 2,162) |
+| `n_posts` | 198 | 183 |
+| `splits_sha256` / `split.eval_version` | absent / absent | `05b495adac68cdc4` / 2 |
+| `pair_ok` | absent | `detector_pair_ok(<=0)` |
+| CV pairwise / AUC | 0.9710 / 0.9652 | 0.9739 / 0.9666 |
+| **real facet** pairwise / AUC | **0.7337** / 0.6580 | **0.7840** / 0.6927 |
+| styler-holdout real pairwise (n) | 0.8182 (176) | 0.8000 (70) |
+
+The pool shrank for reasons that are *not* eval_v2 — the W12 prune and D41's
+`automation` gate on synthetic detector targets — since eval_v2 took nothing
+from the detector. The real facet rising 0.734 → 0.784 on 36 fewer real pairs is
+within the ±0.05 fold spread and should not be read as an improvement.
+
+**What the verdict did.** The instrument check that needs no spend: score both
+sides of the frozen stratum with the new head and take the paired
+slop − Dan `P(slop)` difference (`paired_delta`), real facet, clustered by post.
+
+| stratum | n | clusters | mean Δ | cluster CI | width | chunk-level width |
+|---|---:|---:|---:|---|---:|---:|
+| v1 | 41 | 6 | 0.1724 | [0.1232, 0.1987] | 0.0755 | 0.1367 |
+| v2 | 149 | 12 | 0.1560 | [0.1013, 0.2007] | 0.0994 | 0.0806 |
+
+The **chunk-level** interval narrows as n grows (0.137 → 0.081, near the √3.6
+the extra pairs buy). The **cluster** interval *widens* (0.076 → 0.099), and
+that is the point rather than a regression: at 6 clusters the percentile
+bootstrap resamples six post-means that happened to agree, so it reported an
+interval *narrower* than the chunk-level one — an inversion that only ever
+means "too few clusters to say". At 12 clusters the ordering is the expected
+one (clustering widens), and the six new posts show genuinely lower separation,
+which also pulls the point estimate down 0.172 → 0.156. v1's number was mildly
+optimistic and its interval was not measuring what it claimed.
+
+**And the instrument moves more than the effects it measures.** The same 41 v1
+pairs read Δ = **0.1466** under the old head and **0.1724** under the new one —
+a 0.026 shift from a refit alone, against run 4a's headline movement of 0.038.
+`compare_scores` refuses the pair outright (D39), which is the correct answer.
 
 ## What a stale-corpus prune would cost and buy — measured 2026-09-03 (W12)
 

@@ -29,6 +29,7 @@ from stylebot import classify, synth
 from stylebot import eval as ev
 from stylebot import splits as sp
 from stylebot.classify_train import Dataset
+from stylebot.errors import ConfigError
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -408,3 +409,120 @@ def test_splits_sha256_moves_when_the_partition_does(tmp_path):
     before = sp.splits_sha256(path)
     sp.save_splits(sp.extend_eval(base, ["post/new.qmd"]), path)
     assert sp.splits_sha256(path) != before
+
+
+# ---------------------------------------------------------------------------
+# `extend-eval`: the operation around the transform (preview, refuse, write)
+# ---------------------------------------------------------------------------
+
+
+def _splits_file(tmp_path, posts=("post/a.qmd",)):
+    path = tmp_path / "splits.json"
+    sp.save_splits(
+        {
+            "schema_version": 1,
+            "eval_posts": list(posts),
+            "rest_rule": {"kind": "hash", "detector_frac": 0.4, "salt": "0"},
+        },
+        path,
+    )
+    return path
+
+
+def _emitted(lines):
+    def emit(message, /, *, level="info"):
+        lines.append((level, message))
+
+    return emit
+
+
+def test_extend_eval_dry_run_reports_the_move_and_writes_nothing(tmp_path):
+    path = _splits_file(tmp_path)
+    before = path.read_text(encoding="utf-8")
+    lines: list[tuple[str, str]] = []
+
+    report = sp.apply_eval_extension(
+        sp.ExtendEvalOpts(splits_path=path, posts=("post/b.qmd", "post/a.qmd")),
+        emit=_emitted(lines),
+    )
+
+    assert report["applied"] is False
+    assert path.read_text(encoding="utf-8") == before
+    assert report["already_eval"] == ["post/a.qmd"]
+    (addition,) = report["additions"]
+    assert addition["post"] == "post/b.qmd"
+    # It names the pool the prose is leaving, which is the whole cost of the move.
+    assert addition["from_role"] == sp.role_of("post/b.qmd", sp.load_splits(path))
+    assert report["eval_version_before"] == 1 and report["eval_version_after"] == 2
+    assert any("dry run" in message for _, message in lines)
+
+
+def test_extend_eval_apply_writes_the_bumped_stratum(tmp_path):
+    path = _splits_file(tmp_path)
+    before_sha = sp.splits_sha256(path)
+
+    report = sp.apply_eval_extension(
+        sp.ExtendEvalOpts(splits_path=path, posts=("post/b.qmd",), note="eval_v2", apply=True)
+    )
+
+    written = sp.load_splits(path)
+    assert report["applied"] is True
+    assert report["splits_sha256_after"] != before_sha
+    assert sp.eval_version(written) == 2
+    assert sp.role_of("post/b.qmd", written) == "eval"
+    assert written["eval_history"][-1]["note"] == "eval_v2"
+
+
+def test_extend_eval_refuses_a_post_that_is_not_on_disk(tmp_path):
+    path = _splits_file(tmp_path)
+    (tmp_path / "post").mkdir()
+    (tmp_path / "post" / "b.qmd").write_text("x", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="not on disk"):
+        sp.apply_eval_extension(
+            sp.ExtendEvalOpts(
+                splits_path=path,
+                posts=("post/b.qmd", "post/typo.qmd"),
+                blog_root=tmp_path,
+                apply=True,
+            )
+        )
+    assert sp.eval_version(sp.load_splits(path)) == 1
+
+
+def test_extend_eval_needs_posts_and_leaves_a_no_op_unversioned(tmp_path):
+    path = _splits_file(tmp_path)
+    with pytest.raises(ConfigError, match="no posts to add"):
+        sp.apply_eval_extension(sp.ExtendEvalOpts(splits_path=path))
+
+    report = sp.apply_eval_extension(
+        sp.ExtendEvalOpts(splits_path=path, posts=("post/a.qmd",), apply=True)
+    )
+    assert report["applied"] is False
+    assert sp.eval_version(sp.load_splits(path)) == 1
+
+
+def test_extend_eval_reads_a_posts_file(tmp_path):
+    path = _splits_file(tmp_path)
+    listing = tmp_path / "posts.txt"
+    listing.write_text("# the new cut\npost/b.qmd\n\n  post/c.qmd  # why\n", encoding="utf-8")
+
+    report = sp.apply_eval_extension(sp.ExtendEvalOpts(splits_path=path, posts_file=listing))
+    assert [a["post"] for a in report["additions"]] == ["post/b.qmd", "post/c.qmd"]
+
+
+def test_extend_eval_cli_is_a_dry_run_by_default(tmp_path):
+    from click.testing import CliRunner
+
+    from stylebot.bin.ai_style import main
+
+    path = _splits_file(tmp_path)
+    argv = ["extend-eval", "--splits", str(path), "--post", "post/b.qmd"]
+    result = CliRunner().invoke(main, argv)
+    assert result.exit_code == 0, result.output
+    assert "would re-role 1 post(s)" in result.output
+    assert sp.eval_version(sp.load_splits(path)) == 1
+
+    result = CliRunner().invoke(main, [*argv, "--apply"])
+    assert result.exit_code == 0, result.output
+    assert sp.eval_version(sp.load_splits(path)) == 2
