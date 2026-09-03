@@ -50,6 +50,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from stylebot.capture import read_archive, write_archive
+from stylebot.errors import RunError
 from stylebot.infer import invented_anchors
 from stylebot.jsonl import write_jsonl_atomic
 from stylebot.pairs import extract_slop, extract_target, iter_pairs
@@ -86,7 +87,7 @@ Log = Callable[[str], None]
 # ---------------------------------------------------------------------------
 
 
-class MigrationError(RuntimeError):
+class MigrationError(RunError):
     """A migration refused to continue; nothing further was written."""
 
 

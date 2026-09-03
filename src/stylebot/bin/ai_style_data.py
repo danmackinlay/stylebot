@@ -54,10 +54,7 @@ def migrate_captures_cmd(data_dir: Path, apply: bool) -> None:
     """
     from stylebot import migrations
 
-    try:
-        migrations.migrate_capture_archives(data_dir, apply=apply, log=click.echo)
-    except migrations.MigrationError as exc:
-        raise click.ClickException(str(exc)) from exc
+    migrations.migrate_capture_archives(data_dir, apply=apply, log=click.echo)
 
 
 @main.command("prune-invented-anchors")
