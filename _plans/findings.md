@@ -9,6 +9,75 @@ Each entry: date, what was measured, sample size, the number.
 
 ---
 
+## Document-scale eval — run 2026-09-03 (W10 item 7): the instrument has no resolution there
+
+The first time `rewrite_text` has been run over whole eval posts rather than
+pre-cut chunks. 34 of 35 eval-role capture archives rewritten by run 4a
+(`20260817-170037`) at its own diet — 563 chunks, 7 kept verbatim — then scored
+with the refit detector (`c0e2ac85be`). ~$0.27.
+
+**The verdict is that there is no verdict, and that is the result.**
+
+| field | n | mean P(slop) | sd | min | max |
+|---|---:|---:|---:|---:|---:|
+| slop (the AI draft) | 34 | 0.4880 | 0.2260 | 0.1107 | 0.7921 |
+| target (Dan's edit) | 34 | 0.4951 | 0.2224 | 0.1107 | 0.7921 |
+| output (the styler) | 34 | 0.4914 | 0.2229 | 0.1107 | 0.7921 |
+
+**The min and max are byte-identical across all three fields**, the means differ
+by 0.007, and the styler's output scored *closer to slop* than the draft did in
+34 of 34 documents — by 0.0034, which is noise. The detector is responding to
+the document, not to who wrote it.
+
+The mechanism is not mysterious. A capture's three variants are the *same
+document* differing in a few percent of their characters — an edit, not a
+rewrite — and the styler changes a comparable fraction. The detector is a
+StyleDistance embedding fit on chunks of ~1.2k chars; over 25k chars the shared
+90-odd percent dominates the embedding and the differences wash out. Its
+chunk-scale real-facet pairwise is 0.784; here it is indistinguishable from a
+coin.
+
+**Consequences.**
+1. **A document-scale verdict must score chunk-wise and aggregate**, not embed
+   the whole document. The rewrite half of `rewrite_documents_file` is right and
+   worth keeping — it is the only thing that exercises a diet switch end to end
+   — but the scoring half needs to segment the before/after/output the same way
+   serving does and pair the chunks up. Until then `--documents` produces output
+   worth reading by eye and a number worth ignoring.
+2. **This does not invalidate the chunk-level verdicts.** It bounds where the
+   detector may be pointed, which nothing had established: it was built,
+   validated and always used at chunk scale, and its first use outside that
+   scale silently returned 0.49 for everything.
+3. It is a third instance of the day's pattern — Pangram's dead URL, the
+   `--documents` segfault below, and this — where the first *live* run of a
+   built-and-tested path found something no stub could.
+
+### The run also segfaults, and a pipe hid it
+
+`dan-style eval --documents` exits **139 (SIGSEGV)** after the rewrite completes
+and before scoring, reproducibly. Both the Tinker SDK (for sampling) and
+sentence-transformers/torch (for the detector) load OpenMP into one process —
+the libomp double-load the blog's `index-blog-pipeline` skill documents, which
+is why `index-blog` already runs its `map` step in a torch-free subprocess.
+
+Two things made it invisible. The rewrite writes `documents.jsonl` and flushes
+per record, so its output looked complete. And the run was piped through `tail`,
+so the shell reported **tail's** exit status, not the pipeline's — `$?` was 0.
+The scores file was created and left empty, and nothing said why.
+
+Scoring the same file in a torch-only process wrote all 34 records with 0
+errors, which is how the table above exists. **The fix is the same as
+index-blog's**: run the sampling pass and the scoring pass in separate
+processes. Do not add `pipefail`-dependent reasoning to the RUNBOOK and call it
+fixed — the segfault is real whether or not the exit code is visible.
+
+### One document still fails to rewrite
+
+`43f0e688`: `AttributeError: 'list' object has no attribute 'strip'` inside
+`rewrite_text`. Uncaught by any test, caught by `rewrite_documents_file`'s
+per-document guard, so 34 of 35 completed. Not diagnosed.
+
+
 ## Pangram cross-check — run 2026-09-03, PARTIAL (W10 item 6)
 
 The one-shot independent-detector check `eval-harness.md` has described since
