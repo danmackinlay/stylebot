@@ -37,10 +37,11 @@ dev = [
     # deliberately NOT here; no model downloads in the test suite).
     "scikit-learn>=1.4",
     "numpy>=1.26",
-    # Only so tests/test_corpus_stability.py can import the sibling blog's
-    # training_targets (which uses it) to read the live chunk policy. Not used
-    # by stylebot itself — see the removal in aa570f4.
-    "python-dateutil>=2.9.0",
+    # NOTHING that exists only to import the sibling blog. `python-dateutil` sat
+    # here from 2026-08-10 to 2026-09-03 so `tests/test_corpus_stability.py`
+    # could `sys.path`-patch its way into `livingthing.training_targets`; that
+    # test now lives in the blog's suite, where the corpus, the policy and the
+    # git pin already are (W5). stylebot depends on no checkout it does not own.
 ]
 
 [build-system]

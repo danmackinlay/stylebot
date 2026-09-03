@@ -308,11 +308,11 @@ def test_iter_archives_refuses_legacy_json(tmp_path):
     msg = str(excinfo.value)
     assert "1 legacy JSON capture archive" in msg
     assert "deadbeef.json" in msg
-    assert "scripts/migrate_capture_archives.py" in msg
+    assert "ai-style data migrate-captures" in msg
 
     # And the same refusal reaches the caller through recut, which is how a user
     # would actually hit it.
-    with pytest.raises(ValueError, match="migrate_capture_archives"):
+    with pytest.raises(ValueError, match="migrate-captures"):
         capture.recut_archives(pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800)
 
 

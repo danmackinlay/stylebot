@@ -55,26 +55,31 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
   check-splits|eval|export-table|log|make-splits|merge-adapter|run|serve|synth|train|train-clf|validate-pairs`).
   Not a scatter of loose scripts: Phase 1's logger shipped as a standalone
   `ai-style-log` script until 2026-07-20, and was folded in. One console script,
-  one `--help` tree. **One carve-out: one-off data migrations** — currently a
-  membership of one, `scripts/migrate_capture_archives.py` (converts the
-  superseded `captures/<id>.json` blobs to the `captures/<id>/` directory
-  layout). It rewrites data already on disk to a new schema, is typed once per
-  schema change, and would only clutter the `--help` tree of a tool nobody
-  should be migrating with twice. The code that needs it names it in the error:
-  `capture.iter_archives` refuses a legacy archive and prints the command. A
-  migration script is deleted once the only corpus that exists has been through
-  it — `restamp_style_system.py` (the 2026-08-04 `STYLE_SYSTEM` amendment) and
-  `prune_stale_synth_pairs.py` (the 2026-08-10 segmentation change) went that
-  way in 0.3; users migrate on version increment rather than carrying spent
-  code. Anything a user runs as part of the pipeline is a subcommand, no
-  exceptions.
+  one `--help` tree. **No carve-out, and there is no `scripts/` directory**
+  (W5, 2026-09-03). One-off data migrations used to be one — loose files that
+  rewrite corpus state already on disk to a new schema, kept out of the tree so
+  they would not clutter the `--help` of a tool nobody should be migrating with
+  twice. The tidy `--help` was the right goal and `scripts/` was the wrong
+  means: it is not in the wheel, so `capture.iter_archives` printed a command a
+  `pip install stylebot` user did not have, and the blog's RUNBOOK reached
+  across the seam with `uv run python ../stylebot/scripts/…` — a hardcoded
+  blog→stylebot path, which is the arrow W5 straightened. `hidden=True` buys the
+  tidy tree without the exception.
 
-  Current membership: `migrate_capture_archives.py` (the only path off the
-  legacy archive format) and `prune_anchor_inventing_pairs.py` (the corpus that
-  predates `--drop-invented-anchors`; delete it once the live corpus has been
-  through it). Both take `--apply` and dry-run by default, both keep a `.bak`,
-  and both carry a test in `tests/` — a script that deletes corpus records earns
-  one even though `scripts/` is outside the package.
+  So migrations are `stylebot.migrations` (typed functions) behind **`ai-style
+  data`**, a hidden group: absent from `ai-style --help`, documented under
+  `ai-style data --help`, and nameable by any error message or runbook step.
+  Current membership: `migrate-captures` (the only path off the legacy
+  `captures/<id>.json` blobs) and `prune-invented-anchors` (the corpus that
+  predates `--drop-invented-anchors`). Both dry-run by default and need
+  `--apply`; the prune keeps a `.bak`; both carry a test in
+  `tests/test_migrations.py` — the claim that both were tested was made here
+  while only one of them was, which is the sort of drift a directory outside the
+  package makes easy. A migration is deleted once the only corpus that exists
+  has been through it — `restamp_style_system.py` (the 2026-08-04 `STYLE_SYSTEM`
+  amendment) and `prune_stale_synth_pairs.py` (the 2026-08-10 segmentation
+  change) went that way in 0.3; users migrate on version increment rather than
+  carrying spent code. Delete the function, its command and its test together.
 - **Explicit paths, precedence `--flag` > `$STYLEBOT_DATA_DIR` > default**,
   resolved in `stylebot.config`. Two distinct inputs, never collapsed:
   `--blog-root` (read source) vs `--data-dir` (read/write state).
@@ -183,7 +188,7 @@ synthetic)**, and neither trained run has been re-run against it.
 | --- | --- |
 | Phase 0 scaffolding + Phase 1 `ai-style log` | done; daily-used; captures heading context (contract enforced in `stylebot.pairs`; mechanics in `_training_pairs/README.md`) |
 | Phase 2 `ai-style synth` / `dan-style synth` | shipped; corpus settled ~4.6k pairs with identity + inflation hygiene gates (`--max-transform-sim` / `--max-length-ratio`). `stylebot.synth_cli` is the library seam; the CLI translates its `Synth*Error`s |
-| Segmentation `stylebot.markdown` | one implementation, 2026-08-11; training and inference now agree, pinned by `tests/test_protection_parity.py`, `tests/test_corpus_stability.py` and the cross-implementation `tests/fixtures/segmenter_conformance.*` |
+| Segmentation `stylebot.markdown` | one implementation, 2026-08-11; training and inference now agree, pinned by `tests/test_protection_parity.py` and the cross-implementation `tests/fixtures/segmenter_conformance.*`. The corpus-stability floor (does today's segmenter still cut the corpus we paid to generate?) is the blog's `tests/test_corpus_stability.py` — it needs the corpus, the policy and a git pin, all three of which live there |
 | Eval harness `ai-style eval` | built: four signals (Vale, LLM judge, detector, eyeball) + the Phase-4 `output` field; JSONL-batched + resumable ([`_plans/eval-harness.md`](_plans/eval-harness.md)) |
 | Voice classifier (the detector signal) | built: StyleDistance embedding + logistic head; dep-free runtime `stylebot.classify`; artifact at livingthing `_models/voice-clf/` |
 | Splits contract | `stylebot.splits` → blog's committed `splits.json`: frozen eval posts, styler posts, hash-stable detector pool |

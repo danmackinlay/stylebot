@@ -564,7 +564,7 @@ def test_recut_reports_legacy_archives_as_an_error_not_a_traceback(temp_corpus):
     assert result.exception is None or isinstance(result.exception, SystemExit)
     assert "Error:" in result.output
     assert "1 legacy JSON capture archive" in result.output
-    assert "scripts/migrate_capture_archives.py" in result.output
+    assert "ai-style data migrate-captures" in result.output
 
 
 # ---- symlinked sources converge on one session ----------------------------

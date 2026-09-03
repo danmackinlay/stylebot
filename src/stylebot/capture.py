@@ -469,7 +469,7 @@ def iter_archives(pairs_path: Path):
     blobs was dropped in 0.3, but they are REFUSED rather than skipped: a silent
     skip would look exactly like "that capture had no changed regions", so the
     caller would never learn an archive had dropped out of the corpus. Migrate
-    with `scripts/migrate_capture_archives.py`, which still reads the old form.
+    with `ai-style data migrate-captures`, which still reads the old form.
     """
     cap_dir = pairs_path.parent / "captures"
     if not cap_dir.is_dir():
@@ -488,7 +488,7 @@ def iter_archives(pairs_path: Path):
             f"{len(legacy)} legacy JSON capture archive(s) in {cap_dir} "
             f"(e.g. {legacy[0].name}). Support was removed in stylebot 0.3; "
             "migrate them with:\n"
-            f"  uv run python scripts/migrate_capture_archives.py {pairs_path.parent} --apply"
+            f"  uv run ai-style data migrate-captures {pairs_path.parent} --apply"
         )
     archives.sort(key=lambda d: (d.get("snapped_at") or "", d.get("capture_id") or ""))
     yield from archives
