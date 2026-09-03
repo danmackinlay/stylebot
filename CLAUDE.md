@@ -36,6 +36,21 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
 
 ## Architecture rules (don't violate without updating the plan)
 
+- **`asyncio` first; threading must stringently justify itself.** Set
+  2026-09-03, after `eval.score_pairs_file`'s eight-worker `ThreadPoolExecutor`
+  segfaulted the process (exit 139, deterministic) by driving one
+  `SentenceTransformer` from several threads — latent for months, surfaced only
+  when chunk-wise scoring raised the embed rate ~6x, and misdiagnosed once
+  before a subprocess isolation disproved the first theory. `asyncio` is this
+  project's concurrency mechanism for IO and is what `synth` already uses at
+  scale; the threads in `eval` were a reflex, because `Judge`/`Detector` are
+  plain sync callables, not an argument. New threading needs **a measured
+  substantial win in performance or complexity** and a `decisions.md` entry
+  carrying the number. Three corollaries: never share a non-re-entrant native
+  object (a torch model, a Rust tokenizer) across threads; a lock as the answer
+  means the threads were the wrong shape, not that the problem is solved; and
+  for CPU-bound work prefer **batching over fan-out** — `_vale_prepass` (one
+  `vale` process per ~256 texts) is the pattern.
 - **Library-first, CLI second.** Each phase is a module with a typed function
   over explicit paths/params; the `click` CLI is a thin wrapper. The blog build
   imports the function directly. Two seams worth knowing (both 2026-08-11):
