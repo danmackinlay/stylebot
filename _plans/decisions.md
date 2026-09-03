@@ -472,6 +472,34 @@ stylebot (then delete the copy and import); or the two implementations diverge
 on something the fixture did not cover, which is the fixture's failure and an
 argument to grow the document rather than abandon the approach.
 
+**SUPERSEDED 2026-09-03 (W3), by its own re-evaluation clause.** D30 fell (see
+below), so the import became available and the copy was deleted.
+`livingthing.qmd_core.segment_for_edit` is now a thin call to
+`protected_spans(text, block_only=False, raw_html=True, html_comments=True)` —
+the `livingthing` named configuration, which is exactly what D29 was for — and
+the blog's `tests/fixtures/segmenter_conformance.{qmd,json}`, its
+`fixture_sha256` gate and `tests/test_segmenter_conformance.py` are gone with it.
+Verified before deleting: the conformance test passed unmodified against the
+import-based implementation, and `segment_for_edit`'s protected spans are
+byte-identical on **all 1758 blog `.qmd`** (0 files differing). The weaker
+guarantee this entry warned about was the right call while it held, and its cost
+was paid twice — a frontmatter stamper rewrote the `.qmd` half of the matched
+pair in `128308fa55` and again in `2815a291fc`, and since neither repo runs
+pytest in CI the gate only ever fired on somebody's laptop.
+
+What survives: **D29 stands, and is what made the deletion cheap.** The three
+keyword arguments now sit at one call site instead of being recorded as named
+configurations in a fixture. Two loose ends this entry's disappearance leaves —
+stylebot's own `tests/fixtures/segmenter_conformance.{qmd,json}` and
+`tests/test_segmenter_conformance.py` now assert stylebot against its own output,
+a transcript rather than a spec, and the module docstring of
+`stylebot.markdown` still describes livingthing as a permanent SIBLING
+implementation. Both are stylebot-side, and neither is load-bearing; the fixture
+is still the honest place to record what the two configurations mean, so the
+question is whether it earns its regeneration hatch now that only one repo reads
+it. (`tests/test_marker_segmentation.py` pins a genuinely separate
+implementation and is untouched — until W4 deletes that one too.)
+
 ## D29: policy differences are parameters — `block_only`, `raw_html`, `div_is_prose`
 
 **Decision (2026-08-11)**: where stylebot and livingthing legitimately want
@@ -528,6 +556,52 @@ the segmenter is permanent.
 
 **Re-evaluate if**: the styler becomes part of the ordinary publish path rather
 than an editing-time tool.
+
+**SUPERSEDED 2026-09-03 (W3).** The decision conflated two things that turned
+out to be separable: **stylebot** and **the ML tooling**. stylebot's base
+install is `click` + `ruamel-yaml` + `openai`; torch, the tinker SDK and
+sentence-transformers were always behind its `[classifier]`/`[trainer]` extras.
+So the deciding constraint above — "a hard dependency would put torch, the
+tinker SDK and sentence-transformers in the way of rendering a blog post" — was
+never true of *bare* stylebot, only of the extras. What it actually bought was
+a permanent second segmenter (D28), a hand-copied fixture, a sha gate and a
+paragraph of skill documentation defending all three.
+
+The line moved to where the weight is. `stylebot` is now a hard dependency in
+livingthing's `[project].dependencies`; `styler = ["stylebot[classifier,trainer]"]`
+keeps only the ML extras, still carried by the default-on `styler` group. The
+constraint is intact and is now *tested* as what it always meant: the blog's
+`tests/test_styler_optional.py` blocks `torch`/`tinker`/`tinker_cookbook` rather
+than `stylebot`, and asserts blog-core imports, does real work, and drags none
+of them in. Proof: a lean sync (`uv sync --no-group styler`, into a scratch
+`UV_PROJECT_ENVIRONMENT` so a shared checkout is not disturbed) installs 227
+packages against the full install's 243, imports `stylebot.markdown`, and fails
+to import `tinker` or `tinker_cookbook`.
+
+**One correction to the W3 brief while here.** Its done-criterion said `import
+torch` should fail in the lean install. It does not, and never did: `uv tree
+--invert --package torch` gives three parents and two of them are the blog's own
+direct dependencies — `sentence-transformers` (for `index-blog`) and `pycid` →
+`pgmpy`. Only the third, `tinker-cookbook`, arrives through stylebot. The lean
+install has always carried torch, so torch was never what the `styler` extra
+kept out; `tinker`/`tinker-cookbook` are. This does not change the decision — it
+removes one of the arguments that had been made for the old one.
+
+**The cost, and it is real**: a blog install now needs stylebot resolvable.
+`[tool.uv.sources]` carries two sources partitioned by marker — the editable
+`../stylebot` on darwin, a pinned git source everywhere else — because uv 0.12.7
+permits exactly one source URL per package per marker environment (`uv.toml`
+refuses a `sources` table outright; two unconditional or `group`-conditional
+sources fail with "conflicting URLs … in all marker environments"; and
+`uv pip install -e` over a git-sourced sync is undone by the next `uv run`).
+That fixes CI and every Linux clone and leaves one gap: a fresh macOS clone
+without the sibling checkout still has to clone it. Written up in the blog's
+`CLAUDE.md`.
+
+**Re-evaluate if**: stylebot's base dependencies grow something heavy (an
+`openai` bump is fine; a torch-adjacent one is not — that would put the weight
+back on the wrong side of the line); or stylebot is published to an index, at
+which point the marker-partitioned sources collapse to an ordinary version pin.
 
 ---
 
