@@ -414,6 +414,87 @@ pair at all. That is what shipped (D41).
 The maximal cut is the one the QA list describes and it zeroes both other roles'
 real strata. Not applied — see D42.
 
+## What a stale-corpus prune would cost and buy — measured 2026-09-03 (W12)
+
+`ai-style data prune-stale`, dry run, against the live 8,244-record corpus
+(398 real / 7,846 synthetic / 497 posts) re-cut under
+`livingthing.training_targets.chunk_policy()` — the one composed policy W2 left
+behind. **Nothing was pruned.** These are the numbers the decision needs.
+
+**Orphans: 603 of 7,222 distinct synthetic cells (8.3%), carrying 672 pairs
+(8.6% of the synthetic corpus) across 124 posts.** By diet: section-bounded
+@1500 **349**, cross-heading @1500 **172**, @3000 **81**, @4500 **70**. The
+heaviest posts are `notebook/latex.qmd` (52), `quarto_websites.qmd` (46),
+`note_taking.qmd` (44), `ai_search.qmd` (33), `optionality_as_end.qmd` (26).
+
+**Zero real captures, and that is structural rather than lucky.** A capture's
+target comes from a paragraph diff of an edit archive, never from
+`iter_targets`, so asking whether the chunker reproduces it is a category error.
+The measurement reports the 398 real pairs as UNCHECKED, not as clean. Zero
+orphans from a missing source, too, so no post has been renamed out from under
+its pairs since W0's alias map landed.
+
+**Why the cells stopped reproducing.** Re-cut at each stability arm's pinned
+revision, so the prose is a frozen git blob and only policy can move the number
+(cells, not pairs; the two arms overlap by 3 cells, hence 606 against 603):
+
+| cause | section-bounded | cross-heading | cells |
+|---|---:|---:|---:|
+| W2's fence rule (unclosed fences, the four-backtick closer) | 0 | 0 | **0** |
+| `COMMENT_MARKER` in `ignore_markers` | 3 | 24 | 27 |
+| `div_is_prose` applied to cells cut before it existed | 70 | 0 | 70 |
+| **prose Dan has edited since generation** | 227 | 265 | **492** |
+| irreducible residue (synthesis ran against an uncommitted tree) | 5 | 12 | 17 |
+| total against the working tree | 305 | 301 | 606 |
+
+**So W12's premise is wrong about its own cause.** The item was written expecting
+W2's segmentation change to have orphaned cells; it orphaned **none**. The two
+files whose protected spans W2 moved (`notebook/quarto.qmd`,
+`notebook/learning_with_ai.qmd`) carry **zero corpus cells** between them. Four
+fifths of the orphans (492 of 606) are Dan having edited the post since 2026-07
+or 2026-08 — the corpus being a frozen record of prose that moved, which is not
+damage and not a reason to delete a pair. The 97 that a *policy* change caused
+are dominated by `div_is_prose` (70) charged against the **frozen**
+section-bounded arm: `CROSS_HEADING` is live policy, so no synth run will ever
+refill a section-bounded cell, and pruning those 349 pairs is permanent loss.
+
+**Eval contamination: 62 synthetic pairs, all from
+`notebook/automatic_coding.qmd`**, 41 real captures spared. This reconciles
+exactly with W10's corpus-view row (103 pairs / 41 real / 62 synthetic); W10's
+other figure, 48, is the same stratum after the detector's `transform_sim > 0.85`
+gate, which 14 near-identity synthetic pairs do not survive. By generator:
+sonnet-4.6 **18**, gemma-4-26b **15**, qwen3.5-9b **10**, deepseek-v4-flash
+**7**, qwen3.6-35b **5**, llama-3.3-70b **4**, nemotron-3-nano **3**. **25 pairs
+are in both sets**, so the two prunes together drop 709, not 734.
+
+| corpus | total | real | synthetic | posts |
+|---|---:|---:|---:|---:|
+| now | 8,244 | 398 | 7,846 | 497 |
+| minus orphans | 7,572 | 398 | 7,174 | 491 |
+| minus eval synthetic | 8,182 | 398 | 7,784 | 497 |
+| minus both | 7,535 | 398 | 7,137 | 491 |
+
+**And it does not touch the dilution W9 found, which was the reason to want it.**
+Styler-role pairs under `styler_pair_ok` with W9's containment grouping (no val
+split, so these are larger than W9's 3,981 train pairs by the held-out posts):
+
+| corpus | pairs | passages | mean pairs/passage | real % of pairs | real % of passages |
+|---|---:|---:|---:|---:|---:|
+| now | 4,373 | 1,077 | 4.06 | 3.16% | 12.53% |
+| minus orphans | 4,016 | 993 | 4.04 | 3.44% | 13.60% |
+| minus eval synthetic | 4,373 | 1,077 | 4.06 | 3.16% | 12.53% |
+| minus both | 4,016 | 993 | 4.04 | 3.44% | 13.60% |
+
+The orphan prune removes 357 styler pairs and 84 whole passages and moves the
+mean effective weight **4.06 → 4.04**. It cannot do better: orphans are spread
+across 124 posts roughly in proportion to the corpus, so it thins passages and
+pairs together. Dilution is what `per_passage` and `pair_weight` are for (D43),
+and a prune is not a substitute for either. The eval prune is invisible here by
+construction — eval-role pairs never enter the styler set; it protects the
+*verdict*, not the training diet.
+
+---
+
 ---
 
 ## Training runs
