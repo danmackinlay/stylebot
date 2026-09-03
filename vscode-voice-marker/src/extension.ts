@@ -2,15 +2,22 @@
  * Voice Marker — mark paragraphs dan-or-bot with P(slop) from `ai-style serve`.
  *
  * Flow: activate on markdown/quarto → spawn the sidecar from
- * `voiceMarker.command` (dormant if unset) → on debounced edits, segment the
- * document (parity with stylebot.lib), score the prose paragraphs, and paint
- * graded decorations. See stylebot/_plans/vscode-marker.md.
+ * `voiceMarker.command` (dormant if unset) → on debounced edits, ASK THE
+ * SIDECAR which spans are prose, score them, and paint graded decorations.
+ * See stylebot/_plans/vscode-marker.md.
+ *
+ * There is no segmenter in this package. There was one — a TypeScript port of
+ * stylebot's splitter, pinned by a fixture — and it drifted in the three ways a
+ * port always drifts: it had no `div_is_prose` hook (so callout prose was never
+ * scored and never rewritable), no unclosed-fence handling, and its own heading
+ * spelling. Its boundaries won, because `rewrite_candidates` re-segments only to
+ * veto. Segmentation is now one `segment` NDJSON hop on the already-debounced
+ * path; see stylebot `_plans/decisions.md` D44 for the measured cost.
  */
 
 import * as vscode from "vscode";
 import { Decorations } from "./decorations";
-import { proseParagraphs } from "./segment";
-import { RewriteCandidate, Sidecar, SidecarState } from "./sidecar";
+import { ProseSegment, RewriteCandidate, Sidecar, SidecarState } from "./sidecar";
 
 const LANGS = new Set(["markdown", "quarto"]);
 
@@ -100,14 +107,26 @@ async function scoreEditor(editor: vscode.TextEditor): Promise<void> {
   const document = editor.document;
   const generation = ++scoreGeneration;
   const version = document.version;
-  const paragraphs = proseParagraphs(document.getText(), cfg.minChars);
-  if (paragraphs.length === 0) {
-    decorations.clear(editor);
+  // One snapshot, two hops: the segment offsets index THIS string, so slicing
+  // it (rather than re-reading the document) stays exact even if the user has
+  // typed on since. The version check below is what decides to paint.
+  const text = document.getText();
+  let segments: ProseSegment[];
+  try {
+    segments = await sidecar.segment(text, cfg.minChars);
+  } catch (err) {
+    output.appendLine(`[segment] ${err}`);
+    return;
+  }
+  if (segments.length === 0) {
+    if (generation === scoreGeneration && document.version === version) {
+      decorations.clear(editor);
+    }
     return;
   }
   let scores: number[];
   try {
-    scores = await sidecar.score(paragraphs.map((p) => p.text));
+    scores = await sidecar.score(segments.map((s) => text.slice(s.start, s.end)));
   } catch (err) {
     output.appendLine(`[score] ${err}`);
     return;
@@ -116,35 +135,42 @@ async function scoreEditor(editor: vscode.TextEditor): Promise<void> {
   if (generation !== scoreGeneration || document.version !== version) {
     return;
   }
-  const scored = paragraphs.map((p, i) => ({
-    range: new vscode.Range(document.positionAt(p.start), document.positionAt(p.end)),
+  const scored = segments.map((s, i) => ({
+    range: new vscode.Range(document.positionAt(s.start), document.positionAt(s.end)),
     score: scores[i],
   }));
   decorations.apply(editor, scored, sidecar.meta?.name ?? "voice-clf");
 }
 
-/** The rewrite target: the selection if non-empty, else the prose paragraph
- * at the cursor (proseParagraphs offsets). Null when neither applies. */
-function rewriteTarget(editor: vscode.TextEditor): vscode.Range | null {
-  if (!editor.selection.isEmpty) {
-    return new vscode.Range(editor.selection.start, editor.selection.end);
-  }
+/** The rewrite target and its heading context, from the sidecar's segments:
+ * the selection if non-empty, else the prose paragraph at the cursor. Null
+ * range when the cursor is in no prose paragraph (a fence, a figure div, …). */
+function rewriteTarget(
+  editor: vscode.TextEditor,
+  segments: ProseSegment[],
+): { range: vscode.Range; context: string | null } | null {
   const document = editor.document;
-  const offset = document.offsetAt(editor.selection.active);
-  for (const p of proseParagraphs(document.getText(), 0)) {
-    if (p.start <= offset && offset <= p.end) {
-      return new vscode.Range(document.positionAt(p.start), document.positionAt(p.end));
+  const offset = document.offsetAt(
+    editor.selection.isEmpty ? editor.selection.active : editor.selection.start,
+  );
+  // The context of the last segment starting at or before the anchor — which
+  // for a paragraph target is its own, and for a multi-paragraph selection is
+  // the heading the selection opens under.
+  let context: string | null = null;
+  for (const s of segments) {
+    if (s.start <= offset) {
+      context = s.context;
     }
   }
-  return null;
-}
-
-/** Nearest markdown heading line above `line` — the training-time context. */
-function headingAbove(document: vscode.TextDocument, line: number): string | null {
-  for (let i = line - 1; i >= 0; i--) {
-    const text = document.lineAt(i).text;
-    if (/^[ \t]{0,3}#{1,6}[ \t]/.test(text)) {
-      return text.trim();
+  if (!editor.selection.isEmpty) {
+    return { range: new vscode.Range(editor.selection.start, editor.selection.end), context };
+  }
+  for (const s of segments) {
+    if (s.start <= offset && offset <= s.end) {
+      return {
+        range: new vscode.Range(document.positionAt(s.start), document.positionAt(s.end)),
+        context: s.context,
+      };
     }
   }
   return null;
@@ -169,14 +195,22 @@ async function rewriteCommand(): Promise<void> {
     void vscode.window.showWarningMessage("Voice Marker: sidecar is not configured (voiceMarker.command).");
     return;
   }
-  const range = rewriteTarget(editor);
-  if (!range) {
+  const document = editor.document;
+  const text = document.getText();
+  let segments: ProseSegment[];
+  try {
+    segments = await sidecar.segment(text, 0);
+  } catch (err) {
+    void vscode.window.showErrorMessage(`Voice Marker: segmentation failed — ${(err as Error).message}`);
+    return;
+  }
+  const target = rewriteTarget(editor, segments);
+  if (!target) {
     void vscode.window.showInformationMessage("Voice Marker: put the cursor in a prose paragraph (or select prose).");
     return;
   }
-  const document = editor.document;
+  const { range, context } = target;
   const original = document.getText(range);
-  const context = headingAbove(document, range.start.line);
   const bestOf = config().bestOf;
 
   let resp;
@@ -278,9 +312,8 @@ async function rewriteCommand(): Promise<void> {
   // the working copy is uncommitted.
   const startOffset = document.offsetAt(range.start);
   const endOffset = document.offsetAt(range.end);
-  const paras = proseParagraphs(document.getText(), 0);
-  const before = [...paras].reverse().find((p) => p.end <= startOffset);
-  const after = paras.find((p) => p.start >= endOffset);
+  const before = [...segments].reverse().find((s) => s.end <= startOffset);
+  const after = segments.find((s) => s.start >= endOffset);
 
   if (pick.candidate) {
     const ok = await editor.edit((edit) => edit.replace(range, pick.candidate!.text));
@@ -300,8 +333,8 @@ async function rewriteCommand(): Promise<void> {
       kept_input: pick.candidate === null,
       doc: vscode.workspace.asRelativePath(document.uri),
       offsets: [startOffset, endOffset],
-      para_before: before ? before.text : null,
-      para_after: after ? after.text : null,
+      para_before: before ? text.slice(before.start, before.end) : null,
+      para_after: after ? text.slice(after.start, after.end) : null,
     })
     .catch((err) => output.appendLine(`[prefer] not recorded: ${err}`));
   scheduleScore(editor, 0);

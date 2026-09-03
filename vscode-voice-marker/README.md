@@ -30,7 +30,7 @@ window close. Commands: `Voice Marker: Rescore Document`, `Toggle Marks`,
 
 ```sh
 npm install
-npm test            # segmentation parity vs ../tests/fixtures (shared with pytest)
+npm test            # sidecar client: the segment/score wire, timeouts, restarts
 npm run compile     # esbuild → dist/extension.js
 npm run package     # vsce → voice-marker-<version>.vsix
 code --install-extension voice-marker-0.0.1.vsix
@@ -38,8 +38,10 @@ code --install-extension voice-marker-0.0.1.vsix
 
 Dev loop: open this folder in VS Code and F5 (Extension Development Host).
 
-Segmentation (`src/segment.ts`) must stay in behavioural lockstep with
-`stylebot.lib.segment_for_edit` / `split_paragraphs` — the shared fixture
-test on both sides pins it. If stylebot's segmentation changes, regenerate
-the expectation with `STYLEBOT_REGEN_SEGMENTS=1 uv run pytest
-tests/test_marker_segmentation.py` and re-run `npm test`.
+This package has no segmenter. Which spans of a document are prose is the
+`segment` op's answer (`stylebot.serve.prose_paragraphs`), under the
+`div_is_prose` policy the sidecar was started with — so a stylebot-side
+segmentation change reaches the editor by restarting the sidecar, not by
+repackaging the `.vsix`. There was a TypeScript port here until 2026-09-03;
+stylebot `_plans/decisions.md` D44 records what it had drifted into and why the
+fixture that pinned it could not have caught the worst of it.

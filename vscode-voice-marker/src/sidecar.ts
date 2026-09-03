@@ -10,6 +10,24 @@ import { ChildProcess, spawn } from "child_process";
 
 export type SidecarState = "stopped" | "starting" | "ready" | "failed";
 
+/** One scoreable prose paragraph from the `segment` op (stylebot.serve.prose_paragraphs).
+ *
+ * The extension owns no segmenter: which spans of a document are prose, and
+ * what heading each sits under, is a question only the sidecar can answer,
+ * because the answer depends on the `div_is_prose` policy it was started with
+ * (a `.callout-note` paragraph is prose; a `#fig-` div's caption is not). */
+export interface ProseSegment {
+  /** UTF-16 code-unit offsets into the document that was sent — the same index
+   * space as `TextDocument.positionAt`, so no conversion is needed here. */
+  start: number;
+  end: number;
+  kind: string;
+  /** Nearest heading line above, or null. Provenance for the `prefer` record;
+   * whether the styler actually SEES it is the serving diet's call, made
+   * server-side in `stylebot.infer.rewrite_candidates`. */
+  context: string | null;
+}
+
 /** One styler candidate from the `rewrite` op (stylebot.infer.rewrite_candidates). */
 export interface RewriteCandidate {
   text: string;
@@ -79,6 +97,7 @@ const MAX_RESTARTS = 3;
 const TIMEOUT_MS: Record<string, number> = {
   info: 60_000,
   score: 30_000,
+  segment: 30_000,
   rewrite: 180_000,
   prefer: 15_000,
 };
@@ -140,6 +159,16 @@ export class Sidecar {
       .catch(() => {
         /* exit/error path already reported state */
       });
+  }
+
+  /** The document's scoreable prose spans, under the sidecar's own policy. */
+  async segment(text: string, minChars: number): Promise<ProseSegment[]> {
+    const resp = await this.request<{ segments: ProseSegment[] }>({
+      op: "segment",
+      text,
+      min_chars: minChars,
+    });
+    return resp.segments;
   }
 
   /** Score texts; resolves to one P(slop) per text, in order. */

@@ -610,6 +610,22 @@ were merged into `stylebot.markdown`. The three that remain are all pinned:
 Neither can be deleted — one is a different language, one must run with
 stylebot uninstalled (`decisions.md` D26/D28/D30).
 
+**Segmenter implementations: 3 → 1** (2026-09-03). Both "cannot be deleted"
+turned out to be claims about packaging and process boundaries rather than about
+segmentation, and both fell the same day. `livingthing.qmd_core.segment_for_edit`
+became a thin call to `stylebot.markdown.protected_spans` once bare stylebot
+became a hard blog dependency (W3, D28 superseded); the TypeScript port became a
+`segment` NDJSON op once the extension — which already owns the sidecar's
+lifecycle and goes dormant without it — was allowed to ask over the wire it
+already holds open (W4, D44). Measured before each deletion: the blog copy was
+byte-identical on all 1,758 `.qmd`, and the TypeScript port matched on
+**1,728 of 1,757**, with all 29 differences corrections (28 a heading glued to
+its paragraph, 1 an unclosed fence) — plus 385 callout paragraphs, 96,796 chars,
+that the port could not see at all because `div_is_prose` is a blog-side
+callable. Both golden fixtures went with them; what pins segmentation now is
+`stylebot.markdown`'s own tests plus `tests/test_serve.py` and
+`tests/test_protection_parity.py` over `tests/fixtures/protection_parity.qmd`.
+
 **Test count: 370 → 474** (2026-08-11, `uv run pytest -q`; 2 skipped, the
 corpus-stability pair, which need `LIVINGTHING_ROOT`).
 

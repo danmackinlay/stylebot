@@ -7,12 +7,14 @@ existing `ai-style log` tasks capture the `(before, after)` pair. The marker is
 the **front-end of the capture loop**, not a standalone gadget.
 
 Lives here (stylebot): nothing in the sidecar or extension is Dan-specific —
-segmentation mirrors `stylebot.lib`, the sidecar wraps
+segmentation IS `stylebot.markdown`, reached over the wire (the extension has
+owned no segmenter since 2026-09-03; see `decisions.md` D44), the sidecar wraps
 `stylebot.classify.sklearn_detector` (which lazy-imports sentence-transformers,
 so stylebot's no-ML-deps import contract holds), and the extension is
 parameterized by a command + artifact path. The blog contributes only the
-trained artifact (`livingthing/_models/voice-clf/`) and workspace settings —
-the usual mechanism/policy split.
+trained artifact (`livingthing/_models/voice-clf/`), the chunk/div policy it
+starts `dan-style serve` with, and workspace settings — the usual
+mechanism/policy split.
 
 ## Feasibility (measured, StyleDistance on Dan's Mac, MPS)
 
@@ -27,6 +29,26 @@ The only worry was latency; it's a non-issue:
 
 After a one-time 5 s load, re-scoring an entire document is ~34 ms — fast
 enough to run on debounced idle keystrokes, not just on save.
+
+### The `segment` hop (measured 2026-09-03, W4)
+
+Segmentation moved into the sidecar, so a document change now costs two NDJSON
+round trips instead of one. Measured through the real `Sidecar` client against a
+stub-detector `serve_loop`, 50 timed round trips each, warm:
+
+| document | chars | segments | median | p95 | of which in-process |
+|---|---|---|---|---|---|
+| corpus-median post (`music_loopers`) | 5,428 | 9 | **0.30 ms** | 0.38 ms | 0.28 ms |
+| p90 post (`digest/2026-04-24`) | 17,662 | 22 | 0.65 ms | 0.71 ms | 0.50 ms |
+| `automatic_coding` | 30,496 | 67 | 1.07 ms | 1.10 ms | 0.90 ms |
+| largest in the repo (`local_llm_mac`) | 116,774 | 212 | **4.20 ms** | 4.36 ms | 3.71 ms |
+
+Nearly all of it is `stylebot.markdown` doing the work; the hop itself — JSON
+both ways plus the pipe — is tens of microseconds. Against the 34 ms the score
+op already spends on the same document and the 500 ms debounce, no typist can
+see it. Both hops sit behind the same debounce and the same
+generation/`document.version` staleness check, so a burst of keystrokes issues
+one pair of requests, not one per character.
 
 ## Settled design decisions (2026-07-06)
 
@@ -64,20 +86,35 @@ enough to run on debounced idle keystrokes, not just on save.
 1. **Sidecar** — `stylebot.serve.serve_loop(detector, stdin, stdout)` + CLI
    `ai-style serve --detector-model DIR`. Requests
    `{"id", "op": "score", "texts": [...]}` → `{"id", "scores": [...]}`;
+   `{"op": "segment", "text": <document>, "min_chars": n}` →
+   `{"segments": [{start, end, kind, context}]}`;
    `{"op": "info"}` → the artifact's `meta.json` (doubles as the ready
    handshake). Malformed input → an `error` response, never a crash. Run it
    from the blog env: `uv run --project ~/Source/livingthing ai-style serve
    --detector-model _models/voice-clf`.
 2. **Extension** (`vscode-voice-marker/`, TS + esbuild): spawn/manage the
-   sidecar (`PYTHONUNBUFFERED=1`), segment, debounce (~500 ms), score, bucket,
-   decorate, hover. Settings: `voiceMarker.command` (string[]),
-   `.cwd`, `.thresholds`, `.minChars`, `.debounceMs`, `.enabled`.
-3. **Segmentation parity** (what keeps scores honest): blank-line paragraph
-   splitting (`stylebot.lib.split_paragraphs`) after dropping protected blocks
-   — code fences, `$$math$$`, `:::` divs, blockquotes
-   (`stylebot.lib.segment_for_edit`) — plus YAML frontmatter and heading
-   lines. Enforced by a shared fixture: `tests/fixtures/segmentation.qmd` with
-   `expected_segments.json` asserted by *both* pytest and the TS unit test.
+   sidecar (`PYTHONUNBUFFERED=1`), debounce (~500 ms), ask for segments, score,
+   bucket, decorate, hover. Settings: `voiceMarker.command` (string[]),
+   `.cwd`, `.thresholds`, `.minChars`, `.debounceMs`, `.enabled`, `.bestOf`,
+   `.timeouts`.
+3. **Segmentation parity** (what keeps scores honest) is no longer a *parity*
+   problem: there is one implementation, `stylebot.serve.prose_paragraphs` over
+   `stylebot.markdown`, and the extension reads its answer off the wire. Prose is
+   a maximal run of lines `markdown.line_kinds` calls prose, so protected blocks
+   (fences — unclosed ones included — display math, `:::` divs, blockquotes),
+   blank lines and heading lines all end one; YAML frontmatter is dropped; the
+   nearest heading above rides along as `context`. Which div classes bear prose
+   is the *sidecar's* policy (`dan-style serve` passes the blog's
+   `div_is_prose`), which is the one thing a client-side port could never know.
+   Pinned by `tests/test_serve.py` against `stylebot.markdown` on
+   `tests/fixtures/protection_parity.qmd`, under both policies.
+
+   Offsets are UTF-16 code units, converted server-side, so
+   `document.positionAt(start)` needs no arithmetic in the client.
+
+   The TypeScript port this replaced (`src/segment.ts`) and its fixture pair are
+   deleted; D44 records what its boundaries had drifted into, measured over all
+   1,757 blog `.qmd` files before deleting it (1,728 identical, 29 corrections).
 
 ## Threshold calibration (2026-07-06)
 
@@ -108,14 +145,18 @@ blog's `.vscode/settings.json`; recalibrate after retraining the head.
 
 ## Done-criteria
 
-- [x] `ai-style serve` round-trips NDJSON (score/info/malformed); stub-detector
-      tests green with no new required deps (`uv run pytest -q`); real-model
-      smoke test scores banned-word slop 0.61 vs a Dan sentence 0.48.
-- [x] Segmentation parity fixture passes in both pytest and the TS test
-      (`tests/test_marker_segmentation.py` ↔ `vscode-voice-marker/npm test`).
+- [x] `ai-style serve` round-trips NDJSON (score/segment/info/malformed);
+      stub-detector tests green with no new required deps (`uv run pytest -q`);
+      real-model smoke test scores banned-word slop 0.61 vs a Dan sentence 0.48.
+- [x] One segmenter, in Python: `tests/test_serve.py` asserts the `segment` op
+      against `stylebot.markdown` on the parity fixture under both div policies,
+      and the blog's `tests/test_dan_style_cli.py` asserts `dan-style serve`
+      returns a `.callout-note` paragraph as scoreable prose. The TS side keeps
+      only its client tests (`vscode-voice-marker/npm test`).
 - [ ] Extension marks paragraphs of a `.qmd` with graded tint + ruler marks,
       hover shows the number, updates ≤ ~1 s after typing stops (warm).
-      *(needs an eyeball in the Extension Dev Host / installed .vsix)*
+      *(needs an eyeball in the Extension Dev Host / installed .vsix — repackage
+      first: the extension now requires a sidecar that knows the `segment` op)*
 - [x] Thresholds calibrated from `scores.jsonl` quantiles, recorded above.
 - [ ] The loop closes: a flagged-then-rewritten paragraph is capturable via the
       existing `ai-style log` save task with no extra steps. *(manual check)*
@@ -123,6 +164,9 @@ blog's `.vscode/settings.json`; recalibrate after retraining the head.
 ## Parked alternatives
 
 - **B — in-extension, no Python** (`onnxruntime-node` / transformers.js).
+  Note this now also means porting segmentation back into TypeScript, including
+  a `div_is_prose` policy that lives in the blog — D44 is the list of what such
+  a port has to get right, and the measurement of what the last one got wrong.
   StyleDistance is roberta-base + mean-pooling → exports to ONNX; head in TS.
   The *distributable* `.vsix` path. Cost: ONNX export, verifying JS 768-d
   vectors match Python's (or retraining the head on JS embeddings), a

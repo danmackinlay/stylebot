@@ -12,9 +12,9 @@ comparison and asserted separately: they are protected on both sides, but by
 different machinery (`targets._split_sections` upstream of the chunker, versus
 `_segment`'s own kind), so a line-set comparison is the wrong instrument.
 
-Following the `tests/test_marker_segmentation.py` idiom: one shared fixture,
-asserted from both directions, with a test that the fixture actually exercises
-every case.
+One shared fixture, asserted from both directions, with a test that the fixture
+actually exercises every case. `tests/test_serve.py` re-uses the same fixture for
+the editor seam's third reading of it.
 """
 
 from __future__ import annotations

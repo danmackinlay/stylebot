@@ -130,17 +130,20 @@ extension owns the process lifecycle: spawn on activation, status-bar spinner
 until the `info` handshake, capped-backoff restart on crash, kill on window
 close. You never launch the sidecar by hand.
 
-Segmentation in the extension (`src/segment.ts`) is a **parity port** of
-`stylebot.lib.segment_for_edit` + `split_paragraphs` — and since 2026-08-11 the
-primitives behind those live in one place, `stylebot.markdown`. Paragraphs split
-on blank lines after dropping code fences (both ``` and `~~~`), display
-`$$math$$`, `:::` divs, blockquotes, frontmatter, and heading lines — so the
-classifier sees the same prose shape it was trained and evaluated on. A shared
-fixture (`tests/fixtures/segmentation.qmd` + `expected_segments.json`) is
-asserted by both pytest and the extension's `npm test`; if either side's
-segmentation changes, the other's test breaks. TypeScript cannot import Python,
-so the fixture *is* the contract — the same instrument now pins
-`livingthing.qmd_core` (`tests/fixtures/segmenter_conformance.*`).
+The extension does **not** segment. It asks the sidecar: `{"op": "segment",
+"text": <document>}` returns the scoreable prose spans, computed by
+`stylebot.serve.prose_paragraphs` over `stylebot.markdown` — paragraphs are runs
+of prose lines, so code fences (both ``` and `~~~`, unclosed ones running to end
+of document), display `$$math$$`, `:::` divs, blockquotes, frontmatter and
+heading lines all end one, and the classifier sees the same prose shape it was
+trained on. **Which div classes bear prose is the sidecar's policy**
+(`dan-style serve` hands it the blog's `div_is_prose`), which is precisely what
+a client-side port could not know: the TypeScript port that used to live here
+never scored a callout paragraph, and never offered to rewrite one. It was
+deleted 2026-09-03 (`_plans/decisions.md` D44) after measuring its boundaries
+against this one over all 1,757 blog `.qmd` files — 1,728 identical, 29
+corrections. The remaining cross-implementation fixture, pinning
+`livingthing.qmd_core`, is `tests/fixtures/segmenter_conformance.*`.
 
 ### Install & configure
 
@@ -197,11 +200,10 @@ the extension:
    path or you'll silently compute quantiles over the old model's scores.
    Threshold changes apply live, no restart.
 
-Rebuilding/reinstalling the `.vsix` is needed only when the **segmentation
-contract** (`stylebot.markdown`, via `stylebot.lib`) or the **wire protocol**
-(`stylebot.serve`) changes — regenerate the shared fixture with
-`STYLEBOT_REGEN_SEGMENTS=1 uv run pytest tests/test_marker_segmentation.py`,
-confirm `npm test` passes, then `npm run package` and reinstall.
+Rebuilding/reinstalling the `.vsix` is needed only when the **wire protocol**
+(`stylebot.serve`) changes — a segmentation change is now server-side and needs
+no repackaging at all. Confirm `npm test` passes, then `npm run package` and
+reinstall.
 
 ## Data & secrets
 
