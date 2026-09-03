@@ -931,10 +931,13 @@ def run_synth(
     inspection = inspection if inspection is not None else InspectOpts()
     corpus = corpus if corpus is not None else CorpusOpts()
 
+    from stylebot import splits as splits_mod
+
+    loaded: dict | None = None
+
     # Substrate selection runs BEFORE --limit: role and sample-frac define
     # *which* population this run measures, --limit is only a cost cap on it.
     if substrate.role is not None or substrate.sample_frac is not None:
-        from stylebot import splits as splits_mod
         from stylebot.targets import select_targets
 
         before = len(targets)
@@ -959,6 +962,38 @@ def run_synth(
             if p
         )
         say(f"substrate: {before} -> {len(targets)} target chunk(s) ({detail})")
+
+    # The frozen-eval guard. `splits.json` pins the posts the final eval scores;
+    # cutting their prose as synthesis targets trains the styler on the metric.
+    # Nothing enforced this before: `--role` is optional and the blog's canonical
+    # corpus run (RUNBOOK §6) passes no role at all, so an eval post that had
+    # been renamed out of its pinned path went straight into the training diet
+    # (2026-09-03). The guard therefore does not wait to be asked: it consults
+    # the corpus's own `splits.json` when `--splits` was not given, and the only
+    # way past it is the deliberate `--role eval`.
+    if substrate.role != "eval":
+        eval_splits = loaded
+        if eval_splits is None:
+            eval_splits = (
+                splits_mod.load_splits(substrate.splits_path)
+                if substrate.splits_path is not None
+                else splits_mod.load_corpus_splits(data_dir)
+                if data_dir is not None
+                else None
+            )
+        if eval_splits is not None:
+            from stylebot.targets import split_off_role
+
+            refused, targets = split_off_role(targets, splits=eval_splits, role="eval")
+            if refused:
+                posts = sorted({t.source for t in refused})
+                shown = ", ".join(posts[:3]) + (" ..." if len(posts) > 3 else "")
+                say(
+                    f"eval guard: refused {len(refused)} target chunk(s) from "
+                    f"{len(posts)} frozen-eval post(s) ({shown}) — pass --role eval "
+                    f"to synthesize on the eval stratum deliberately",
+                    level="warn",
+                )
 
     if substrate.limit is not None:
         targets = targets[: substrate.limit]

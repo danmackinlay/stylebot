@@ -40,6 +40,21 @@ def resolve_data_dir(flag: str | os.PathLike | None = None) -> Path:
     return Path(os.environ.get("STYLEBOT_DATA_DIR", "_training_pairs"))
 
 
+DEFAULT_SPLITS_NAME = "splits.json"
+
+
+def splits_path(data_dir: str | os.PathLike | None = None) -> Path:
+    """Where the by-post splits contract lives inside a corpus directory.
+
+    One spelling of `<data-dir>/splits.json`, so the guards that consult it
+    (synth's frozen-eval refusal, `log save`'s notice) find the same file
+    `ai-style make-splits --out` is pointed at. The path is returned whether or
+    not it exists; callers that treat an absent file as "no contract" test for
+    themselves.
+    """
+    return resolve_data_dir(data_dir) / DEFAULT_SPLITS_NAME
+
+
 def get_key(name: str) -> str | None:
     """Return an API key from the environment, or None if unset/blank."""
     val = os.environ.get(name)

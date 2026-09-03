@@ -23,6 +23,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
+from stylebot import splits as sp
 from stylebot import synth, synth_cli
 from stylebot import targets as targets_mod
 from stylebot.bin.ai_style import main as ai_style_main
@@ -841,3 +842,102 @@ def test_reasoning_effort_rotation_cross_product(tmp_path, make_blog):
     assert captured == ["off", "high"]  # one generator per effort
     recs = [json.loads(ln) for ln in (tmp_path / "corpus" / "pairs.jsonl").read_text().splitlines()]
     assert {r["meta"]["gen"]["reasoning_effort"] for r in recs} == {"off", "high"}
+
+
+# -- the frozen-eval guard: synth never cuts eval prose unasked ---------------
+
+
+def _eval_splits(*eval_posts: str, aliases: dict | None = None) -> dict:
+    return {
+        "schema_version": sp.SCHEMA_VERSION,
+        "eval_posts": list(eval_posts),
+        **({"aliases": aliases} if aliases else {}),
+        "rest_rule": {"kind": "hash", "detector_frac": 0.4, "salt": "0"},
+    }
+
+
+def _lines(sink: list) -> str:
+    return "\n".join(sink)
+
+
+def _collect(sink: list):
+    def emit(message: str, /, *, level: str = "info") -> None:
+        sink.append(message)
+
+    return emit
+
+
+def _stub_gen():
+    return synth.Generator(name="stub", generate=lambda t, history=None: f"[slop] {t}")
+
+
+def test_synth_refuses_eval_posts_from_the_corpus_splits(tmp_path, make_blog):
+    """The W0 leak: no --role, no --splits, and eval prose is cut as a target.
+
+    The guard reads the corpus's own splits.json, because the run that leaked
+    (blog RUNBOOK §6) passes neither flag.
+    """
+    root = make_blog(ai=False)
+    targets = synth.iter_targets(blog_root=root)
+    assert targets and {t.source for t in targets} == {"post/human.qmd"}
+
+    data_dir = tmp_path / "corpus"
+    data_dir.mkdir()
+    sp.save_splits(_eval_splits("post/human.qmd"), data_dir / "splits.json")
+
+    sink: list[str] = []
+    result = synth_cli.run_synth(
+        targets, data_dir=data_dir, generators=[_stub_gen()], emit=_collect(sink)
+    )
+    assert result is None  # nothing left to synthesize
+    assert "eval guard" in _lines(sink) and "post/human.qmd" in _lines(sink)
+    assert not (data_dir / "pairs.jsonl").exists()
+
+
+def test_synth_eval_guard_follows_a_rename(tmp_path, make_blog):
+    """A pinned eval post renamed on disk is still refused, via `aliases`."""
+    root = make_blog(ai=False)
+    targets = synth.iter_targets(blog_root=root)
+    data_dir = tmp_path / "corpus"
+    data_dir.mkdir()
+    sp.save_splits(
+        _eval_splits("post/old.qmd", aliases={"post/human.qmd": "post/old.qmd"}),
+        data_dir / "splits.json",
+    )
+    sink: list[str] = []
+    assert (
+        synth_cli.run_synth(
+            targets, data_dir=data_dir, generators=[_stub_gen()], emit=_collect(sink)
+        )
+        is None
+    )
+    assert "eval guard" in _lines(sink)
+
+
+def test_synth_role_eval_is_the_deliberate_opt_in(tmp_path, make_blog):
+    root = make_blog(ai=False)
+    targets = synth.iter_targets(blog_root=root)
+    data_dir = tmp_path / "corpus"
+    data_dir.mkdir()
+    splits_path = sp.save_splits(_eval_splits("post/human.qmd"), data_dir / "splits.json")
+
+    sink: list[str] = []
+    result = synth_cli.run_synth(
+        targets,
+        data_dir=data_dir,
+        generators=[_stub_gen()],
+        substrate=synth_cli.SubstrateOpts(splits_path=splits_path, role="eval"),
+        emit=_collect(sink),
+    )
+    assert result is not None and result.written == len(targets)
+    assert "eval guard" not in _lines(sink)
+
+
+def test_synth_without_a_splits_file_is_unguarded_but_unchanged(tmp_path, make_blog):
+    """No contract, no guard — a corpus with no splits.json behaves as before."""
+    root = make_blog(ai=False)
+    targets = synth.iter_targets(blog_root=root)
+    result = synth_cli.run_synth(
+        targets, data_dir=tmp_path / "corpus", generators=[_stub_gen()]
+    )
+    assert result is not None and result.written == len(targets)

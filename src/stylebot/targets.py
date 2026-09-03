@@ -30,7 +30,7 @@ from stylebot.lib import (
     split_paragraphs,
 )
 from stylebot.markdown import DivIsProse, heading_title, is_heading_line
-from stylebot.splits import role_of, unit_from_digest
+from stylebot.splits import ROLES, role_of, unit_from_digest
 
 logger = logging.getLogger(__name__)
 
@@ -586,3 +586,21 @@ def select_targets(
         if sample_frac < 1.0:
             out = [t for t in out if hash_unit(t.source, t.text, salt=sample_salt) < sample_frac]
     return out
+
+
+def split_off_role(
+    targets: Sequence[Target], *, splits: dict, role: str
+) -> tuple[list[Target], list[Target]]:
+    """Partition targets into (those whose post holds `role`, everything else).
+
+    The two-sided form of `select_targets(role=...)`, for callers that must
+    *report* what they removed rather than quietly keep a subset — the
+    frozen-eval guard in `synth_cli` names the posts it refused, because silence
+    is how eval prose got cut as training targets in the first place.
+    """
+    if role not in ROLES:
+        raise ValueError(f"split_off_role: unknown role {role!r}")
+    matched, rest = [], []
+    for target in targets:
+        (matched if role_of(target.source, splits) == role else rest).append(target)
+    return matched, rest
