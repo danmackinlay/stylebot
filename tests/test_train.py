@@ -52,7 +52,7 @@ def test_assemble_filters_to_styler_role(write_pairs_corpus):
     assert corpus.dropped["role"] == corpus.n_source_records - corpus.n_train
 
 
-def test_selector_and_per_target_hooks(write_pairs_corpus):
+def test_selector_and_per_passage_hooks(write_pairs_corpus):
     corpus_path = write_pairs_corpus(n_posts=6, **CORPUS)
 
     def drop_synth(rec):
@@ -64,12 +64,135 @@ def test_selector_and_per_target_hooks(write_pairs_corpus):
     def cap_one(recs):
         return recs[:1]
 
-    # Every target body is unique in the fixture, so cap-one keeps everything…
-    corpus = tr.assemble_training_corpus(corpus_path, per_target=cap_one, val_frac=0)
-    assert corpus.dropped["per_target"] == 0 and corpus.n_train == 12
+    # No chunk of the fixture nests in another, so every pair is its own passage
+    # and cap-one keeps everything…
+    corpus = tr.assemble_training_corpus(corpus_path, per_passage=cap_one, val_frac=0)
+    assert corpus.dropped["per_passage"] == 0 and corpus.n_train == 12
     # …and dropping everything via the hook zeroes the corpus.
-    corpus = tr.assemble_training_corpus(corpus_path, per_target=lambda recs: [], val_frac=0)
-    assert corpus.n_train == 0 and corpus.dropped["per_target"] == 12
+    corpus = tr.assemble_training_corpus(corpus_path, per_passage=lambda recs: [], val_frac=0)
+    assert corpus.n_train == 0 and corpus.dropped["per_passage"] == 12
+
+
+# -- W9: a passage is a stretch of prose, not a string ----------------------
+
+
+def _pair(capture_id: str, source: str, target: str, **meta) -> dict:
+    from stylebot.ai_core import STYLE_SYSTEM
+
+    return {
+        "messages": [
+            {"role": "system", "content": STYLE_SYSTEM},
+            {"role": "user", "content": f"It is worth noting that {target}"},
+            {"role": "assistant", "content": target},
+        ],
+        "meta": {
+            "source": source,
+            "captured_at": "2026-09-03T00:00:00+00:00",
+            "capture_id": capture_id,
+            "chunk_index": 0,
+            "chunk_total": 1,
+            **meta,
+        },
+    }
+
+
+def _write(records: list[dict], path):
+    from stylebot.jsonl import dumps_line
+
+    path.write_text("".join(dumps_line(rec) + "\n" for rec in records), encoding="utf-8")
+    return path
+
+
+# One post cut at three budgets: paragraph A alone, A+B, and A+B+C. This is the
+# live corpus' shape — 3,981 styler-role train pairs on 3,533 distinct target
+# bodies but only 982 passages, measured 2026-09-03.
+A = "Alpha paragraph, long enough to be a real target chunk on its own."
+B = "Beta paragraph, the one that only the wider budgets ever reached."
+C = "Gamma paragraph, which only the widest budget packed in with the rest."
+NESTED = [
+    _pair("cap-a", "post/p.qmd", A, merge_max_chars=None),
+    _pair("cap-ab", "post/p.qmd", f"{A}\n\n{B}", merge_max_chars=1500),
+    _pair("cap-abc", "post/p.qmd", f"{A}\n\n{B}\n\n{C}", merge_max_chars=3000),
+    # Same text, another post: identical strings never merge across sources.
+    _pair("cap-other", "post/other.qmd", A, merge_max_chars=None),
+]
+
+
+def test_passage_groups_fold_nested_cuts_of_one_stretch_of_prose():
+    groups = tr.passage_groups(NESTED)
+    # Three budgets over one stretch = ONE passage; the other post never merges
+    # in, however identical its text.
+    assert [len(g) for g in groups] == [3, 1]
+    assert {(g["meta"]["source"]) for g in groups[0]} == {"post/p.qmd"}
+    assert groups[1][0]["meta"]["source"] == "post/other.qmd"
+
+
+def test_per_passage_cap_counts_a_nested_target_once(tmp_path):
+    """The done-criterion for W9: a nested target does not count twice.
+
+    Under the old exact-body grouping these were three unrelated targets and a
+    cap-one hook was a no-op, which is why every manifest to date records
+    `per_target: null` — using it would not have helped.
+    """
+    corpus_path = _write(NESTED, tmp_path / "nested.jsonl")
+    corpus = tr.assemble_training_corpus(corpus_path, per_passage=lambda recs: recs[:1], val_frac=0)
+    assert corpus.n_train == 2  # one per passage, not one per distinct string
+    assert corpus.dropped["per_passage"] == 2
+    kept = sorted(rec["messages"][2]["content"] for rec in corpus.train)
+    assert kept == [A, A]  # corpus order within a passage, so the first cut wins
+
+
+def test_chunk_scale_reports_the_per_passage_weight_histogram(tmp_path):
+    corpus_path = _write(NESTED, tmp_path / "nested.jsonl")
+    corpus = tr.assemble_training_corpus(corpus_path, val_frac=0)
+    scale = corpus.chunk_scale
+    assert scale["passages"]["train"] == {
+        "n_passages": 2,
+        "pairs_per_passage": {"1": 1, "3": 1},
+        "max_pairs_per_passage": 3,
+        "mean_pairs_per_passage": 2.0,
+    }
+    assert scale["passages"]["val"]["n_passages"] == 0
+    # Unweighted by default: every pair is one training example.
+    assert scale["pair_weights"] == {"1": 4} and scale["n_train_examples"] == 4
+
+
+def test_pair_weight_replicates_rows_in_the_train_file_only(tmp_path):
+    """`meta.weight` was promised from the first draft and stripped one line
+    before the trainer could see it (`_write_conversations`). It is integer
+    replication now, and val is never replicated."""
+    corpus_path = _write(NESTED, tmp_path / "nested.jsonl")
+
+    def triple_the_unmerged(rec):
+        return 3 if (rec.get("meta") or {}).get("merge_max_chars") is None else 1
+
+    corpus = tr.assemble_training_corpus(corpus_path, pair_weight=triple_the_unmerged, val_frac=0)
+    assert [tr.pair_weight_of(r) for r in corpus.train] == [3, 1, 1, 3]
+    assert corpus.n_train == 4 and corpus.n_train_examples == 8
+    assert corpus.chunk_scale["pair_weights"] == {"1": 2, "3": 2}
+
+    train_file = tmp_path / "train.jsonl"
+    assert tr._write_conversations(corpus.train, train_file) == 8
+    assert len(train_file.read_text(encoding="utf-8").splitlines()) == 8
+    # The val file takes the same records unreplicated: a weighted held-out loss
+    # is an average over a distribution nobody chose.
+    val_file = tmp_path / "val.jsonl"
+    assert tr._write_conversations(corpus.train, val_file, replicate=False) == 4
+
+    # And the cost estimate follows the replication, because that is what gets
+    # paid for.
+    assert tr.estimate_tokens(corpus.train) > tr.estimate_tokens(
+        [{"messages": r["messages"]} for r in corpus.train]
+    )
+
+
+def test_pair_weight_of_is_defensive_about_junk():
+    assert tr.pair_weight_of({"meta": {}}) == 1
+    assert tr.pair_weight_of({}) == 1
+    assert tr.pair_weight_of({"meta": {"weight": 0}}) == 1
+    assert tr.pair_weight_of({"meta": {"weight": -2}}) == 1
+    assert tr.pair_weight_of({"meta": {"weight": "nope"}}) == 1
+    assert tr.pair_weight_of({"meta": {"weight": 4}}) == 4
 
 
 def test_val_split_deterministic_and_by_post(write_pairs_corpus):

@@ -36,9 +36,6 @@ from stylebot.splits import ROLES, role_of, unit_from_digest
 
 logger = logging.getLogger(__name__)
 
-#: The orderings `ChunkPolicy.sort_key` knows how to build.
-SORT_KEYS = ("none", "length", "source")
-
 # Chunk hygiene. There is no voice transform to learn from a bare heading, a
 # fenced code block, a link list, or a stub paragraph — so trim them.
 MIN_CHUNK_CHARS = 80  # drop chunks shorter than this
@@ -185,12 +182,6 @@ class ChunkPolicy:
     # `_plans/decisions.md` D27 (amended 2026-09-03) for why it defaults to the
     # behaviour that does NOT match inference.
     pack_across_protected: bool = True
-    # Library-only, no flag. Target ORDER cannot change the corpus — arms are
-    # assigned by content hash, so a chunk gets the same generator wherever it
-    # sits in the list — which left `--sort` affecting only which chunks
-    # `--limit` happened to take and the row order of a report. Retired 0.3.1
-    # (synth-flag-audit C1); the knob stays for a caller ordering in code.
-    sort_name: str = "none"
     # Library-only for a different reason: a predicate is not expressible on a
     # command line, and *which* `:::` classes wrap prose is blog policy set in
     # code — see `stylebot.markdown` and livingthing's
@@ -205,18 +196,6 @@ class ChunkPolicy:
         # `_keep_chunk` compares `len(s) > max_chars`.
         if self.max_chars == 0:
             object.__setattr__(self, "max_chars", None)
-
-    def sort_key(self) -> Callable[[Target], object] | None:
-        """This policy's `--sort` choice as an ordering callable (None = none)."""
-        if self.sort_name == "none":
-            return None
-        if self.sort_name == "length":
-            return lambda t: len(t.text)
-        if self.sort_name == "source":
-            return lambda t: (t.source, t.chunk_index)
-        # Unreachable from the CLI (`--sort` is a click.Choice); this guards the
-        # library path, where a caller sets `ChunkPolicy(sort_name=…)` in code.
-        raise ValueError(f"unknown sort key {self.sort_name!r}; known: {', '.join(SORT_KEYS)}")
 
 
 def _norm_header(text: str) -> str:
@@ -535,7 +514,6 @@ def iter_targets(
     selector: Callable[[dict], bool] = is_human_authored,
     glob: str = "**/*.qmd",
     policy: ChunkPolicy | None = None,
-    sort_key: Callable[[Target], object] | None = None,
     **chunk_kw,
 ) -> list[Target]:
     """Collect prose chunks to use as synthesis targets.
@@ -592,8 +570,11 @@ def iter_targets(
       `heading_context` off — an inline heading is text the styler rewrites, not
       fixed context. See `_plans/v2-longer-rewrites.md`.
 
-    `sort_key` orders the resulting chunks, overriding the policy's own
-    `--sort` choice. Returns a flat list of `Target`s.
+    Returns a flat list of `Target`s in document order, post by post. There is
+    no ordering knob: `--sort` and its `ChunkPolicy.sort_name` twin were retired
+    0.3.1 (arms are assigned by content hash, so order cannot change the corpus)
+    and deleted 2026-09-03 with nothing left calling them (D43). A caller that
+    wants an order sorts the returned list.
     """
     if files is not None and blog_root is not None:
         raise ValueError(
@@ -610,7 +591,6 @@ def iter_targets(
     targets: list[Target] = []
     root = Path(blog_root) if blog_root is not None else None
     policy = policy if policy is not None else ChunkPolicy(**chunk_kw)
-    sort_key = sort_key if sort_key is not None else policy.sort_key()
 
     if files is not None:
         for f in files:
@@ -626,8 +606,6 @@ def iter_targets(
                 continue
             targets.extend(_post_targets(body, _source_label(path, root), policy, meta=meta))
 
-    if sort_key is not None:
-        targets.sort(key=sort_key)
     return targets
 
 

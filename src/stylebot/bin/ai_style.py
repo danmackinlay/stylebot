@@ -1193,7 +1193,7 @@ def train_cmd(
     Needs the `trainer` extra (`uv add 'stylebot[trainer]'`) and
     TINKER_API_KEY for the paid step; --dry-run needs neither.
     """
-    pairs_path = data_dir / "pairs.jsonl"
+    pairs_path = config.pairs_path(data_dir)
     if not pairs_path.exists():
         raise click.ClickException(f"no pairs.jsonl in {data_dir}")
 
@@ -1219,6 +1219,7 @@ def train_cmd(
         f"dropped {data['dropped']}) from {data['n_source_records']} record(s), "
         f"pairs sha256 {data['pairs_sha256']}"
     )
+    click.echo(tr.format_passage_scale(data["chunk_scale"]))
     cost = f" ≈ ${est['cost_usd']}" if est["cost_usd"] is not None else ""
     click.echo(
         f"~{est['train_tokens']:,} train tokens ({est['basis']}){cost} on "

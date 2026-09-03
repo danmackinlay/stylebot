@@ -57,7 +57,8 @@ The remaining class-C proposals were reviewed together and the file is now
   as a library-only knob with its current value hardcoded, so **no cell
   re-keys and no paid corpus regenerates**:
   - `--sort` → `ChunkPolicy.sort_name = "none"`. Arms are assigned by content
-    hash, so target *order* cannot reach the corpus at all.
+    hash, so target *order* cannot reach the corpus at all. (The library-only
+    field was deleted outright 2026-09-03, no caller having appeared — D43.)
   - `--report-max-rows` → `InspectOpts.report_max_rows = 2000`.
   - `--all` → gone entirely; `--max-level` already relaxes the selector and
     `FILES` bypasses it, which is what the docstring now says.

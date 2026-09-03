@@ -28,7 +28,6 @@ from stylebot import synth, synth_cli
 from stylebot import targets as targets_mod
 from stylebot.bin.ai_style import main as ai_style_main
 from stylebot.cli_options import EMIT_LEVELS, cli_fields, field_owners
-from stylebot.targets import Target as _Target
 
 
 def test_synth_options_repins_defaults():
@@ -72,22 +71,21 @@ def test_synth_options_rejects_unknown_names():
         synth_cli.synth_options(exclude=("also_not_a_knob",))
 
 
-def test_chunk_policy_translates_its_two_cli_spellings():
-    # The CLI spells "uncapped" as 0 and an ordering as a choice string; the
-    # library wants None and a callable. Both translations live on the type, so
-    # a caller cannot forget to apply them.
-    chunk = synth_cli.ChunkPolicy(min_chars=10, max_chars=0, sort_name="length")
+def test_chunk_policy_translates_the_uncapped_cli_spelling():
+    # The CLI spells "uncapped" as 0 and the library wants None. The translation
+    # lives on the type, so a caller cannot forget to apply it.
+    chunk = synth_cli.ChunkPolicy(min_chars=10, max_chars=0)
     assert chunk.min_chars == 10
     assert chunk.max_chars is None  # 0 -> uncapped, normalised in __post_init__
-    assert chunk.sort_key()(_Target("abcd", "p.qmd", 0, 1)) == 4
-    assert synth_cli.ChunkPolicy().sort_key() is None  # "none" -> no ordering
 
 
-def test_chunk_policy_rejects_an_unknown_sort_name():
-    # Unreachable from the CLI (--sort is a click.Choice); this is the library
-    # path, where a caller builds the policy in code.
-    with pytest.raises(ValueError, match="unknown sort key"):
-        synth_cli.ChunkPolicy(sort_name="nope").sort_key()
+def test_chunk_policy_has_no_ordering_knob():
+    # `--sort` retired 0.3.1 and `sort_name`/`sort_key()` were deleted with it
+    # (D43): arms are assigned by content hash, so target order cannot change
+    # the corpus, and nothing in either repo ordered in code either.
+    assert not hasattr(synth_cli.ChunkPolicy(), "sort_key")
+    with pytest.raises(TypeError):
+        synth_cli.ChunkPolicy(sort_name="length")
 
 
 def test_iter_targets_refuses_policy_and_loose_kwargs_together():
@@ -100,10 +98,10 @@ def test_iter_targets_refuses_policy_and_loose_kwargs_together():
 def test_pop_bundles_folds_a_callback_kwargs():
     # The click-callback path: **kw in, bundles out, and the command's own
     # params left behind for the callback itself.
-    kw = {"min_chars": 10, "sort_name": "length", "session_turns": 4, "blog_root": "x"}
+    kw = {"min_chars": 10, "merge_max_chars": 3000, "session_turns": 4, "blog_root": "x"}
     opts = synth_cli.pop_bundles(kw)
     assert set(opts) == set(synth_cli.BUNDLE_PARAMS)
-    assert opts["chunk"].min_chars == 10 and opts["chunk"].sort_name == "length"
+    assert opts["chunk"].min_chars == 10 and opts["chunk"].merge_max_chars == 3000
     assert opts["session"].session_turns == 4
     assert opts["gen"] == synth_cli.GenOpts()  # absent names keep their default
     assert kw == {"blog_root": "x"}
@@ -204,7 +202,8 @@ def test_synth_command_surface_is_exactly_the_bundles_plus_its_own():
     assert len(params) == 49
     assert {p.name for p in params} - own == shared
     # Library-only fields stay off the CLI — that is what omitting opt() means.
-    # `sort_name` and `report_max_rows` joined them when their flags retired.
+    # `report_max_rows` joined them when its flag retired; `sort_name` did too,
+    # and was then deleted outright (D43).
     assert {"session_budgets", "report_title", "sort_name", "report_max_rows"} & {
         p.name for p in params
     } == set()

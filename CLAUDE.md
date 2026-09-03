@@ -86,8 +86,11 @@ the package. To read or parse source, prefer the search tools (`rg`, `grep`) or
 - **Defaults where a mistake is cheap, required flags where it isn't.**
   `ai-style log` has a default data-dir; `train`/`make-splits` must not.
 - **Selection is a user-supplied policy.** Phases accept a
-  `selector: Callable[[dict], bool]` (+ optional `sort_key`/`sampler`),
-  defaulting to `stylebot.lib.is_human_authored` (the `automation: 0` example).
+  `selector: Callable[[dict], bool]` (plus, at assembly, `per_passage` and
+  `pair_weight` — `train.assemble_training_corpus`), defaulting to
+  `stylebot.lib.is_human_authored` (the `automation: 0` example). There is no
+  `sort_key` or `sampler` hook: `--sort` retired 0.3.1 and its library twin was
+  deleted 2026-09-03 with no caller (`_plans/decisions.md` D43).
   Never hardcode the predicate; the caller can pass their own or hand in a
   pre-selected file list.
 - **`STYLE_SYSTEM` (`stylebot.ai_core`) is frozen.** It is baked into every

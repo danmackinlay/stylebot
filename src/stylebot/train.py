@@ -15,9 +15,16 @@ are lazy; the module imports free.
   styler data: they teach the model to leave alone prose that is already fine.
 - Records train exactly as stored: `STYLE_SYSTEM` verbatim as `messages[0]`,
   heading context left on both sides. Never strip or rewrite a side.
-- Per-target multiplicity is a *policy hook* (`per_target`), not a built-in
-  gate: re-key epochs and deliberate replicates can stack several pairs on one
-  target passage, and whether that up-weights the passage is the caller's call.
+- Per-passage multiplicity is a *policy hook* (`per_passage`), not a built-in
+  gate: several chunk budgets over one stretch of prose, re-key epochs and
+  deliberate replicates all stack pairs on one passage, and whether that
+  up-weights the passage is the caller's call. What assembly owes the caller is
+  that the grouping be **true** — see `passage_groups`, and D43 for the
+  measurement that showed exact-body grouping was not.
+- Weight is integer replication, applied to the TRAIN file only
+  (`pair_weight` -> `meta.weight` -> N copies in `_write_conversations`). Val
+  stays one row per pair, or the held-out loss is a weighted average of a
+  distribution nobody chose.
 
 **The manifest is the reproducibility record.** Weights and corpus never enter
 git; the small JSON written by `write_manifest` (content hash of the corpus,
@@ -154,6 +161,7 @@ class Hyperparameters:
         """This bundle as the manifest's `hyperparameters` block."""
         return {f.name: getattr(self, f.name) for f in fields(self)}
 
+
 _EXTRA_HINT = (
     "stylebot.train needs the 'trainer' extra: "
     "run `uv add 'stylebot[trainer]'` (or `pip install 'stylebot[trainer]'`) "
@@ -220,6 +228,11 @@ class TrainCorpus:
         ("null" = unmerged records); `modes` does the same for
         `meta.chunk_mode`. `max_target_chars` is the longest assistant side —
         the ceiling on what the adapter has ever been asked to emit.
+
+        `passages` and `pair_weights` are the *other* scale question, and the
+        one a budget sweep makes urgent: how many DISTINCT stretches of prose
+        those pairs cover, and how many gradient steps each one buys. See
+        `passage_groups`.
         """
         budgets: dict[str, int] = {}
         modes: dict[str, int] = {}
@@ -233,16 +246,138 @@ class TrainCorpus:
             msgs = rec.get("messages") or []
             if len(msgs) == 3:
                 longest = max(longest, len(msgs[2].get("content") or ""))
-        return {"budgets": budgets, "modes": modes, "max_target_chars": longest}
+        return {
+            "budgets": budgets,
+            "modes": modes,
+            "max_target_chars": longest,
+            "passages": self.passage_scale,
+            "pair_weights": _histogram(pair_weight_of(rec) for rec in self.train),
+            "n_train_examples": self.n_train_examples,
+        }
+
+    @property
+    def passage_scale(self) -> dict:
+        """Effective per-passage multiplicity, train and val separately.
+
+        `pairs_per_passage` is the histogram this item exists for: a corpus cut
+        at four chunk budgets over the same prose reaches the trainer as N pairs
+        on one passage, which is N gradient steps on that passage under a
+        manifest claiming one epoch. Reported per split because the val split is
+        by POST, which makes it honest about leakage and silent about this —
+        both sides inflate alike, so val loss cannot see it.
+        """
+        out: dict = {}
+        for name, records in (("train", self.train), ("val", self.val)):
+            groups = passage_groups(records)
+            hist = _histogram(len(g) for g in groups)
+            out[name] = {
+                "n_passages": len(groups),
+                "pairs_per_passage": hist,
+                "max_pairs_per_passage": max((len(g) for g in groups), default=0),
+                "mean_pairs_per_passage": (round(len(records) / len(groups), 2) if groups else 0.0),
+            }
+        return out
+
+    @property
+    def n_train_examples(self) -> int:
+        """Rows the trainer actually sees — `n_train` after weight replication."""
+        return sum(pair_weight_of(rec) for rec in self.train)
+
+
+def _hook_name(hook: Callable | None) -> str | None:
+    """A policy hook's name for the manifest — `None` when unset."""
+    return getattr(hook, "__name__", repr(hook)) if hook else None
+
+
+def _histogram(values) -> dict[str, int]:
+    """Counter as a JSON-safe, numerically sorted `{str(value): count}`."""
+    counts: dict[int, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return {str(k): counts[k] for k in sorted(counts)}
 
 
 def _target_body(rec: dict) -> str:
-    """The assistant-side body, heading-context stripped — the per-target
-    grouping key for the multiplicity hook (same recovery as `synth`'s
-    coverage check)."""
+    """The assistant-side body, heading-context stripped (same recovery as
+    `synth`'s coverage check)."""
     from stylebot.pairs import extract_target
 
     return extract_target(rec).strip()
+
+
+def pair_weight_of(rec: dict) -> int:
+    """A record's training weight: `meta.weight`, defaulting to 1.
+
+    Non-positive or unparseable values read as 1 rather than raising — a weight
+    is an optimisation knob, and a corpus with a junk one should train, loudly
+    uniform, rather than fail at the assembly step of a paid run.
+    """
+    raw = (rec.get("meta") or {}).get("weight")
+    try:
+        weight = int(raw)
+    except (TypeError, ValueError):
+        return 1
+    return weight if weight > 0 else 1
+
+
+def passage_groups(records: Sequence[dict]) -> list[list[dict]]:
+    """Group pair records by SOURCE POST and character-span containment.
+
+    A *passage* is a maximal stretch of prose: every record whose target body is
+    a substring of some longer target from the same post joins that target's
+    group. Groups come back in first-appearance corpus order, and each group's
+    records keep corpus order, so the multiplicity hook sees a deterministic
+    list whatever the input order.
+
+    **Why containment and not equality.** Grouping by exact target body — what
+    this did until 2026-09-03 — sees a passage cut at 1500 chars and the same
+    prose cut at 3000 as two unrelated targets, because they are different
+    strings. Measured on the live corpus that day: 3,981 styler-role train pairs
+    sat on 3,533 distinct target bodies (1.13 pairs each, so exact-body grouping
+    had almost nothing to group) but on only **982 passages** under this rule —
+    a mean effective weight of 4.05 and a maximum of 15. The hook that was
+    supposed to control multiplicity could not see 3.6 of every 4 duplicates.
+    `_plans/decisions.md` D43.
+
+    Substring containment is the right test rather than an offset interval
+    because a pair record stores its target as text and never recorded where in
+    the post it came from; the packer emits paragraph joins verbatim, so a
+    shorter cut of the same prose IS a substring of the longer one. It costs
+    O(spans²) string searches per post — a few thousand on the live corpus,
+    milliseconds — and it never merges across posts, which is what would make it
+    quadratic in the corpus.
+    """
+    by_source: dict[str, dict[str, list[dict]]] = {}
+    order: list[str] = []
+    for rec in records:
+        source = (rec.get("meta") or {}).get("source") or "?"
+        if source not in by_source:
+            by_source[source] = {}
+            order.append(source)
+        by_source[source].setdefault(_target_body(rec), []).append(rec)
+
+    groups: list[list[dict]] = []
+    for source in order:
+        bodies = by_source[source]
+        # Longest first, so a root is always seen before anything nested in it.
+        roots: list[str] = []
+        root_of: dict[str, str] = {}
+        for body in sorted(bodies, key=len, reverse=True):
+            parent = next((r for r in roots if body in r), None)
+            if parent is None:
+                roots.append(body)
+                parent = body
+            root_of[body] = parent
+        merged: dict[str, list[dict]] = {}
+        appearance: list[str] = []
+        for body, recs in bodies.items():  # insertion order == corpus order
+            root = root_of[body]
+            if root not in merged:
+                merged[root] = []
+                appearance.append(root)
+            merged[root].extend(recs)
+        groups.extend(merged[root] for root in appearance)
+    return groups
 
 
 def assemble_training_corpus(
@@ -250,20 +385,28 @@ def assemble_training_corpus(
     *,
     splits: dict | None = None,
     selector: Callable[[dict], bool] | None = None,
-    per_target: Callable[[list[dict]], list[dict]] | None = None,
+    per_passage: Callable[[list[dict]], list[dict]] | None = None,
+    pair_weight: Callable[[dict], int] | None = None,
     val_frac: float = DEFAULT_VAL_FRAC,
     seed: int = 0,
     validate: bool = True,
 ) -> TrainCorpus:
-    """Validate, filter, and split the corpus for styler training.
+    """Validate, filter, weight, and split the corpus for styler training.
 
     - `splits`: a loaded `splits.json`. When given, only **styler**-role pairs
       are kept — the detector pool and the frozen eval posts never enter
       training. When None, every pair is eligible (fixture/experiment use).
     - `selector`: pair-level policy hook (record -> keep?). Default keep-all —
       note this deliberately KEEPS near-copy pairs (see module docstring).
-    - `per_target`: multiplicity hook. Pairs sharing one target body are passed
-      as a list (corpus order); the hook returns the subset to keep.
+    - `per_passage`: multiplicity hook. Every pair covering one stretch of prose
+      is passed as a list in corpus order (`passage_groups` — containment, not
+      string equality); the hook returns the subset to keep. Named `per_target`
+      until 2026-09-03, when the grouping stopped being per *target*; the rename
+      is deliberate, so a caller written against the old meaning fails loudly
+      instead of silently grouping 3.6× too finely (D43).
+    - `pair_weight`: record -> positive int, stamped onto `meta.weight` and
+      honoured as integer replication in the TRAIN file only. Default None
+      leaves every record at 1, which is what every run to date did implicitly.
     - The val split shuffles the kept POSTs with `random.Random(seed)` and
       holds out `max(1, round(n * val_frac))` of them (0 with `val_frac=0`),
       so it is deterministic and disjoint by post.
@@ -279,7 +422,7 @@ def assemble_training_corpus(
                 f"malformed corpus"
             )
 
-    dropped = {"role": 0, "selector": 0, "per_target": 0}
+    dropped = {"role": 0, "selector": 0, "per_passage": 0}
     kept: list[dict] = []
     n_source = 0
     if splits is not None:
@@ -296,20 +439,16 @@ def assemble_training_corpus(
             continue
         kept.append(rec)
 
-    if per_target is not None:
-        by_target: dict[str, list[dict]] = {}
-        order: list[str] = []
-        for rec in kept:
-            key = _target_body(rec)
-            if key not in by_target:
-                by_target[key] = []
-                order.append(key)
-            by_target[key].append(rec)
+    if per_passage is not None:
         capped: list[dict] = []
-        for key in order:
-            capped.extend(per_target(by_target[key]))
-        dropped["per_target"] = len(kept) - len(capped)
+        for group in passage_groups(kept):
+            capped.extend(per_passage(group))
+        dropped["per_passage"] = len(kept) - len(capped)
         kept = capped
+
+    if pair_weight is not None:
+        for rec in kept:
+            rec.setdefault("meta", {})["weight"] = max(1, int(pair_weight(rec)))
 
     posts = sorted({(rec.get("meta") or {}).get("source") or "?" for rec in kept})
     if val_frac > 0 and posts:
@@ -336,8 +475,17 @@ def assemble_training_corpus(
 def estimate_tokens(records: Sequence[dict]) -> int:
     """Keyless order-of-magnitude token estimate (~4 chars/token) over every
     message of every record — for the dry-run cost preview only; the paid path
-    counts real rendered tokens."""
-    chars = sum(len(m.get("content") or "") for rec in records for m in rec.get("messages", ()))
+    counts real rendered tokens.
+
+    Counts each record `meta.weight` times (default 1), because replication is
+    what the train file does with the weight and the estimate is a *cost*
+    estimate: a 3× weighted real-pair slice is 3× the tokens to pay for.
+    """
+    chars = sum(
+        pair_weight_of(rec) * len(m.get("content") or "")
+        for rec in records
+        for m in rec.get("messages", ())
+    )
     return chars // _CHARS_PER_TOKEN
 
 
@@ -451,7 +599,7 @@ def build_manifest(
             "record_ids_sha256": _record_ids_sha256(corpus),
             "n_train_posts": len(corpus.train_posts),
             "val_posts": corpus.val_posts,
-            "filters": filters or {"selector": None, "per_target": None},
+            "filters": filters or {"selector": None, "per_passage": None, "pair_weight": None},
             "selector_constants": selector_constants,
             # The chunk diet, so serving can follow it instead of hard-coding a
             # budget that goes stale the next time the corpus is re-cut.
@@ -477,6 +625,34 @@ def build_manifest(
         "result": None,  # filled by the paid run
     }
     return manifest
+
+
+def format_passage_scale(chunk_scale: dict) -> str:
+    """The per-passage weight line both `train` CLIs print on a dry run.
+
+    Lives here rather than in either shell because `ai-style train` and
+    livingthing's `dan-style train` must not drift on the one number that says
+    how many times the run will walk over the same prose. Reads the manifest
+    block, so it also renders an OLD manifest (pre-2026-09 ones have no
+    `passages` key and say so) rather than only a live `TrainCorpus`.
+    """
+    passages = (chunk_scale or {}).get("passages") or {}
+    train = passages.get("train")
+    if not train:
+        return "passages: not recorded (manifest predates the per-passage histogram)"
+    hist = train.get("pairs_per_passage") or {}
+    spread = ", ".join(f"x{k}: {v}" for k, v in hist.items())
+    examples = (chunk_scale or {}).get("n_train_examples")
+    weights = (chunk_scale or {}).get("pair_weights") or {}
+    weighted = ""
+    if examples is not None and set(weights) - {"1"}:
+        weighted = f"; weights {dict(weights)} -> {examples:,} training rows"
+    return (
+        f"{train['n_passages']:,} distinct passage(s), "
+        f"{train['mean_pairs_per_passage']}x mean / "
+        f"{train['max_pairs_per_passage']}x max pairs per passage "
+        f"[{spread}]{weighted}"
+    )
 
 
 def write_manifest(manifest: dict, manifest_out: str | Path) -> Path:
@@ -511,7 +687,8 @@ def run_training(
     hp: Hyperparameters | None = None,
     splits_path: str | Path | None = None,
     selector: Callable[[dict], bool] | None = None,
-    per_target: Callable[[list[dict]], list[dict]] | None = None,
+    per_passage: Callable[[list[dict]], list[dict]] | None = None,
+    pair_weight: Callable[[dict], int] | None = None,
     val_frac: float = DEFAULT_VAL_FRAC,
     run_id: str | None = None,
     train_price_per_mtok: float | None = None,
@@ -556,7 +733,8 @@ def run_training(
         pairs_path,
         splits=splits,
         selector=selector,
-        per_target=per_target,
+        per_passage=per_passage,
+        pair_weight=pair_weight,
         val_frac=val_frac,
         seed=hp.seed,
     )
@@ -564,8 +742,9 @@ def run_training(
         raise ValueError(f"no training pairs left after filtering {pairs_path}")
 
     filters = {
-        "selector": getattr(selector, "__name__", repr(selector)) if selector else None,
-        "per_target": getattr(per_target, "__name__", repr(per_target)) if per_target else None,
+        "selector": _hook_name(selector),
+        "per_passage": _hook_name(per_passage),
+        "pair_weight": _hook_name(pair_weight),
     }
     manifest = build_manifest(
         run_id=run_id,
@@ -599,15 +778,33 @@ def run_training(
     )
 
 
-def _write_conversations(records: Sequence[dict], path: Path) -> Path:
+def _write_conversations(records: Sequence[dict], path: Path, *, replicate: bool = True) -> int:
     """Write records as bare `{"messages": ...}` JSONL — derived training data
-    for the run's work dir (never committed). Meta is stripped because the HF
-    dataset layer wants a uniform schema and training only reads messages."""
+    for the run's work dir (never committed). Returns the row count.
+
+    Meta is stripped because the HF dataset layer wants a uniform schema and
+    training only reads messages. **That strip is why `meta.weight` never did
+    anything**: it was documented as a hook from the first draft and dropped one
+    line before the trainer could see it. So weight is consumed HERE, as integer
+    replication — `meta.weight` copies of the row — which is the only form of
+    up-weighting the cookbook's `SupervisedDatasetFromHFDataset` can express
+    without a per-example loss scale it has no field for. Replicas are separate
+    rows, so the builder's epoch shuffle scatters them rather than presenting a
+    passage N times in a row.
+
+    `replicate=False` for the val file: a weighted held-out loss is an average
+    over a distribution nobody chose, and val exists to be comparable across
+    runs whose weights differ.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    rows = 0
     with path.open("w", encoding="utf-8") as fp:
         for rec in records:
-            fp.write(dumps_line({"messages": rec["messages"]}) + "\n")
-    return path
+            line = dumps_line({"messages": rec["messages"]}) + "\n"
+            for _ in range(pair_weight_of(rec) if replicate else 1):
+                fp.write(line)
+                rows += 1
+    return rows
 
 
 def _make_presplit_builder(
@@ -721,8 +918,18 @@ def _tinker_runner(
     learning_rate = hp.learning_rate or hyperparam_utils.get_lr(base_model)
 
     data_dir = work_dir / "data"
-    train_file = _write_conversations(corpus.train, data_dir / "train.jsonl")
-    val_file = _write_conversations(corpus.val, data_dir / "val.jsonl") if corpus.val else None
+    train_file = data_dir / "train.jsonl"
+    n_rows = _write_conversations(corpus.train, train_file)
+    val_file = data_dir / "val.jsonl" if corpus.val else None
+    if val_file is not None:
+        _write_conversations(corpus.val, val_file, replicate=False)
+    if n_rows != corpus.n_train:
+        logger.info(
+            "weighted train file: %d rows from %d pairs (%.2fx)",
+            n_rows,
+            corpus.n_train,
+            n_rows / corpus.n_train,
+        )
 
     common = ChatDatasetBuilderCommonConfig(
         model_name_for_tokenizer=base_model,

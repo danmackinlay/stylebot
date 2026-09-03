@@ -507,6 +507,33 @@ noise at this corpus size. Both arms close ~90% of the slop→Dan detector gap
 same day**, so that is not a like-for-like comparison with the run-1/2 table
 above.
 
+**Effective passage weight — measured 2026-09-03 (W9).** The corpus is cut at
+four diets over the same prose (`meta.merge_max_chars` null / 1500 / 3000 /
+4500), so a training run walks each stretch of prose several times under a
+manifest claiming one epoch. Over all 8,244 records: **5,325 distinct targets
+are strict substrings of another target in the same post**, carrying **6,157
+pairs (74.7%)**; 883 targets carry more than one pair; **92.4%** of the corpus
+sits in some containment-or-repeat group. Reproducing run 4a's selection
+(`styler_pair_ok`, `splits.json`, `val_frac=0.1`, `seed=0`) against today's
+corpus:
+
+| | count | mean |
+| --- | --- | --- |
+| train pairs | 3,981 | |
+| distinct target bodies | 3,533 | **1.13** pairs each |
+| passages (source + containment) | **982** | **4.05** pairs each, max **15** |
+| val pairs / passages | 392 / 95 | 4.13 |
+
+Two readings. (1) The multiplicity is the budget sweep, not generator
+replicates: **653 of the 678 multi-pair passages span ≥2 budgets**, and pairs
+per *distinct body* is only 1.13. (2) It re-weights the scarce side — real
+captures were cut once, synthetic pairs went through the sweep, so real pairs
+are **3.09% of train pairs but 12.2% of train passages**. The by-post val split
+cannot show this: val inflates identically (mean 4.13), so held-out loss is
+computed over the same skew. Capping at one pair per passage would leave 982
+pairs; at 2, 1,660; at 3, 2,212. Mechanism and accounting landed (D43);
+**no run has been re-cut or re-weighted** — that costs a paid retrain.
+
 ---
 
 ## Inference and serving
