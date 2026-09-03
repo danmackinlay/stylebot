@@ -20,8 +20,13 @@ from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.jsonl import append_jsonl, read_jsonl, write_jsonl_atomic
 from stylebot.lib import read_w_frontmatter_text, split_paragraphs
 from stylebot.markdown import is_heading_line
-from stylebot.pairs import build_pair_content
-from stylebot.provenance import now_iso  # `ai-style log` binds capture.now_iso
+from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content, system_sha
+from stylebot.provenance import (  # `ai-style log` binds capture.now_iso
+    now_iso,
+    pair_provenance,
+    policy_digest,
+    repo_provenance,
+)
 
 
 def new_capture_id() -> str:
@@ -41,6 +46,19 @@ def split_frontmatter_meta(text: str) -> tuple[dict, str]:
         return (meta or {}), body
     except Exception:
         return {}, text
+
+
+def _automation_of(meta: dict | None) -> int | None:
+    """The frontmatter `automation` level, or None if absent/not an int.
+
+    The one blog-shaped key stylebot already names generically — it is
+    `lib.is_human_authored`'s default field, and the pair record needs to say
+    what the selector was looking at, because the post is editable and the
+    corpus is frozen. A caller selecting on some other field gets None here
+    rather than a number that means something else.
+    """
+    value = (meta or {}).get("automation")
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 # ---- Paragraph-level diffing ----
@@ -185,14 +203,22 @@ def build_pair_record(
     chunk_total: int,
     context: str = "",
     extra_meta: dict | None = None,
+    provenance: dict | None = None,
 ) -> dict:
     """Build a chat-completion JSONL record from pre-stripped body strings.
 
     A non-empty `context` is prepended *verbatim and identically* to both message
     bodies. `before_chars`/`after_chars` still count the BODY only, so adding
     context does not change the recorded transform-region size.
+
+    `provenance` is the caller's `provenance.pair_provenance(...)` dict — which
+    trees and which cut policy produced the record. Omitted rather than
+    null-filled when the caller has none, so an unstamped record stays
+    distinguishable from one whose producer could not answer.
     """
     meta: dict = {
+        "schema_version": PAIR_SCHEMA_VERSION,
+        "system_sha": system_sha(),
         "source": source,
         "captured_at": now_iso(),
         "capture_id": capture_id,
@@ -212,6 +238,9 @@ def build_pair_record(
     if context:
         meta["context"] = context
         meta["context_mode"] = "immediate"
+
+    if provenance:
+        meta["provenance"] = provenance
 
     if extra_meta:
         meta.update(extra_meta)
@@ -255,6 +284,7 @@ def capture_pairs(
     coalesce_gap_paras: int = 0,
     coalesce_gap_chars: int = 0,
     max_chars: int | None = None,
+    blog_root: Path | str | None = None,
 ) -> list[dict]:
     """Strip frontmatter, diff, and append one or more pair records.
 
@@ -267,9 +297,30 @@ def capture_pairs(
     (`<pairs_dir>/captures/<capture_id>/`). The chunk records are a lossy VIEW —
     changed regions only, no document offsets — so the archive is what lets the
     corpus be re-cut at other chunk scales later without re-capturing.
+
+    Every record carries `meta.provenance` (`blog_root` defaults to the git
+    work-tree holding the corpus). A capture's "policy" is its cut knobs — the
+    coalesce gaps and the size cap — a different shape from a synthetic pair's
+    `ChunkPolicy`, so the two producers' `policy_digest`s are comparable within
+    a producer and not across one. `source_automation` is read from the AFTER
+    frontmatter: what the file said at the moment it was captured.
     """
     before_meta, before_body = split_frontmatter_meta(before_text)
     after_meta, after_body = split_frontmatter_meta(after_text)
+    provenance = pair_provenance(
+        repo_provenance(blog_root if blog_root is not None else pairs_path.parent),
+        policy_digest=policy_digest(
+            {
+                "producer": "capture",
+                "whole": whole,
+                "heading_context": heading_context,
+                "gap_paras": coalesce_gap_paras,
+                "gap_chars": coalesce_gap_chars,
+                "max_chars": max_chars,
+            }
+        ),
+        source_automation=_automation_of(after_meta) or _automation_of(before_meta),
+    )
 
     if whole:
         # A whole-file pair spans many headings, so no single one applies.
@@ -315,6 +366,7 @@ def capture_pairs(
             chunk_total=total,
             context=context,
             extra_meta=extra_meta,
+            provenance=provenance,
         )
         append_jsonl(pairs_path, record)
         written.append(record)
@@ -452,6 +504,7 @@ def recut_archives(
     min_chars: int = 0,
     max_similarity: float | None = None,
     dry_run: bool = False,
+    blog_root: Path | str | None = None,
 ) -> list[dict]:
     """Re-derive real pairs from the capture archives at a new cut policy.
 
@@ -475,6 +528,12 @@ def recut_archives(
         policy["min_chars"] = min_chars
     if max_similarity is not None:
         policy["max_similarity"] = max_similarity
+    # The re-cut's own trees. `meta.recut` already records the gap policy in
+    # full and `record_id` folds it into the key, so the digest here is the same
+    # policy under the one name every producer answers to.
+    repo_prov = repo_provenance(blog_root if blog_root is not None else pairs_path.parent)
+    recut_digest = policy_digest({"producer": "capture-recut", **policy,
+                                  "heading_context": heading_context, "max_chars": max_chars})
     records: list[dict] = []
     recut_ids: set[str] = set()
 
@@ -482,8 +541,8 @@ def recut_archives(
         cap_id = arch.get("capture_id")
         if not cap_id or arch.get("whole"):
             continue  # whole-file captures are already unchunked
-        _, before_body = split_frontmatter_meta(arch.get("before_text") or "")
-        _, after_body = split_frontmatter_meta(arch.get("after_text") or "")
+        before_meta, before_body = split_frontmatter_meta(arch.get("before_text") or "")
+        after_meta, after_body = split_frontmatter_meta(arch.get("after_text") or "")
         triples = diff_chunks(
             before_body,
             after_body,
@@ -521,6 +580,12 @@ def recut_archives(
                     chunk_total=len(triples),
                     context=context,
                     extra_meta={"recut": policy},
+                    provenance=pair_provenance(
+                        repo_prov,
+                        policy_digest=recut_digest,
+                        source_automation=_automation_of(after_meta)
+                        or _automation_of(before_meta),
+                    ),
                 )
             )
 

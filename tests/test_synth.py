@@ -859,3 +859,158 @@ def test_is_anchor_faithful_selects_over_an_existing_corpus(tmp_path):
     assert all(r["meta"]["generator"] == "keeps-links" for r in kept)
     # The name lands in the training manifest, which a lambda could not do.
     assert infer.is_anchor_faithful.__name__ == "is_anchor_faithful"
+
+
+# --- the record contract: provenance and one-record-per-cell ------------------
+
+
+def test_written_records_carry_the_five_provenance_keys(tmp_path, make_blog):
+    """W8: every record written after 2026-09 says which trees and which cut
+    produced it, and what the source frontmatter said AT THAT MOMENT."""
+    import json
+
+    from stylebot.pairs import PAIR_SCHEMA_VERSION, system_sha
+    from stylebot.provenance import PROVENANCE_KEYS, policy_digest
+    from stylebot.targets import ChunkPolicy
+
+    root = make_blog(ai=False)
+    data_dir = tmp_path / "corpus"
+    policy = ChunkPolicy(merge=True, merge_max_chars=1500)
+    targets = synth.iter_targets(blog_root=root, policy=policy)
+    synth.synthesize_pairs(targets, data_dir, [_fake("g")], blog_root=root)
+
+    recs = [
+        json.loads(line)
+        for line in (data_dir / "pairs.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert recs
+    for r in recs:
+        meta = r["meta"]
+        assert meta["schema_version"] == PAIR_SCHEMA_VERSION
+        assert meta["system_sha"] == system_sha()
+        prov = meta["provenance"]
+        assert sorted(prov) == sorted(PROVENANCE_KEYS)
+        # The blog fixture is not a git checkout, so the tree fields degrade to
+        # null rather than raising — but the policy and the selector's view of
+        # the post are always answerable.
+        assert prov["policy_digest"] == policy_digest(policy)
+        assert prov["source_automation"] == 0
+
+
+def test_provenance_records_a_higher_automation_level_it_was_handed(tmp_path, make_blog):
+    """The 75 pairs sitting on `automation: 2` posts had nothing recording that.
+    A pre-selected FILES list bypasses the selector by design, so the record is
+    the only place the level can be caught."""
+    import json
+
+    root = make_blog()  # includes the AI-touched post the default selector drops
+    ai_post = root / "post" / "ai.qmd"
+    data_dir = tmp_path / "corpus"
+    targets = synth.iter_targets(files=[ai_post])
+    assert targets
+    synth.synthesize_pairs(targets, data_dir, [_fake("g")])
+
+    recs = [
+        json.loads(line)
+        for line in (data_dir / "pairs.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    levels = {r["meta"]["provenance"]["source_automation"] for r in recs}
+    assert levels == {2}
+
+
+def test_a_cell_claimed_mid_run_by_another_writer_is_not_duplicated(tmp_path, make_blog):
+    """The 2026-08-12 defect, deterministically: `synthesize_pairs` plans against
+    the keys it read at startup, so a second process appending the same cell
+    between plan and write used to produce two records with one `record_id`.
+
+    Injected through the generator rather than a real race, so the interleaving
+    is exact rather than hoped for."""
+    import json
+
+    from stylebot.jsonl import append_jsonl
+    from stylebot.pairs import validate_pairs_file
+
+    root = make_blog(ai=False)
+    data_dir = tmp_path / "corpus"
+    data_dir.mkdir()
+    pairs_path = data_dir / "pairs.jsonl"
+    targets = synth.iter_targets(blog_root=root)
+    assert len(targets) >= 2
+
+    # Plan the run once so we know the keys the "other process" would write.
+    plan = synth.synthesize_pairs(targets, data_dir, [_fake("g")], dry_run=True)
+    assert plan.planned == len(targets)
+
+    competitor: dict[str, dict] = {}
+
+    def _rival_then_slop(text: str) -> str:
+        """Impersonate a concurrent run: append the record for this cell first."""
+        for t in targets:
+            if t.text == text:
+                key = synth._synth_key("g", t.text, t.context)
+                rec = synth._build_record(
+                    slop=f"[rival] {text}",
+                    target=t,
+                    generator_name="g",
+                    synth_key=key,
+                    context=t.context,
+                )
+                append_jsonl(pairs_path, rec)
+                competitor[key] = rec
+                break
+        return f"[g-slop] {text}"
+
+    result = synth.synthesize_pairs(
+        targets, data_dir, [synth.Generator(name="g", generate=_rival_then_slop)]
+    )
+
+    recs = [json.loads(line) for line in pairs_path.read_text().splitlines() if line.strip()]
+    assert len(recs) == len(targets), "one record per cell, whoever wrote it"
+    assert result.written == 0 and result.skipped_existing == len(targets)
+    # The rival's draw is the one on disk — first writer wins, as `record_id`
+    # consumers already assume.
+    assert all(r["messages"][1]["content"].startswith("[rival]") for r in recs)
+    assert validate_pairs_file(pairs_path) == []
+
+
+def test_two_concurrent_synth_runs_write_one_record_per_cell(tmp_path, make_blog):
+    """The same defect through real threads and two open handles. `flock` is per
+    open-file-description, so two handles in one process contend exactly as two
+    processes do."""
+    import json
+    import threading
+
+    from stylebot.pairs import validate_pairs_file
+
+    root = make_blog(ai=False)
+    data_dir = tmp_path / "corpus"
+    targets = synth.iter_targets(blog_root=root)
+    barrier = threading.Barrier(2)
+
+    def _slow(text: str) -> str:
+        # Widen the plan->write window both runs are racing inside.
+        barrier.wait(timeout=10)
+        return f"[g-slop] {text}"
+
+    def _run(out: list):
+        out.append(
+            synth.synthesize_pairs(
+                targets, data_dir, [synth.Generator(name="g", generate=_slow)]
+            )
+        )
+
+    results: list = []
+    threads = [threading.Thread(target=_run, args=(results,)) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    pairs_path = data_dir / "pairs.jsonl"
+    recs = [json.loads(line) for line in pairs_path.read_text().splitlines() if line.strip()]
+    keys = [r["meta"]["synth_key"] for r in recs]
+    assert len(keys) == len(set(keys)) == len(targets)
+    assert sum(r.written for r in results) == len(targets)
+    assert validate_pairs_file(pairs_path) == []

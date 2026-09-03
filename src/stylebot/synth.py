@@ -20,9 +20,11 @@ import asyncio
 import difflib
 import hashlib
 import inspect
+import json
 import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,8 +37,8 @@ from stylebot.generators import (
 )
 from stylebot.infer import invented_anchors
 from stylebot.jsonl import append_jsonl, dumps_line, iter_jsonl
-from stylebot.pairs import build_pair_content, iter_pairs
-from stylebot.provenance import now_iso
+from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content, iter_pairs, system_sha
+from stylebot.provenance import now_iso, pair_provenance, repo_provenance
 from stylebot.targets import Target
 
 logger = logging.getLogger(__name__)
@@ -251,8 +253,11 @@ def _build_record(
     context: str = "",
     extra_tags: Sequence[str] = (),
     gen_meta: dict | None = None,
+    repo_prov: Mapping | None = None,
 ) -> dict:
     meta = {
+        "schema_version": PAIR_SCHEMA_VERSION,
+        "system_sha": system_sha(),
         "source": target.source,
         "captured_at": now_iso(),
         "capture_id": _capture_id(target.source, generator_name, strategy),
@@ -270,6 +275,18 @@ def _build_record(
         "slop_strategy": strategy,
         "synth_key": synth_key,
         "tags": ["synthetic", "paraphrase", *extra_tags],
+        # Which trees and which cut produced this pair. The chunk policy arrives
+        # ON THE TARGET (`iter_targets` digests whatever `ChunkPolicy` it was
+        # handed) rather than as a parameter here, so the stamp tracks the real
+        # composed policy without `synthesize_pairs` having to be told about it
+        # — and keeps tracking it once the blog composes that policy in one
+        # place. `synth_key` deliberately does NOT fold any of this in: resume
+        # must not restart because the tree moved a commit.
+        "provenance": pair_provenance(
+            repo_prov,
+            policy_digest=target.policy_digest,
+            source_automation=target.automation,
+        ),
     }
     if context:
         # Identical heading prefix on both sides: the styler restyles the body
@@ -535,6 +552,106 @@ class _RunState:
     done: int = 0
     on_progress: Callable[[int, int, SynthResult], None] | None = None
     on_error: Callable[[str, str], None] | None = None
+    repo_prov: Mapping | None = None  # tree provenance, resolved once per run
+    # The synth_keys actually ON DISK, handed to `PairsWriter`. Deliberately
+    # NOT the planner's `seen`, which additionally holds every cell this run
+    # PLANS to write — feeding that to the writer would make it refuse its own
+    # first write of every cell.
+    disk_keys: set[str] = field(default_factory=set)
+
+
+class PairsWriter:
+    """An append handle for `pairs.jsonl` that will not duplicate a cell.
+
+    **The defect this exists for.** `synthesize_pairs` loads
+    `existing_synth_keys` once, plans, and appends with a bare `fp.write`. Two
+    runs against the same corpus each read the file before the other wrote to
+    it, so every cell both planned got written twice: 21 duplicate `record_id`s
+    reached the live corpus on 2026-08-12, from two budgets run concurrently.
+    Nothing downstream tolerates that — eval and rewrite resume on `record_id`,
+    score the first copy and skip the second, while training takes both, so the
+    pair silently gets double weight and a score measured on the other draw.
+
+    So every append is guarded by an exclusive `flock` on the file, and inside
+    that lock the writer catches up on **whatever was appended since it last
+    looked** before deciding. The catch-up is a tail read from a byte offset,
+    not a re-read of the corpus: re-reading 38 MB per record would be
+    quadratic, which is why "re-read `seen` before each write" is not on its own
+    an implementable instruction.
+
+    `flock` is advisory and per open-file-description, so it serialises two
+    processes *and* two handles in one process, and costs nothing when there is
+    only one writer. Platforms without `fcntl` (Windows) degrade to the
+    unlocked-but-still-tail-checking path rather than failing to write.
+    """
+
+    def __init__(self, path: Path, seen: set[str]) -> None:
+        self._path = Path(path)
+        self._seen = seen
+        self._offset = 0
+        self._fp = None
+
+    def __enter__(self) -> PairsWriter:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        # BINARY "ab+", not text mode, for two reasons that both bite silently:
+        # a text handle raises on `tell()` after line iteration, and its `seek`
+        # takes an opaque cookie rather than a byte offset. Encoding one JSON
+        # line by hand is the cheaper half of that trade.
+        self._fp = self._path.open("ab+")
+        self._fp.seek(0, 2)
+        self._offset = self._fp.tell()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self._fp is not None:
+            self._fp.close()
+            self._fp = None
+
+    def _catch_up(self) -> None:
+        """Fold every synth_key appended by anyone since our last look into `seen`."""
+        fp = self._fp
+        fp.seek(self._offset)
+        tail = fp.read()
+        self._offset = fp.tell()
+        for raw in tail.split(b"\n"):
+            if not raw.strip():
+                continue
+            try:
+                rec = json.loads(raw.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            key = (rec.get("meta") or {}).get("synth_key") if isinstance(rec, dict) else None
+            if key:
+                self._seen.add(key)
+
+    def write(self, key: str, record: dict) -> bool:
+        """Append `record` unless `key` is already in the file. True if written."""
+        fp = self._fp
+        with _flock(fp):
+            self._catch_up()
+            if key and key in self._seen:
+                return False
+            fp.write((dumps_line(record) + "\n").encode("utf-8"))
+            fp.flush()
+            self._offset = fp.tell()
+            if key:
+                self._seen.add(key)
+        return True
+
+
+@contextmanager
+def _flock(fp):
+    """Exclusive advisory lock on `fp` for the block, a no-op without `fcntl`."""
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover — non-POSIX
+        yield
+        return
+    fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+    try:
+        yield
+    finally:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
 
 
 def _session_token_cap(
@@ -890,7 +1007,7 @@ async def _draw_past_gates(
     return slop, gen_meta, verdict, redraws, call
 
 
-async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
+async def _run_session(sess: _Session, writer: PairsWriter, st: _RunState) -> list[_Turn]:
     """Run one session's turns in order, appending records as they complete.
 
     Returns the turns this session could NOT run, for the caller to reflow into a
@@ -981,6 +1098,7 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             context=turn.context,
             extra_tags=st.extra_tags,
             gen_meta=gen_meta,
+            repo_prov=st.repo_prov,
         )
         if verdict is not None:
             # Count loudly, record the spend, write nothing — the cell stays
@@ -995,12 +1113,16 @@ async def _run_session(sess: _Session, fp, st: _RunState) -> list[_Turn]:
             # perfectly fluent draw that merely deleted a link, and calling that
             # degenerate sent readers looking for the wrong defect.
             logger.warning("gate dropped a draw: %s — %s (%s)", gen.name, reason, turn.key)
-        else:
-            fp.write(dumps_line(record) + "\n")
-            fp.flush()
+        elif writer.write(turn.key, record):
             st.result.written += 1
             st.result.per_generator[gen.name] = st.result.per_generator.get(gen.name, 0) + 1
             st.result.add_gen_stats(gen.name, gen_meta)
+        else:
+            # Another writer claimed this cell between our plan and our write.
+            # The draw is paid for and discarded rather than appended: one cell,
+            # one record, whoever got there first (`PairsWriter`).
+            st.result.skipped_existing += 1
+            logger.info("cell already written by a concurrent run: %s", turn.key)
         st.done += 1
         if st.on_progress is not None:
             st.on_progress(st.done, st.total, st.result)
@@ -1024,17 +1146,17 @@ async def _run_sessions(
     """
     sem = asyncio.Semaphore(max(1, max_workers))
 
-    async def _gated(sess: _Session, fp) -> None:
+    async def _gated(sess: _Session, writer: PairsWriter) -> None:
         async with sem:
-            leftover = await _run_session(sess, fp, st)
+            leftover = await _run_session(sess, writer, st)
             while leftover:
                 st.result.reflow_sessions += 1
                 st.result.reflowed_turns += len(leftover)
                 sess = _respin_session(sess.generator, leftover)
-                leftover = await _run_session(sess, fp, st)
+                leftover = await _run_session(sess, writer, st)
 
-    with pairs_path.open("a", encoding="utf-8") as fp:
-        await asyncio.gather(*(_gated(s, fp) for s in sessions))
+    with PairsWriter(pairs_path, st.disk_keys) as writer:
+        await asyncio.gather(*(_gated(s, writer) for s in sessions))
 
 
 def synthesize_pairs(
@@ -1060,6 +1182,7 @@ def synthesize_pairs(
     drop_invented_anchors: bool = True,
     gate_retries: int = 0,
     gen_retries: int = DEFAULT_GEN_RETRIES,
+    blog_root: Path | str | None = None,
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
@@ -1106,6 +1229,14 @@ def synthesize_pairs(
     `context_dropout` keeps a deterministic fraction heading-less. `dry_run`
     plans and counts without calling any generator or writing, so generators may
     be name-only `Generator(name, generate=None)` stubs.
+
+    **Provenance** (`meta.provenance`) is resolved ONCE per run and stamped on
+    every record: `blog_root` names the prose repo whose SHA and dirty flag go
+    on the pair, defaulting to the git work-tree containing `data_dir` — which
+    is the blog, in the only deployment there is, since that is where the corpus
+    is committed. The chunk policy and the source post's `automation` level ride
+    in on the `Target`s (`targets._post_targets` stamps them at cut time), so
+    the record says what the frontmatter *said then*, not what it says now.
     """
     data_dir = Path(data_dir)
     pairs_path = data_dir / "pairs.jsonl"
@@ -1133,7 +1264,8 @@ def synthesize_pairs(
 
     # Key everything, drop what the corpus already has plus in-run duplicates,
     # then plan sessions over only the missing cells.
-    seen = existing_synth_keys(pairs_path)
+    disk_keys = existing_synth_keys(pairs_path)
+    seen = set(disk_keys)
     missing: list[tuple[Target, Generator, str, str]] = []
     for target, gen, ctx in assignments:
         key = _synth_key(
@@ -1176,6 +1308,8 @@ def synthesize_pairs(
         replicate=replicate,
         on_progress=on_progress,
         on_error=on_error,
+        repo_prov=repo_provenance(blog_root if blog_root is not None else data_dir),
+        disk_keys=disk_keys,
     )
     asyncio.run(_run_sessions(sessions, pairs_path, st, max_workers))
     return result

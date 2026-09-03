@@ -139,3 +139,191 @@ def test_gen_facet_keys_are_a_subset_of_recorded_keys():
 
     unknown = set(GEN_FACET_KEYS) - set(GEN_META_KEYS) - set(GEN_SESSION_KEYS)
     assert not unknown, f"facet keys nothing records: {sorted(unknown)}"
+
+
+# --- meta types and domains ---------------------------------------------------
+
+
+def test_pre_provenance_record_still_validates():
+    """The 8,265 records written before 2026-09 carry no schema_version, no
+    system_sha and no provenance. Adding the keys must not invalidate them —
+    absence is the version-0 tell, not an error."""
+    rec = _good_record()
+    assert "schema_version" not in rec["meta"]
+    assert validate_pair_record(rec) == []
+
+
+def test_meta_type_violations_flagged():
+    for key, bad in (
+        ("chunk_index", "0"),
+        ("chunk_total", None),
+        ("transform_sim", "0.5"),
+        ("tags", "synthetic"),
+        ("synthetic", 1),
+        ("gen", []),
+    ):
+        rec = _good_record()
+        rec["meta"][key] = bad
+        errs = validate_pair_record(rec)
+        assert any(f"meta.{key}" in e for e in errs), f"{key}={bad!r} passed validation"
+
+
+def test_meta_domain_violations_flagged():
+    for key, bad in (
+        ("chunk_index", -1),
+        ("chunk_total", 0),
+        ("transform_sim", 1.5),
+        ("context_mode", "breadcrumb"),
+        ("chunk_mode", "section"),
+        ("schema_version", 0),
+    ):
+        rec = _good_record()
+        rec["meta"][key] = bad
+        assert any(f"meta.{key}" in e for e in validate_pair_record(rec)), f"{key}={bad!r} passed"
+
+
+def test_chunk_index_past_chunk_total_flagged():
+    rec = _good_record()
+    rec["meta"]["chunk_index"] = 3
+    rec["meta"]["chunk_total"] = 2
+    assert any("chunk_index" in e for e in validate_pair_record(rec))
+
+
+def test_bool_does_not_satisfy_an_int_field():
+    # bool is an int subclass, so a naive isinstance check would let True
+    # through as a chunk index.
+    rec = _good_record()
+    rec["meta"]["chunk_index"] = True
+    assert any("chunk_index" in e for e in validate_pair_record(rec))
+
+
+def test_system_sha_must_match_the_frozen_prompt():
+    from stylebot.pairs import PAIR_SCHEMA_VERSION, system_sha
+
+    rec = _good_record()
+    rec["meta"]["schema_version"] = PAIR_SCHEMA_VERSION
+    rec["meta"]["system_sha"] = system_sha()
+    assert validate_pair_record(rec) == []
+    rec["meta"]["system_sha"] = "0" * 16
+    assert any("system_sha" in e for e in validate_pair_record(rec))
+
+
+def test_provenance_shape_is_checked():
+    from stylebot.provenance import PROVENANCE_KEYS, pair_provenance
+
+    rec = _good_record()
+    rec["meta"]["provenance"] = pair_provenance(
+        {"blog_sha": "abc1234", "blog_dirty": False, "stylebot_sha": "def5678"},
+        policy_digest="0123456789ab",
+        source_automation=0,
+    )
+    assert sorted(rec["meta"]["provenance"]) == sorted(PROVENANCE_KEYS)
+    assert validate_pair_record(rec) == []
+
+    del rec["meta"]["provenance"]["policy_digest"]
+    assert any("provenance missing" in e for e in validate_pair_record(rec))
+
+    rec["meta"]["provenance"]["policy_digest"] = 7
+    assert any("provenance.policy_digest" in e for e in validate_pair_record(rec))
+
+
+# --- record_id uniqueness, and the fix ---------------------------------------
+
+
+def _synth_record(key: str, slop: str = "It is worth noting the tapestry."):
+    rec = _good_record()
+    rec["messages"][1]["content"] = slop
+    rec["meta"]["synth_key"] = key
+    rec["meta"]["synthetic"] = True
+    return rec
+
+
+def test_duplicate_record_id_is_reported_against_the_later_line(tmp_path):
+    p = tmp_path / "pairs.jsonl"
+    p.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in (
+                _synth_record("aaa", "first draw"),
+                _synth_record("bbb"),
+                _synth_record("aaa", "second draw, same cell"),
+            )
+        )
+        + "\n"
+    )
+    problems = validate_pairs_file(p)
+    assert [ln for ln, _ in problems] == [3]
+    assert any("duplicate record_id 'aaa'" in e for e in problems[0][1])
+    assert any("first seen line 1" in e for e in problems[0][1])
+    # A shard is legitimately a partial view of the id space.
+    assert validate_pairs_file(p, check_duplicates=False) == []
+
+
+def test_dedupe_keeps_the_first_draw(tmp_path):
+    from stylebot.pairs import dedupe_pairs_file, iter_pairs
+
+    p = tmp_path / "pairs.jsonl"
+    p.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in (
+                _synth_record("aaa", "first draw"),
+                _synth_record("bbb"),
+                _synth_record("aaa", "second draw"),
+            )
+        )
+        + "\n"
+    )
+    dry = dedupe_pairs_file(p)
+    assert (dry.total, dry.dropped, dry.kept, dry.duplicate_ids) == (3, 1, 2, 1)
+    assert dry.drops == [("aaa", 3, 1)]
+    assert not dry.applied
+    assert len(p.read_text().splitlines()) == 3  # dry run wrote nothing
+
+    report = dedupe_pairs_file(p, apply=True)
+    assert report.applied and report.dropped == 1
+    assert report.backup is not None and report.backup.exists()
+    bodies = [r["messages"][1]["content"] for r in iter_pairs(p)]
+    # The FIRST draw survives: it is the one committed scores already join to.
+    assert bodies == ["first draw", "It is worth noting the tapestry."]
+    assert validate_pairs_file(p) == []
+
+
+def test_dedupe_is_a_no_op_on_a_clean_file(tmp_path):
+    from stylebot.pairs import dedupe_pairs_file
+
+    p = tmp_path / "pairs.jsonl"
+    p.write_text(json.dumps(_synth_record("aaa")) + "\n")
+    before = p.read_bytes()
+    report = dedupe_pairs_file(p, apply=True)
+    assert (report.dropped, report.applied) == (0, False)
+    assert p.read_bytes() == before
+    assert not (tmp_path / "pairs.jsonl.bak").exists()
+
+
+# --- the CLI shell ------------------------------------------------------------
+
+
+def test_validate_pairs_cli_reports_and_fixes(tmp_path):
+    from click.testing import CliRunner
+
+    from stylebot.bin.ai_style import main
+
+    p = tmp_path / "pairs.jsonl"
+    p.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in (_synth_record("aaa", "first"), _synth_record("aaa", "second"))
+        )
+        + "\n"
+    )
+    runner = CliRunner()
+    result = runner.invoke(main, ["validate-pairs", str(p)])
+    assert result.exit_code == 1
+    assert "1 duplicate record_id" in result.output
+
+    result = runner.invoke(main, ["validate-pairs", str(p), "--fix", "--no-backup"])
+    assert result.exit_code == 0, result.output
+    assert "dropped 1 of 2" in result.output
+    assert not (tmp_path / "pairs.jsonl.bak").exists()
+    assert runner.invoke(main, ["validate-pairs", str(p)]).exit_code == 0

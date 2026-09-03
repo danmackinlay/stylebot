@@ -30,6 +30,7 @@ from stylebot.lib import (
     split_paragraphs,
 )
 from stylebot.markdown import DivIsProse, heading_title, is_heading_line
+from stylebot.provenance import policy_digest
 from stylebot.splits import ROLES, role_of, unit_from_digest
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,15 @@ class Target:
     # "cross-heading" = heading lines packed in as content, spanning sections.
     merge_max_chars: int | None = None
     chunk_mode: str | None = None
+    # Provenance carried from the cut, stamped into `meta.provenance` by
+    # `synth._build_record`. `automation` is the source post's frontmatter level
+    # AS READ AT CUT TIME — the corpus is a frozen record and the post is not, so
+    # nothing else can recover what the selector was looking at. (The key name is
+    # the one `lib.is_human_authored` defaults to; a caller selecting on another
+    # field gets None here rather than a wrong number.) `policy_digest` is
+    # `provenance.policy_digest` of the `ChunkPolicy` this target was cut under.
+    automation: int | None = None
+    policy_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -350,13 +360,19 @@ def _pack_paragraphs(paras: Sequence[str], *, merge_max_chars: int) -> list[str]
     return blocks
 
 
-def _post_targets(body: str, source: str, policy: ChunkPolicy) -> list[Target]:
+def _post_targets(
+    body: str, source: str, policy: ChunkPolicy, *, meta: dict | None = None
+) -> list[Target]:
     """Chunk one post's **already-loaded** body into targets.
 
     Takes the body rather than a path so every caller loads and YAML-parses a
     post exactly once: the `blog_root` walk needs the frontmatter for its
     `selector`, and re-reading here would parse the same file twice (and warn
     twice about an unparseable one).
+
+    `meta` is that same frontmatter, carried onto each `Target` (see
+    `Target.automation`) so the pair record can say what the selector was
+    looking at when the target was cut.
     """
     # Cut trailing dump sections (e.g. "## Incoming") before anything else.
     body = _truncate_at_headers(body, policy.stop_at_headers)
@@ -415,6 +431,8 @@ def _post_targets(body: str, source: str, policy: ChunkPolicy) -> list[Target]:
     total = len(chunks)
     scale = policy.merge_max_chars if policy.merge else None
     mode = "cross-heading" if cross else None
+    automation = (meta or {}).get("automation")
+    digest = policy_digest(policy)
     return [
         Target(
             text=t,
@@ -424,6 +442,8 @@ def _post_targets(body: str, source: str, policy: ChunkPolicy) -> list[Target]:
             context=c,
             merge_max_chars=scale,
             chunk_mode=mode,
+            automation=automation if isinstance(automation, int) else None,
+            policy_digest=digest,
         )
         for i, (t, c) in enumerate(chunks)
     ]
@@ -521,14 +541,14 @@ def iter_targets(
             path = Path(f)
             if not path.is_file():
                 continue
-            _, body = _load_meta_body(path)
-            targets.extend(_post_targets(body, _source_label(path, root), policy))
+            meta, body = _load_meta_body(path)
+            targets.extend(_post_targets(body, _source_label(path, root), policy, meta=meta))
     else:
         for path in gather_qmd_files([], base=root, default_glob=glob):
             meta, body = _load_meta_body(path)
             if not selector(meta):
                 continue
-            targets.extend(_post_targets(body, _source_label(path, root), policy))
+            targets.extend(_post_targets(body, _source_label(path, root), policy, meta=meta))
 
     if sort_key is not None:
         targets.sort(key=sort_key)

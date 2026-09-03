@@ -14,10 +14,25 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 from stylebot.ai_core import STYLE_SYSTEM
-from stylebot.jsonl import iter_jsonl
+from stylebot.jsonl import iter_jsonl, read_jsonl, write_jsonl_atomic
+from stylebot.provenance import PROVENANCE_KEYS
+
+#: The `meta.schema_version` stamped on every record written from now on.
+#:
+#: 1 is the shape as it stood on 2026-09-03: the message triple, the required
+#: meta keys below, and `meta.provenance`. The four earlier shape changes went
+#: unversioned, which is why nothing downstream can tell a pre-provenance record
+#: from a producer that failed to stamp one — records with NO `schema_version`
+#: are exactly the pre-2026-09 corpus, and that is the version-0 tell.
+#:
+#: Bump only for a change a consumer must branch on. Adding an optional meta key
+#: is not one; changing what an existing key MEANS is.
+PAIR_SCHEMA_VERSION = 1
 
 # meta keys every well-formed pair record carries (chunk 0 additionally may
 # carry before_frontmatter/after_frontmatter; tags/synthetic/generator are
@@ -110,6 +125,20 @@ GEN_FACET_KEYS = (
     "provider",
     "finish_reason",
 )
+
+
+@lru_cache(maxsize=1)
+def system_sha() -> str:
+    """16-hex digest of the frozen `STYLE_SYSTEM`, stamped as `meta.system_sha`.
+
+    `validate_pair_record` already refuses a record whose system message is not
+    the frozen prompt, so this is not a second check of the same thing: it is
+    what a *derived* artifact — a scores row, a run manifest, a training shard
+    that dropped `messages[0]` — can carry to say which prompt the pairs behind
+    it were built against. Stamping it on the record is what makes that
+    transitive claim checkable.
+    """
+    return hashlib.sha256(STYLE_SYSTEM.encode("utf-8")).hexdigest()[:16]
 
 
 def build_pair_content(context: str, body: str) -> str:
@@ -229,12 +258,132 @@ def record_id(record: dict) -> str:
     return h.hexdigest()[:16]
 
 
+# --- meta types and domains --------------------------------------------------
+# Key -> (accepted types, optional predicate, predicate description). Checked
+# only when the key is PRESENT, so this list may name keys older records never
+# carried; `REQUIRED_META_KEYS` above is the separate question of which must be
+# there at all. Anything absent from this table is unvalidated by design — the
+# schema is open (a caller's `extra_meta` lands in the same dict), and a closed
+# whitelist here would make every experiment's covariate a validation failure.
+#
+# NoneType is accepted where a producer legitimately writes null: `source` is
+# None for a hand-fed string, `merge_max_chars` for an unmerged chunk.
+_NoneType = type(None)
+_META_TYPES: dict[str, tuple] = {
+    "source": (str, _NoneType),
+    "captured_at": (str,),
+    "capture_id": (str,),
+    "chunk_index": (int,),
+    "chunk_total": (int,),
+    "before_chars": (int,),
+    "after_chars": (int,),
+    "transform_sim": (int, float),
+    "context": (str,),
+    "context_mode": (str,),
+    "snapped_at": (str, _NoneType),
+    "merge_max_chars": (int, _NoneType),
+    "chunk_mode": (str, _NoneType),
+    "synthetic": (bool,),
+    "generator": (str,),
+    "slop_strategy": (str,),
+    "synth_key": (str,),
+    "tags": (list,),
+    "gen": (dict,),
+    "recut": (dict,),
+    "before_frontmatter": (dict,),
+    "after_frontmatter": (dict,),
+    "schema_version": (int,),
+    "system_sha": (str,),
+    "provenance": (dict,),
+}
+_META_DOMAINS: dict[str, tuple[Callable[[object], bool], str]] = {
+    "chunk_index": (lambda v: v >= 0, "must be >= 0"),
+    "chunk_total": (lambda v: v >= 1, "must be >= 1"),
+    "before_chars": (lambda v: v >= 0, "must be >= 0"),
+    "after_chars": (lambda v: v >= 0, "must be >= 0"),
+    "transform_sim": (lambda v: 0.0 <= v <= 1.0, "must be in [0, 1]"),
+    "context_mode": (lambda v: v == "immediate", "must be 'immediate'"),
+    "chunk_mode": (lambda v: v in (None, "cross-heading"), "must be null or 'cross-heading'"),
+    "schema_version": (lambda v: v >= 1, "must be >= 1"),
+    "merge_max_chars": (lambda v: v is None or v > 0, "must be null or > 0"),
+}
+_PROVENANCE_TYPES: dict[str, tuple] = {
+    "blog_sha": (str, _NoneType),
+    "blog_dirty": (bool, _NoneType),
+    "stylebot_sha": (str, _NoneType),
+    "policy_digest": (str, _NoneType),
+    "source_automation": (int, _NoneType),
+}
+
+
+def _type_name(types: tuple) -> str:
+    return " | ".join("null" if t is _NoneType else t.__name__ for t in types)
+
+
+def _check_meta_types(meta: dict) -> list[str]:
+    errors: list[str] = []
+    for key, types in _META_TYPES.items():
+        if key not in meta:
+            continue
+        value = meta[key]
+        # bool is an int subclass; an int-typed key must not silently take True.
+        if bool in types:
+            ok = isinstance(value, types)
+        else:
+            ok = isinstance(value, types) and not (int in types and isinstance(value, bool))
+        if not ok:
+            errors.append(f"meta.{key} must be {_type_name(types)}, got {type(value).__name__}")
+            continue
+        domain = _META_DOMAINS.get(key)
+        if domain is not None and not domain[0](value):
+            errors.append(f"meta.{key} {domain[1]}, got {value!r}")
+    if isinstance(meta.get("tags"), list) and not all(isinstance(t, str) for t in meta["tags"]):
+        errors.append("meta.tags must be a list of strings")
+    idx, total = meta.get("chunk_index"), meta.get("chunk_total")
+    if (
+        isinstance(idx, int)
+        and not isinstance(idx, bool)
+        and isinstance(total, int)
+        and idx >= total
+    ):
+        errors.append(f"meta.chunk_index {idx} must be < meta.chunk_total {total}")
+    if isinstance(meta.get("system_sha"), str) and meta["system_sha"] != system_sha():
+        errors.append(
+            "meta.system_sha does not match the frozen STYLE_SYSTEM "
+            f"(record {meta['system_sha']}, current {system_sha()})"
+        )
+    prov = meta.get("provenance")
+    if isinstance(prov, dict):
+        missing = [k for k in PROVENANCE_KEYS if k not in prov]
+        if missing:
+            errors.append(f"meta.provenance missing key(s) {missing}")
+        for key, types in _PROVENANCE_TYPES.items():
+            if key not in prov:
+                continue
+            value = prov[key]
+            ok = isinstance(value, types) and not (
+                bool not in types and isinstance(value, bool) and int in types
+            )
+            if not ok:
+                errors.append(
+                    f"meta.provenance.{key} must be {_type_name(types)}, "
+                    f"got {type(value).__name__}"
+                )
+    return errors
+
+
 def validate_pair_record(rec: object) -> list[str]:
     """Return a list of human-readable problems with one pair record.
 
     Empty list == valid. Checks the message triple (system/user/assistant),
     that the system prompt is the frozen `STYLE_SYSTEM`, that user/assistant
-    content is non-empty, and that the required `meta` keys are present.
+    content is non-empty, that the required `meta` keys are present, and that
+    every meta key it knows about carries the right type and a value in range.
+
+    **Per-record by construction, which is the limit worth naming**: nothing
+    here can see that two records share a `record_id`, and for two years nothing
+    did — 21 duplicate cells reached the live corpus. `validate_pairs_file` is
+    where that check lives.
     """
     errors: list[str] = []
 
@@ -266,6 +415,7 @@ def validate_pair_record(rec: object) -> list[str]:
         for key in REQUIRED_META_KEYS:
             if key not in meta:
                 errors.append(f"meta missing required key {key!r}")
+        errors.extend(_check_meta_types(meta))
 
         # Heading-context invariant: a declared meta.context must be the
         # verbatim prefix of BOTH the user and assistant content — added as
@@ -285,15 +435,29 @@ def validate_pair_record(rec: object) -> list[str]:
     return errors
 
 
-def validate_pairs_file(path: str | Path) -> list[tuple[int, list[str]]]:
-    """Validate every line of a `pairs.jsonl`.
+def validate_pairs_file(
+    path: str | Path, *, check_duplicates: bool = True
+) -> list[tuple[int, list[str]]]:
+    """Validate every line of a `pairs.jsonl`, and the file-level uniqueness rule.
 
     Returns a list of `(line_number, errors)` for each invalid line (1-based,
     skipping blank lines). An empty result means the whole file is valid.
     Unparseable JSON is reported as a single error for that line.
+
+    **`record_id` uniqueness is a property of the FILE, not of a record**, so it
+    is checked here and nowhere else. A repeat is reported against the *later*
+    line, because the earlier one is the copy every resuming consumer already
+    joined to: `eval.score_pairs_file` and `infer.rewrite_pairs_file` key on
+    `record_id`, score the first, and skip the second — so a duplicate is not a
+    harmless extra row, it is a training pair with double weight and no score of
+    its own. `dedupe_pairs_file` drops exactly the lines named here.
+
+    `check_duplicates=False` for a partial file (a shard, a `--limit` slice)
+    where the id space is legitimately shared with lines you are not looking at.
     """
     path = Path(path)
     problems: list[tuple[int, list[str]]] = []
+    first_seen: dict[str, int] = {}
     with path.open(encoding="utf-8") as fp:
         for lineno, line in enumerate(fp, start=1):
             line = line.rstrip("\n")
@@ -305,9 +469,78 @@ def validate_pairs_file(path: str | Path) -> list[tuple[int, list[str]]]:
                 problems.append((lineno, [f"invalid JSON: {exc}"]))
                 continue
             errs = validate_pair_record(rec)
+            if check_duplicates and isinstance(rec, dict) and isinstance(rec.get("meta"), dict):
+                rid = record_id(rec)
+                if rid in first_seen:
+                    errs.append(f"duplicate record_id {rid!r} (first seen line {first_seen[rid]})")
+                else:
+                    first_seen[rid] = lineno
             if errs:
                 problems.append((lineno, errs))
     return problems
+
+
+@dataclass
+class DedupeReport:
+    """What `dedupe_pairs_file` found (and, with `apply`, did)."""
+
+    total: int = 0
+    duplicate_ids: int = 0  # distinct record_ids appearing more than once
+    dropped: int = 0  # lines that would be / were removed
+    kept: int = 0
+    applied: bool = False
+    backup: Path | None = None
+    #: (record_id, position dropped, position kept), oldest first. Positions are
+    #: 1-based RECORD indices with blank lines skipped, which is the file's line
+    #: number for any corpus a producer wrote (nothing here emits blank lines).
+    drops: list[tuple[str, int, int]] = field(default_factory=list)
+
+
+def dedupe_pairs_file(
+    path: str | Path, *, apply: bool = False, backup: bool = True
+) -> DedupeReport:
+    """Drop every repeat of a `record_id`, keeping the FIRST occurrence.
+
+    **First, not best, and not newest** — the first is the one already joined to
+    by every committed `scores.jsonl` row and every resumable rewrite, so
+    keeping it leaves those artifacts valid while keeping any other copy would
+    silently re-point them at prose they were not measured on. The duplicates
+    this exists for are not byte-identical rows: they are two *draws* for the
+    same cell (same target, generator, strategy, prompt), written by two synth
+    processes that each loaded `existing_synth_keys` before the other appended.
+    Only one of them is the corpus's answer for that cell; the file order says
+    which.
+
+    Dry-run by default. `apply` rewrites the file atomically, keeping a `.bak`
+    beside it unless `backup=False`; unparseable lines are round-tripped
+    verbatim rather than dropped (`iter_jsonl(keep_undecodable=True)`).
+    """
+    path = Path(path)
+    records = read_jsonl(path, keep_undecodable=True)
+    report = DedupeReport(total=len(records))
+    first_line: dict[str, int] = {}
+    kept: list[dict] = []
+    for lineno, rec in enumerate(records, start=1):
+        if "_raw" in rec or not isinstance(rec.get("meta"), dict):
+            kept.append(rec)
+            continue
+        rid = record_id(rec)
+        if rid in first_line:
+            report.drops.append((rid, lineno, first_line[rid]))
+            continue
+        first_line[rid] = lineno
+        kept.append(rec)
+    report.dropped = len(report.drops)
+    report.kept = len(kept)
+    report.duplicate_ids = len({rid for rid, _, _ in report.drops})
+    if apply and report.dropped:
+        if backup:
+            bak = path.with_suffix(path.suffix + ".bak")
+            bak.write_bytes(path.read_bytes())
+            report.backup = bak
+        write_jsonl_atomic(path, kept)
+        report.applied = True
+    return report
 
 
 def iter_pairs(path: str | Path) -> Iterator[dict]:

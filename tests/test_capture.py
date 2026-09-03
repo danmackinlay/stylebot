@@ -432,3 +432,72 @@ def test_recut_drops_null_edits_that_min_chars_cannot_catch(tmp_path):
     )
     assert len(floored) < len(kept)
     assert all((r["meta"]["recut"].get("max_similarity")) == 0.95 for r in floored)
+
+
+# --- the record contract: schema version, system sha, provenance --------------
+
+
+def test_captured_records_carry_provenance(tmp_path):
+    """W8: a real capture stamps the same five keys a synthetic pair does, and
+    reads `source_automation` off the frontmatter it was handed."""
+    from stylebot.pairs import PAIR_SCHEMA_VERSION, system_sha
+    from stylebot.provenance import PROVENANCE_KEYS
+
+    pairs_path = tmp_path / "pairs.jsonl"
+    written = capture.capture_pairs(
+        "---\ntitle: T\nautomation: 0\n---\n\nIt is worth noting the rich tapestry.",
+        "---\ntitle: T\nautomation: 0\n---\n\nWe dig in.",
+        pairs_path=pairs_path,
+        source="post/foo.qmd",
+        snapped_at="2026-09-03T00:00:00+00:00",
+    )
+    meta = written[0]["meta"]
+    assert meta["schema_version"] == PAIR_SCHEMA_VERSION
+    assert meta["system_sha"] == system_sha()
+    assert sorted(meta["provenance"]) == sorted(PROVENANCE_KEYS)
+    assert meta["provenance"]["source_automation"] == 0
+    assert meta["provenance"]["policy_digest"]
+    assert validate_pairs_file(pairs_path) == []
+
+
+def test_capture_policy_digest_tracks_the_cut_knobs(tmp_path):
+    """Two coalesce policies over the same edit must not share a digest — that
+    is what makes 'were these pairs cut the same way?' answerable."""
+    before = "P one is worth noting.\n\nUntouched middle.\n\nP two is worth noting."
+    after = "P one, dug in.\n\nUntouched middle.\n\nP two, dug in."
+    digests = []
+    for gap_paras, gap_chars in ((0, 0), (1, 200)):
+        pairs_path = tmp_path / f"pairs-{gap_paras}.jsonl"
+        written = capture.capture_pairs(
+            before,
+            after,
+            pairs_path=pairs_path,
+            source="post/foo.qmd",
+            snapped_at="2026-09-03T00:00:00+00:00",
+            coalesce_gap_paras=gap_paras,
+            coalesce_gap_chars=gap_chars,
+        )
+        digests.append(written[0]["meta"]["provenance"]["policy_digest"])
+    assert digests[0] != digests[1]
+
+
+def test_recut_records_carry_provenance(tmp_path):
+    from stylebot.provenance import PROVENANCE_KEYS
+
+    pairs_path = tmp_path / "pairs.jsonl"
+    capture.capture_pairs(
+        "---\nautomation: 1\n---\n\nP one is worth noting.\n\nStill here.\n\n"
+        "P two is worth noting.",
+        "---\nautomation: 1\n---\n\nP one, dug in.\n\nStill here.\n\nP two, dug in.",
+        pairs_path=pairs_path,
+        source="post/foo.qmd",
+        snapped_at="2026-09-03T00:00:00+00:00",
+    )
+    records = capture.recut_archives(pairs_path, coalesce_gap_paras=1, coalesce_gap_chars=200)
+    assert records
+    for rec in records:
+        prov = rec["meta"]["provenance"]
+        assert sorted(prov) == sorted(PROVENANCE_KEYS)
+        assert prov["source_automation"] == 1
+        assert prov["policy_digest"]
+    assert validate_pairs_file(pairs_path) == []
