@@ -157,3 +157,43 @@ def test_the_embedder_is_serialized_across_threads(monkeypatch):
         list(pool.map(lambda i: encode([f"text {i}"]), range(16)))
 
     assert peak == 1, f"{peak} concurrent forward passes — the embedder is not serialized"
+
+
+def test_embedding_classifier_detector_exposes_a_batch_path_that_agrees():
+    """`.batch_detect` must be the same instrument as `detect`, in one encode.
+
+    The audit finding behind it (D57): `sentence_transformers_batch_embed_fn`
+    has always returned a batch encoder, and every caller was handing it one
+    text at a time — 22.2 s of batch-of-one encodes against 14.2 s batched over
+    the 1,690 serving-scale chunks of the document-scale eval.
+    """
+    head = {"coef": [1.0, -1.0], "intercept": 0.0}
+    calls: list[int] = []
+
+    def encode(texts, *, batch_size: int = 32):
+        texts = list(texts)
+        calls.append(len(texts))
+        return [[len(t) / 10.0, 1.0] for t in texts]
+
+    def embed(prose: str):
+        return encode([prose])[0]
+
+    det = classify.embedding_classifier_detector(
+        embed_fn=embed, head=head, name="stub", batch_embed_fn=encode
+    )
+    texts = ["a", "bb", "ccc"]
+    one_at_a_time = [det(t) for t in texts]
+    assert calls == [1, 1, 1]
+    calls.clear()
+    assert det.batch_detect(texts) == one_at_a_time
+    assert calls == [3]
+    assert det.batch_detect([]) == []
+
+
+def test_a_detector_with_no_batch_embedder_simply_has_no_batch_path():
+    """An injected per-passage `embed_fn` (a test stub) is still a valid detector."""
+    det = classify.embedding_classifier_detector(
+        embed_fn=lambda prose: [1.0, 1.0], head={"coef": [1.0, -1.0], "intercept": 0.0}
+    )
+    assert not hasattr(det, "batch_detect")
+    assert det("anything")["configured"] is True

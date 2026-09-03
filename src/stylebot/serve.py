@@ -56,6 +56,7 @@ from collections.abc import Callable
 from typing import IO
 
 from stylebot import markdown
+from stylebot.eval import detect_many
 
 
 def _utf16_mapper(text: str) -> Callable[[int], int]:
@@ -177,7 +178,10 @@ def handle_request(
             texts = request.get("texts")
             if not isinstance(texts, list) or not all(isinstance(t, str) for t in texts):
                 return {"id": rid, "error": "'texts' must be a list of strings"}
-            return {"id": rid, "scores": [detector(t)["score"] for t in texts]}
+            # One `encode` for the whole request, not one per text: the
+            # marker sends a document's paragraphs as a single `score` op,
+            # and batch-of-one encodes cost 1.56x (`_plans/decisions.md` D57).
+            return {"id": rid, "scores": [r["score"] for r in detect_many(detector, texts)]}
         if op == "segment":
             text = request.get("text")
             if not isinstance(text, str):

@@ -256,6 +256,16 @@ it consumes the `meta.gen` covariates synth records per pair.
       slop|target] [--judge --judge-model …] [--vale-config …] [--max-workers N]
       [--out scores.jsonl] [--summary summary.json] [--by slop_strategy] [--limit N]
       [--report scores.html] [--sample N]`. Batched, concurrent, resumable.
+
+      **What `--max-workers` actually parallelises is the judge, and only the
+      judge** (D57, 2026-09-03). Both local signals run as batched pre-passes on
+      the calling thread before anything is submitted: Vale one process per
+      slice, and — since the threading audit — the detector one `encode` per
+      slice. The detector had been inside the pool since the harness shipped,
+      where it was a batch-of-one embed per passage and, measured, bought
+      nothing: 24.25 s at eight workers against 23.96 s at one. Batched it is
+      12.6 s. The judge is worth 6.4x (103.3 s -> 16.1 s at eight, 1 s/call), so
+      the pool stays for it. Numbers: `findings.md`, "Threading audit".
 - [x] **Eval integrity** (2026-09-03, W10; D39-D42): every score row names the
       detector artifact that produced it and mixing two is refused; the paired
       verdict bootstraps over POSTs; the headline is the real facet; the eval

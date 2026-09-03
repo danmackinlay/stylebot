@@ -2381,3 +2381,141 @@ problem and the isolation is the only remaining reason for `ScoreJob`); or if
 the double process ever costs more than the loudness is worth — at which point
 the honest move is to delete the isolation and keep the lock, not to keep both
 out of caution.
+
+---
+
+## D56: `asyncio` first; threading must stringently justify itself
+
+**Decision (2026-09-03, Dan).** A standing project-level constraint, recorded
+here because it is the kind of thing later work has to be able to find and
+re-open. `asyncio` is this project's concurrency mechanism for IO, and it is
+what `synth` already uses at scale (`synth._run_sessions`: one event loop, an
+`asyncio.Semaphore` for the worker cap, one append handle, no locks). **New
+threading needs a measured substantial win in performance or complexity** — at
+least one of the two, with a number, and a `decisions.md` entry carrying it.
+The rule as written is in [`CLAUDE.md`](../CLAUDE.md) (`4f4d07c` here, blog
+`04909d1ddc`); this entry is why it exists and what was rejected.
+
+The precipitating case is D55. `eval.score_pairs_file` fanned the judge *and*
+the detector over a `ThreadPoolExecutor(max_workers=8)`; eight threads sharing
+one `SentenceTransformer` segfaulted the process deterministically once
+chunk-wise scoring raised the embed rate ~6x. It was latent for months, the
+first diagnosis was wrong, and the fix cost a lock plus a subprocess-isolation
+layer. Every threading episode in these two repos has cost hours of lock or
+segfault diagnosis; the asyncio paths have produced no crashes and no lock
+trouble.
+
+*Alternatives.* **Ban threading outright**: rejected, and the audit below is
+why — `focus.py`'s daemon HTTP server and `library_archive`'s parallel
+downloads are both threads that clearly earn their keep, and a blanket ban
+would push them into worse shapes (a second process, an async rewrite of a
+blocking-httpx download loop). **Leave it to judgement case by case**:
+rejected, because judgement is exactly what produced the eval pool — `Judge`
+and `Detector` are plain sync callables and `ThreadPoolExecutor` is what one
+reaches for to wrap those, so the reflex needs a rule in front of it rather
+than a reminder. **Make the bar "no shared mutable state"**: rejected as too
+narrow; the eval pool shared no *Python* state at all. What it shared was a
+torch model and a Rust tokenizer, which is invisible at the Python level, and
+that is precisely why the failure was a segfault rather than a wrong answer.
+
+*The deciding constraint.* The bar is EITHER a substantial reduction in
+complexity OR a substantial increase in performance, **measured**. Both halves
+matter. "Measured" rules out the eval pool, which had never been timed and
+turns out to buy nothing for the work it was doing. "Either/or" keeps the
+daemon-thread cases, which win on complexity and would lose on a
+performance-only bar. Three corollaries carried in `CLAUDE.md`: never share a
+non-re-entrant native object across threads; **a lock as the answer means the
+threads were the wrong shape**, not that the problem is solved; and for
+CPU-bound work prefer **batching over fan-out**, `_vale_prepass` being the
+pattern and D57 the second instance of it.
+
+**Re-evaluate if** a free-threaded (no-GIL) interpreter becomes this project's
+runtime and the CPU-bound sites stop being GIL-bound — at which point fan-out
+over a thread pool becomes a real alternative to batching for the first time,
+and the native-object corollary becomes *more* important rather than less.
+
+---
+
+## D57: the detector is batched out of the pool; the pool is kept for the judge alone
+
+**Decision (2026-09-03, the D56 audit).** `score_pairs_file` now runs **two**
+batched pre-passes per slice on the calling thread — Vale, as before, and now
+the detector (`eval._detector_prepass` -> `eval.detect_many`) — and submits
+only the judge to the thread pool. `classify.embedding_classifier_detector`
+grows a `.batch_detect(texts) -> list[dict]` attribute wherever it was built
+over a batch encoder, `eval.chunked_detector` grows the matching one over all
+the chunks of all the passages in a call, and `score_candidate` grows a
+`detector_result=` injection slot exactly like its existing `vale=`.
+`serve.handle_request`'s `score` op takes the same path: the marker sends a
+document's paragraphs as one request, and they now cross the backbone as one
+encode.
+
+**The finding that forced it.** `classify.sentence_transformers_batch_embed_fn`
+has always returned a *batch* encoder — `encode(texts, batch_size=32) -> [N,
+D]` — and every caller in the harness was handing it one text at a time through
+`sentence_transformers_embed_fn`. **Every embed in the project was a batch of
+one**, and since D55 a batch of one behind a lock. Numbers in
+[`findings.md`](findings.md), "Threading audit"; the two that decide it:
+
+- **The pool bought nothing for the detector.** Scoring the 34 document-scale
+  records with no judge: `max_workers=8` 24.25 s / 24.71 s against
+  `max_workers=1` 23.96 s / 23.69 s. Eight threads were, if anything, slightly
+  slower than one. Embedding is CPU-bound, so the GIL was never released, and
+  after D55 the lock made that explicit.
+- **Batching bought 1.7x.** The same scoring pass is 12.6–15.5 s batched. At
+  passage scale over 512 live corpus records, 12.6–15.7 s becomes 6.9–8.3 s.
+  The bare encode microbenchmark over the 1,690 serving-scale chunks is 22.2 s
+  against 14.2 s, 1.56x — the rest is per-call Python overhead the pre-pass
+  also removes.
+
+So the detector cleared neither D56 bar in the pool and clears the performance
+bar out of it. **The judge stays in the pool** and clears the bar on its own:
+the same 34 records with a 1 s-per-call judge take 103.3 s at one worker and
+16.1 s at eight, 6.4x. That is a network wait, which is the one thing a thread
+pool here is actually for.
+
+*Alternatives.* **Move the judge to `asyncio` too, and delete the pool**, which
+is what D56 points at: rejected for now, and this is the live tension. It would
+buy nothing measurable — 102 blocking calls overlapped by threads and 102
+awaited calls overlap identically — and it would cost `openai.AsyncOpenAI`, an
+`async def` all the way up through `score_candidate` / `_score_record` /
+`score_pairs_file`, and an `asyncio.run` at a boundary that is currently a
+plain function called from a CLI, from `run_score_job`, and from the isolated
+child. D56's bar is *either* complexity *or* performance; this clears neither.
+It becomes right the moment anything else in the scoring path needs to await.
+**Keep the detector in the pool and just raise `batch_size`**: rejected — the
+batch never had more than one text in it, so there was nothing for a batch size
+to act on. **Drop the D55 lock now that the hot path does not need it**:
+rejected. `detect_many` still falls back to per-text for any detector without a
+batch path, `infer`'s best-of-N reranking still scores candidates one at a
+time, and the lock costs nothing measurable (the `max_workers` 8-vs-1 numbers
+above are its cost, and they are noise). D56's corollary says a lock means the
+threads were the wrong shape — that is now recorded as *why the detector left
+the pool*, not as a reason to remove the guard. **Batch across slices rather
+than within one**: rejected; `_SCORE_BATCH_RECORDS = 128` exists so a crash
+costs at most a slice, and one encode of 256 texts is already past the point
+where per-call overhead matters.
+
+*The deciding constraint.* A batch encoder called one text at a time is not a
+performance bug you can see in the code — it reads as an ordinary
+`detector(text)` — and it had been invisible for months precisely because the
+thread pool around it looked like the answer to "is this fast enough?".
+Removing the pool from that path is what makes the shape legible: the local
+CPU-bound signals batch, and the remote signal fans out.
+
+**Known cost, measured:** batching changes the arithmetic. Re-scoring the 34
+document-scale records reproduces the committed `scores-chunkwise.jsonl` to a
+maximum absolute difference of **1.86e-07** in `detector.score`, not bit for
+bit — a transformer's forward pass pads to the batch, and float32 addition is
+not associative. That is four orders of magnitude below the effects this
+instrument is used to measure (the target−slop delta is 0.022) and below its
+own reporting precision, but it does mean a re-score is not byte-identical to a
+pre-2026-09-03 one. The D39 mixing guard is unaffected: it compares identity,
+not scores, and batching does not change the head.
+
+**Re-evaluate if** the judge stops being the only network signal in the pass —
+a second remote signal, or a detector behind a service boundary, and the
+asyncio rewrite rejected above becomes the cheap option rather than the
+expensive one. Or if `infer`'s best-of-N reranking ever dominates a run: it
+scores N candidates for one chunk one at a time, which is the same
+batch-of-one shape, left alone here because it was never measured to matter.

@@ -9,6 +9,81 @@ Each entry: date, what was measured, sample size, the number.
 
 ---
 
+## Threading audit — 2026-09-03: the eval pool bought nothing; batching bought 1.7x
+
+Every threading construct in stylebot and the blog, audited against D56's rule.
+All local, no spend: the benchmark corpus is the 34 already-paid-for rewritten
+documents in `_training_pairs/runs/docscale-20260903/documents.jsonl` and the
+committed live pairs corpus. Apple silicon, torch 2.13, sentence-transformers
+5.7, `StyleDistance/styledistance`, `torch.get_num_threads() == 6`. Every timing
+is an interleaved repeat (`8, 1, 8, 1`), and the spread between repeats is
+reported rather than averaged away — an effect that does not clear its own noise
+at this size is a null result, not a reason for a bigger sample.
+
+**1. The detector in the thread pool.** `score_pairs_file` over the 34
+documents, chunk-wise (1,690 serving-scale chunks, 4500/inline-headings), no
+judge, no Vale — the detector is the whole cost:
+
+| | `max_workers=8` | `max_workers=1` |
+|---|---|---|
+| before (detector inside the pool) | 24.25 s, 24.71 s | 23.96 s, 23.69 s |
+| after (batched pre-pass) | 12.58 s, 14.85 s | 13.84 s, 15.53 s |
+
+Eight threads were **not faster than one**, before or after — indistinguishable
+within a ±10% repeat spread, and marginally *slower* in three of four pairings.
+Embedding is CPU-bound, so the GIL never went anywhere, and since D55 the lock
+around `model.encode` made that explicit. The pool over the detector was pure
+cost for its entire life.
+
+**2. Batching, the alternative.** Bare encode over the same 1,690 chunks, no
+harness: **22.22 s** as batches of one (13.2 ms/chunk) against **14.24 s** in
+one `encode(batch_size=32)` call (8.4 ms/chunk) — **1.56x**. Larger batches do
+not help (`batch_size=64`: 14.59 s), so 32 is already past the knee.
+
+End to end through `score_pairs_file` the win is a little larger, because the
+pre-pass also removes 1,690 Python-level detector calls: 24.25 s -> 12.58 s at
+the same eight workers, **~1.7x**.
+
+**3. The ordinary corpus path**, which is the common case (`dan-style eval`, no
+`--documents`): passage-scale detector, 512 live pairs x {slop, target} = 1,024
+embeds, no judge, no Vale:
+
+| | `max_workers=8` | `max_workers=1` |
+|---|---|---|
+| per-text (before) | 15.65 s, 12.90 s | 12.85 s, 12.58 s |
+| batched (after) | 6.93 s, 8.00 s | 7.35 s, 8.33 s |
+
+**~1.7x** again, and the same verdict on the pool: at 512 records eight workers
+never beat one. (A full-corpus run — 8,148 records, collected before the sample
+cap was set and not repeated — put it at 223.3 s against 158.8 s, the same 1.4x
+once the fixed ~9 s model load is inside the number. It adds nothing the 512
+sample did not already resolve.)
+
+**4. The judge, which is what the pool is actually for.** The same 34 records x
+3 fields = 102 judge calls, latency simulated at 1 s per call so no money is
+spent — the production `score_pairs_file` path, only the judge faked:
+
+| `max_workers` | 1 | 4 | 8 | 16 |
+|---|---|---|---|---|
+| wall clock | 103.33 s | 28.08 s | 16.08 s | 10.03 s |
+
+**6.4x at the default eight**, near-linear. Network wait is the one thing this
+pool overlaps that is worth overlapping, and the same number is the reasoning
+for the blog's `library_archive` download pool, which cannot be measured
+without a keyed external service.
+
+**5. Batching is not bit-identical.** Re-scoring the 34 documents through the
+batched path reproduces the committed `scores-chunkwise.jsonl` to a maximum
+absolute difference of **1.86e-07** in `detector.score` (204 of 204 float fields
+differ, all at that scale). A transformer pads to its batch and float32 addition
+is not associative. Four orders of magnitude below the target−slop delta of
+0.022 this instrument is used to measure, and below its reporting precision —
+but a re-score of a pre-2026-09-03 file will not diff clean.
+
+Decisions: D56 (the rule), D57 (what changed).
+
+---
+
 ## Document-scale eval, chunk-wise — run 2026-09-03 (later the same day): it separates
 
 The fix for the entry below. Same 34 rewritten documents, same detector

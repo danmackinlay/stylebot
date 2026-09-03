@@ -822,3 +822,125 @@ def test_real_pair_without_gen_buckets_null():
     }
     by = ev.summarize_scores([rec], by="reasoning_effort")["by"]
     assert set(by) == {"null"}
+
+
+# --- the batched detector pre-pass inside score_pairs_file ------------------
+#
+# The mirror of the Vale pre-pass, and the second half of the 2026-09-03
+# threading audit (D57): the detector's backbone is a transformer, so scoring
+# one passage at a time from inside the thread pool made every embed a batch of
+# one. It now runs once per slice, on the calling thread, before the pool.
+
+
+def _batching_detector(record: list):
+    """A detector whose batch path is observable: `record` gets one entry per
+    CALL, carrying how many texts that call carried. One entry of 12 is the
+    batched pre-pass; twelve entries of 1 is the old batch-of-one shape."""
+
+    def _score(prose: str) -> dict:
+        return {"score": min(0.99, len(prose) / 100), "configured": True, "name": "stub"}
+
+    def detect(prose: str) -> dict:
+        record.append(1)
+        return _score(prose)
+
+    def batch_detect(texts):
+        texts = list(texts)
+        record.append(len(texts))
+        return [_score(t) | {"batched": True} for t in texts]
+
+    detect.identity = {key: None for key in ev.DETECTOR_IDENTITY_KEYS} | {"name": "stub"}
+    detect.batch_detect = batch_detect
+    return detect
+
+
+def test_detect_many_falls_back_when_the_detector_has_no_batch_path():
+    calls: list[int] = []
+
+    def plain(prose: str) -> dict:
+        calls.append(1)
+        return {"score": 0.5, "configured": True, "name": "plain"}
+
+    assert [r["score"] for r in ev.detect_many(plain, ["a", "b", "c"])] == [0.5] * 3
+    assert calls == [1, 1, 1]  # the obvious loop; the caller never had to ask
+
+
+def test_score_candidate_accepts_a_precomputed_detector_result():
+    """The injection point: `detector_result=` given => the detector is not called."""
+    calls: list[int] = []
+    det = _batching_detector(calls)
+    precomputed = {"score": 0.25, "configured": True, "name": "stub"}
+    rec = ev.score_candidate("prose", judge=None, detector=det, detector_result=precomputed)
+    assert rec["detector"] is precomputed
+    assert calls == []
+    # Default is unchanged for every existing caller: it still scores inline.
+    ev.score_candidate("prose", judge=None, detector=det)
+    assert calls == [1]
+
+
+def test_score_pairs_file_batches_the_detector_into_one_call_per_slice(tmp_path, monkeypatch):
+    """6 pairs x 2 fields used to be 12 batch-of-one embeds; it is now one call of 12."""
+    specs = [
+        (f"Paragraph number {i}, long enough to be scored as a candidate here.", None, "polish")
+        for i in range(6)
+    ]
+    pairs = _make_pairs(tmp_path / "c", specs)
+    _count_vale_spawns(monkeypatch)
+    calls: list[int] = []
+
+    res = ev.score_pairs_file(
+        pairs, tmp_path / "scores.jsonl", judge=None, detector=_batching_detector(calls),
+        max_workers=4,
+    )
+    assert res.written == 6
+    assert calls == [12], calls  # ONE call carrying every (record, field) text
+    lines = (tmp_path / "scores.jsonl").read_text().splitlines()
+    rows = [json.loads(ln) for ln in lines if ln.strip()]
+    assert all(r["scores"][f]["detector"]["batched"] for r in rows for f in ("slop", "target"))
+
+
+def test_a_failing_detector_batch_falls_back_to_per_text_scoring(tmp_path, monkeypatch):
+    """A signal is never a run-ender: a broken batch path degrades, it does not fail records."""
+    specs = [
+        (f"Paragraph number {i}, long enough to be scored as a candidate here.", None, "polish")
+        for i in range(3)
+    ]
+    pairs = _make_pairs(tmp_path / "c", specs)
+    _count_vale_spawns(monkeypatch)
+    per_text: list[int] = []
+
+    def detect(prose: str) -> dict:
+        per_text.append(1)
+        return {"score": 0.4, "configured": True, "name": "stub"}
+
+    def exploding_batch(texts):
+        raise RuntimeError("the backbone fell over")
+
+    detect.identity = {key: None for key in ev.DETECTOR_IDENTITY_KEYS} | {"name": "stub"}
+    detect.batch_detect = exploding_batch
+
+    res = ev.score_pairs_file(pairs, tmp_path / "s.jsonl", judge=None, detector=detect)
+    assert res.written == 3 and res.errors == []
+    assert len(per_text) == 6  # 3 pairs x 2 fields, scored the old way inside the pool
+
+
+def test_chunked_detector_batch_path_agrees_with_the_per_passage_path():
+    """Batching may not move a number: the two paths share one aggregation."""
+    calls: list[int] = []
+    inner = _batching_detector(calls)
+    det = ev.chunked_detector(inner, max_chunk_chars=120)
+    passages = [
+        "First paragraph, of some length.\n\nSecond paragraph here.\n\n"
+        "Third one, longer than the others by a bit.",
+        "# A heading\n\nOnly one prose paragraph under it.",
+        "```\ncode only, no prose at all\n```",
+    ]
+    one_at_a_time = [det(p) for p in passages]
+    calls.clear()
+    batched = det.batch_detect(passages)
+    assert batched == one_at_a_time
+    # Every chunk of every passage crossed the backbone in ONE call — and the
+    # per-passage path above had spent one call per chunk.
+    assert len(calls) == 1
+    assert calls[0] == sum(r["n_chunks"] for r in one_at_a_time)
+    assert one_at_a_time[2]["score"] is None and one_at_a_time[2]["n_chunks"] == 0

@@ -286,3 +286,33 @@ def test_segment_rejects_a_non_string_and_survives():
     )
     assert responses[0] == {"id": 1, "error": "'text' must be a string"}
     assert len(responses[1]["segments"]) == 1
+
+
+def test_score_op_uses_the_detector_batch_path_when_there_is_one():
+    """The marker sends a document's paragraphs as one `score` op — so send them
+    to the backbone as one encode, not one per paragraph (D57)."""
+    sizes: list[int] = []
+
+    def detect(prose: str) -> dict:
+        sizes.append(1)
+        return {"score": 0.1, "configured": True}
+
+    def batch_detect(texts):
+        texts = list(texts)
+        sizes.append(len(texts))
+        return [{"score": 0.5, "configured": True} for _ in texts]
+
+    detect.batch_detect = batch_detect
+    resp = serve.handle_request(
+        {"id": 1, "op": "score", "texts": ["one", "two", "three"]}, detect, {}
+    )
+    assert resp == {"id": 1, "scores": [0.5, 0.5, 0.5]}
+    assert sizes == [3]
+
+
+def test_score_op_still_works_for_a_detector_with_no_batch_path():
+    def detect(prose: str) -> dict:
+        return {"score": 0.9 if "slop" in prose else 0.1, "configured": True}
+
+    resp = serve.handle_request({"id": 2, "op": "score", "texts": ["slop", "ok"]}, detect, {})
+    assert resp == {"id": 2, "scores": [0.9, 0.1]}
