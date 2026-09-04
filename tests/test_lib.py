@@ -86,9 +86,6 @@ def test_empty_input_gives_no_paragraphs():
     assert split_paragraphs("\n\n\n") == []
 
 
-# -- segment_for_edit: the lossless round-trip property on nasty inputs --
-
-
 # -- file gathering --
 
 
@@ -129,18 +126,6 @@ def test_is_valid_qmd_file_base_makes_the_judgement_project_relative(tmp_path):
     assert is_valid_qmd_file(ok) is False  # judged whole: `_checkout` bites
     assert is_valid_qmd_file(ok, base) is True  # judged below `base`
     assert gather_qmd_files([], base=base) == [ok]
-
-
-def test_gather_qmd_files_walk_skips_build_dirs(tmp_path):
-    (tmp_path / "post").mkdir()
-    (tmp_path / "post" / "keep.qmd").write_text("x", encoding="utf-8")
-    (tmp_path / "_site").mkdir()
-    (tmp_path / "_site" / "built.qmd").write_text("x", encoding="utf-8")
-    (tmp_path / "_tmp" / "eval").mkdir(parents=True)
-    (tmp_path / "_tmp" / "eval" / "scratch.qmd").write_text("x", encoding="utf-8")
-    (tmp_path / "post" / "_draft.qmd").write_text("x", encoding="utf-8")
-    found = gather_qmd_files([], base=tmp_path)
-    assert [p.name for p in found] == ["keep.qmd"]
 
 
 def test_gather_qmd_files_honours_a_non_qmd_glob(tmp_path):

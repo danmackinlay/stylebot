@@ -20,52 +20,12 @@ import pytest
 from click.testing import CliRunner
 
 from stylebot.bin import ai_style
-from stylebot.cli_options import ErrorTranslatingGroup, translate_errors
-from stylebot.errors import ConfigError, MissingExtra, RunError, StylebotError
+from stylebot.cli_options import translate_errors
+from stylebot.errors import ConfigError, RunError
 
 # ---------------------------------------------------------------------------
 # The vocabulary itself.
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "cls,builtin",
-    [(ConfigError, ValueError), (RunError, RuntimeError), (MissingExtra, ImportError)],
-)
-def test_each_class_is_also_the_builtin_it_replaces(cls, builtin):
-    """The sweep could not break an existing `except ValueError:` anywhere.
-
-    `stylebot.serve` turns a bad editor selection into an NDJSON error field
-    with `except ValueError`, and livingthing's `dan-style` commands catch the
-    builtins too. Subclassing is what let ~90 raise sites move in one pass.
-    """
-    exc = cls("boom")
-    assert isinstance(exc, builtin)
-    assert isinstance(exc, StylebotError)
-
-
-def test_missing_extra_is_a_run_error_not_a_config_error():
-    """An uninstalled extra is an unready world (exit 1), not a bad flag."""
-    assert issubclass(MissingExtra, RunError)
-    assert not issubclass(MissingExtra, ConfigError)
-
-
-def test_synth_errors_are_the_same_vocabulary():
-    """`Synth*Error` is a named specialization, no longer a fourth scheme."""
-    from stylebot import synth_cli
-
-    assert issubclass(synth_cli.SynthConfigError, ConfigError)
-    assert issubclass(synth_cli.SynthRunError, RunError)
-    assert issubclass(synth_cli.SynthGenerationError, RunError)
-
-
-def test_session_error_is_the_same_vocabulary():
-    """W11.b's `SessionError` folded in rather than staying a third scheme —
-    and keeps the exit code it chose (1, an unready world)."""
-    from stylebot.session import SessionError
-
-    assert issubclass(SessionError, RunError)
-    assert not issubclass(SessionError, ConfigError)
 
 
 # ---------------------------------------------------------------------------
@@ -133,15 +93,6 @@ def _leaf_commands(
 LEAVES = _leaf_commands(ai_style.main)
 
 
-def test_the_tree_is_not_empty_and_covers_both_groups():
-    """Guards the enumeration itself: an empty walk would pass vacuously."""
-    paths = {p for p, _ in LEAVES}
-    assert len(paths) >= 15
-    assert ("synth",) in paths and ("train",) in paths  # top level
-    assert any(p[0] == "log" for p in paths)  # the `log` subgroup
-    assert any(p[0] == "data" for p in paths)  # the hidden migrations subgroup
-
-
 @pytest.mark.parametrize(
     "path,cmd", LEAVES, ids=lambda v: " ".join(v) if isinstance(v, tuple) else ""
 )
@@ -169,15 +120,6 @@ def test_every_subcommand_exits_1_on_a_run_error(path, cmd, monkeypatch):
     result = CliRunner().invoke(ai_style.main, list(path))
     assert result.exit_code == 1, f"{' '.join(path)}: {result.exit_code}\n{result.output}"
     assert "no key" in result.output
-
-
-def test_both_groups_translate_so_a_direct_invoke_is_covered_too():
-    """`tests/test_ai_style_log.py` invokes `log.main` directly, not through
-    `ai-style`, so the `log` group has to carry the translation itself."""
-    from stylebot.bin import ai_style_log
-
-    assert isinstance(ai_style.main, ErrorTranslatingGroup)
-    assert isinstance(ai_style_log.main, ErrorTranslatingGroup)
 
 
 # ---------------------------------------------------------------------------

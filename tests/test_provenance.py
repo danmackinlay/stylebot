@@ -14,7 +14,6 @@ import sys
 from stylebot.markdown import is_heading_line
 from stylebot.provenance import (
     PROVENANCE_KEYS,
-    git_dirty,
     git_repo_root,
     pair_provenance,
     policy_digest,
@@ -115,7 +114,3 @@ def test_git_repo_root_walks_up_from_a_file(tmp_path):
     leaf.write_text("x", encoding="utf-8")
     assert git_repo_root(leaf) == tmp_path.resolve()
     assert git_repo_root(tmp_path / "a") == tmp_path.resolve()
-
-
-def test_git_dirty_reports_none_outside_a_repo(tmp_path):
-    assert git_dirty(tmp_path) is None

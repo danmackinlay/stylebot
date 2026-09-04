@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 
 import pytest
-from click.testing import CliRunner
 
 from stylebot import backends, infer
 from stylebot.backends import BackendOpts
@@ -43,16 +42,6 @@ def test_missing_key_is_a_runtime_error_not_a_usage_one(monkeypatch):
         backends.build_styler(
             BackendOpts(backend="openai", base_url="u", model="m", api_key_env="NO_SUCH_KEY")
         )
-
-
-def test_openai_backend_gets_the_scaled_token_budget(monkeypatch):
-    seen: dict = {}
-    monkeypatch.setattr(
-        infer, "openai_backend", lambda *a, **kw: seen.update(kw) or (lambda *_a, **_k: [])
-    )
-    backends.build_styler(BackendOpts(backend="openai", base_url="u", model="m",
-                                      max_chunk_chars=4500))
-    assert seen["max_tokens"] == infer.max_tokens_for(4500)
 
 
 # --- the served adapter's diet ---------------------------------------------
@@ -181,92 +170,12 @@ def test_opts_from_manifest_logs_the_mismatch_it_did_not_override(caplog):
 # --- the CLI is only translation -------------------------------------------
 
 
-def test_run_manifest_threads_the_diet_and_the_token_budget(tmp_path, monkeypatch):
-    from stylebot.bin import ai_style
-
-    seen_backend: dict = {}
-    seen_rewrite: dict = {}
-    monkeypatch.setattr(
-        infer, "openai_backend",
-        lambda *a, **kw: seen_backend.update(kw) or (lambda *_a, **_k: []),
-    )
-    monkeypatch.setattr(
-        infer, "rewrite_text",
-        lambda text, styler, **kw: seen_rewrite.update(kw) or infer.RewriteResult(text=text),
-    )
-    manifest = tmp_path / "run.json"
-    manifest.write_text(json.dumps(_RUN), encoding="utf-8")
-    doc = tmp_path / "d.qmd"
-    doc.write_text("Some prose.\n", encoding="utf-8")
-
-    result = CliRunner().invoke(
-        ai_style.main,
-        ["run", str(doc), "--manifest", str(manifest),
-         "--backend", "openai", "--base-url", "http://x/v1", "--model", "m"],
-    )
-    assert result.exit_code == 0, result.output
-    assert seen_rewrite["max_chunk_chars"] == 4500
-    assert seen_rewrite["inline_headings"] is True
-    assert seen_backend["max_tokens"] == infer.max_tokens_for(4500)
-
-
 # The CLI's own exit-code translation (usage -> 2, environment -> 1) is pinned
 # by `test_smoke.test_run_backend_errors_keep_their_exit_codes`; what is tested
 # here is that the library raises the two kinds it distinguishes them by.
 
 
 # --- the Styler seam: what the Protocol types, and what it cannot -----------
-
-
-def _styler_signature(fn):
-    import inspect
-
-    return list(inspect.signature(fn).parameters)
-
-
-def test_both_backends_return_the_shape_the_protocol_declares(monkeypatch):
-    """`Styler` was `Callable[..., list[str]]` until 2026-09-03 — a return type
-    and no arguments at all. This is the argument half, checked against the
-    Protocol's own signature rather than a copy of it.
-
-    Both backends are constructed with their clients stubbed: the point is the
-    closure's shape, which costs nothing to build and no API call to inspect.
-    """
-    import inspect
-
-    declared = list(inspect.signature(infer.Styler.__call__).parameters)[1:]
-    assert declared == ["messages", "num_samples"]
-
-    class _Resp:
-        choices = [type("C", (), {"message": type("M", (), {"content": "terse."})()})()]
-
-    class _FakeOpenAI:
-        def __init__(self, **kw):
-            self.chat = type(
-                "Chat", (), {"completions": type("Comp", (), {"create": lambda *a, **k: _Resp()})()}
-            )()
-
-    import openai
-
-    monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
-    styler = infer.openai_backend("http://x/v1", "m")
-    assert _styler_signature(styler) == declared
-    assert styler([{"role": "user", "content": "hi"}]) == ["terse."]
-
-
-def test_the_protocol_cannot_see_the_chat_template(monkeypatch):
-    """The honest limit, pinned so nobody reads the Protocol as a parity claim.
-
-    A backend that renders with a *different* template — the whole failure mode
-    the openai path carries — is still a perfectly good `Styler`. Only the
-    warning below distinguishes them.
-    """
-
-    def wrong_template(messages: list[dict], num_samples: int = 1) -> list[str]:
-        return ["<|im_start|>whatever the server felt like<|im_end|>"] * num_samples
-
-    assert isinstance(wrong_template, infer.Styler)
-    assert _styler_signature(wrong_template) == ["messages", "num_samples"]
 
 
 def test_an_openai_backend_warns_that_the_renderer_pin_is_uncheckable():

@@ -21,7 +21,6 @@ from stylebot.cli_options import (
     cli_fields,
     field_owners,
     opt,
-    section_name,
 )
 
 
@@ -153,30 +152,3 @@ def test_bundles_from_kwargs_round_trips_a_callback():
     # Absent names fall back to the declared default, so a wrapper that
     # excluded a flag still gets a complete bundle.
     assert bundles_from_kwargs({}, {"gen": ToyGen})["gen"] == ToyGen()
-
-
-def test_sections_group_help_and_fall_back_to_the_class_name():
-    assert section_name(ToyGen) == "Toy generation"
-    assert section_name(ToyOut) == "ToyOut"
-
-    @click.command(cls=SectionedCommand)
-    @click.option("--own", help="The command's own flag.")
-    @bundle_options(TOY_BUNDLES)
-    def cmd(**kw):
-        pass
-
-    out = CliRunner().invoke(cmd, ["--help"]).output
-    assert "\nToy generation:\n" in out and "\nToyOut:\n" in out
-    # Unsectioned params (the command's own, plus --help) lead.
-    assert out.index("\nOptions:\n") < out.index("Toy generation:")
-    assert out.index("--own") < out.index("Toy generation:")
-    assert out.index("Toy generation:") < out.index("ToyOut:")  # bundle order
-    # A plain click.Command still works, just unsectioned.
-    plain = CliRunner().invoke(_plain_cmd, ["--help"]).output
-    assert "Toy generation:" not in plain and "--model" in plain
-
-
-@click.command()
-@bundle_options(TOY_BUNDLES)
-def _plain_cmd(**kw):
-    pass

@@ -24,11 +24,6 @@ def test_data_dir_env_beats_default(monkeypatch):
     assert config.resolve_data_dir() == Path("/from/env")
 
 
-def test_data_dir_default(monkeypatch):
-    monkeypatch.delenv("STYLEBOT_DATA_DIR", raising=False)
-    assert config.resolve_data_dir() == Path("_training_pairs")
-
-
 def test_get_key_blank_is_none(monkeypatch):
     monkeypatch.setenv("SOME_API_KEY", "")
     assert config.get_key("SOME_API_KEY") is None

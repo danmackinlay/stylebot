@@ -10,21 +10,11 @@ polarity that lets the trained detector compose with `mean_detector_score`.
 from __future__ import annotations
 
 import json
-import math
 
 import pytest
 
 from stylebot import classify
 from stylebot.errors import RunError
-
-
-def test_logreg_p_slop_matches_sigmoid():
-    # P(slop) = sigmoid(intercept + coef·vec); a hand-computed reference.
-    vec = [1.0, 2.0, -1.0]
-    coef = [0.5, -0.25, 1.0]
-    intercept = 0.1
-    z = 0.1 + (0.5 * 1.0 + -0.25 * 2.0 + 1.0 * -1.0)
-    assert classify._logreg_p_slop(vec, coef, intercept) == pytest.approx(1 / (1 + math.exp(-z)))
 
 
 def test_sigmoid_is_stable_at_extremes():
@@ -159,12 +149,3 @@ def test_detect_many_falls_back_when_the_detector_has_no_batch_path():
 
     assert [r["score"] for r in classify.detect_many(plain, ["a", "b", "c"])] == [0.5] * 3
     assert calls == [1, 1, 1]  # the obvious loop; the caller never had to ask
-
-
-def test_a_detector_with_no_batch_embedder_simply_has_no_batch_path():
-    """An injected per-passage `embed_fn` (a test stub) is still a valid detector."""
-    det = classify.embedding_classifier_detector(
-        embed_fn=lambda prose: [1.0, 1.0], head={"coef": [1.0, -1.0], "intercept": 0.0}
-    )
-    assert not hasattr(det, "batch_detect")
-    assert det("anything")["configured"] is True

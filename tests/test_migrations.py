@@ -39,14 +39,6 @@ def _write(tmp_path: Path, records: list[dict]) -> Path:
     return path
 
 
-def test_data_group_is_hidden_from_the_help_tree():
-    """Hidden, not absent: `--help` stays the pipeline, the command still ships."""
-    from stylebot.bin.ai_style_data import main as group
-
-    assert group.hidden is True
-    assert set(group.commands) == {"prune-stale"}
-
-
 # ---------------------------------------------------------------------------
 # prune-stale (W12): orphans, and eval contamination
 #

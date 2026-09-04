@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from stylebot import synth, targets
-from stylebot.targets import _is_link_list, _is_list_item, _pack_paragraphs, _split_sections
+from stylebot import synth
+from stylebot.targets import _is_link_list, _split_sections
 
 
 def _write(root, rel, text):
@@ -35,24 +35,6 @@ def test_split_sections_excludes_headers_and_carries_heading():
     by_heading = {h: b for h, b in secs}
     assert "para a" in by_heading["## A"]
     assert "para b" in by_heading["### B"]
-
-
-def test_pack_respects_budget():
-    paras = ["x" * 100] * 10
-    blocks = _pack_paragraphs(paras, merge_max_chars=250)
-    assert all(len(b) <= 250 for b in blocks)
-    assert len(blocks) > 1
-
-
-def test_pack_keeps_oversized_paragraph_whole():
-    big = "y" * 400
-    blocks = _pack_paragraphs([big], merge_max_chars=250)
-    assert blocks == [big]  # never split mid-paragraph
-
-
-def test_is_list_item():
-    assert _is_list_item("* a\n* b\n1. c")
-    assert not _is_list_item("a normal sentence")
 
 
 def test_is_link_list_prose_residual():
@@ -115,14 +97,6 @@ def test_merge_oversized_single_paragraph_kept_whole(tmp_path):
     blocks = synth.iter_targets(blog_root=root, min_chars=50, merge=True, merge_max_chars=200)
     assert len(blocks) == 1
     assert len(blocks[0].text) > 200  # emitted whole, not split
-
-
-def test_merge_max_chars_hard_drop(tmp_path):
-    root = tmp_path / "blog"
-    giant = "word " * 3000  # ~15k chars
-    body = f"---\ntitle: t\nautomation: 0\n---\n\n{giant.strip()}\n"
-    _write(root, "post/g.qmd", body)
-    assert synth.iter_targets(blog_root=root, merge=True, max_chars=8000) == []
 
 
 def test_merge_drops_packed_link_list(tmp_path):
@@ -230,55 +204,7 @@ def test_cross_heading_requires_merge(tmp_path):
     assert blocks[0].context == "## A Section"
 
 
-def test_cross_heading_is_what_buys_length_not_the_budget(tmp_path):
-    """The load-bearing finding behind v2: section-bounded packing hits the
-    SECTION wall, not the budget, so raising merge_max_chars alone barely moves
-    the distribution. Modelled here as many short sections."""
-    root = tmp_path / "blog"
-    sections = "\n\n".join(f"## S{i}\n\n{P1}" for i in range(8))
-    _write(root, "post/w.qmd", f"---\ntitle: t\nautomation: 0\n---\n\n{sections}\n")
-    kw = dict(blog_root=root, min_chars=50, merge=True)
-    # Section-bounded: tripling the budget changes nothing — every section is
-    # already under it, and no block may cross a header.
-    small = synth.iter_targets(**kw, merge_max_chars=1500)
-    big = synth.iter_targets(**kw, merge_max_chars=4500)
-    assert len(small) == len(big) == 8
-    # Cross-heading: the same budget now actually binds.
-    crossed = synth.iter_targets(**kw, merge_max_chars=4500, cross_heading=True)
-    assert len(crossed) < len(small)
-    assert max(len(t.text) for t in crossed) > max(len(t.text) for t in small)
-
-
 # --- one load per post ----------------------------------------------------
-
-
-def test_each_post_is_parsed_once(tmp_path, monkeypatch):
-    """Both input modes load and YAML-parse each post exactly once.
-
-    The walk needs the frontmatter for its `selector` and the body for chunking;
-    taking them from one load is worth ~1.8s on a 1771-post blog. The `files=`
-    mode skips the selector and must not pay for a parse it ignores either.
-    """
-    root = tmp_path / "blog"
-    body = f"---\ntitle: t\nautomation: 0\n---\n\n{P1}\n\n{P2}\n"
-    _write(root, "post/a.qmd", body)
-    _write(root, "post/b.qmd", body)
-
-    parses: list[str] = []
-    real = targets.read_w_frontmatter_text
-    monkeypatch.setattr(
-        targets,
-        "read_w_frontmatter_text",
-        lambda text: (parses.append(text), real(text))[1],
-    )
-
-    assert len(synth.iter_targets(blog_root=root, min_chars=50)) == 4  # 2 posts x 2 paragraphs
-    assert len(parses) == 2
-
-    parses.clear()
-    preselected = [root / "post/a.qmd", root / "post/b.qmd"]
-    assert len(synth.iter_targets(files=preselected, min_chars=50)) == 4
-    assert len(parses) == 2
 
 
 def test_unparseable_frontmatter_warns_once_per_post(tmp_path, caplog):

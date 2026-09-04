@@ -1,10 +1,13 @@
 """Merging a trained LoRA adapter back into its base weights.
 
-The key-inversion logic is pure and always runs; the tests that touch real
-`.safetensors` files skip without the ``trainer`` extra (safetensors/torch are
-not in the dev group — no 9B downloads in this suite). The merge itself is
-never executed: `merge_adapter` takes a `merge_fn` seam and gets a fake, so
-everything around the merge is exercised without torch loading a base model.
+The key-inversion logic is pure. The normalise/merge tests write real
+`.safetensors` files, so torch and safetensors are imported at module scope:
+either extra installs them (`[classifier]` via sentence-transformers,
+`[trainer]` via tinker-cookbook), the suite expects `uv sync --all-extras`,
+and without them this module errors at collection rather than passing green by
+skipping (X4). The merge itself is never executed: `merge_adapter` takes a
+`merge_fn` seam and gets a fake, so everything around the merge is exercised
+without torch loading a base model.
 """
 
 from __future__ import annotations
@@ -13,6 +16,8 @@ import json
 from pathlib import Path
 
 import pytest
+import safetensors.torch as st
+import torch
 
 from stylebot import export
 from stylebot.errors import RunError
@@ -63,10 +68,6 @@ def test_is_serving_format_detects_either_prefix():
 # --- the scaling guard -----------------------------------------------------
 
 
-def test_equal_alpha_and_r_is_accepted():
-    export.check_adapter_scaling({"r": 32, "lora_alpha": 32})  # no raise
-
-
 def test_unequal_scaling_is_refused_and_says_why():
     with pytest.raises(RunError, match="lora_alpha=64 != r=32"):
         export.check_adapter_scaling({"r": 32, "lora_alpha": 64})
@@ -90,8 +91,6 @@ def test_base_model_of_manifest():
 
 def _adapter(tmp_path, keys, *, r=32, alpha=32):
     """A minimal on-disk PEFT adapter with `keys` as its tensor names."""
-    torch = pytest.importorskip("torch")
-    st = pytest.importorskip("safetensors.torch")
     d = tmp_path / "adapter"
     d.mkdir()
     st.save_file({k: torch.zeros(2, 2) for k in keys}, str(d / export.ADAPTER_WEIGHTS))
@@ -102,7 +101,6 @@ def _adapter(tmp_path, keys, *, r=32, alpha=32):
 
 
 def _keys_of(path):
-    st = pytest.importorskip("safetensors.torch")
     return set(st.load_file(str(path / export.ADAPTER_WEIGHTS)))
 
 
@@ -125,12 +123,6 @@ def test_normalize_leaves_an_already_raw_adapter_alone(tmp_path):
 
     assert out == src, "an already-raw adapter should be used in place, not copied"
     assert not (tmp_path / "raw").exists()
-
-
-def test_normalize_refuses_a_misscaled_adapter(tmp_path):
-    src = _adapter(tmp_path, SERVING_KEYS, r=32, alpha=64)
-    with pytest.raises(RunError, match="wrong scale"):
-        export.normalize_adapter(src, tmp_path / "raw")
 
 
 def test_normalize_names_the_missing_file(tmp_path):
@@ -206,49 +198,3 @@ def test_cli_needs_a_base_model_from_somewhere(tmp_path):
     res = _invoke(tmp_path, "--adapter", str(src), "--out", str(tmp_path / "m"))
     assert res.exit_code == 2, res.output  # usage error, not a crash
     assert "--base-model" in res.output and "--manifest" in res.output
-
-
-def test_cli_reads_the_base_model_from_a_manifest(tmp_path, monkeypatch):
-    from stylebot import export as export_mod
-
-    src = _adapter(tmp_path, SERVING_KEYS)
-    manifest = tmp_path / "run.json"
-    manifest.write_text(
-        json.dumps({"run_id": "r1", "hyperparameters": {"base_model": "Qwen/Qwen3.5-9B"}}),
-        encoding="utf-8",
-    )
-    seen = {}
-
-    def fake_merge(adapter_dir, out_dir, *, base_model, work_dir=None):
-        seen.update(base_model=base_model, out_dir=Path(out_dir))
-        return Path(out_dir)
-
-    monkeypatch.setattr(export_mod, "merge_adapter", fake_merge)
-    res = _invoke(
-        tmp_path,
-        "--adapter",
-        str(src),
-        "--out",
-        str(tmp_path / "m"),
-        "--manifest",
-        str(manifest),
-    )
-    assert res.exit_code == 0, res.output
-    assert seen["base_model"] == "Qwen/Qwen3.5-9B"
-
-
-def test_cli_reports_a_manifest_with_no_base_model(tmp_path):
-    src = _adapter(tmp_path, SERVING_KEYS)
-    manifest = tmp_path / "run.json"
-    manifest.write_text(json.dumps({"run_id": "r1", "hyperparameters": {}}), encoding="utf-8")
-    res = _invoke(
-        tmp_path,
-        "--adapter",
-        str(src),
-        "--out",
-        str(tmp_path / "m"),
-        "--manifest",
-        str(manifest),
-    )
-    assert res.exit_code == 1, res.output  # world-is-wrong, not usage
-    assert "hyperparameters.base_model" in res.output

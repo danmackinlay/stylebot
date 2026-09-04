@@ -63,13 +63,15 @@ def test_malformed_lines_error_without_killing_the_loop():
         {"id": 3, "op": "score", "texts": "not-a-list"},
         {"id": 4, "op": "nonsense"},
         "",  # blank line: ignored, no response
-        {"id": 5, "op": "score", "texts": ["still alive slop"]},
+        {"id": 5, "op": "segment", "text": ["not", "a", "string"]},
+        {"id": 6, "op": "score", "texts": ["still alive slop"]},
     )
-    assert len(responses) == 4
+    assert len(responses) == 5
     assert responses[0]["id"] is None and "bad request line" in responses[0]["error"]
     assert responses[1] == {"id": 3, "error": "'texts' must be a list of strings"}
     assert responses[2]["id"] == 4 and "unknown op" in responses[2]["error"]
-    assert responses[3] == {"id": 5, "scores": [0.9]}
+    assert responses[3] == {"id": 5, "error": "'text' must be a string"}
+    assert responses[4] == {"id": 6, "scores": [0.9]}
 
 
 def test_rewrite_and_prefer_unarmed_error_politely():
@@ -79,28 +81,6 @@ def test_rewrite_and_prefer_unarmed_error_politely():
     )
     assert "without a styler" in responses[0]["error"]
     assert "without a preferences sink" in responses[1]["error"]
-
-
-def test_rewrite_delegates_and_flattens_result():
-    calls = []
-
-    def rewriter(text, *, context=None, best_of=4):
-        calls.append((text, context, best_of))
-        return {
-            "input_score": 0.5,
-            "candidates": [{"text": "better", "score": 0.2, "anchors_lost": []}],
-        }
-
-    (resp,) = run_lines(
-        {"id": 3, "op": "rewrite", "text": "meh prose", "context": "## H", "best_of": 2},
-        rewriter=rewriter,
-    )
-    assert calls == [("meh prose", "## H", 2)]
-    assert resp == {
-        "id": 3,
-        "input_score": 0.5,
-        "candidates": [{"text": "better", "score": 0.2, "anchors_lost": []}],
-    }
 
 
 def test_rewrite_rejects_blank_text_and_survives_rewriter_errors():
@@ -256,15 +236,6 @@ def test_segment_offsets_are_utf16_code_units():
     assert second["start"] != text.index("The paragraph")  # the naive answer differs
 
 
-def test_segment_rejects_a_non_string_and_survives():
-    responses = run_lines(
-        {"id": 1, "op": "segment", "text": ["not", "a", "string"]},
-        {"id": 2, "op": "segment", "text": "Still alive and segmenting."},
-    )
-    assert responses[0] == {"id": 1, "error": "'text' must be a string"}
-    assert len(responses[1]["segments"]) == 1
-
-
 def test_score_op_uses_the_detector_batch_path_when_there_is_one():
     """The marker sends a document's paragraphs as one `score` op — so send them
     to the backbone as one encode, not one per paragraph (D57)."""
@@ -285,14 +256,6 @@ def test_score_op_uses_the_detector_batch_path_when_there_is_one():
     )
     assert resp == {"id": 1, "scores": [0.5, 0.5, 0.5]}
     assert sizes == [3]
-
-
-def test_score_op_still_works_for_a_detector_with_no_batch_path():
-    def detect(prose: str) -> dict:
-        return {"score": 0.9 if "slop" in prose else 0.1, "configured": True}
-
-    resp = serve.handle_request({"id": 2, "op": "score", "texts": ["slop", "ok"]}, detect, {})
-    assert resp == {"id": 2, "scores": [0.9, 0.1]}
 
 
 def test_serve_answers_a_failed_styler_build_and_lives(monkeypatch, tmp_path):

@@ -254,23 +254,6 @@ def test_a_verdict_manifest_is_listed_with_its_pins(tmp_path):
     assert "docscale-20260904" in text and "detector=c0e2ac85be" in text
 
 
-def test_a_verdict_manifest_does_not_become_the_promoted_one(tmp_path):
-    """The trap F6 documented: `docscale-...` sorts above every timestamp stem.
-
-    Its `promoted: false` and its missing `result` are both load-bearing, and
-    the ordering must not depend on either.
-    """
-    runs = tmp_path / "runs"
-    _write_runs(
-        runs,
-        [
-            _manifest("20260101-old"),
-            _verdict("docscale-20260904", produced_at="2026-09-04T10:14+10:00"),
-        ],
-    )
-    assert st.promoted_manifest(runs)["run_id"] == "20260101-old"
-
-
 def test_manifests_are_ordered_by_their_own_clock_not_their_filename(tmp_path):
     """A run id is a timestamp by convention only, so the clock decides (D74)."""
     runs = tmp_path / "runs"

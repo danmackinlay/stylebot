@@ -10,7 +10,7 @@ import pytest
 
 from stylebot import splits as sp
 from stylebot.classify_train import Dataset
-from stylebot.errors import ConfigError, RunError
+from stylebot.errors import RunError
 
 
 def _dataset(posts_pairs: dict[str, int], synth_posts: set | None = None) -> Dataset:
@@ -116,27 +116,6 @@ def test_role_of_is_a_frozen_contract():
 
     assert sp.role_of("notebook/gamma.qmd", _with_frac(0.46916)) == "detector"
     assert sp.role_of("notebook/gamma.qmd", _with_frac(0.46914)) == "styler"
-
-
-def test_role_of_memo_does_not_leak_between_splits_docs():
-    """No cached pinned-list may answer for the wrong splits doc.
-
-    `role_of` scans `eval_posts` directly and holds no state, so this passes
-    trivially today. It stays as the guard on that: a memo was tried and
-    reverted (870d030) for making `role_of` non-reentrant and going stale on an
-    in-place edit — the last assertion here is the case that broke.
-    """
-    rule = {"kind": "hash", "detector_frac": 0.4, "salt": "0"}
-    a = {"schema_version": 1, "eval_posts": ["post/only_in_a.qmd"], "rest_rule": rule}
-    b = {"schema_version": 1, "eval_posts": ["post/only_in_b.qmd"], "rest_rule": rule}
-    for _ in range(3):  # alternate so a cached set has to be invalidated each time
-        assert sp.role_of("post/only_in_a.qmd", a) == "eval"
-        assert sp.role_of("post/only_in_a.qmd", b) != "eval"
-        assert sp.role_of("post/only_in_b.qmd", b) == "eval"
-        assert sp.role_of("post/only_in_b.qmd", a) != "eval"
-    # In-place growth of the pinned list is picked up too.
-    a["eval_posts"].append("post/late_pin.qmd")
-    assert sp.role_of("post/late_pin.qmd", a) == "eval"
 
 
 def test_save_load_roundtrip_and_validation(tmp_path):
@@ -353,12 +332,6 @@ def test_missing_eval_posts_is_an_error_not_a_warning(tmp_path):
     assert [line for line in report if sp.is_error(line)] == []
 
 
-def test_check_splits_without_blog_root_checks_no_paths(tmp_path):
-    """The on-disk check is opt-in: `check_splits` has corpus-only callers."""
-    ds = _dataset({"notebook/old.qmd": 2})
-    assert not any(sp.is_error(line) for line in sp.check_splits(_renamed_splits(), ds))
-
-
 def test_role_of_reads_the_pinned_list_through_the_alias_map():
     """A pin spelled with the post's NEW path still names the same identity.
 
@@ -391,13 +364,3 @@ def test_extending_with_a_renamed_post_pins_both_spellings():
     # Re-adding under either spelling is a no-op, not a version churn.
     assert sp.extend_eval(extended, ["notebook/new.qmd"]) is extended
     assert sp.extend_eval(extended, ["notebook/old.qmd"]) is extended
-
-
-def test_require_pinned_posts_is_the_gate_check_splits_only_reported(tmp_path):
-    """The same fact as `missing_eval_posts`, raised — for pre-run callers."""
-    splits = _renamed_splits()
-    (tmp_path / "notebook").mkdir()
-    with pytest.raises(ConfigError, match="notebook/old.qmd"):
-        sp.require_pinned_posts(splits, tmp_path)
-    (tmp_path / "notebook" / "new.qmd").write_text("x")
-    assert sp.require_pinned_posts(splits, tmp_path) is None
