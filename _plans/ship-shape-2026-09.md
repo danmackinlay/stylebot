@@ -1,6 +1,6 @@
 # Ship-shape runbook, 2026-09-04 — a master agent and its swarm
 
-**Status: specified 2026-09-04, not started.** Written from a four-review design
+**Status: wave 1 landed 2026-09-04 (stylebot `fc56ce7..7e04234`, blog `8fcb92f639..93d3b62c88`); wave 2 in progress.** Written from a four-review design
 QA of both repos (seam, data contract, mechanism, docs apparatus) run against
 stylebot `880a579` (main) and blog `8056cb219c` (master), with both suites green
 (917 / 1 skipped; 800 / 2 skipped). The QA transcript is not in git; every
@@ -419,6 +419,8 @@ reviewer signs that off against the step-1 byte-identity test.
   `SourcePolicy(glob, meta_field, max_level)` and an author slot at the next
   re-stamp (wave 4 step 4 is that moment). Not dispatched until decided.
 
+**Decided 2026-09-04 (Dan):** allowlist edits ride the commit that earns them (M1b, option B, D58); `findings.md` gets a P4 gate (M1c, option A); X3's eight knobs as listed; interim archives keep every save with `superseded_by` (checked read-only first: all six sessions are interim, see §8); promotion is an explicit `dan-style promote` (D74 amended); views are not committed, the raw generator output stays in the draw, the five null-provenance cells are kept; blog-agnosticism is a `SourcePolicy` plus an author slot at the wave 4 step 4 re-stamp. Added to wave 2: **C21 · blog: archive immutability guard** — a committed per-archive hash manifest with a test that existing archives never change, and a pre-commit check refusing modified or deleted paths under `captures/`; the six archives `c0f8fbfa6b` edited are *not* restored.
+
 ## 7. Acceptance, per wave (the reviewer's checklist)
 
 - Both suites green in both main checkouts; test counts not lower than
@@ -455,3 +457,11 @@ reports below this line, dated, one line each.
 - 2026-09-04 (seam brief): the blog's `styler.chunk_diet` is a thin twin of
   `backends.serving_diet`, pinned by tests; fold when wave 3 lane B3 touches
   `styler.py`, or report again.
+- 2026-09-04 (T4): the blog's `bin/dan_style.py:30-33` docstring and `pyproject.toml:100` comment still describe stylebot as optional; `styler_dep.INSTALL_HINT` names `--extra styler` where the docs say `--no-group styler`; C1 deletes the first and third, the comment is a blog docs fix.
+- 2026-09-04 (T4): `voice_classifier.eval_pass` hardcodes `backend="tinker"` for `eval --documents`, so unlike `run`/`style`/`serve` it has no `--backend openai` path; wave 3 lane B1 touches that function.
+- 2026-09-04 (M1): stylebot `capture.py: recut_archives` measures 98 lines under its recorded 99; `ruff format --check` fails on both repos' `tests/test_budget.py` and 13 stylebot files (pre-existing; `ruff check` clean).
+- 2026-09-04 (T2): the blog's `model-roster-2026-08.md` optional "§Gotchas into the head" trim was not done; stylebot `v2-longer-rewrites.md:29` cites the run-4 preflight stub for evidence that now lives only in `findings.md` "v2 post-gate distributions".
+- 2026-09-04 (T5): `PROSE_CEILING` sits at zero headroom (4688 of 4688); the next docstring under `src/stylebot` must be paid for in the same change.
+- 2026-09-04 (T1): blog `training_targets.py:176-182` restates findings numbers (a P1 copy); `synth_cli.py:162` "(synth-flag-audit C2)" could cite D83; no test pins D40's "the verdict path imports with no extras".
+- 2026-09-04 (T3): `findings.md` disagrees with itself on the corpus size across one day (8,244 on 2026-09-03 vs 8,156 on 2026-09-04; the blog's seam stub says 8,148) and none says what it counted; D73's "49 real captures" is a copied number; OVERVIEW's transcript-mining sizing now has no home in either repo.
+- 2026-09-04 (wave-4 pre-check, read-only): the six multi-archive sessions are all interim saves of one session (Dan's keep-with-`superseded_by` holds); no save order is recorded anywhere (`meta.json` has no timestamp, `iter_archives` orders by random id); a recut today re-emits superseded saves and a floor-failing archive keeps stale records through `capture.py:545-547`; the corpus holds byte- and near-duplicate real pairs from this; one final save (more_measured, 2026-08-06) followed an AI edit pass by four minutes; blog commit `c0f8fbfa6b` (2026-09-01) edited `before.md`/`after.md` inside six archives — archives are mutable in practice, hence the new C21 guard.
