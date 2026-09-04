@@ -739,8 +739,8 @@ nothing.
 `_plans/stylebot-seam-followup-2026-09.md` — one layer per "why" (decisions →
 findings → code → commit), size budgets on modules, functions and docstrings, and
 dispatch rules for agents. `tests/test_budget.py` enforces the sizes against an
-allowlist of everything over budget today; the blog runs a copy over
-`src/livingthing`. The allowlist is the record of the sizes as measured.
+allowlist of everything over budget, plus P3's and P6's doc budgets; the blog
+runs a copy over `src/livingthing`. The allowlist records the sizes as measured.
 
 **Alternatives considered**:
 
@@ -759,9 +759,9 @@ cliff — and a deleted entry is the only evidence of progress the process keeps
 
 **Re-evaluate if** an allowlist entry has to *grow* for a change that is plainly
 right: the budget is then wrong, and what gets written is the new budget, not the
-exception. The enforced package-wide number is the prose line count rather than
-P2's ratio, because deleting mechanism raises the ratio and F2/F8 exist to delete
-mechanism; a ratio enforced literally would reward keeping it.
+exception. The package-wide check is a prose count *or* a pinned ratio, either
+sufficient (F16c): the count alone makes one documented helper cost a docstring
+deleted elsewhere, and the ratio alone fails the code diet F2/F8 exist to do.
 
 ## D59: one mechanism in the scoring path — the judge awaits, everything else batches
 

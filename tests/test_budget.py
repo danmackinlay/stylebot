@@ -32,11 +32,13 @@ DOCSTRING_LINES = 15
 MODULE_DOCSTRING_LINES = 30
 RATIO_BUDGET = 0.40
 
-# (docstring + comment) lines in the package after F8's diet, when the ratio was
-# 0.4108. This, not the ratio, is the ratchet: deleting mechanism raises the
-# ratio while lowering the prose. Only ever lower it; set it to None once the
-# package meets RATIO_BUDGET.
+# Two high-water marks, and satisfying EITHER satisfies the rule. Neither works
+# alone: the count alone makes one documented helper cost a docstring deleted
+# elsewhere, and the ratio alone fails an honest code diet, which is why the
+# count was picked first. Together they fail only prose grown with no code to
+# explain. Only ever lower them; set both to None once RATIO_BUDGET is met.
 PROSE_CEILING: int | None = 4688
+RATIO_PIN: float | None = 0.4072
 
 # module -> the budgets it is over today, at their exact current size.
 # "functions" and "docstrings" list every over-budget span, largest first.
@@ -194,15 +196,77 @@ def test_prose_does_not_outgrow_the_code_it_explains() -> None:
     if PROSE_CEILING is None:
         assert ratio <= RATIO_BUDGET, f"(docstring+comment)/code is {ratio:.4f}"
         return
-    assert prose <= PROSE_CEILING, (
-        f"docstring+comment lines grew {PROSE_CEILING} -> {prose} "
-        f"((docstring+comment)/code {ratio:.4f}, budget {RATIO_BUDGET}). "
-        "Say it once, in the layer that owns it (D58/P1)."
+    assert prose <= PROSE_CEILING or ratio <= RATIO_PIN, (
+        f"docstring+comment lines grew {PROSE_CEILING} -> {prose} AND the ratio "
+        f"{RATIO_PIN} -> {ratio:.4f} (budget {RATIO_BUDGET}). New code pays for "
+        "its own prose at the pinned ratio; past that, say it once, in the layer "
+        "that owns it (D58/P1)."
     )
     assert ratio > RATIO_BUDGET, (
         f"the package now meets the {RATIO_BUDGET} ratio ({ratio:.4f}) — "
-        "set PROSE_CEILING = None"
+        "set PROSE_CEILING and RATIO_PIN = None"
     )
+
+
+# ---------------------------------------------------------------------------
+# P3: decisions.md stays indexed, and an entry stays one screen
+# ---------------------------------------------------------------------------
+
+#: P3's numbers. The live file is capped and its entries are capped; the
+#: archive is history written before the rule, so only its index rows are
+#: checked. Until F16c this was an awk one-liner pasted into agent briefs.
+DECISIONS_LINES = 1300
+DECISION_ENTRY_LINES = 31
+
+#: Index rows reserved for an entry that was never written.
+RESERVED_DECISIONS = frozenset({"D70"})
+
+
+def _decision_entries(path: Path) -> dict[str, int]:
+    """`Dn -> line count` per `## Dn:` section, up to the next `## ` heading."""
+    entries: dict[str, int] = {}
+    current, n = None, 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            if current:
+                entries[current] = n
+            match = re.match(r"## (D\d+):", line)
+            current, n = (match.group(1) if match else None), 0
+        n += 1
+    if current:
+        entries[current] = n
+    return entries
+
+
+def test_decisions_stay_indexed_and_short() -> None:
+    plans = Path(__file__).resolve().parents[1] / "_plans"
+    live_path = plans / "decisions.md"
+    live_text = live_path.read_text(encoding="utf-8")
+    live = _decision_entries(live_path)
+    archived = _decision_entries(plans / "decisions-archive.md")
+
+    n = len(live_text.splitlines())
+    assert n <= DECISIONS_LINES, (
+        f"decisions.md is {n} lines, over P3's {DECISIONS_LINES}. The ratchet is "
+        "the archive, not trimming: move the oldest entries to "
+        "decisions-archive.md and leave their index rows behind."
+    )
+    over = {d: size for d, size in live.items() if size > DECISION_ENTRY_LINES}
+    assert not over, (
+        f"decisions.md entries over {DECISION_ENTRY_LINES} lines: {over}. A "
+        "number is a citation into findings.md, never a copy (P3, P4)."
+    )
+    both = sorted(set(live) & set(archived))
+    assert not both, f"{both}: a full entry in both decisions.md and the archive"
+
+    rows = set(re.findall(r"^\| (D\d+)", live_text, re.M))
+    missing = sorted(set(archived) - rows)
+    assert not missing, (
+        f"archived {missing} has no index row in decisions.md — a moved entry "
+        "keeps its one-line summary and status in the index (P3)."
+    )
+    orphans = sorted(rows - set(live) - set(archived) - RESERVED_DECISIONS)
+    assert not orphans, f"index rows with no entry in either file: {orphans}"
 
 
 # ---------------------------------------------------------------------------
