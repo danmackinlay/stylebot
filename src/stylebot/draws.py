@@ -3,8 +3,8 @@
 Layer 1, **draws**: one record per generator call or human edit, keyed on what
 it *was* — source, blog SHA, span, generator, strategy, prompt, effort,
 replicate — with the raw generator output kept and an `outcome` of
-`accepted | gate:<name> | error:<class>`. Draws live in
-`draws/synth-<YYYY-MM>.jsonl` shards and are only ever appended to.
+`accepted | gate:<name> | error:<class>`. Draws live under `draws/` in
+`pairs/`'s shard layout and are only ever appended to.
 
 Layer 2, **views**: a function of the draws and a `ViewPolicy`, materialised
 in exactly `pairs/`'s shard layout so every `corpus.iter_records` reader keeps
@@ -38,7 +38,6 @@ from stylebot.targets import Target
 ACCEPTED = "accepted"
 
 _MONTH_RE = re.compile(r"^(\d{4}-\d{2})")
-_DRAW_SHARD_GLOB = "synth-*.jsonl"
 
 
 @dataclass
@@ -102,24 +101,24 @@ def draw_id(
 
 
 def draw_shard_of(draw: Draw) -> str:
-    """`synth-<YYYY-MM>.jsonl` by `drawn_at`, else `synth-undated.jsonl`."""
+    """`corpus.shard_of` its record, so a backfill keeps corpus order (W4 step 3);
+    a tombstone goes to `synth-<YYYY-MM>.jsonl` by `drawn_at`, else `-undated`."""
+    if draw.record is not None:
+        return corpus.shard_of(draw.record)
     match = _MONTH_RE.match(draw.drawn_at) if isinstance(draw.drawn_at, str) else None
     return f"synth-{match.group(1) if match else 'undated'}.jsonl"
 
 
 def append(draws_dir: str | Path, draw: Draw) -> Path:
-    """Append one draw to its month shard; returns the shard written.
-
-    A plain append: step 1 has no concurrent writer, so there is no lock (P8).
-    """
+    """Append one draw to its shard, no lock: nothing writes concurrently (P8)."""
     shard = Path(draws_dir) / draw_shard_of(draw)
     append_jsonl(shard, draw.to_json())
     return shard
 
 
 def iter_draws(draws_dir: str | Path) -> Iterator[Draw]:
-    """Every draw in `draws_dir`, shard by shard in name order."""
-    for shard in sorted(Path(draws_dir).glob(_DRAW_SHARD_GLOB)):
+    """Every draw in `draws_dir`, shard by shard in `corpus.shard_paths` order."""
+    for shard in corpus.shard_paths(draws_dir):
         for rec in iter_jsonl(shard):
             yield Draw.from_json(rec)
 

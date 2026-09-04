@@ -15,7 +15,7 @@ from pathlib import Path
 import conftest
 import pytest
 
-from stylebot import corpus, draws, pairs
+from stylebot import corpus, draws, migrations, pairs
 from stylebot.errors import ConfigError
 
 SWEEP_ENV = conftest.SWEEP_ENV
@@ -103,6 +103,36 @@ def test_rejects_and_named_exclusions_never_reach_the_view(pairs_dir, tmp_path):
 # --- draws on disk -------------------------------------------------------------
 
 
+@pytest.fixture
+def interleaved_dir(tmp_path, write_pairs_corpus) -> Path:
+    """A `pairs/` whose real records span three months out of order, interleaved
+    with synthetic ones — the live `captures.jsonl` shape (W4 step 3)."""
+    flat = write_pairs_corpus(tmp_path / "flat.jsonl", n_posts=6, chunks=1, n_synth_posts=3)
+    records = corpus.read_records(flat)
+    ordered: list[dict] = []
+    months = ("2026-07", "2026-05", "2026-09")
+    for real, synth, month in zip(records[:3], records[3:], months, strict=True):
+        real["meta"]["captured_at"] = f"{month}-15T00:00:00+00:00"
+        ordered += [real, synth]
+    out = tmp_path / "pairs"
+    out.mkdir()
+    corpus.rewrite(out, ordered)
+    assert [p.name for p in corpus.shard_paths(out)] == ["captures.jsonl", "synth-2026-07.jsonl"]
+    return out
+
+
+def test_draws_on_disk_keep_corpus_order_for_real_records(interleaved_dir, tmp_path):
+    for draw in draws.draws_from_pairs(interleaved_dir):
+        draws.append(tmp_path / "draws", draw)
+    names = sorted(p.name for p in (tmp_path / "draws").glob("*.jsonl"))
+    assert names == ["captures.jsonl", "synth-2026-07.jsonl"], "shards mirror pairs/"
+
+    back = list(draws.iter_draws(tmp_path / "draws"))
+    assert [d.record for d in back] == corpus.read_records(interleaved_dir)
+    report = draws.build_view(back, draws.ViewPolicy(), out=tmp_path / "view")
+    assert report.content_sha256 == corpus.content_sha256(interleaved_dir)
+
+
 def test_append_then_iter_draws_round_trips(tmp_path):
     draw = draws.Draw(
         draw_id=draws.draw_id("post/a.qmd", "abc123", (10, 20), "gpt", "polish", "p1", "off"),
@@ -116,15 +146,16 @@ def test_append_then_iter_draws_round_trips(tmp_path):
         raw_output="It is worth noting.",
         outcome="gate:length",
         drawn_at="2026-09-04T10:00:00+00:00",
-        record={"messages": [], "meta": {"source": "post/a.qmd"}},
+        record={"messages": [], "meta": {"source": "post/a.qmd", "synthetic": True}},
     )
+    draw.record["meta"]["captured_at"] = draw.drawn_at
     shard = draws.append(tmp_path / "draws", draw)
     assert shard.name == "synth-2026-09.jsonl"
-    undated = draws.append(tmp_path / "draws", dataclasses.replace(draw, drawn_at=None))
-    assert undated.name == "synth-undated.jsonl"
+    stone = dataclasses.replace(draw, drawn_at=None, record=None)
+    assert draws.append(tmp_path / "draws", stone).name == "synth-undated.jsonl"
 
     back = list(draws.iter_draws(tmp_path / "draws"))
-    assert back == [draw, dataclasses.replace(draw, drawn_at=None)]
+    assert back == [draw, stone]
     assert isinstance(back[0].span, tuple)
 
 
@@ -181,3 +212,20 @@ def test_the_view_reproduces_the_blog_corpus(tmp_path):
     assert report.excluded == {} and set(report.by_outcome) == {draws.ACCEPTED}
     assert _ids(tmp_path / "view") == _ids(src)
     assert len(_ids(src)) == report.records
+
+
+@pytest.mark.sweep  # conftest deselects it unless SWEEP_ENV is set
+def test_the_backfilled_draws_reproduce_the_blog_corpus(tmp_path):
+    root = Path(os.environ[SWEEP_ENV]).expanduser()
+    src = root / "_training_pairs" / "pairs"
+    assert src.is_dir(), f"{SWEEP_ENV}={root} has no _training_pairs/pairs"
+
+    migrations.backfill_draws(src, tmp_path / "draws", apply=True, log=lambda _: None)
+    report = draws.build_view(
+        draws.iter_draws(tmp_path / "draws"),
+        draws.ViewPolicy(keep_superseded=True),
+        out=tmp_path / "view",
+    )
+    print(f"\ncontent_sha256={report.content_sha256} records={report.records}")
+    assert report.content_sha256 == corpus.content_sha256(src)
+    assert [p.name for p in report.shards] == [p.name for p in corpus.shard_paths(src)]

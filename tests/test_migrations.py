@@ -360,7 +360,7 @@ def test_backfill_dry_run_writes_nothing_and_reports(sharded, tmp_path):
     assert any("dry run" in x for x in lines) and "pair records            : 8" in lines
 
 
-def test_backfill_apply_writes_month_shards_the_view_reproduces(sharded, tmp_path):
+def test_backfill_apply_writes_pairs_shaped_shards_the_view_reproduces(sharded, tmp_path):
     report = migrations.backfill_draws(
         sharded,
         tmp_path / "draws",
@@ -368,7 +368,11 @@ def test_backfill_apply_writes_month_shards_the_view_reproduces(sharded, tmp_pat
         apply=True,
         log=lambda _: None,
     )
-    assert [p.name for p in report.shards] == ["synth-2026-07.jsonl", "synth-2026-08.jsonl"]
+    assert [p.name for p in report.shards] == [
+        "captures.jsonl",
+        "synth-2026-07.jsonl",
+        "synth-2026-08.jsonl",
+    ]
     assert corpus.content_sha256(sharded) == corpus.content_sha256(sharded)  # untouched
     assert _view_sha(tmp_path / "draws", tmp_path / "view") == corpus.content_sha256(sharded)
     stones = [d for d in draws.iter_draws(tmp_path / "draws") if d.outcome != draws.ACCEPTED]
@@ -439,7 +443,7 @@ def test_backfill_draws_command_is_in_the_hidden_group_and_dry_runs(sharded, tmp
 
     res = CliRunner().invoke(data_cli, ["backfill-draws", str(tmp_path), "--apply"])
     assert res.exit_code == 0, res.output
-    assert "wrote 2 shard(s)" in res.output
+    assert "wrote 3 shard(s)" in res.output
     assert _view_sha(tmp_path / "draws", tmp_path / "view") == corpus.content_sha256(sharded)
     res = CliRunner().invoke(data_cli, ["backfill-draws", str(tmp_path), "--apply"])
     assert res.exit_code != 0 and "not empty" in res.output
