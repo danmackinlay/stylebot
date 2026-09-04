@@ -693,11 +693,11 @@ def rewrite_text(
         if on_decision is not None:
             on_decision(chunk, context, list(raw), raw_scores, chosen_idx, chosen_idx is None)
         if out is not chunk:
-            # Backends strip sampled text; restore the chunk's edge newline
-            # runs so reassembly (and EOF newlines) stay byte-faithful.
-            lead = chunk[: len(chunk) - len(chunk.lstrip("\n"))]
-            trail = chunk[len(chunk.rstrip("\n")) :]
-            out = lead + out.strip("\n") + trail
+            # Backends strip sampled text; restore the chunk's edge whitespace
+            # runs (EOF newline, CRLF, a two-space hard break) byte-for-byte.
+            lead = chunk[: len(chunk) - len(chunk.lstrip())]
+            trail = chunk[len(chunk.rstrip()) :]
+            out = lead + out.strip() + trail
         result.chunk_chars.append((len(chunk), len(out)))
         out_chunks.append(out)
     pieces = [frontmatter]

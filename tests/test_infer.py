@@ -41,6 +41,20 @@ def test_rewrite_identity_preserves_text_exactly():
     assert result.n_chunks >= 2
 
 
+def test_rewrite_identity_round_trips_crlf():
+    text = "Para one.\r\n\r\nPara two.\r\n"
+    result = infer.rewrite_text(text, _identity_styler, max_chunk_chars=12)
+    assert result.text == text
+    assert result.n_chunks == 2
+
+
+def test_rewrite_identity_round_trips_a_trailing_hard_break():
+    text = "Para one.  \n\nPara two.  \n"
+    result = infer.rewrite_text(text, _identity_styler, max_chunk_chars=12)
+    assert result.text == text
+    assert result.n_chunks == 2
+
+
 def test_rewrite_frontmatter_never_sent_to_styler():
     seen = []
 
