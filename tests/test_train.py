@@ -217,7 +217,8 @@ def test_validation_gate_refuses_malformed_corpus(tmp_path):
         tr.assemble_training_corpus(bad)
 
 
-def test_dry_run_writes_manifest_without_spending(tmp_path, write_pairs_corpus):
+def test_dry_run_reports_the_manifest_and_writes_nothing_under_runs(tmp_path, write_pairs_corpus):
+    """The dry-run report, and the rule that it is a report: `runs/` stays untouched."""
     corpus_path = write_pairs_corpus(n_posts=6, **CORPUS)
     manifest_out = tmp_path / "runs" / "test.json"
     calls = []
@@ -232,13 +233,46 @@ def test_dry_run_writes_manifest_without_spending(tmp_path, write_pairs_corpus):
         runner=lambda *a, **k: calls.append(1),
     )
     assert not calls  # the paid seam is never touched on dry-run
-    manifest = json.loads(manifest_out.read_text())
+    assert not manifest_out.parent.exists(), "a dry run writes nothing under runs/"
+    assert result.manifest_path == manifest_out  # where the paid run would write
+    manifest = result.manifest
     assert manifest["dry_run"] is True and manifest["result"] is None
     assert manifest["run_id"] == "testrun"
     assert manifest["data"]["pairs_sha256"] == result.corpus.pairs_sha256
     assert manifest["data"]["n_train"] + manifest["data"]["n_val"] == 12
+    assert manifest["data"]["policy_sha"] is None and manifest["data"]["draws_sha256"] is None
     assert manifest["estimate"]["cost_usd"] > 0
     assert manifest["hyperparameters"]["base_model"] == tr.DEFAULT_BASE_MODEL
+
+
+def test_a_run_from_draws_trains_on_the_view_and_pins_it(tmp_path, write_pairs_corpus):
+    """`draws_dir` + `policy` replace `pairs_path`: the manifest names the view (W4 step 4)."""
+    from stylebot import config, corpus, draws
+
+    corpus_path = write_pairs_corpus(n_posts=6, **CORPUS)
+    draws_dir = tmp_path / "data" / "draws"
+    for draw in draws.draws_from_pairs(corpus_path):
+        draws.append(draws_dir, draw)
+    policy = draws.ViewPolicy(keep_superseded=True)
+
+    result = tr.run_training(
+        None,
+        tmp_path / "work",
+        tmp_path / "runs" / "r.json",
+        dry_run=True,
+        run_id="v",
+        draws_dir=draws_dir,
+        policy=policy,
+    )
+    data = result.manifest["data"]
+    view = config.view_path(tmp_path / "data", draws.policy_sha(policy))
+    assert data["pairs_path"] == str(view) and view.is_dir()
+    assert data["policy_sha"] == draws.policy_sha(policy)
+    assert data["draws_sha256"] == draws.content_sha256(draws_dir)
+    assert data["pairs_sha256"] == corpus.content_sha256(view) == result.corpus.pairs_sha256
+    assert data["n_train"] + data["n_val"] == 12
+    with pytest.raises(ConfigError, match="pairs_path or draws_dir"):
+        tr.run_training(None, tmp_path / "work", tmp_path / "runs" / "r.json", dry_run=True)
 
 
 def test_run_training_records_result_via_runner_seam(tmp_path, write_pairs_corpus):
@@ -379,3 +413,35 @@ def test_train_cli_exits_2_on_a_missing_pin(tmp_path, write_pairs_corpus):
     )
     assert result.exit_code == 2, result.output
     assert "not on disk under" in result.output
+
+
+def test_train_cli_dry_run_prints_the_manifest_and_leaves_runs_untouched(
+    tmp_path, write_pairs_corpus
+):
+    from click.testing import CliRunner
+
+    from stylebot import config, draws
+    from stylebot.bin import ai_style
+
+    data_dir = tmp_path / "corpus"
+    data_dir.mkdir()
+    write_pairs_corpus(path=config.pairs_path(data_dir), n_posts=6, **CORPUS)
+    manifest_out = tmp_path / "runs" / "m.json"
+    common = ["--work-dir", str(tmp_path / "w"), "--manifest-out", str(manifest_out), "--dry-run"]
+
+    result = CliRunner().invoke(ai_style.main, ["train", "--data-dir", str(data_dir)] + common)
+    assert result.exit_code == 0, result.output
+    assert not manifest_out.parent.exists()
+    assert '"dry_run": true' in result.output and '"policy_sha": null' in result.output
+
+    draws_dir = config.draws_path(data_dir)
+    for draw in draws.draws_from_pairs(config.pairs_path(data_dir)):
+        draws.append(draws_dir, draw)
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps({"keep_superseded": True, "retired_arms": ["x"]}))
+    args = ["train", "--data-dir", str(data_dir), "--draws", str(draws_dir)]
+    result = CliRunner().invoke(ai_style.main, args + ["--policy", str(policy_file)] + common)
+    assert result.exit_code == 0, result.output
+    sha = draws.policy_sha(draws.ViewPolicy(keep_superseded=True, retired_arms=("x",)))
+    assert f'"policy_sha": "{sha}"' in result.output
+    assert config.view_path(data_dir, sha).is_dir() and not manifest_out.parent.exists()

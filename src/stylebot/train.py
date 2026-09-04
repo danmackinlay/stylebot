@@ -16,19 +16,18 @@ are lazy; the module imports free.
 - Records train exactly as stored: `STYLE_SYSTEM` verbatim as `messages[0]`,
   heading context left on both sides. Never strip or rewrite a side.
 - Per-passage multiplicity is a *policy hook* (`per_passage`), not a built-in
-  gate: several chunk budgets over one stretch of prose, re-key epochs and
-  deliberate replicates all stack pairs on one passage, and whether that
-  up-weights the passage is the caller's call. What assembly owes the caller is
-  that the grouping be **true** — see `passage_groups`, and D43 for the
-  measurement that showed exact-body grouping was not.
+  gate: chunk budgets, re-key epochs and replicates all stack pairs on one
+  passage, and whether that up-weights it is the caller's call. What assembly
+  owes the caller is that the grouping be **true** — `passage_groups`, and
+  D43 for the measurement that showed exact-body grouping was not.
 - Weight is integer replication, applied to the TRAIN file only
   (`pair_weight` -> `meta.weight` -> N copies in `_write_conversations`). Val
   stays one row per pair, or the held-out loss is a weighted average of a
   distribution nobody chose.
 
 **The manifest is the reproducibility record.** Weights and corpus never enter
-git; the small JSON written by `write_manifest` (content hash of the corpus,
-split, hyperparameters, tinker paths, cost) is what gets committed.
+git; the small JSON `write_manifest` writes (corpus and view hashes, split,
+hyperparameters, tinker paths, cost) is committed — never by a dry run.
 
 Needs the ``trainer`` extra for the paid path —
 ``uv add 'stylebot[trainer]'`` (tinker, tinker-cookbook).
@@ -47,6 +46,7 @@ from pathlib import Path
 
 import click
 
+from stylebot import draws
 from stylebot.cli_options import opt
 from stylebot.corpus import content_sha256
 from stylebot.errors import ConfigError, MissingExtra, RunError
@@ -687,10 +687,12 @@ def _default_run_id() -> str:
 
 
 def run_training(
-    pairs_path: str | Path,
+    pairs_path: str | Path | None,
     work_dir: str | Path,
     manifest_out: str | Path,
     *,
+    draws_dir: str | Path | None = None,
+    policy: draws.ViewPolicy | None = None,
     hp: Hyperparameters | None = None,
     splits_path: str | Path | None = None,
     blog_root: str | Path | None = None,
@@ -708,21 +710,19 @@ def run_training(
 ) -> TrainResult:
     """Assemble → manifest → (unless dry-run) train on Tinker → export adapter.
 
-    The training knobs arrive as a `Hyperparameters` bundle; everything left
-    here is a knob that is *not* a hyperparameter — where the data comes from,
-    which policy hooks filter it, and what to do with the artifacts.
-
-    `val_frac` stays out of the bundle deliberately: it shapes the data split,
-    not the fit, and the manifest records its *outcome* (`data.val_posts`). The
-    seed drives both the split and the epoch shuffle, so it belongs in the bundle.
-    `blog_root` (with `splits_path`) refuses a run whose pinned eval posts have
-    left the tree — D34's check, before the spend rather than after it.
-
-    The manifest at `manifest_out` is written twice — pre-run (so an interrupted
-    run still leaves its record) and again with `result`; on `dry_run` only the
-    first, keyless and free. `runner` is the paid seam
-    `(corpus, manifest, work_dir, hp, *, download_adapter) -> result dict`.
+    Data: `pairs_path`, or the view of `draws_dir` under `policy`
+    (`draws.training_view`, which the manifest pins as `policy_sha` and
+    `draws_sha256`). `hp` is the fit; `val_frac` shapes the split, recorded as
+    `data.val_posts`. `blog_root` + `splits_path` refuse a run whose pinned eval
+    posts left the tree (D34). A dry run writes nothing and returns the
+    manifest it would write; the paid run writes it pre-run and with `result`.
+    `runner` is the seam `(corpus, manifest, work_dir, hp, *, download_adapter)`.
     """
+    view_pins: dict = {}
+    if draws_dir is not None:
+        pairs_path, view_pins = draws.training_view(draws_dir, policy)
+    elif pairs_path is None:
+        raise ConfigError("run_training needs pairs_path or draws_dir")
     pairs_path = Path(pairs_path)
     work_dir = Path(work_dir)
     run_id = run_id or _default_run_id()
@@ -766,14 +766,14 @@ def run_training(
         selector_constants=selector_constants,
         base_model_revision=base_model_revision,
     )
-    manifest_path = write_manifest(manifest, manifest_out)
+    manifest["data"] |= {"policy_sha": None, "draws_sha256": None, **view_pins}
     if dry_run:
-        return TrainResult(manifest=manifest, manifest_path=manifest_path, corpus=corpus)
+        return TrainResult(manifest=manifest, manifest_path=Path(manifest_out), corpus=corpus)
 
+    manifest_path = write_manifest(manifest, manifest_out)
     work_dir.mkdir(parents=True, exist_ok=True)
     run = runner or _tinker_runner
     result = run(corpus, manifest, work_dir, hp, download_adapter=download_adapter)
-    manifest["dry_run"] = False
     manifest["result"] = {k: v for k, v in result.items() if k != "adapter_dir"}
     manifest_path = write_manifest(manifest, manifest_out)
     adapter = result.get("adapter_dir")

@@ -28,6 +28,8 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
+import click
+
 from stylebot import config, corpus, pairs
 from stylebot.errors import ConfigError
 from stylebot.generators import Generator
@@ -333,3 +335,55 @@ def ensure_view(draws_dir: str | Path, policy: ViewPolicy, *, views_root: str | 
     }
     (out / VIEW_SIDECAR).write_text(json.dumps(side, indent=2) + "\n", encoding="utf-8")
     return out
+
+
+def training_view(draws_dir: str | Path, policy: ViewPolicy | None) -> tuple[Path, dict]:
+    """The view a training run reads, built beside its draws, and the manifest
+    keys that name it: `policy_sha` and `draws_sha256` sit next to
+    `pairs_sha256`, which is then the view's own content hash (W4 step 4)."""
+    draws_dir = Path(draws_dir)
+    policy = policy or ViewPolicy()
+    view = ensure_view(draws_dir, policy, views_root=config.views_root(draws_dir.parent))
+    return view, {"policy_sha": policy_sha(policy), "draws_sha256": content_sha256(draws_dir)}
+
+
+def load_policy(path: str | Path | None) -> ViewPolicy:
+    """A `ViewPolicy` from a JSON object of its fields (lists become tuples);
+    `None` is the identity policy. The blog builds its policy from constants
+    instead (`training_targets.view_policy`); this is `ai-style`'s way in."""
+    if path is None:
+        return ViewPolicy()
+    doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    unknown = (
+        sorted(set(doc) - {f.name for f in fields(ViewPolicy)}) if isinstance(doc, dict) else []
+    )
+    if not isinstance(doc, dict) or unknown:
+        raise ConfigError(f"{path}: not a ViewPolicy object; unknown field(s) {unknown}")
+    for key in ("retired_arms", "excluded_draw_ids"):
+        if doc.get(key) is not None:
+            doc[key] = tuple(doc[key])
+    return ViewPolicy(**doc)
+
+
+def view_options():
+    """`--draws DIR` and `--policy FILE` for a command that reads a view (W4 step 4)."""
+
+    def deco(f):
+        f = click.option(
+            "--policy",
+            "policy_path",
+            type=click.Path(exists=True, dir_okay=False, path_type=Path),
+            default=None,
+            help="A ViewPolicy as a JSON object of its fields (`draws.load_policy`). "
+            "[default: the identity policy]",
+        )(f)
+        return click.option(
+            "--draws",
+            "draws_dir",
+            type=click.Path(file_okay=False, path_type=Path),
+            default=None,
+            help="A draws/ directory: build (or reuse) its view under the sibling views/ "
+            "and read that instead of pairs/ (D84).",
+        )(f)
+
+    return deco

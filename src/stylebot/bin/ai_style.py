@@ -37,18 +37,11 @@ from pathlib import Path
 
 import click
 
-# `classify_train`, `splits` and `train` are imported at module scope so click
-# can own their defaults directly (`default=tr.DEFAULT_LORA_RANK`), replacing a
-# triple declaration: `default=None`, a hand-written `[default: X]` in the help
-# string, and an `x if x is not None else DEFAULT_X` at the call site. All three
-# import free (tinker/sklearn/sentence-transformers stay lazy) and reuse the
-# substrate `synth` already pulls in: 344 µs measured, against 4.5 ms for click.
-# `infer` stays lazy — it owns no default declared here.
-#
-# `synth`/`synth_cli` are here for the same reason (`synth_options()` is a
-# decorator; a default cannot be lazy). D49 has the `--help` numbers and why
-# neither a lazy-command group nor deferring `asyncio` earned its keep.
-from stylebot import backends, config, pairs, synth, synth_cli
+# Library modules are imported at module scope so click can own their defaults
+# and option decorators directly (`default=tr.DEFAULT_LORA_RANK`,
+# `synth_options()`); all import free. `infer` stays lazy — it owns no default
+# declared here. D49 has the `--help` numbers.
+from stylebot import backends, config, draws, pairs, synth, synth_cli
 from stylebot import classify_cli as cc
 from stylebot import classify_train as ct
 from stylebot import eval as ev
@@ -83,22 +76,10 @@ main.add_command(_log, name="log")
 main.add_command(_data, name="data")
 
 
-# ---------------------------------------------------------------------------
-# The styler backend: one surface, two commands.
-#
-# `run` (batch, one file) and `serve` (long-lived editor sidecar) arm the SAME
-# styler from the SAME flags — the sidecar's rewrite op is `run` held open. The
-# surface itself (`BackendOpts`, `build_styler`, the token-scaling rule and the
-# manifest diet) is `stylebot.backends`, a LIBRARY: it lived here until
-# 2026-09-03, where livingthing could not import it, reimplemented it, and lost
-# `max_tokens` in the copy. Nothing of it is left here — not even the exit-code
-# translation, which `ErrorTranslatingGroup` now does for the whole tree.
-#
-# The per-command differences below are deliberate and stay per-command:
-# `run` defaults --backend to tinker (serve omits it for score-only serving),
-# `serve` defaults --temperature hotter, and serve's --detector-model is
-# required (it IS the service) where run's only feeds --best-of.
-# ---------------------------------------------------------------------------
+# The styler backend (`run`, `serve`) is one surface, `stylebot.backends`, a
+# LIBRARY — its docstring says why. What stays per-command is deliberate:
+# `run` defaults --backend to tinker, `serve` runs hotter and requires
+# --detector-model (it IS the service) where run's only feeds --best-of.
 
 
 @main.command("synth", cls=synth_cli.SectionedCommand)
@@ -664,9 +645,11 @@ def train_clf_cmd(**kw) -> None:
 @click.option(
     "--dry-run",
     is_flag=True,
-    help="Assemble, write the manifest preview + token/cost estimate, and stop. No key, no spend.",
+    help="Assemble, print the manifest + token/cost estimate, and stop. Writes nothing; "
+    "no key, no spend.",
 )
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the pre-spend confirmation prompt.")
+@draws.view_options()
 @bundle_options([tr.Hyperparameters])
 def train_cmd(
     data_dir: Path,
@@ -680,19 +663,24 @@ def train_cmd(
     download_adapter: bool,
     dry_run: bool,
     assume_yes: bool,
+    draws_dir: Path | None,
+    policy_path: Path | None,
     **kw,
 ) -> None:
     """Phase 3: LoRA-SFT the styler on Tinker (stylebot.train.run_training).
 
     Assembles the corpus (styler-role posts only under --splits, near-copy pairs
-    KEPT), cuts a by-POST val split, writes the manifest, runs the Tinker recipe.
-    Needs the `trainer` extra and TINKER_API_KEY; --dry-run needs neither.
+    KEPT) — or, with --draws, the view of those draws — cuts a by-POST val
+    split, writes the manifest, runs the Tinker recipe. Needs the `trainer`
+    extra and TINKER_API_KEY; --dry-run needs neither.
     """
     pairs_path = config.pairs_path(data_dir)
-    if not pairs_path.exists():
+    if draws_dir is None and not pairs_path.exists():
         raise click.ClickException(f"no corpus (pairs/ or pairs.jsonl) in {data_dir}")
 
     kwargs = dict(
+        draws_dir=draws_dir,
+        policy=draws.load_policy(policy_path),
         hp=bundles_from_kwargs(kw, {"hp": tr.Hyperparameters})["hp"],
         splits_path=splits_path,
         blog_root=blog_root,
@@ -719,7 +707,8 @@ def train_cmd(
         f"{preview.manifest['hyperparameters']['base_model']}"
     )
     if dry_run:
-        click.echo(f"[dry-run] manifest preview -> {preview.manifest_path}")
+        click.echo(f"[dry-run] the manifest a paid run would write to {preview.manifest_path}:")
+        click.echo(json.dumps(preview.manifest, indent=2))
         return
 
     if not config.get_key("TINKER_API_KEY"):
