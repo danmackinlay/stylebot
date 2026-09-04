@@ -655,11 +655,9 @@ def score_candidate(
     its field comes back ``None``. `eyeball` is an optional human note carried
     verbatim into the record.
 
-    Each signal has an injection slot for an already-computed result, which is
-    how `score_pairs_file` feeds a whole slice's pre-passes back in: `vale`
-    (from `vale_score_many`), `detector_result` (from `classify.detect_many`),
-    `judge_result` (from the awaited judge pass). Leave them `None` — the
-    default — and this computes each signal itself, one passage at a time.
+    Each signal has an injection slot for an already-computed result (`vale`,
+    `detector_result`, `judge_result`), how `scoring` feeds a slice's pre-passes
+    back in; left `None`, this computes the signal itself, one passage at a time.
 
     Returns a stable, JSON-able record keyed
     ``text_chars`` / ``vale`` / ``judge`` / ``detector`` / ``eyeball``.

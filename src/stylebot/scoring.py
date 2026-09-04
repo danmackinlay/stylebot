@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from stylebot.classify import DETECTOR_IDENTITY_KEYS, detect_many
-from stylebot.errors import ConfigError
+from stylebot.errors import ConfigError, RunError
 from stylebot.eval import (
     SCHEMA_VERSION,
     AsyncJudge,
@@ -198,9 +198,10 @@ def _score_record(
     """Score the requested fields of one pair record -> a `scores.jsonl` line.
 
     The three `*_by_field` maps carry the slice's pre-pass results (field name
-    -> that signal's record); a field missing from one falls back to scoring
-    that signal inline. A judge call that raised is carried as the exception and
-    re-raised here, so it fails its own record and no other.
+    -> that signal's record). A field missing from the Vale or detector map is
+    scored inline; missing from the judge map it raises, since the inline judge
+    call would store an async judge's coroutine. A judge call that raised is
+    carried as the exception and re-raised here, against that record alone.
     """
     meta = record.get("meta") or {}
     scores: dict[str, dict] = {}
@@ -209,9 +210,10 @@ def _score_record(
         verdict = (judge_by_field or {}).get(name)
         if isinstance(verdict, BaseException):
             raise verdict
+        if judge is not None and verdict is None:
+            raise RunError(f"record {record_id(record)!r}: no judge verdict for field {name!r}")
         scores[name] = score_candidate(
             text,
-            judge=judge,
             detector=detector,
             vale_config=vale_config,
             vale=(vale_by_field or {}).get(name),
@@ -492,10 +494,10 @@ async def score_pairs_file_async(
     """Score a `pairs.jsonl` corpus -> an id-keyed `scores.jsonl` (batched).
 
     For each pair, score the named `fields` and append one score record keyed by
-    `record_id`. Idempotent + resumable: ids already in `out_path` are skipped.
-    Records go in slices of `_SCORE_BATCH_RECORDS` (`_score_slice`), so a crash
-    costs at most the slice in flight. `max_workers` counts judge calls in
-    flight — the only concurrency (D59), so a corpus pass wants an async judge.
+    `record_id`; ids already in `out_path` are skipped (idempotent, resumable).
+    Per slice (`_SCORE_BATCH_RECORDS`, `_score_slice`) the Vale and detector
+    pre-passes run synchronously, blocking the loop — by design, D59: the judge
+    awaits, everything else batches — then `max_workers` judge calls go in flight.
 
     On entry `out_path` is pruned of records whose pair no longer exists
     (`prune_orphan_scores`; count in `ScoreResult.pruned_orphans` — surface it,
