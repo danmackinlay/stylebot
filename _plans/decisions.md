@@ -784,10 +784,8 @@ holds the function, and the predicate it wrapped is still in `infer`.
 **Decision (2026-09-04, F12f).** `stylebot.status` gains `load_manifests` and a
 `RunEntry` per manifest — run id, `kind`, state (serving / completed / not
 promoted / incomplete) and the artifacts it pinned — which `format_status`
-prints under the runs block. `promoted_manifest` keeps its contract and now reads
-the same list. This is what makes F6's "`dan-style status` lists the docscale run
-with its pins" true; before it, a verdict manifest showed only as the count
-going up.
+prints under the runs block; `promoted_manifest` reads the same list. Before
+it, a verdict manifest showed only as the count going up (F6).
 
 **The ordering changes with it.** Manifests were sorted by filename in reverse on
 the convention that a run id is a timestamp. A verdict manifest's stem
@@ -803,11 +801,14 @@ rejected: a checkout rewrites mtimes. *A separate `ai-style runs` command* —
 rejected under P8, a new command for data `status` already reads.
 
 **Deciding constraint.** The guards on the two committed verdict manifests stay
-load-bearing: no `result` key, `promoted: false`. Nothing here may make a
-manifest without a `result` promotable, and a test pins that.
+load-bearing: no `result` key, `promoted: false`; a test pins that nothing here
+makes a manifest without a `result` promotable.
 
-**Re-evaluate if** a runs directory grows past ~30 manifests, when the listing
-wants a `--limit` more than it wants completeness.
+**Re-evaluate if** a runs directory passes ~30 manifests and wants a `--limit`.
+
+**Amended 2026-09-05 (W4 step 4).** Promotion is opt-in: `promoted_manifest` serves
+only `promoted: true`, which `ai-style promote RUN_ID` (`status.promote`) sets and
+clears elsewhere; `train --dry-run` writes nothing. Live `runs/` serves `20260817-170037` under both rules.
 
 ## D75: a sampled message's content may be parts, not a string
 

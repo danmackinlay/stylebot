@@ -10,7 +10,8 @@ that answer "where is this pipeline?":
    every pinned eval post is still on disk, the per-role table and the danger
    report (`stylebot.splits`);
 3. the **runs** — every manifest with the artifacts it pinned, which are
-   completed, and which one serves by default (the `promoted` rule, below);
+   completed, and which one serves (`promoted: true`, written by `promote` —
+   the one thing this module writes; the rule is `promoted_manifest`);
 4. the **detector** — the artifact's `git_sha`, when it was fit, and on how
    many pairs (`stylebot.classify.load_artifact_meta`);
 5. the **cross-checks between them**, which is why this is one function rather
@@ -35,6 +36,7 @@ from pathlib import Path
 
 from stylebot import corpus as corpus_mod
 from stylebot import splits as splits_mod
+from stylebot.errors import ConfigError
 
 
 def _run_time(doc: dict) -> float:
@@ -81,26 +83,46 @@ def load_manifests(runs_dir: str | Path) -> list[tuple[Path, dict]]:
 
 
 def promoted_manifest(runs_dir: str | Path) -> dict | None:
-    """The newest completed, non-nixed run manifest under `runs_dir`, or None.
+    """The newest completed run manifest marked `promoted: true`, or None.
 
-    A manifest is *completed* when it carries a `result` block and *promoted*
-    unless it says `"promoted": false`; the default-serving run is the newest
-    that is both. The rule lives here rather than in either CLI so `status` and
-    serving cannot disagree about which adapter is live — the blog's
-    `styler.latest_manifest` is this function plus an error.
-
-    `"promoted": false` skips a run without hiding it — a nixed run, an ablation
-    arm and a verdict manifest stay on record with their `promotion_note` and
-    are listed by `run_entries`.
+    A manifest is *completed* when it carries a `result` block; it *serves*
+    only when `promote` has said so (D74 as amended, W4 step 4) — a completed
+    run with no `promoted` key is on record and not serving, and `"promoted":
+    false` is a nixed run, an ablation arm or a verdict manifest, all listed by
+    `run_entries`. The rule lives here rather than in either CLI so `status`
+    and serving cannot disagree: the blog's `styler.latest_manifest` is this
+    function plus an error.
 
     Returns the manifest with `_path` added. None when no manifest qualifies —
-    an unbuilt pipeline, not an error.
+    an unbuilt or never-promoted pipeline, not an error.
     """
     for path, manifest in load_manifests(runs_dir):
-        if manifest.get("result") and manifest.get("promoted") is not False:
+        if manifest.get("result") and manifest.get("promoted") is True:
             manifest["_path"] = str(path)
             return manifest
     return None
+
+
+def _write_manifest(path: Path, doc: dict) -> None:
+    path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+
+def promote(runs_dir: str | Path, run_id: str) -> Path:
+    """Make `run_id` the one serving run: `promoted: true` on its manifest,
+    `false` on every other completed one. An incomplete manifest (no `result`)
+    is neither promotable nor touched. Returns the promoted manifest's path."""
+    manifests = load_manifests(runs_dir)
+    chosen = [(p, d) for p, d in manifests if str(d.get("run_id") or p.stem) == run_id]
+    if not chosen:
+        raise ConfigError(f"no manifest for run {run_id!r} under {runs_dir}")
+    path, doc = chosen[0]
+    if not doc.get("result"):
+        raise ConfigError(f"run {run_id!r} has no result; only a completed run can serve")
+    for other, odoc in manifests:
+        if other != path and odoc.get("result") and odoc.get("promoted") is not False:
+            _write_manifest(other, odoc | {"promoted": False})
+    _write_manifest(path, doc | {"promoted": True})
+    return path
 
 
 @dataclass(frozen=True)
@@ -346,7 +368,7 @@ def _cross_checks(splits: SplitsStatus, runs: RunsStatus, detector: DetectorStat
             f"manifest pins (D42) — which partition it held out is not recorded"
         )
     if runs.exists and not promoted:
-        out.append(f"no completed, promoted run manifest under {runs.path}")
+        out.append(f"no promoted run manifest under {runs.path} — `promote RUN_ID` names one")
     for line in splits.report:
         out.append(line)
     return out
@@ -419,7 +441,7 @@ def _format_runs(r: RunsStatus) -> list[str]:
             budgets = ", ".join(f"{k}:{v}" for k, v in sorted(scale["budgets"].items()))
             lines.append(f"           diet:     {budgets}")
     else:
-        lines.append("           serving:  (none promoted)")
+        lines.append("           serving:  none (run `promote`)")
     for entry in r.entries:
         lines.append(f"           {entry.run_id:<26} {entry.kind:<22} {entry.state}")
         if entry.pins:

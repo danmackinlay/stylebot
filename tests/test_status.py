@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from click.testing import CliRunner
 
 from stylebot import status as st
@@ -66,7 +67,8 @@ def _write_runs(runs_dir, manifests):
 # --- the promoted rule ------------------------------------------------------
 
 
-def test_promoted_manifest_takes_the_newest_completed_non_nixed_run(tmp_path):
+def test_promoted_manifest_serves_only_a_run_marked_promoted(tmp_path):
+    """Promotion is opt-in (D74 amended): no key means "completed, not serving"."""
     runs = tmp_path / "runs"
     _write_runs(
         runs,
@@ -76,9 +78,51 @@ def test_promoted_manifest_takes_the_newest_completed_non_nixed_run(tmp_path):
             _manifest("20260103-aborted", result=False),
         ],
     )
-    assert st.promoted_manifest(runs)["run_id"] == "20260101-old"
+    assert st.promoted_manifest(runs) is None
     _write_runs(runs, [_manifest("20260104-new", promoted=True)])
     assert st.promoted_manifest(runs)["run_id"] == "20260104-new"
+    _write_runs(runs, [_manifest("20260105-newer")])  # newer, completed, never promoted
+    assert st.promoted_manifest(runs)["run_id"] == "20260104-new"
+
+
+def test_promote_flips_exactly_one_run_to_serving(tmp_path):
+    from stylebot import train as tr
+    from stylebot.errors import ConfigError
+
+    runs = tmp_path / "runs"
+    _write_runs(
+        runs,
+        [
+            _manifest("20260101-a"),
+            _manifest("20260102-b", promoted=True),
+            _manifest("20260103-c", result=False),
+        ],
+    )
+    assert tr.promote is st.promote
+    assert st.promote(runs, "20260101-a") == runs / "20260101-a.json"
+    docs = {p.stem: json.loads(p.read_text()) for p in runs.glob("*.json")}
+    assert docs["20260101-a"]["promoted"] is True
+    assert docs["20260102-b"]["promoted"] is False
+    assert "promoted" not in docs["20260103-c"], "an incomplete run is not touched"
+    assert st.promoted_manifest(runs)["run_id"] == "20260101-a"
+    with pytest.raises(ConfigError, match="no result"):
+        st.promote(runs, "20260103-c")
+    with pytest.raises(ConfigError, match="no manifest"):
+        st.promote(runs, "20260199-zzz")
+
+
+def test_ai_style_promote_and_status_agree_on_the_serving_run(tmp_path):
+    runs = tmp_path / "runs"
+    _write_runs(runs, [_manifest("20260101-a"), _manifest("20260102-b")])
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    status = ["status", "--data-dir", str(data_dir), "--runs", str(runs)]
+    before = CliRunner().invoke(ai_style, status)
+    assert before.exit_code == 0 and "serving:  none (run `promote`)" in before.output
+    result = CliRunner().invoke(ai_style, ["promote", "--runs", str(runs), "20260101-a"])
+    assert result.exit_code == 0, result.output
+    after = CliRunner().invoke(ai_style, status)
+    assert "serving:  20260101-a" in after.output and "20260102-b" in after.output
 
 
 def test_promoted_manifest_is_none_rather_than_an_error_when_nothing_qualifies(tmp_path):
@@ -161,7 +205,7 @@ def test_collect_flags_a_detector_fit_under_a_stale_eval_stratum(tmp_path):
 
 def test_collect_says_when_a_promoted_run_predates_the_splits_pin(tmp_path):
     runs = tmp_path / "runs"
-    _write_runs(runs, [_manifest("20260101-old")])
+    _write_runs(runs, [_manifest("20260101-old", promoted=True)])
     report = st.collect(runs_dir=runs)
     assert any("predates the splits" in w for w in report.warnings)
     # ... and stops saying it once the pin is there and agrees.
@@ -179,7 +223,7 @@ def test_collect_says_when_a_promoted_run_predates_the_splits_pin(tmp_path):
     )
     from stylebot.splits import splits_sha256
 
-    _write_runs(runs, [_manifest("20260102-new", splits_sha=splits_sha256(splits))])
+    _write_runs(runs, [_manifest("20260102-new", promoted=True, splits_sha=splits_sha256(splits))])
     report = st.collect(runs_dir=runs, splits=splits)
     assert not [w for w in report.warnings if "splits_sha256" in w]
 
@@ -189,7 +233,10 @@ def test_collect_says_when_a_promoted_run_predates_the_splits_pin(tmp_path):
 
 def test_ai_style_status_prints_the_promoted_run_id_and_lists_the_rest(tmp_path):
     runs = tmp_path / "runs"
-    _write_runs(runs, [_manifest("20260101-old"), _manifest("20260102-nixed", promoted=False)])
+    _write_runs(
+        runs,
+        [_manifest("20260101-old", promoted=True), _manifest("20260102-nixed", promoted=False)],
+    )
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     result = CliRunner().invoke(
@@ -235,7 +282,7 @@ def test_a_verdict_manifest_is_listed_with_its_pins(tmp_path):
     _write_runs(
         runs,
         [
-            _manifest("20260101-old"),
+            _manifest("20260101-old", promoted=True),
             _verdict("docscale-20260904", produced_at="2026-09-04T10:14+10:00"),
         ],
     )
@@ -257,9 +304,9 @@ def test_a_verdict_manifest_is_listed_with_its_pins(tmp_path):
 def test_manifests_are_ordered_by_their_own_clock_not_their_filename(tmp_path):
     """A run id is a timestamp by convention only, so the clock decides (D74)."""
     runs = tmp_path / "runs"
-    old = _manifest("20260101-old")
+    old = _manifest("20260101-old", promoted=True)
     old["created_at"] = "2026-01-01T00:00:00+00:00"
-    new = _manifest("aardvark")
+    new = _manifest("aardvark", promoted=True)
     new["created_at"] = "2026-09-04T00:00:00+00:00"
     _write_runs(runs, [old, new])
     assert [e.run_id for e in st.collect(runs_dir=runs).runs.entries] == [

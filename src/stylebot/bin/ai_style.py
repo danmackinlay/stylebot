@@ -2,21 +2,15 @@
 
 Per OVERVIEW "Interfaces": one command, subcommands — not a scatter of loose
 scripts. Each subcommand is a thin `click` wrapper that parses flags and calls a
-typed library function: `log` (Phase 1 capture), `synth` (Phase 2), `make-splits`
-(the shared by-post splits contract), `check-splits` (its health check) and
-`extend-eval` (the add-only re-cut of the frozen eval stratum),
-`train-clf` (the voice classifier),
-`train` (Phase 3 LoRA SFT), `run` (Phase 4 inference), `eval` (the offline
-scorer, `stylebot.eval`), `export-table` (scores -> tidy CSV), `merge-adapter`
-(adapter + base -> one merged checkpoint, `stylebot.export`), `serve` (the
-NDJSON editor sidecar, `stylebot.serve`), `validate-pairs` (the record
-contract on demand) and `status` (`stylebot.status` — what the corpus holds,
-which run serves, which detector scored it, and where those three disagree;
-the numbers documentation is no longer allowed to carry, D52).
-
-Phase 1's capture logger is `ai-style log` — a subcommand like every other, not
-a separate console script. It shipped as a standalone `ai-style-log` until
-2026-07-20; that alias is gone, one canonical spelling.
+typed library function: `log` (Phase 1 capture; a subcommand, not a console
+script, since 2026-07-20), `synth` (Phase 2), `make-splits` / `check-splits` /
+`extend-eval` (the by-post splits contract), `train-clf` (the voice
+classifier), `train` (Phase 3 LoRA SFT) and `promote` (which run serves, D74),
+`run` (Phase 4 inference), `eval` (the offline scorer), `export-table` (scores
+-> tidy CSV), `merge-adapter` (`stylebot.export`), `serve` (the NDJSON editor
+sidecar), `validate-pairs` (the record contract on demand) and `status`
+(`stylebot.status` — what the corpus holds, which run serves, which detector
+scored it, and where those disagree; the numbers docs may not carry, D52).
 
 **Exit codes are not written here.** The libraries raise `stylebot.errors`'
 two classes and `ErrorTranslatingGroup` (on `main`, so the whole subtree
@@ -731,6 +725,20 @@ def train_cmd(
     if result.adapter_dir:
         click.echo(f"PEFT adapter -> {result.adapter_dir} (never commit this)")
     click.echo(f"manifest -> {result.manifest_path} (commit this)")
+
+
+@main.command("promote")
+@click.option(
+    "--runs",
+    "runs_dir",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Directory of run manifests (where `train --manifest-out` wrote them).",
+)
+@click.argument("run_id")
+def promote_cmd(runs_dir: Path, run_id: str) -> None:
+    """Make RUN_ID the serving run: `promoted: true` on it, false on the rest (D74)."""
+    click.echo(f"promoted {run_id}: {tr.promote(runs_dir, run_id)} (commit the manifests)")
 
 
 @main.command("merge-adapter")

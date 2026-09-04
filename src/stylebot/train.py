@@ -29,8 +29,7 @@ are lazy; the module imports free.
 git; the small JSON `write_manifest` writes (corpus and view hashes, split,
 hyperparameters, tinker paths, cost) is committed — never by a dry run.
 
-Needs the ``trainer`` extra for the paid path —
-``uv add 'stylebot[trainer]'`` (tinker, tinker-cookbook).
+Needs the ``trainer`` extra for the paid path: ``uv add 'stylebot[trainer]'``.
 """
 
 from __future__ import annotations
@@ -53,6 +52,7 @@ from stylebot.errors import ConfigError, MissingExtra, RunError
 from stylebot.jsonl import dumps_line
 from stylebot.pairs import iter_pairs, system_sha, validate_pairs_file
 from stylebot.provenance import file_sha256, git_sha  # file_sha256 re-exported: public here
+from stylebot.status import promote as promote  # re-exported: the run's other verb
 
 logger = logging.getLogger(__name__)
 
