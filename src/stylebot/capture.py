@@ -256,24 +256,6 @@ def build_pair_record(
     }
 
 
-def _meta_of(record: object) -> dict:
-    return record.get("meta", {}) if isinstance(record, dict) else {}
-
-
-def remove_pairs_for_source(pairs_path: Path, source: str) -> int:
-    """Drop every record whose meta.source matches. Returns count removed."""
-    removed = 0
-
-    def drop_source(records: list[dict]) -> list[dict] | None:
-        nonlocal removed
-        kept = [r for r in records if _meta_of(r).get("source") != source]
-        removed = len(records) - len(kept)
-        return kept if removed else None
-
-    corpus.rewrite_with(pairs_path, drop_source)
-    return removed
-
-
 def capture_pairs(
     before_text: str,
     after_text: str,
@@ -396,9 +378,8 @@ def _land(
     """
     draws_dir = config.draws_path(pairs_path.parent)
     if not draws_dir.is_dir():
-        with corpus.corpus_lock(pairs_path):  # an append is a writer too (D60)
-            for record in records:
-                append_jsonl(corpus.shard_path_for(pairs_path, record), record)
+        for record in records:
+            append_jsonl(corpus.shard_path_for(pairs_path, record), record)
         return records
     for record, span in zip(records, spans, strict=True):
         draw = draws.draw_from_pair(record)
@@ -411,10 +392,9 @@ def _land(
 #
 #     captures/<capture_id>/{before.md, after.md, meta.json}
 #
-# A DIRECTORY of ordinary files, not a JSON blob, so a capture can be read,
-# `diff`ed and hand-corrected when it comes out wrong (`recut` picks the
-# correction up next run): the before->after diff IS the training signal and
-# must stay legible. `.md` and not `.qmd`, because every tool in the blog repo
+# A DIRECTORY of ordinary files, not a JSON blob, so a capture can be read and
+# `diff`ed when it comes out wrong: the before->after diff IS the training
+# signal and must stay legible. `.md` and not `.qmd`, because every tool in the blog repo
 # keys on `*.qmd` — the pre-commit hook would reformat the verbatim record,
 # search would index captured slop as the author's, and `iter_targets` would
 # sample it as a target.
@@ -487,14 +467,14 @@ def read_archive(archive_dir: Path) -> dict | None:
         return None
 
 
-# ---- Re-cutting the archive ----
+# ---- Reading the archive ----
 
 
 def iter_archives(pairs_path: Path):
     """Yield each capture archive dict beside `pairs_path`, oldest first.
 
-    Sorted by `snapped_at` so a re-cut is deterministic, and flattened to the
-    shape `recut_archives` consumes.
+    Sorted by `snapped_at` so a walk is deterministic, in `read_archive`'s
+    flat shape.
 
     Directories only. Support for the superseded `captures/<capture_id>.json`
     blobs was dropped in 0.3, but they are REFUSED rather than skipped: a silent
@@ -523,103 +503,3 @@ def iter_archives(pairs_path: Path):
         )
     archives.sort(key=lambda d: (d.get("snapped_at") or "", d.get("capture_id") or ""))
     yield from archives
-
-
-def recut_archives(
-    pairs_path: Path,
-    *,
-    coalesce_gap_paras: int,
-    coalesce_gap_chars: int,
-    max_chars: int | None = None,
-    heading_context: bool = True,
-    min_chars: int = 0,
-    max_similarity: float | None = None,
-    dry_run: bool = False,
-    blog_root: Path | str | None = None,
-) -> list[dict]:
-    """Re-derive real pairs from the capture archives at a new cut policy.
-
-    `min_chars` and `max_similarity` are the two no-op floors, and re-cutting is
-    how a corpus already holding no-ops sheds them: the archives are the source
-    of truth, so a policy change plus a re-run *replaces* those pairs. Captures
-    with no archive keep their native cut and are filtered at assembly instead.
-
-    Emitted records carry `meta.recut` and reuse the archive's `capture_id`,
-    making a re-cut IDEMPOTENT (D36); pairs from the original cut are dropped as
-    a lossier view of the same edit. Returns the records written (or that would
-    be, under `dry_run`).
-    """
-    policy = {"gap_paras": coalesce_gap_paras, "gap_chars": coalesce_gap_chars}
-    if min_chars:
-        policy["min_chars"] = min_chars
-    if max_similarity is not None:
-        policy["max_similarity"] = max_similarity
-    # The re-cut's own trees. `meta.recut` already records the gap policy in
-    # full and `record_id` folds it into the key, so the digest here is the same
-    # policy under the one name every producer answers to.
-    repo_prov = repo_provenance(blog_root if blog_root is not None else pairs_path.parent)
-    recut_digest = policy_digest({"producer": "capture-recut", **policy,
-                                  "heading_context": heading_context, "max_chars": max_chars})
-    records: list[dict] = []
-    recut_ids: set[str] = set()
-
-    for arch in iter_archives(pairs_path):
-        cap_id = arch.get("capture_id")
-        if not cap_id or arch.get("whole"):
-            continue  # whole-file captures are already unchunked
-        before_meta, before_body = split_frontmatter_meta(arch.get("before_text") or "")
-        after_meta, after_body = split_frontmatter_meta(arch.get("after_text") or "")
-        triples = diff_chunks(
-            before_body,
-            after_body,
-            heading_context=heading_context,
-            coalesce_gap_paras=coalesce_gap_paras,
-            coalesce_gap_chars=coalesce_gap_chars,
-            max_chars=max_chars,
-        )
-        triples = [t for t in triples if len(t[1].strip()) >= min_chars]
-        if max_similarity is not None:
-            # The null-edit floor, and the one `min_chars` cannot stand in for:
-            # a long paragraph whose only change is a comma is not a short pair,
-            # it is a full-length pair carrying no lesson. Both floors are
-            # needed because they fail in different directions — a one-line
-            # cross-reference is short, a punctuation touch-up is not.
-            triples = [
-                t
-                for t in triples
-                if difflib.SequenceMatcher(None, t[0], t[1]).ratio() < max_similarity
-            ]
-        if not triples:
-            continue
-        recut_ids.add(cap_id)
-        for i, (b, a, context) in enumerate(triples):
-            records.append(
-                build_pair_record(
-                    before_body=b,
-                    after_body=a,
-                    source=arch.get("source"),
-                    snapped_at=arch.get("snapped_at"),
-                    before_frontmatter=None,
-                    after_frontmatter=None,
-                    capture_id=cap_id,
-                    chunk_index=i,
-                    chunk_total=len(triples),
-                    context=context,
-                    extra_meta={"recut": policy},
-                    provenance=pair_provenance(
-                        repo_prov,
-                        policy_digest=recut_digest,
-                        source_automation=_automation_of(after_meta)
-                        or _automation_of(before_meta),
-                    ),
-                )
-            )
-
-    if not dry_run and records:
-        corpus.rewrite_with(
-            pairs_path,
-            lambda old: (
-                [r for r in old if _meta_of(r).get("capture_id") not in recut_ids] + records
-            ),
-        )
-    return records

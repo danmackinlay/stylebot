@@ -963,26 +963,14 @@ def status_cmd(
 
 @main.command("validate-pairs")
 @click.argument("pairs_file", type=click.Path(exists=True, path_type=Path))
-@click.option(
-    "--fix",
-    is_flag=True,
-    help="Drop duplicate record_ids (keeping the first of each) and rewrite the file.",
-)
-@click.option(
-    "--backup/--no-backup",
-    default=True,
-    show_default=True,
-    help="With --fix, keep a .bak beside the corpus before rewriting.",
-)
 @click.option("--limit", type=int, default=20, show_default=True, help="Problem lines to print.")
-def validate_pairs_cmd(pairs_file: Path, fix: bool, backup: bool, limit: int) -> None:
-    """Check a corpus against the record contract, and optionally de-duplicate.
+def validate_pairs_cmd(pairs_file: Path, limit: int) -> None:
+    """Check a corpus against the record contract. Read-only (D84).
 
     The gate `train` runs on its input, exposed so it can be run on demand: the
     message triple and the frozen system prompt, meta types and domains, and
-    `record_id` uniqueness across the whole corpus. `--fix` addresses only the
-    last of those — a duplicate is mechanically removable, a malformed record
-    is not.
+    `record_id` uniqueness across the whole corpus. A duplicate is fixed by a
+    policy clause and a rebuilt view, never by rewriting the file.
 
     PAIRS_FILE is a `pairs.jsonl` or a `pairs/` shard directory. Uniqueness is
     checked across every shard, which is the reason to point this at the
@@ -999,19 +987,7 @@ def validate_pairs_cmd(pairs_file: Path, fix: bool, backup: bool, limit: int) ->
         click.echo(f"  {loc}: {'; '.join(errs)}")
     if len(problems) > limit:
         click.echo(f"  ... and {len(problems) - limit} more")
-
-    if fix:
-        report = pairs.dedupe_pairs_file(pairs_file, apply=True, backup=backup)
-        click.echo(
-            f"deduped: dropped {report.dropped} of {report.total} record(s) across "
-            f"{report.duplicate_ids} duplicated id(s); {report.kept} kept"
-            + (f"; backup at {report.backup}" if report.backup else "")
-        )
-        remaining = pairs.validate_pairs_file(pairs_file)
-        click.echo(f"re-validated: {len(remaining)} problem line(s)")
-        if remaining:
-            raise SystemExit(1)
-    elif problems:
+    if problems:
         raise SystemExit(1)
 
 

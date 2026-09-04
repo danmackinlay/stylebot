@@ -218,11 +218,11 @@ def test_provenance_shape_is_checked():
 
 # --- re-cut ids (the `meta.recut` discriminator) ---------------------------
 #
-# `capture.recut_archives` reuses the archive's `capture_id` and renumbers
-# `chunk_index` from 0, so `capture_id:chunk_index` alone can name materially
-# different prose before and after a re-cut. `record_id` folds `meta.recut`
-# (the gap policy) into the key for re-cut records ONLY. The end-to-end
-# capture->recut regression lives in test_capture.py; these pin the id algebra.
+# The re-cuts (retired with W4 step 4; the corpus still holds their records)
+# reused the archive's `capture_id` and renumbered `chunk_index` from 0, so
+# `capture_id:chunk_index` alone can name materially different prose before
+# and after a re-cut. `record_id` folds `meta.recut` (the gap policy) into the
+# key for re-cut records ONLY; these pin the id algebra.
 
 _RECUT_A = {"gap_paras": 2, "gap_chars": 800}
 
@@ -309,52 +309,8 @@ def test_duplicate_record_id_is_reported_against_the_later_line(tmp_path):
     assert validate_pairs_file(p, check_duplicates=False) == []
 
 
-def test_dedupe_keeps_the_first_draw(tmp_path):
-    from stylebot.pairs import dedupe_pairs_file, iter_pairs
-
-    p = tmp_path / "pairs.jsonl"
-    p.write_text(
-        "\n".join(
-            json.dumps(r)
-            for r in (
-                _synth_record("aaa", "first draw"),
-                _synth_record("bbb"),
-                _synth_record("aaa", "second draw"),
-            )
-        )
-        + "\n"
-    )
-    dry = dedupe_pairs_file(p)
-    assert (dry.total, dry.dropped, dry.kept, dry.duplicate_ids) == (3, 1, 2, 1)
-    assert dry.drops == [("aaa", 3, 1)]
-    assert not dry.applied
-    assert len(p.read_text().splitlines()) == 3  # dry run wrote nothing
-
-    report = dedupe_pairs_file(p, apply=True)
-    assert report.applied and report.dropped == 1
-    assert report.backup is not None and report.backup.exists()
-    bodies = [r["messages"][1]["content"] for r in iter_pairs(p)]
-    # The FIRST draw survives: it is the one committed scores already join to.
-    assert bodies == ["first draw", "It is worth noting the tapestry."]
-    assert validate_pairs_file(p) == []
-
-
-def test_dedupe_is_a_no_op_on_a_clean_file(tmp_path):
-    from stylebot.pairs import dedupe_pairs_file
-
-    p = tmp_path / "pairs.jsonl"
-    p.write_text(json.dumps(_synth_record("aaa")) + "\n")
-    before = p.read_bytes()
-    report = dedupe_pairs_file(p, apply=True)
-    assert (report.dropped, report.applied) == (0, False)
-    assert p.read_bytes() == before
-    assert not (tmp_path / "pairs.jsonl.bak").exists()
-
-
-# --- the CLI shell ------------------------------------------------------------
-
-
-def test_validate_pairs_cli_reports_and_fixes(tmp_path):
+def test_validate_pairs_cli_reports_and_refuses_to_rewrite(tmp_path):
+    """Read-only (D84): a duplicate is reported and exits 1; there is no --fix."""
     from click.testing import CliRunner
 
     from stylebot.bin.ai_style import main
@@ -362,18 +318,13 @@ def test_validate_pairs_cli_reports_and_fixes(tmp_path):
     p = tmp_path / "pairs.jsonl"
     p.write_text(
         "\n".join(
-            json.dumps(r)
-            for r in (_synth_record("aaa", "first"), _synth_record("aaa", "second"))
+            json.dumps(r) for r in (_synth_record("aaa", "first"), _synth_record("aaa", "second"))
         )
         + "\n"
     )
-    runner = CliRunner()
-    result = runner.invoke(main, ["validate-pairs", str(p)])
+    before = p.read_bytes()
+    result = CliRunner().invoke(main, ["validate-pairs", str(p)])
     assert result.exit_code == 1
     assert "1 duplicate record_id" in result.output
-
-    result = runner.invoke(main, ["validate-pairs", str(p), "--fix", "--no-backup"])
-    assert result.exit_code == 0, result.output
-    assert "dropped 1 of 2" in result.output
-    assert not (tmp_path / "pairs.jsonl.bak").exists()
-    assert runner.invoke(main, ["validate-pairs", str(p)]).exit_code == 0
+    assert p.read_bytes() == before
+    assert CliRunner().invoke(main, ["validate-pairs", str(p), "--fix"]).exit_code == 2

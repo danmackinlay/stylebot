@@ -1,8 +1,8 @@
 """`stylebot.draws`: a view built from today's pairs reproduces them (D84).
 
-The fast tests run on a fixture corpus written by `corpus.rewrite`, the real
-writer, so byte-identity is against stylebot's own bytes and not against a
-copy this module made. The `sweep` test does the same over the blog corpus and
+The fast tests run on a fixture corpus laid out by `build_view` itself, so
+byte-identity is against stylebot's own bytes and not against a copy this
+module made. The `sweep` test does the same over the blog corpus and
 prints the `content_sha256` `dan-style status` reports.
 """
 
@@ -27,8 +27,7 @@ def pairs_dir(tmp_path, write_pairs_corpus) -> Path:
     """A sharded `pairs/` of 8 records — two real posts, two synthetic."""
     single = write_pairs_corpus(tmp_path / "flat.jsonl", n_posts=4, chunks=2, n_synth_posts=2)
     out = tmp_path / "pairs"
-    out.mkdir()  # `rewrite` shards only into a directory that already exists
-    corpus.rewrite(out, corpus.read_records(single))
+    draws.build_view(draws.draws_from_pairs(single), draws.ViewPolicy(), out=out)
     assert len(corpus.shard_paths(out)) == 2, "captures + one synth month"
     return out
 
@@ -116,8 +115,7 @@ def interleaved_dir(tmp_path, write_pairs_corpus) -> Path:
         real["meta"]["captured_at"] = f"{month}-15T00:00:00+00:00"
         ordered += [real, synth]
     out = tmp_path / "pairs"
-    out.mkdir()
-    corpus.rewrite(out, ordered)
+    draws.build_view(map(draws.draw_from_pair, ordered), draws.ViewPolicy(), out=out)
     assert [p.name for p in corpus.shard_paths(out)] == ["captures.jsonl", "synth-2026-07.jsonl"]
     return out
 
@@ -302,4 +300,3 @@ def test_the_view_reproduces_the_blog_corpus(tmp_path):
     assert report.excluded == {} and set(report.by_outcome) == {draws.ACCEPTED}
     assert _ids(tmp_path / "view") == _ids(src)
     assert len(_ids(src)) == report.records
-

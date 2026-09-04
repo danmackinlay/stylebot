@@ -22,7 +22,6 @@ import hashlib
 import inspect
 import json
 import logging
-import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -533,21 +532,18 @@ class PairsWriter:
     `corpus.shard_of` so a run leaves every other shard byte-identical (D50).
     Handles are opened lazily and kept, one per shard touched.
 
-    Every append is guarded by `corpus.corpus_lock`, and inside it the writer
-    catches up on whatever was appended since it last looked — a tail read from a
-    remembered offset over *every* shard, since re-reading per record would be
-    quadratic (D36). Without `fcntl` it degrades to the unlocked-but-still-tail-
-    checking path. A rewrite may replace a shard mid-run, so handle and offset
-    are checked against the inode before they are trusted (D60).
+    Before each append the writer catches up on whatever another run appended
+    since it last looked — a tail read from a remembered offset over *every*
+    shard, since re-reading per record would be quadratic (D36). No lock and
+    no inode check: nothing rewrites a corpus (D84), so a handle never goes
+    stale. The pair side stays beside the draws until W4 step 5.
     """
 
     def __init__(self, path: Path, seen: set[str]) -> None:
         self._path = Path(path)
         self._seen = seen
         self._offsets: dict[Path, int] = {}
-        self._idents: dict[Path, tuple[int, int] | None] = {}
         self._handles: dict[Path, object] = {}
-        self._open = False
 
     def __enter__(self) -> PairsWriter:
         if self._path.is_dir():
@@ -556,25 +552,16 @@ class PairsWriter:
             self._path.parent.mkdir(parents=True, exist_ok=True)
         for shard in corpus.shard_paths(self._path):
             self._offsets[shard] = shard.stat().st_size if shard.exists() else 0
-            self._idents[shard] = corpus.shard_ident(shard)
-        self._open = True
         return self
 
     def __exit__(self, *exc) -> None:
         for fp in self._handles.values():
             fp.close()
         self._handles.clear()
-        self._open = False
 
     def _handle(self, shard: Path):
-        """One shard's append handle, reopened if a rewrite replaced it (D60)."""
+        """One shard's append handle, opened on first use and kept."""
         fp = self._handles.get(shard)
-        if fp is not None:
-            st = os.fstat(fp.fileno())
-            if (st.st_dev, st.st_ino) != corpus.shard_ident(shard):
-                fp.close()
-                del self._handles[shard]
-                fp = None
         if fp is None:
             # BINARY "ab+", not text mode, for two reasons that both bite
             # silently: a text handle raises on `tell()` after line iteration,
@@ -583,7 +570,6 @@ class PairsWriter:
             fp = shard.open("ab+")
             self._handles[shard] = fp
             self._offsets.setdefault(shard, 0)
-            self._idents[shard] = corpus.shard_ident(shard)
         return fp
 
     def _catch_up(self) -> None:
@@ -597,11 +583,6 @@ class PairsWriter:
         """
         for shard in corpus.shard_paths(self._path):
             size = shard.stat().st_size if shard.exists() else 0
-            ident = corpus.shard_ident(shard)
-            if ident != self._idents.get(shard):
-                # Rewritten under us: the offset is into a dead inode (D60).
-                self._idents[shard] = ident
-                self._offsets[shard] = 0
             start = self._offsets.get(shard, 0)
             if size <= start:
                 self._offsets[shard] = size
@@ -624,17 +605,16 @@ class PairsWriter:
     def write(self, key: str, record: dict) -> bool:
         """Append `record` to its shard unless `key` is already in the corpus."""
         shard = corpus.shard_path_for(self._path, record)
-        with corpus.corpus_lock(self._path):
-            self._catch_up()
-            if key and key in self._seen:
-                return False
-            fp = self._handle(shard)
-            fp.seek(0, 2)
-            fp.write((dumps_line(record) + "\n").encode("utf-8"))
-            fp.flush()
-            self._offsets[shard] = fp.tell()
-            if key:
-                self._seen.add(key)
+        self._catch_up()
+        if key and key in self._seen:
+            return False
+        fp = self._handle(shard)
+        fp.seek(0, 2)
+        fp.write((dumps_line(record) + "\n").encode("utf-8"))
+        fp.flush()
+        self._offsets[shard] = fp.tell()
+        if key:
+            self._seen.add(key)
         return True
 
 

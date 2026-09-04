@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
@@ -192,7 +191,7 @@ def _recut_digest(recut: object) -> str:
 
     Canonical JSON (sorted keys, no whitespace) so the digest keys off the
     policy's VALUES, not off dict insertion order — and so any key a future
-    `recut_archives` adds to the stamp participates automatically. Eight hex
+    a re-cut added to the stamp participates automatically. Eight hex
     chars discriminates a handful of hand-chosen cut policies with room to spare.
     """
     try:
@@ -209,7 +208,7 @@ def record_id(record: dict) -> str:
     (real captures group by `capture_id`); else a hash of `source` + chunk index.
 
     **A re-cut record folds its cut policy (`meta.recut`) into the key**, since
-    `capture.recut_archives` reuses the `capture_id` and renumbers from 0 — so
+    the re-cuts (retired, W4 step 4) reused the `capture_id` and renumbered — so
     `<cap>:0` can name a merged pair where it named one paragraph, and a
     resuming consumer would skip changed prose as done. The same policy re-run
     gives a byte-identical id. Records with no `meta.recut` keep their key
@@ -451,90 +450,6 @@ def validate_pairs_file(
                 if errs:
                     problems.append((where, errs))
     return problems
-
-
-@dataclass
-class DedupeReport:
-    """What `dedupe_pairs_file` found (and, with `apply`, did)."""
-
-    total: int = 0
-    duplicate_ids: int = 0  # distinct record_ids appearing more than once
-    dropped: int = 0  # lines that would be / were removed
-    kept: int = 0
-    applied: bool = False
-    backup: Path | None = None
-    #: (record_id, position dropped, position kept), oldest first. Positions are
-    #: 1-based RECORD indices with blank lines skipped, which is the file's line
-    #: number for any corpus a producer wrote (nothing here emits blank lines).
-    drops: list[tuple[str, int, int]] = field(default_factory=list)
-
-
-def dedupe_pairs_file(
-    path: str | Path, *, apply: bool = False, backup: bool = True
-) -> DedupeReport:
-    """Drop every repeat of a `record_id`, keeping the FIRST occurrence.
-
-    **First, not best, and not newest**: the first is what every committed
-    `scores.jsonl` row already joined to, so keeping it leaves those artifacts
-    valid. The duplicates this exists for are not byte-identical rows — they are
-    two *draws* for the same cell, written by two synth processes that each read
-    `existing_synth_keys` before the other appended (D36).
-
-    Dry-run by default. `apply` rewrites atomically, keeping a `.bak` beside the
-    corpus unless `backup=False` — `<corpus>.bak` for a single file, a
-    `<corpus>.bak/` directory of shard copies for a sharded one. Unparseable
-    lines are round-tripped verbatim rather than dropped
-    (`iter_jsonl(keep_undecodable=True)`).
-    """
-    path = Path(path)
-    report = DedupeReport()
-
-    def dedupe(records: list[dict]) -> list[dict] | None:
-        report.total = len(records)
-        first_line: dict[str, int] = {}
-        kept: list[dict] = []
-        for lineno, rec in enumerate(records, start=1):
-            if "_raw" in rec or not isinstance(rec.get("meta"), dict):
-                kept.append(rec)
-                continue
-            rid = record_id(rec)
-            if rid in first_line:
-                report.drops.append((rid, lineno, first_line[rid]))
-                continue
-            first_line[rid] = lineno
-            kept.append(rec)
-        report.dropped = len(report.drops)
-        report.kept = len(kept)
-        report.duplicate_ids = len({rid for rid, _, _ in report.drops})
-        if not (apply and report.dropped):
-            return None
-        if backup:
-            report.backup = backup_corpus(path)
-        report.applied = True
-        return kept
-
-    corpus.rewrite_with(path, dedupe)
-    return report
-
-
-def backup_corpus(path: str | Path) -> Path:
-    """Copy a corpus aside before a destructive rewrite. Returns the backup path.
-
-    `<corpus>.bak` for a single file — the shape every migration script and
-    `--fix` has always left. For a sharded corpus it is a `<corpus>.bak/`
-    directory holding a copy of each shard, rather than one concatenated file,
-    so restoring is `cp` and not a re-shard.
-    """
-    path = Path(path)
-    if not path.is_dir():
-        bak = path.with_suffix(path.suffix + ".bak")
-        bak.write_bytes(path.read_bytes())
-        return bak
-    bak_dir = path.with_name(path.name + ".bak")
-    bak_dir.mkdir(parents=True, exist_ok=True)
-    for shard in corpus.shard_paths(path):
-        (bak_dir / shard.name).write_bytes(shard.read_bytes())
-    return bak_dir
 
 
 def iter_pairs(path: str | Path) -> Iterator[dict]:

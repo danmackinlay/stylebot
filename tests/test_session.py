@@ -1,8 +1,8 @@
 """The session rules, at the library seam (W11.b).
 
 These call `stylebot.session` directly, which is where the rules live:
-snapshot persistence, symlink canonicalisation, `save`'s disposition rule and
-`tidy`'s latest-wins rule. `tests/test_ai_style_log.py` keeps only what the
+snapshot persistence, symlink canonicalisation and `save`'s disposition
+rule. `tests/test_ai_style_log.py` keeps only what the
 shell adds — the corpus it resolves and its two exit-code classes — since a
 thin shell is proven by those, not by a CliRunner copy of every rule (X4). A
 behaviour that can only be asserted by parsing CLI output is a behaviour with
@@ -18,7 +18,6 @@ import pytest
 
 from stylebot import session
 from stylebot.errors import ConfigError
-from stylebot.jsonl import write_jsonl_atomic
 from stylebot.session import SessionError, SessionStore, Snapshot
 
 SLOP = "## S\n\nIt is worth noting the rich tapestry.\n"
@@ -453,135 +452,6 @@ def test_summarize_state_groups_by_source_and_counts_saves(store, post):
     # A closed session is not reported as an open one.
     assert state.open_sessions == []
     assert len(state.closed_sessions) == 1
-
-
-# ---- tidy: latest save per source wins ------------------------------------
-
-
-def _rec(source, captured_at, body):
-    return {
-        "messages": [{"role": "assistant", "content": body}],
-        "meta": {"source": source, "captured_at": captured_at},
-    }
-
-
-def test_tidy_keeps_only_the_latest_save_per_source(tmp_path):
-    store = SessionStore(tmp_path / "corpus")  # old layout: no draws/
-    write_jsonl_atomic(
-        store.pairs_path,
-        [
-            _rec("a.qmd", "2026-01-01T00:00:00+00:00", "old a"),
-            _rec("a.qmd", "2026-02-01T00:00:00+00:00", "new a"),
-            _rec("b.qmd", "2026-01-01T00:00:00+00:00", "old b"),
-            _rec("b.qmd", "2026-03-01T00:00:00+00:00", "new b"),
-        ],
-    )
-    result = session.tidy_pairs(store)
-    assert (result.removed, len(result.kept), result.applied) == (2, 2, True)
-    assert sorted(r["messages"][0]["content"] for r in session.read_pairs(store)) == [
-        "new a",
-        "new b",
-    ]
-
-
-def test_tidy_can_be_scoped_to_one_source(store):
-    write_jsonl_atomic(
-        store.pairs_path,
-        [
-            _rec("a.qmd", "2026-01-01T00:00:00+00:00", "old a"),
-            _rec("a.qmd", "2026-02-01T00:00:00+00:00", "new a"),
-            _rec("b.qmd", "2026-01-01T00:00:00+00:00", "old b"),
-            _rec("b.qmd", "2026-03-01T00:00:00+00:00", "new b"),
-        ],
-    )
-    result = session.tidy_pairs(store, "a.qmd")
-    assert result.removed == 1
-    assert sorted(r["messages"][0]["content"] for r in result.kept) == ["new a", "new b", "old b"]
-
-
-def test_tidy_dry_run_reports_without_writing(tmp_path):
-    store = SessionStore(tmp_path / "corpus")  # old layout: no draws/
-    records = [
-        _rec("a.qmd", "2026-01-01T00:00:00+00:00", "old a"),
-        _rec("a.qmd", "2026-02-01T00:00:00+00:00", "new a"),
-    ]
-    write_jsonl_atomic(store.pairs_path, records)
-    result = session.tidy_pairs(store, dry_run=True)
-    assert (result.removed, result.applied) == (1, False)
-    assert len(session.read_pairs(store)) == 2
-
-
-def test_tidy_keeps_sourceless_and_undecodable_records(tmp_path):
-    store = SessionStore(tmp_path / "corpus")  # old layout: no draws/
-    store.pairs_path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        json.dumps(_rec("a.qmd", "2026-01-01T00:00:00+00:00", "old a")),
-        json.dumps(_rec("a.qmd", "2026-02-01T00:00:00+00:00", "new a")),
-        json.dumps({"messages": [], "meta": {}}),  # no source: nothing to compare
-        "{ this is not json",
-    ]
-    store.pairs_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    result = session.tidy_pairs(store)
-    assert result.removed == 1
-    assert any("_raw" in r for r in result.kept)  # undecodable lines round-trip
-    assert len(session.read_pairs(store)) == 3
-
-
-def test_tidy_on_an_empty_corpus_says_so(store):
-    result = session.tidy_pairs(store)
-    assert result.empty and result.removed == 0 and not result.applied
-
-
-def test_tidy_with_nothing_to_remove_does_not_rewrite(store):
-    write_jsonl_atomic(store.pairs_path, [_rec("a.qmd", "2026-02-01T00:00:00+00:00", "only a")])
-    result = session.tidy_pairs(store)
-    assert (result.empty, result.removed, result.applied) == (False, 0, False)
-
-
-# ---- recut ----------------------------------------------------------------
-
-
-def test_recut_refuses_legacy_archives_as_a_session_error(store):
-    """`capture.iter_archives` refuses unmigrated `captures/<id>.json` blobs.
-
-    The refusal is a library `RunError`; `session.recut` re-raises it as the
-    unready-world class so the CLI prints an instruction, not a traceback.
-    """
-    cap_dir = store.data_dir / "captures"
-    cap_dir.mkdir(parents=True)
-    (cap_dir / "deadbeef.json").write_text(
-        json.dumps(
-            {
-                "capture_id": "deadbeef",
-                "source": "post/legacy.qmd",
-                "snapped_at": "2026-07-01T00:00:00+00:00",
-                "whole": False,
-                "before_text": "It is worth noting the rich tapestry.",
-                "after_text": "We dig in.",
-            }
-        ),
-        encoding="utf-8",
-    )
-    with pytest.raises(SessionError) as exc:
-        session.recut(store, gap_paras=2, gap_chars=800, max_chars=8000)
-    assert "1 legacy JSON capture archive" in str(exc.value)
-
-
-def test_recut_dry_run_leaves_the_corpus_alone(store, post):
-    long_before = "## S\n\n" + ("It is worth noting the rich tapestry. " * 20) + "\n"
-    long_after = "## S\n\n" + ("We dig in, again and again and again. " * 20) + "\n"
-    Path(post).write_text(long_before, encoding="utf-8")
-    session.open_session(store, post)
-    Path(post).write_text(long_after, encoding="utf-8")
-    session.save_session(store, post)
-    before = len(session.read_pairs(store))
-
-    result = session.recut(store, gap_paras=2, gap_chars=800, max_chars=8000, dry_run=True)
-    assert result.records and result.captures == 1
-    assert result.dry_run and result.pairs_after == result.pairs_before == before
-    assert result.median_chars > 0 and result.max_chars >= result.median_chars
-    assert len(session.read_pairs(store)) == before
 
 
 # ---- the corpus receipt ---------------------------------------------------

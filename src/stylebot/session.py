@@ -32,7 +32,6 @@ __all__ = [
     "CorpusSummary",
     "PairResult",
     "PriorPairs",
-    "RecutResult",
     "SaveResult",
     "SessionError",
     "SessionStore",
@@ -52,13 +51,11 @@ __all__ = [
     "partition_prior_pairs",
     "read_pairs",
     "read_snapshot",
-    "recut",
     "reopen_session",
     "restore_snapshot",
     "save_session",
     "snapshot_dirs",
     "summarize_state",
-    "tidy_pairs",
     "write_snapshot",
 ]
 
@@ -286,7 +283,7 @@ def read_pairs(store: SessionStore) -> list[dict]:
     saves excluded, D84), or the pair corpus under the old layout; [] if absent."""
     if store.draws_dir.is_dir():
         return list(draws.view_records(draws.iter_draws(store.draws_dir), draws.ViewPolicy()))
-    return corpus.read_records(store.pairs_path, keep_undecodable=True)
+    return corpus.read_records(store.pairs_path)
 
 
 @dataclass(frozen=True)
@@ -704,136 +701,4 @@ def summarize_state(store: SessionStore) -> StateSummary:
         by_source=by_source,
         open_sessions=load_snapshots(store.snapshots_dir),
         closed_sessions=load_snapshots(store.closed_snapshots_dir),
-    )
-
-
-# ---- tidy: latest save per source wins ------------------------------------
-
-
-@dataclass(frozen=True)
-class TidyResult:
-    """What a tidy would do, or did."""
-
-    kept: list[dict]
-    removed: int
-    empty: bool
-    applied: bool
-
-
-def tidy_pairs(
-    store: SessionStore, source: str | None = None, *, dry_run: bool = False
-) -> TidyResult:
-    """Keep only the latest save per source in `pairs.jsonl`.
-
-    Saves are grouped by source path; the most recent `captured_at` wins. With
-    `source` given, only that source is tidied. Records with no source (and
-    undecodable lines) are always kept. Normally unnecessary, since
-    `save_session` replaces by default; this is the cleanup after `"append"`.
-    """
-    result: list[TidyResult] = []
-
-    def tidy(records: list[dict]) -> list[dict] | None:
-        latest_ts: dict[str, str] = {}
-        for rec in records:
-            meta = rec.get("meta", {}) if isinstance(rec, dict) else {}
-            src = meta.get("source")
-            if src is not None and meta.get("captured_at", "") > latest_ts.get(src, ""):
-                latest_ts[src] = meta["captured_at"]
-
-        kept: list[dict] = []
-        removed = 0
-        for rec in records:
-            if not isinstance(rec, dict) or "meta" not in rec:
-                kept.append(rec)
-                continue
-            meta = rec["meta"]
-            src = meta.get("source")
-            if src is None or (source is not None and src != source):
-                kept.append(rec)
-                continue
-            if meta.get("captured_at", "") == latest_ts.get(src):
-                kept.append(rec)
-            else:
-                removed += 1
-
-        applied = bool(removed) and not dry_run
-        result.append(TidyResult(kept=kept, removed=removed, empty=not records, applied=applied))
-        return kept if applied else None
-
-    corpus.rewrite_with(store.pairs_path, tidy)
-    return result[0]
-
-
-# ---- recut ----------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class RecutResult:
-    """What a re-cut of the capture archives produced."""
-
-    records: list[dict]
-    captures: int
-    pairs_before: int
-    pairs_after: int
-    dry_run: bool
-
-    @property
-    def lengths(self) -> list[int]:
-        """After-side lengths of the re-cut pairs, sorted."""
-        return sorted(len(r["messages"][2]["content"]) for r in self.records)
-
-    @property
-    def median_chars(self) -> int:
-        lens = self.lengths
-        return lens[len(lens) // 2]
-
-    @property
-    def p90_chars(self) -> int:
-        lens = self.lengths
-        return lens[int(0.9 * (len(lens) - 1))]
-
-    @property
-    def max_chars(self) -> int:
-        return self.lengths[-1]
-
-
-def recut(
-    store: SessionStore,
-    *,
-    gap_paras: int,
-    gap_chars: int,
-    max_chars: int | None,
-    min_chars: int = 0,
-    max_similarity: float | None = None,
-    dry_run: bool = False,
-) -> RecutResult:
-    """Re-cut real pairs from the capture archives at a new gap policy.
-
-    Thin over `capture.recut_archives`, adding the before/after corpus counts and
-    the length distribution a caller reports. `capture.iter_archives` refuses
-    unmigrated legacy archives with a `RunError`; that becomes a `SessionError`
-    here, because the fix is a command the user has to run, not a traceback.
-    """
-    pairs_before = len(read_pairs(store))
-    try:
-        records = capture.recut_archives(
-            store.pairs_path,
-            coalesce_gap_paras=gap_paras,
-            coalesce_gap_chars=gap_chars,
-            max_chars=max_chars,
-            min_chars=min_chars,
-            max_similarity=max_similarity,
-            dry_run=dry_run,
-        )
-    except RunError as exc:
-        raise SessionError(str(exc)) from exc
-
-    captures = len({r["meta"]["capture_id"] for r in records}) if records else 0
-    pairs_after = pairs_before if (dry_run or not records) else len(read_pairs(store))
-    return RecutResult(
-        records=records,
-        captures=captures,
-        pairs_before=pairs_before,
-        pairs_after=pairs_after,
-        dry_run=dry_run,
     )

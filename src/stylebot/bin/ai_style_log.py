@@ -15,9 +15,9 @@ Phase 3 reads.
 
 This module is a **click shell**: it declares flags, resolves the store, calls
 `stylebot.session`, and prints. `stylebot.capture` does the diffing and the pair
-records; `stylebot.session` owns snapshot persistence, symlink canonicalisation,
-`save`'s disposition rule and `tidy`'s latest-wins rule (D35). The user-facing
-workflow is `_training_pairs/README.md`.
+records; `stylebot.session` owns snapshot persistence, symlink canonicalisation and
+`save`'s disposition rule (D35). The user-facing workflow is
+`_training_pairs/README.md`.
 
 Errors follow the package idiom (D47): `ConfigError` for wrong flags (exit 2),
 `session.SessionError` — a `RunError` — for a world that is not ready (exit 1),
@@ -52,7 +52,7 @@ from stylebot.session import SessionStore, SnapshotEntry, humanize_age
 class CaptureOpts:
     """The flags `save` and `pair` share — what a captured pair looks like.
 
-    Both commands write (before, after) into `pairs.jsonl` and differ only in
+    Both commands land (before, after) as draws (D84) and differ only in
     where the two texts come from: `save` diffs a file against its session
     snapshot, `pair` takes two paths or stdin. *What the resulting record looks
     like* is the same question for both, and these three answer it — so they are
@@ -60,8 +60,8 @@ class CaptureOpts:
     `--heading-context` came to be a six-line block maintained in two places.
 
     `--replace` is deliberately NOT here despite appearing on both: it means
-    "drop prior pairs for this source" in `pair` and "force a full replace
-    across sessions, overriding the smart default" in `save`. One spelling, two
+    "supersede prior pairs for this source" in `pair` and "supersede across
+    sessions, overriding the smart default" in `save`. One spelling, two
     behaviours — sharing the declaration would imply a symmetry there isn't.
     """
 
@@ -280,7 +280,7 @@ def reopen_session(ctx: click.Context, file: Path):
     "--replace",
     "force_replace",
     is_flag=True,
-    help="Force-replace every prior pair for this source, even ones from "
+    help="Supersede every prior pair for this source, even ones from "
     "different sessions. Use when you genuinely want to abandon earlier "
     "sessions' pairs. Mutually exclusive with --append.",
 )
@@ -309,16 +309,17 @@ def save_session(
     redo: bool,
     **kw,
 ):
-    """Save FILE's rewrite as pair(s) in pairs.jsonl, then close the session.
+    """Save FILE's rewrite as draws (D84), then close the session.
 
     By default emits one pair per changed paragraph region (use --whole for
-    one whole-file pair).
+    one whole-file pair). Nothing is rewritten: a prior pair is *superseded*
+    and a view drops it.
 
     Disposition of prior pairs for this source is **smart by default**: pairs
-    from the *same* session (matching `meta.snapped_at`) are replaced, since
+    from the *same* session (matching `meta.snapped_at`) are superseded, since
     those are interim `--keep-open` saves that should not stack, while pairs
     from earlier sessions are kept as legitimate prior rewrites. Override with
-    --replace (drop cross-session pairs too) or --append (keep everything).
+    --replace (supersede cross-session pairs too) or --append (keep everything).
     """
     if force_replace and force_append:
         raise click.UsageError("--replace and --append are mutually exclusive")
@@ -414,121 +415,6 @@ def list_state():
         _echo_snapshots(state.closed_sessions, age=True)
 
 
-@main.command(name="tidy")
-@click.argument("source", required=False)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    help="Report what would be removed without modifying pairs.jsonl.",
-)
-@click.pass_context
-def tidy_pairs(ctx: click.Context, source: str | None, dry_run: bool):
-    """Keep only the latest save per source in pairs.jsonl.
-
-    Saves are grouped by source path; the most recent captured_at timestamp
-    wins. Older saves of the same source are removed. With SOURCE given,
-    only tidy that source. With no arguments, tidy every source.
-
-    Normally unnecessary because `save` replaces by default. Useful if
-    you've used `save --append` and want to clean up retroactively.
-    """
-    result = session.tidy_pairs(_store(), source, dry_run=dry_run)
-    if result.empty:
-        click.echo("pairs.jsonl is empty; nothing to tidy")
-        return
-    if result.removed == 0:
-        click.echo("nothing to remove; every source already has a single save")
-        _remind_open_sessions(ctx)
-        return
-
-    click.echo(
-        f"{'would remove' if dry_run else 'removed'} {result.removed} pair(s), "
-        f"keeping {len(result.kept)}"
-    )
-    _remind_open_sessions(ctx)
-
-
-@main.command(name="recut")
-@click.option(
-    "--gap-paras",
-    default=2,
-    show_default=True,
-    type=int,
-    help="Bridge unchanged runs of at most this many paragraphs.",
-)
-@click.option(
-    "--gap-chars",
-    default=800,
-    show_default=True,
-    type=int,
-    help="Bridge unchanged runs of at most this many characters.",
-)
-@click.option(
-    "--max-chars",
-    default=8000,
-    show_default=True,
-    type=int,
-    help="Coalesced pairs over this size fall back to the uncoalesced cut (0 disables).",
-)
-@click.option(
-    "--min-chars",
-    default=300,
-    show_default=True,
-    type=int,
-    help="Drop re-cut pairs whose after-side is shorter than this. 300 rather than a "
-    "token floor because below it a 'pair' is a cross-reference line or a bracketed "
-    "aside — 22% of real eval chunks, and nothing a styler can restyle.",
-)
-@click.option(
-    "--max-similarity",
-    default=0.95,
-    show_default=True,
-    type=float,
-    help="Drop re-cut pairs whose two sides are at least this similar: the null edit, "
-    "which --min-chars cannot catch because a punctuation touch-up to a long paragraph "
-    "is full-length. 1.0 disables.",
-)
-@click.option("--dry-run", is_flag=True, help="Report the new cut without modifying pairs.jsonl.")
-@click.pass_context
-def recut_pairs(ctx, gap_paras, gap_chars, max_chars, min_chars, max_similarity, dry_run):
-    """Re-cut real pairs from the capture archives at a new gap policy.
-
-    The archives under `captures/` hold the full before/after texts, so the
-    corpus can be re-derived at a different cut without recapturing. Bridging
-    short unchanged runs keeps a multi-paragraph rewrite as ONE pair instead of
-    fragmenting it — the edits that are *about* cross-paragraph consistency are
-    exactly the ones the default cut chops up.
-
-    Idempotent: re-cut records reuse their archive's capture_id, so every pair
-    from a re-cut capture (original or previous re-cut) is replaced, not
-    stacked. Captures with no archive keep their native cut.
-    """
-    # A `SessionError` here (e.g. unmigrated legacy JSON archives) reaches the
-    # user as a legible instruction rather than a traceback: the group
-    # translates it, and the fix is a command they have to run.
-    result = session.recut(
-        _store(),
-        gap_paras=gap_paras,
-        gap_chars=gap_chars,
-        # 0 / 1.0 are the flags' "disable" sentinels; the library takes None.
-        max_chars=max_chars or None,
-        min_chars=min_chars,
-        max_similarity=None if max_similarity >= 1 else max_similarity,
-        dry_run=dry_run,
-    )
-    if not result.records:
-        click.echo("no archives to re-cut (captures/ is empty or holds only --whole captures)")
-        return
-    verb = "would write" if dry_run else "wrote"
-    click.echo(
-        f"{verb} {len(result.records)} pair(s) from {result.captures} capture(s) "
-        f"[median {result.median_chars} chars, p90 {result.p90_chars}, max {result.max_chars}]"
-    )
-    if not dry_run:
-        click.echo(f"pairs.jsonl: {result.pairs_before} -> {result.pairs_after}")
-    _remind_open_sessions(ctx)
-
-
 def _read_source(spec: str) -> str:
     """Read text from a path or '-' for stdin."""
     if spec == "-":
@@ -559,8 +445,8 @@ def _read_source(spec: str) -> str:
     "--replace",
     "replace",
     is_flag=True,
-    help="If --source is given, remove any prior pairs for that source first. "
-    "By default `pair` appends — unlike `save`, which replaces by default.",
+    help="If --source is given, supersede every prior pair for that source. "
+    "By default `pair` appends — unlike `save`, which supersedes by default.",
 )
 @capture_options()
 @click.pass_context
@@ -577,7 +463,7 @@ def pair(
     Unlike `save`, `pair` defaults to APPEND. The typical use is logging
     one-off pairs from clipboard or scripts, where you usually want to add
     to the corpus rather than overwrite. Pass --replace (with --source) to
-    drop prior pairs for that source first.
+    supersede prior pairs for that source.
     """
     cap: CaptureOpts = bundles_from_kwargs(kw, {"capture": CaptureOpts})["capture"]
     if before_spec == "-" and after_spec == "-":
