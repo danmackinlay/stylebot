@@ -108,7 +108,7 @@ def _coalesce_regions(
     Bridging rather than a fixed-width window, because untouched prose is text
     the author did not get to, not text they endorsed: a capture's before-side is
     slop-bearing, so padding pairs out with untouched neighbours would teach the
-    styler to leave slop alone. See `_plans/v2-longer-rewrites.md`.
+    styler to leave slop alone (D81).
     """
     if not regions or (gap_paras <= 0 and gap_chars <= 0):
         return regions

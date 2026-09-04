@@ -4,13 +4,13 @@ Offline ground truth: it scores candidate output and is not wired into the
 trainer, not baked into the served adapter. Library-first — typed functions
 over prose strings — and it never imports a CLI, nor `livingthing`.
 
-The signals (`_plans/eval-harness.md` "The four signals"): **Vale** (mechanical
+The four signals (the detector's choice is D7): **Vale** (mechanical
 slop, shelled out to the binary, degrades gracefully if it is absent), an **LLM
 judge** (injectable `Judge`; `openrouter_judge` builds a real one), a
 **statistical detector** (pluggable `Detector`, `null_detector` by default), and
 **Dan's eyeball** (the non-automatable veto channel, carried as a string).
 
-Guardrail (`_plans/eval-harness.md` "Guardrail"): this harness is **not** a
+Guardrail (D7): this harness is **not** a
 slop-detection evader. A styler should lower its detector score only as a
 *consequence* of writing more like Dan. The judge and eyeball exist to catch
 reward-hacking; a movement in the detector alone is never the success criterion.
@@ -404,7 +404,7 @@ def null_detector(prose: str) -> dict:
 
     Returns ``score=None`` so the rest of the harness composes cleanly without
     pretending to a signal it does not have. Wiring a real one is the operator's
-    call — see `_plans/eval-harness.md` "The detector decision".
+    call — see D7.
     """
     return {"score": None, "name": "null", "configured": False}
 

@@ -278,7 +278,7 @@ def test_anchor_guard_counts_both_causes_for_one_sample():
 
 
 def test_anchor_audit_records_every_candidate(tmp_path):
-    """Step 0 of `_plans/anchor-integrity.md`: the counters must survive the run.
+    """Step 0 of the anchor-integrity work (D32): the counters must survive the run.
     The denominator is candidates not marked truncated; the numerator is those
     with a non-empty lost/gained."""
     chunk = "Read [the notes](./real.qmd) and think about it for a while, honestly."

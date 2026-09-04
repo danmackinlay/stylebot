@@ -545,11 +545,10 @@ def partition_posts(
     """Split the distinct POSTs into `(train, holdout)` for the shared by-POST split.
 
     The leakage-safe contract: the detector must NOT be trained on the posts the
-    styler trains on or that the final eval scores (see `_plans/eval-harness.md`
-    "the split contract"). An explicit `holdout_posts` list pins the exact
-    partition so all three stages can reuse it; otherwise the holdout is derived
-    deterministically from `holdout_frac` + `holdout_seed`. `holdout_frac=0` and
-    no list ⇒ no holdout.
+    styler trains on or that the final eval scores (D17, D42). An explicit
+    `holdout_posts` list pins the exact partition so all three stages can reuse
+    it; otherwise the holdout is derived deterministically from `holdout_frac` +
+    `holdout_seed`. `holdout_frac=0` and no list ⇒ no holdout.
     """
     posts = sorted(set(sources))
     if holdout_posts:

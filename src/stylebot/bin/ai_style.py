@@ -1362,7 +1362,7 @@ def merge_adapter_cmd(
     help="Append per-chunk anchor accounting to this JSONL (anchor keys and lengths, never "
     "candidate text). The headline counts say whether a run went wrong; this says how the "
     "model behaves, which is what decides whether masking is worth building at all "
-    "(`_plans/anchor-integrity.md`).",
+    "(D32, D33).",
 )
 @click.option(
     "--write",

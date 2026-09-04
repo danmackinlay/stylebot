@@ -1,6 +1,6 @@
 """The shared by-POST splits contract — one partition, three roles, all stages.
 
-The reward-safety rule (see `_plans/eval-harness.md` "the split contract") is
+The reward-safety rule (D17, D42) is
 that the detector must never train on the posts the styler trains on or that
 the frozen eval scores. This module is the single source of truth for that
 partition: a small committed `splits.json` mapping every POST — present and

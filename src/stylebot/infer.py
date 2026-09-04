@@ -21,7 +21,7 @@ was trained on it; a different system prompt is out-of-distribution.
 Best-of-N: pass `best_of > 1` and a `scorer` (lower = better, e.g. the voice
 classifier via `detector_scorer`). The scorer also arms the do-no-harm guard:
 the input chunk competes, so a rewrite ships only if scored strictly better.
-Small N is Goodhart-gentle (KL ~ log N; eval-harness.md "Eval vs reward").
+Small N is Goodhart-gentle (KL ~ log N; D7).
 """
 
 from __future__ import annotations
@@ -405,7 +405,7 @@ def write_anchor_audit(
 ) -> int:
     """Append a run's per-chunk anchor accounting to a JSONL sidecar.
 
-    Step 0 of `_plans/anchor-integrity.md`: how often an UNMASKED candidate
+    Step 0 of the anchor-integrity work (D32): how often an UNMASKED candidate
     loses or invents an anchor is what the masking work is gated on (D33), and
     it is answerable by joining these lines — the denominator is every candidate
     not marked `truncated`, the numerator those with a non-empty `lost` or

@@ -623,7 +623,7 @@ def test_max_length_ratio_gate_drops_inflated_outputs(tmp_path):
 def _delinker(name: str) -> synth.Generator:
     """A generator that strips the link while 'improving' the passage — the exact
     move that, once the edit is reversed, makes the target look like it invented
-    one (`_plans/anchor-integrity.md`)."""
+    one (D32)."""
     return synth.Generator(
         name=name, generate=lambda text: f"[{name}-slop] " + text.replace("[docs](./d.qmd)", "docs")
     )

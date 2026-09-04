@@ -120,7 +120,7 @@ def _synth_key(
     byte-identical text are ONE cell, stamped `meta.merge_max_chars` by whichever
     batch reached it first — so that field records provenance, not a design cell.
     Keying on it would mint a duplicate pair per budget for identical text
-    (`_plans/v2-longer-rewrites.md`).
+    (D82).
     """
     h = hashlib.sha256()
     for part in (generator_name, strategy, reasoning_effort, prompt_id, context, target_text):
@@ -694,7 +694,7 @@ def _gate_verdict(slop: str, target_text: str, st: _RunState) -> tuple[str, str]
         # reverse-edit swap turns that into an example reading *given text
         # without links, produce text with these links*. The most-taught failure
         # in the corpus and the one nothing checked before 0.3.0
-        # (`_plans/anchor-integrity.md`).
+        # (D32).
         uniq = sorted(set(invented))
         shown = ", ".join(uniq[:2]) + ("…" if len(uniq) > 2 else "")
         return (
