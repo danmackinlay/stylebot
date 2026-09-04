@@ -1,22 +1,30 @@
-"""The hard-case corpus: eleven real posts, and the whole-blog sweep behind them.
+"""The hard-case corpus: eleven real posts, one synthetic document, the sweep.
 
-Default path: `fixtures/hard/`, eleven blog posts picked by the difficulty
-ranking in `fixtures/hard/manifest.json`, pinned span-by-span in `spans.json`.
-
-Opt-in path, the pre-release check:
+Default path: `fixtures/hard/`, eleven blog-post excerpts picked by the
+difficulty ranking in `fixtures/hard/manifest.json` plus the synthetic
+`segmenter_conformance.qmd` (the constructs no post has, D69), pinned
+span-by-span in `spans.json`. Opt-in path, the pre-release check:
 
     STYLEBOT_SWEEP_BLOG_ROOT=~/Source/livingthing uv run pytest tests/test_segment_hard.py
 
-Both paths run `violations()` over the same documents, and
-`test_the_two_paths_agree_on_the_fixture_corpus` asserts they agree, so the fast
-one is a proxy for the slow one rather than a second opinion (D68). The sweep
-has no stored baseline — the corpus is not in this repo and moves daily — so it
-checks the invariants; the snapshot is what catches an invariant-preserving
-change, and it needs the fixtures.
+Both run `violations()`; the sweep has no stored baseline — the corpus is not
+in this repo and moves daily — so it checks the invariants, and the snapshot is
+what catches an invariant-preserving change (D68).
 
-`STYLEBOT_REGEN_SEGMENTS=1` rewrites `spans.json` when a policy change is
-deliberate; it belongs in the same commit as the change, and is never hand-edited.
-Which post is the hard case for what: `fixtures/hard/manifest.json`.
+Two named configurations, because the two callers legitimately differ:
+
+    stylebot     block_only=True,  raw_html=False, html_comments=False
+    livingthing  block_only=False, raw_html=True,  html_comments=True
+
+stylebot cuts *training targets* and deletes what it protects, so a mid-line
+``$$k$$`` stays in the prose (defect A5); livingthing reflows whole documents and
+reassembles, so inline math, raw ``<script>`` and comments are protected. Both
+come from `markdown.protected_spans` alone — D29's "two policies, one
+implementation" — and `segmenter_conformance.json` records which construct each
+protects and where they diverge, so a change to either arrives as a reviewable
+diff. Do not regenerate the JSON to make a red test green: `STYLEBOT_REGEN_SEGMENTS=1`
+rewrites `spans.json` and the conformance JSON when a policy change is
+deliberate, in the same commit as the change; neither is ever hand-edited.
 """
 
 from __future__ import annotations
@@ -28,15 +36,59 @@ import re
 from pathlib import Path
 
 import pytest
-from test_segmenter_conformance import CONFIGURATIONS, covered_chars, spans_for
 
 from stylebot import markdown as md
 from stylebot.lib import gather_qmd_files
 
 HARD = Path(__file__).parent / "fixtures" / "hard"
-MANIFEST = HARD / "manifest.json"
 SPANS = HARD / "spans.json"
 SWEEP_ENV = "STYLEBOT_SWEEP_BLOG_ROOT"
+CONFORMANCE = HARD / "segmenter_conformance.qmd"
+CONFORMANCE_EXPECTED = HARD.parent / "segmenter_conformance.json"
+
+#: The named configurations, as keyword arguments to `md.protected_spans`.
+#: ``div_is_prose: null`` records that neither side frees div contents — that is
+#: the caller's policy hook, out of scope for a segmenter conformance spec.
+CONFIGURATIONS: dict[str, dict] = {
+    "stylebot": {
+        "block_only": True,
+        "raw_html": False,
+        "html_comments": False,
+        "div_is_prose": None,
+    },
+    "livingthing": {
+        "block_only": False,
+        "raw_html": True,
+        "html_comments": True,
+        "div_is_prose": None,
+    },
+}
+
+#: ``(case name, needle)``. Each needle must occur exactly once in the synthetic
+#: document; the JSON records which configurations protect it. Cases whose
+#: needle is protected NOWHERE are still cases — an indented or glued heading is
+#: here to pin that no span swallows it.
+CASES: list[tuple[str, str]] = [
+    ("backtick_fence", 'return "a backtick fence"'),
+    ("tilde_fence", "key: a tilde fence"),
+    ("indented_heading", "  ## An indented heading"),
+    ("glued_heading", "## A heading glued to prose"),
+    ("display_math_with_attrs", r"\int_0^1"),
+    ("midline_math", "$$d$$"),  # the whole construct: `high-$$d$$ behaviour`
+    ("blockquote", "somebody else's voice"),
+    ("blockquote_glued_to_prose", "no blank line after it"),
+    ("refs_div", "{#refs}"),
+    ("figure_div", "fig-conformance"),
+    ("callout_div", "callout-note"),
+    ("nested_div", "fig-nested"),
+    ("raw_html_script", "const conformance = 1;"),
+    ("html_comment_single_line", "never prose, in any configuration"),
+    ("html_comment_multi_line", "Its second sentence sits on its own line."),
+    ("html_comment_midline", "A trailing comment, opened mid-line."),
+    ("prose_between_comments", "which must stay prose"),
+    ("unclosed_div", "an-opener-that-is-never-closed"),
+    ("unclosed_fence", "an unclosed fence runs to end of document"),
+]
 
 #: A fence opener's run of characters, at the start of the span.
 OPENER_RE = re.compile(r"^[ \t]*(?P<run>`{3,}|~{3,})")
@@ -63,6 +115,59 @@ LANDMARKS: dict[str, str] = {
     "layout_div": r"(?m)^[ \t]*:::.*#tbl-",
     "heading_line": r"(?m)^#{1,6} \S",
 }
+
+
+# --- the two configurations ------------------------------------------------
+
+
+def spans_for(doc: str, config: str) -> list[md.Span]:
+    """The protected spans of `doc` under the named configuration."""
+    return md.protected_spans(doc, **CONFIGURATIONS[config])
+
+
+def covered_chars(doc: str, config: str) -> set[int]:
+    """Every character index the named configuration protects.
+
+    Coverage rather than span identity, because merging makes the two
+    incomparable as *tuples* while leaving the real invariant intact: a `>` line
+    inside a multi-line comment is a blockquote span under one configuration and
+    part of one larger comment span under the other. Both protect the same
+    characters, which is the only thing a consumer can rely on.
+    """
+    return {i for s, e, _k in spans_for(doc, config) for i in range(s, e)}
+
+
+def _covered(spans: list[md.Span], start: int, end: int) -> bool:
+    """True if some single span wholly contains ``[start, end)`` (spans merge)."""
+    return any(s <= start and end <= e for s, e, _kind in spans)
+
+
+def conformance_record(doc: str) -> dict:
+    """The whole expectation, derived from the document — the JSON's schema."""
+    by_config = {name: spans_for(doc, name) for name in CONFIGURATIONS}
+    cases = []
+    for name, needle in CASES:
+        start = doc.index(needle)
+        end = start + len(needle)
+        cases.append(
+            {
+                "name": name,
+                "needle": needle,
+                "start": start,
+                "end": end,
+                "protected_in": [c for c, sp in by_config.items() if _covered(sp, start, end)],
+            }
+        )
+    return {
+        "fixture": CONFORMANCE.name,
+        "fixture_sha256": hashlib.sha256(doc.encode("utf-8")).hexdigest(),
+        "configurations": CONFIGURATIONS,
+        "cases": cases,
+        "spans": {
+            name: [{"start": s, "end": e, "kind": k, "text": doc[s:e]} for s, e, k in spans]
+            for name, spans in by_config.items()
+        },
+    }
 
 
 # --- the invariants both paths run -----------------------------------------
@@ -165,11 +270,6 @@ def sweep(root: Path) -> dict[str, list[str]]:
 
 
 @pytest.fixture(scope="module")
-def manifest() -> dict:
-    return json.loads(MANIFEST.read_text(encoding="utf-8"))
-
-
-@pytest.fixture(scope="module")
 def corpus() -> dict[str, str]:
     return {p.name: p.read_text(encoding="utf-8") for p in sorted(HARD.glob("*.qmd"))}
 
@@ -215,19 +315,7 @@ def test_the_hard_corpus_breaks_exactly_where_the_corpus_does(corpus: dict[str, 
     assert set(found) == KNOWN_DEFECTS & set(corpus), found
 
 
-def test_the_two_paths_agree_on_the_fixture_corpus(corpus: dict[str, str]):
-    """The sweep, pointed at the fixtures, is the fast path — not a second opinion."""
-    assert sweep(HARD) == {name: violations(doc) for name, doc in corpus.items()}
-
-
 # --- the corpus is only a proxy if it still contains the constructs --------
-
-
-def test_the_manifest_matches_the_fixtures_on_disk(corpus: dict[str, str], manifest: dict):
-    listed = {p["fixture"]: p for p in manifest["posts"]}
-    assert sorted(listed) == sorted(corpus)
-    for name, doc in corpus.items():
-        assert hashlib.sha256(doc.encode("utf-8")).hexdigest() == listed[name]["sha256"], name
 
 
 def test_every_landmark_construct_survives_in_the_corpus(corpus: dict[str, str]):
@@ -267,6 +355,71 @@ def test_every_protected_kind_appears_somewhere(corpus: dict[str, str]):
             html_comments=CONFIGURATIONS[config]["html_comments"],
         )
         assert seen == want, f"{config} corpus misses {want - seen}"
+
+
+# --- the policy rows: what the two configurations mean, written down -------
+
+
+@pytest.fixture(scope="module")
+def conformance() -> str:
+    return CONFORMANCE.read_text(encoding="utf-8")
+
+
+def test_stylebot_matches_the_conformance_fixture(conformance: str):
+    record = conformance_record(conformance)
+    if os.environ.get("STYLEBOT_REGEN_SEGMENTS"):
+        CONFORMANCE_EXPECTED.write_text(
+            json.dumps(record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+    expected = json.loads(CONFORMANCE_EXPECTED.read_text(encoding="utf-8"))
+    assert record["fixture_sha256"] == expected["fixture_sha256"], (
+        "the fixture document changed; regenerate the JSON in the same commit"
+    )
+    assert record["configurations"] == expected["configurations"]
+    assert record["cases"] == expected["cases"]
+    for name in CONFIGURATIONS:
+        assert record["spans"][name] == expected["spans"][name], f"drift in the {name} config"
+
+
+def test_the_configurations_disagree_only_where_intended(conformance: str):
+    """Three declared policy differences, and nothing else.
+
+    Each is a case of the same asymmetry: livingthing reassembles protected spans
+    and stylebot deletes them, so livingthing can afford to protect a construct
+    that sits *inside* a sentence and stylebot cannot.
+    """
+    doc = conformance
+    lt = {(s, e) for s, e, _k in spans_for(doc, "livingthing")}
+    sb = {(s, e) for s, e, _k in spans_for(doc, "stylebot")}
+    extra = sorted(doc[s:e] for s, e in lt - sb)
+    assert any("$$d$$" in x for x in extra), extra  # inline display math
+    assert any(x.lstrip().startswith("<script") for x in extra), extra
+    comments = [x for x in extra if x.lstrip().startswith("<!--")]
+    assert len(comments) == 3, comments  # single-line, multi-line, mid-line
+    assert len(extra) == 2 + len(comments), extra
+    leaked = covered_chars(doc, "stylebot") - covered_chars(doc, "livingthing")
+    assert not leaked, (
+        "the stylebot config must protect a subset of livingthing's; "
+        f"unprotected for livingthing: {doc[min(leaked) : max(leaked) + 1]!r}"
+    )
+
+
+def test_html_comments_are_protected_for_livingthing_only(conformance: str):
+    cases = {c["name"]: c["protected_in"] for c in conformance_record(conformance)["cases"]}
+    for name in (
+        "html_comment_single_line",
+        "html_comment_multi_line",
+        "html_comment_midline",
+    ):
+        assert cases[name] == ["livingthing"], name
+    # The corollary that makes the mid-line case worth having: protecting a
+    # comment must not drag the prose on either side of it out of reach.
+    assert cases["prose_between_comments"] == []
+
+
+def test_every_named_case_occurs_exactly_once(conformance: str):
+    for name, needle in CASES:
+        assert conformance.count(needle) == 1, f"{name}: needle {needle!r} is not unique"
 
 
 # --- the opt-in sweep ------------------------------------------------------

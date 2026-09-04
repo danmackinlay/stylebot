@@ -92,6 +92,14 @@
       "bytes": 528,
       "sha256": "f103279078218bf8cdd2a48f7e615668c22f1a25c9c7718e7a88c99ebea39816",
       "hard_case_for": "The corpus's ONLY indented ':::' div -- a fig div inside a list item at two spaces of indent. The source post is 'draft: true', so only the three markup lines are reproduced; the prose around them is placeholder text written here."
+    },
+    {
+      "fixture": "segmenter_conformance.qmd",
+      "source": "none: synthetic, written in this repo",
+      "content": "synthetic",
+      "bytes": 2143,
+      "sha256": "7c3de6f7d20b354112140baac294ac72fe4eb1b33833e7e0b96945d7af1b8e08",
+      "hard_case_for": "D69's rule for constructs zero posts have: the unclosed ':::' opener, every named policy case in one document (CASES in test_segment_hard.py), a heading inside a callout, and the packing-parity paragraph pair test_infer_segment.py cuts both ways. Moved here from tests/fixtures/ on 2026-09-04 (X4) so violations() runs over it."
     }
   ]
 }

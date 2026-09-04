@@ -1,6 +1,6 @@
 {
   "fixture": "segmenter_conformance.qmd",
-  "fixture_sha256": "fb7bb1c372ca1e095c3be92b22c16e7d70f22eb372bc95f2dc637d5d953d3265",
+  "fixture_sha256": "7c3de6f7d20b354112140baac294ac72fe4eb1b33833e7e0b96945d7af1b8e08",
   "configurations": {
     "stylebot": {
       "block_only": true,
@@ -122,8 +122,8 @@
     {
       "name": "nested_div",
       "needle": "fig-nested",
-      "start": 968,
-      "end": 978,
+      "start": 999,
+      "end": 1009,
       "protected_in": [
         "stylebot",
         "livingthing"
@@ -132,8 +132,8 @@
     {
       "name": "raw_html_script",
       "needle": "const conformance = 1;",
-      "start": 1147,
-      "end": 1169,
+      "start": 1178,
+      "end": 1200,
       "protected_in": [
         "livingthing"
       ]
@@ -141,8 +141,8 @@
     {
       "name": "html_comment_single_line",
       "needle": "never prose, in any configuration",
-      "start": 1242,
-      "end": 1275,
+      "start": 1273,
+      "end": 1306,
       "protected_in": [
         "livingthing"
       ]
@@ -150,8 +150,8 @@
     {
       "name": "html_comment_multi_line",
       "needle": "Its second sentence sits on its own line.",
-      "start": 1444,
-      "end": 1485,
+      "start": 1475,
+      "end": 1516,
       "protected_in": [
         "livingthing"
       ]
@@ -159,8 +159,8 @@
     {
       "name": "html_comment_midline",
       "needle": "A trailing comment, opened mid-line.",
-      "start": 1646,
-      "end": 1682,
+      "start": 1677,
+      "end": 1713,
       "protected_in": [
         "livingthing"
       ]
@@ -168,22 +168,22 @@
     {
       "name": "prose_between_comments",
       "needle": "which must stay prose",
-      "start": 1316,
-      "end": 1337,
+      "start": 1347,
+      "end": 1368,
       "protected_in": []
     },
     {
       "name": "unclosed_div",
       "needle": "an-opener-that-is-never-closed",
-      "start": 1732,
-      "end": 1762,
+      "start": 2031,
+      "end": 2061,
       "protected_in": []
     },
     {
       "name": "unclosed_fence",
       "needle": "an unclosed fence runs to end of document",
-      "start": 1801,
-      "end": 1842,
+      "start": 2100,
+      "end": 2141,
       "protected_in": [
         "stylebot",
         "livingthing"
@@ -236,19 +236,25 @@
       },
       {
         "start": 831,
-        "end": 1053,
+        "end": 1084,
         "kind": "div",
-        "text": "::: {.callout-note}\nCallout prose paragraph one: the author's own voice, sitting inside a container\nthat carries class semantics.\n\n::: {#fig-nested}\n![](nested.png)\n:::\n\nTrailing callout prose after the nested figure.\n:::\n"
+        "text": "::: {.callout-note}\nCallout prose paragraph one: the author's own voice, sitting inside a container\nthat carries class semantics.\n\n## A heading inside a callout\n\n::: {#fig-nested}\n![](nested.png)\n:::\n\nTrailing callout prose after the nested figure.\n:::\n"
       },
       {
-        "start": 1524,
-        "end": 1600,
+        "start": 1555,
+        "end": 1631,
         "kind": "blockquote",
         "text": "  > And a quoted line, indented, which is not a blockquote of the author's.\n"
       },
       {
-        "start": 1764,
-        "end": 1844,
+        "start": 1787,
+        "end": 1827,
+        "kind": "div",
+        "text": "::: {#fig-packing}\n![](packing.png)\n:::\n"
+      },
+      {
+        "start": 2063,
+        "end": 2143,
         "kind": "fence",
         "text": "```python\ndef runaway():\n    return \"an unclosed fence runs to end of document\"\n"
       }
@@ -304,37 +310,43 @@
       },
       {
         "start": 831,
-        "end": 1053,
+        "end": 1084,
         "kind": "div",
-        "text": "::: {.callout-note}\nCallout prose paragraph one: the author's own voice, sitting inside a container\nthat carries class semantics.\n\n::: {#fig-nested}\n![](nested.png)\n:::\n\nTrailing callout prose after the nested figure.\n:::\n"
+        "text": "::: {.callout-note}\nCallout prose paragraph one: the author's own voice, sitting inside a container\nthat carries class semantics.\n\n## A heading inside a callout\n\n::: {#fig-nested}\n![](nested.png)\n:::\n\nTrailing callout prose after the nested figure.\n:::\n"
       },
       {
-        "start": 1054,
-        "end": 1208,
+        "start": 1085,
+        "end": 1239,
         "kind": "raw_html",
         "text": "<script type=\"text/javascript\">\n// A raw-text element, where line structure is load-bearing.\nconst conformance = 1;\n\nconst afterABlankLine = 2;\n</script>\n"
       },
       {
-        "start": 1209,
-        "end": 1280,
+        "start": 1240,
+        "end": 1311,
         "kind": "html_comment",
         "text": "<!-- A single-line HTML comment: never prose, in any configuration. -->"
       },
       {
-        "start": 1417,
-        "end": 1603,
+        "start": 1448,
+        "end": 1634,
         "kind": "html_comment",
         "text": "<!-- A multi-line comment.\nIts second sentence sits on its own line. A third rides along after the second.\n  > And a quoted line, indented, which is not a blockquote of the author's.\n-->"
       },
       {
-        "start": 1641,
-        "end": 1686,
+        "start": 1672,
+        "end": 1717,
         "kind": "html_comment",
         "text": "<!-- A trailing comment, opened mid-line. -->"
       },
       {
-        "start": 1764,
-        "end": 1844,
+        "start": 1787,
+        "end": 1827,
+        "kind": "div",
+        "text": "::: {#fig-packing}\n![](packing.png)\n:::\n"
+      },
+      {
+        "start": 2063,
+        "end": 2143,
         "kind": "fence",
         "text": "```python\ndef runaway():\n    return \"an unclosed fence runs to end of document\"\n"
       }

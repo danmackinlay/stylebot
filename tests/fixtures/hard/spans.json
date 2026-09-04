@@ -430,6 +430,145 @@
     ]
    }
   },
+  "segmenter_conformance.qmd": {
+   "sha256": "7c3de6f7d20b354112140baac294ac72fe4eb1b33833e7e0b96945d7af1b8e08",
+   "spans": {
+    "stylebot": [
+     {
+      "start": 71,
+      "end": 129,
+      "kind": "fence"
+     },
+     {
+      "start": 130,
+      "end": 161,
+      "kind": "fence"
+     },
+     {
+      "start": 314,
+      "end": 370,
+      "kind": "math"
+     },
+     {
+      "start": 514,
+      "end": 603,
+      "kind": "blockquote"
+     },
+     {
+      "start": 604,
+      "end": 648,
+      "kind": "blockquote"
+     },
+     {
+      "start": 698,
+      "end": 714,
+      "kind": "div"
+     },
+     {
+      "start": 715,
+      "end": 830,
+      "kind": "div"
+     },
+     {
+      "start": 831,
+      "end": 1084,
+      "kind": "div"
+     },
+     {
+      "start": 1555,
+      "end": 1631,
+      "kind": "blockquote"
+     },
+     {
+      "start": 1787,
+      "end": 1827,
+      "kind": "div"
+     },
+     {
+      "start": 2063,
+      "end": 2143,
+      "kind": "fence"
+     }
+    ],
+    "livingthing": [
+     {
+      "start": 71,
+      "end": 129,
+      "kind": "fence"
+     },
+     {
+      "start": 130,
+      "end": 161,
+      "kind": "fence"
+     },
+     {
+      "start": 314,
+      "end": 370,
+      "kind": "math"
+     },
+     {
+      "start": 381,
+      "end": 387,
+      "kind": "math"
+     },
+     {
+      "start": 514,
+      "end": 603,
+      "kind": "blockquote"
+     },
+     {
+      "start": 604,
+      "end": 648,
+      "kind": "blockquote"
+     },
+     {
+      "start": 698,
+      "end": 714,
+      "kind": "div"
+     },
+     {
+      "start": 715,
+      "end": 830,
+      "kind": "div"
+     },
+     {
+      "start": 831,
+      "end": 1084,
+      "kind": "div"
+     },
+     {
+      "start": 1085,
+      "end": 1239,
+      "kind": "raw_html"
+     },
+     {
+      "start": 1240,
+      "end": 1311,
+      "kind": "html_comment"
+     },
+     {
+      "start": 1448,
+      "end": 1634,
+      "kind": "html_comment"
+     },
+     {
+      "start": 1672,
+      "end": 1717,
+      "kind": "html_comment"
+     },
+     {
+      "start": 1787,
+      "end": 1827,
+      "kind": "div"
+     },
+     {
+      "start": 2063,
+      "end": 2143,
+      "kind": "fence"
+     }
+    ]
+   }
+  },
   "stein_vgd.qmd": {
    "sha256": "232c9317f63b26e71a21a924ff86f292bb692948b8e7cf26c760a7c299b183bc",
    "spans": {

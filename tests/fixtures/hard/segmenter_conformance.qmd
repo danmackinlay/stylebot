@@ -42,6 +42,8 @@ A figure caption, which is markup rather than a passage of prose.
 Callout prose paragraph one: the author's own voice, sitting inside a container
 that carries class semantics.
 
+## A heading inside a callout
+
 ::: {#fig-nested}
 ![](nested.png)
 :::
@@ -67,6 +69,15 @@ Its second sentence sits on its own line. A third rides along after the second.
 -->
 
 Prose after the multi-line comment. <!-- A trailing comment, opened mid-line. -->
+
+A paragraph before a protected block, which training packs across.
+
+::: {#fig-packing}
+![](packing.png)
+:::
+
+A paragraph after it: TRAINING joins these two into one target once the figure
+is deleted, while inference sends them as two chunks. The packing-parity case.
 
 The closing paragraph of the document.
 
