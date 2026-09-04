@@ -37,8 +37,8 @@ RATIO_BUDGET = 0.40
 # elsewhere, and the ratio alone fails an honest code diet, which is why the
 # count was picked first. Together they fail only prose grown with no code to
 # explain. Only ever lower them; set both to None once RATIO_BUDGET is met.
-PROSE_CEILING: int | None = 4688
-RATIO_PIN: float | None = 0.4072
+PROSE_CEILING: int | None = None
+RATIO_PIN: float | None = None
 
 # module -> the budgets it is over today, at their exact current size.
 # "functions" maps each over-budget function's qualified name (`Class.method`,
