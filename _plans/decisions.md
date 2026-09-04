@@ -62,6 +62,7 @@ keep their numbers — the second index below is how you find them.
 | D74 | `status` lists every run manifest, ordered by the manifest's own clock | live |
 | D75 | a sampled message's content may be parts, not a string | live |
 | D76 | an unclosed `:::` opener yields no span; the source is where it is fixed | live |
+| D77 | `index_blog` is a package of stages under a click shell | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D33)
 
@@ -1299,3 +1300,34 @@ happened five times.
 **Re-evaluate if** an unclosed opener reappears in the corpus sweep, or a rewrite
 is ever observed altering a `:::` line — either would make the narrow fix cheap
 and obviously right.
+
+## D77: `index_blog` is a package of stages under a click shell
+
+**Decision (2026-09-04, F12i).** `livingthing/bin/index_blog.py` — 1,949 lines,
+48 plain top-level functions, F11's explicit non-goal — becomes the package
+`livingthing/index_blog/`: `config` (paths and knobs), `store` (the
+`index_data/` caches and the skip hash), `embed` (the lazily-loaded model),
+`indexing`, `similarity`, `topic_map`. The `bin/` module keeps options, six
+commands and the `__main__` block the `map` child re-invokes; every module is
+under the 800-line budget and the shell holds no plain defs. Three constraints
+survive by construction: the offline/tokenizer env hardening moved to the
+package `__init__`, which runs before any submodule and so before anything can
+reach transformers; `sentence_transformers` is still named only inside
+`embed.get_embed_model()`; and `run_map_isolated` still spawns `python -m
+livingthing.bin.index_blog map` with the sentinel and the two thread pins.
+
+**Alternatives.** *Leave it allowlisted* — the module is the worst instance of
+the defect the same allowlist was built to retire. *Split the four long
+functions too* — 335-line exporter and 104-line transform carried across
+intact and re-allowlisted at their exact sizes; a pure move is diffable against
+a byte-identical pipeline output, a rewrite is not. *Delete the six functions
+found on the way with no caller in either repo* — reported, not done: outside
+an item whose fence is no behaviour change.
+
+**Deciding constraint.** This module segfaults *silently* when it is unhappy, so
+a green suite is not evidence. The split had to be checkable by artifact
+equality — identical `--help` for every command, byte-identical `topic_map.json`
+and all 1,679 related JSONs — which a move gives and a rewrite does not.
+
+**Re-evaluate if** the exporter or the UMAP transform is next touched for its own
+reasons: that is when the 80-line function budget gets paid, not before.
