@@ -689,6 +689,36 @@ def test_a_chunk_wise_pass_refuses_to_append_to_a_whole_document_file(tmp_path):
     ev.score_pairs_file(pairs, tmp_path / "chunked.jsonl", detector=chunked, fields=("slop",))
 
 
+def _divs_are_prose(cls: str) -> bool:
+    """A `div_is_prose` policy, at module level so its qualname is stable."""
+    return cls == "callout-note"
+
+
+def test_a_div_policy_is_a_different_instrument_at_the_same_scale(tmp_path):
+    """`div_is_prose` decides which text is scored, so it belongs in `name`.
+
+    Two document-scale runs at one scale under two div policies read different
+    prose out of the same documents. Without the policy in the identity both
+    call themselves `stub/chunked:4500` and D39's guard cannot separate them.
+    """
+    detector, _ = _recording_detector({})
+    plain = ev.chunked_detector(detector, max_chunk_chars=4500)
+    policied = ev.chunked_detector(detector, max_chunk_chars=4500, div_is_prose=_divs_are_prose)
+    plain_name = ev.detector_identity(plain)["name"]
+    policied_name = ev.detector_identity(policied)["name"]
+    assert plain_name == "stub/chunked:4500"
+    assert policied_name.startswith("stub/chunked:4500:divs=")
+    assert policied_name.endswith("._divs_are_prose")  # module.qualname, not an address
+
+    data_dir = tmp_path / "c"
+    pairs = _make_pairs(data_dir, [("A paragraph long enough to score.", "post/a.qmd")])
+    out = tmp_path / "scores.jsonl"
+    ev.score_pairs_file(pairs, out, detector=plain, fields=("slop",))
+    with pytest.raises(ConfigError, match="blend two instruments"):
+        ev.score_pairs_file(pairs, out, detector=policied, fields=("slop",))
+    ev.score_pairs_file(pairs, tmp_path / "divs.jsonl", detector=policied, fields=("slop",))
+
+
 def test_chunk_wise_document_scores_keep_the_ordinary_scores_jsonl_shape(tmp_path):
     """`summarize_scores` / `format_summary` / the report see nothing new.
 
@@ -783,16 +813,21 @@ def test_the_callout_policy_crosses_the_document_scale_seam(tmp_path):
 
         docs = tmp_path / out_name
         rewritten = ev.rewrite_documents_file(
-            pairs, docs, styler, splits=splits,
-            max_chunk_chars=200, div_is_prose=div_is_prose,
+            pairs,
+            docs,
+            styler,
+            splits=splits,
+            max_chunk_chars=200,
+            div_is_prose=div_is_prose,
         )
         detector, seen = _recording_detector({})
         scores = tmp_path / f"scores-{out_name}"
         ev.score_pairs_file(
-            docs, scores, fields=("slop", "output"), prune_orphans=False,
-            detector=ev.chunked_detector(
-                detector, max_chunk_chars=200, div_is_prose=div_is_prose
-            ),
+            docs,
+            scores,
+            fields=("slop", "output"),
+            prune_orphans=False,
+            detector=ev.chunked_detector(detector, max_chunk_chars=200, div_is_prose=div_is_prose),
         )
         rec = json.loads(scores.read_text().splitlines()[0])
         return rewritten, sent, seen, json.loads(docs.read_text().splitlines()[0]), rec

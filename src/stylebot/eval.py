@@ -524,15 +524,21 @@ def detector_identity(detector: Detector) -> dict:
     return fallback
 
 
-def _chunked_name(name: str | None, max_chunk_chars: int, inline_headings: bool) -> str:
-    """How a chunk-wise detector names the scale it was applied at.
+def _chunked_name(
+    identity: dict, max_chunk_chars: int, inline_headings: bool, div_is_prose=None
+) -> str:
+    """How a chunk-wise detector names the scale and div policy it ran under.
 
-    Two readings from one artifact at two scales are two instruments (see
-    `chunked_detector`), and `DETECTOR_IDENTITY_KEYS` has no field for scale —
-    so it rides on `name`, which is the key the mixing guard already compares.
+    Scale, and a `div_is_prose` saying what is prose at all, each make a second
+    instrument from one artifact; `DETECTOR_IDENTITY_KEYS` has a field for
+    neither, so both ride on `name` — the policy as `_canonical` writes it.
     """
+    from stylebot.provenance import _canonical
+
     suffix = f"/chunked:{max_chunk_chars}" + (":inline-headings" if inline_headings else "")
-    return f"{name or 'detector'}{suffix}"
+    if div_is_prose is not None:
+        suffix += f":divs={_canonical(div_is_prose)}"
+    return f"{identity.get('name') or 'detector'}{suffix}"
 
 
 def chunked_detector(
@@ -551,14 +557,14 @@ def chunked_detector(
     standard deviation) beside it. Chunks are **not** aligned across `slop` /
     `target` / `output`, so a comparison is between two unaligned means. A
     passage with no prose chunks scores ``None``, the convention every other
-    absent signal follows. The identity is the wrapped head's with the scale
-    appended to ``name``, so D39's mixing guard refuses to average a
-    whole-document reading with a chunk-wise one. Why all of that: D54.
+    absent signal follows. The identity is the wrapped head's, with the scale
+    and any `div_is_prose` appended to ``name``, so D39's mixing guard refuses
+    to blend two instruments' readings into one mean. Why all of that: D54.
     """
     from stylebot.infer import prose_chunks
 
     identity = detector_identity(detector)
-    identity["name"] = _chunked_name(identity.get("name"), max_chunk_chars, inline_headings)
+    identity["name"] = _chunked_name(identity, max_chunk_chars, inline_headings, div_is_prose)
     inner_batch = getattr(detector, "batch_detect", None)
 
     def _cut(prose: str) -> list[str]:
