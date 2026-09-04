@@ -21,6 +21,7 @@ Rules and rationale: `CLAUDE.md` "Budgets and layers" (P1-P8) and
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "stylebot"
@@ -202,4 +203,53 @@ def test_prose_does_not_outgrow_the_code_it_explains() -> None:
     assert ratio > RATIO_BUDGET, (
         f"the package now meets the {RATIO_BUDGET} ratio ({ratio:.4f}) — "
         "set PROSE_CEILING = None"
+    )
+
+
+# ---------------------------------------------------------------------------
+# P6: CLAUDE.md is an operating manual
+# ---------------------------------------------------------------------------
+
+#: P6's two numbers. The file reached 244 lines before F7a cut it to 160, and
+#: P6 was the only budget in "Budgets and layers" with no test behind it —
+#: which is how it grew the first time. F12e.
+CLAUDE_MD_LINES = 160
+CLAUDE_MD_BULLET_LINES = 6
+
+
+def _bullet_runs(path: Path) -> list[tuple[int, int]]:
+    """`(line number, length)` per top-level `- ` bullet, continuations included.
+
+    A bullet runs until the next bullet at any depth, a blank line, or a
+    heading. A nested bullet is a bullet: P8 is one line plus five sub-rules,
+    not one ten-line rule.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    runs: list[tuple[int, int]] = []
+    start = None
+    for i, line in enumerate(lines, 1):
+        if re.match(r"^\s*[-*] ", line):
+            if start is not None:
+                runs.append((start, i - start))
+            start = i
+        elif start is not None and (line.startswith("#") or (not line.strip())):
+            runs.append((start, i - start))
+            start = None
+    if start is not None:
+        runs.append((start, len(lines) + 1 - start))
+    return runs
+
+
+def test_claude_md_stays_an_operating_manual() -> None:
+    path = Path(__file__).resolve().parents[1] / "CLAUDE.md"
+    n = len(path.read_text(encoding="utf-8").splitlines())
+    assert n <= CLAUDE_MD_LINES, (
+        f"CLAUDE.md is {n} lines, over P6's {CLAUDE_MD_LINES}. Every bullet is a "
+        "rule plus a pointer; the story of how the rule was learned belongs in "
+        "_plans/decisions.md (P1)."
+    )
+    over = [(ln, size) for ln, size in _bullet_runs(path) if size > CLAUDE_MD_BULLET_LINES]
+    assert not over, (
+        f"CLAUDE.md bullets over {CLAUDE_MD_BULLET_LINES} lines at "
+        f"{[ln for ln, _ in over]} — cut the anecdote to a Dn pointer (P1, P6)."
     )
