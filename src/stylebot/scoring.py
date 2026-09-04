@@ -324,9 +324,9 @@ async def _judge_prepass(
 ) -> list[dict[str, dict | BaseException]]:
     """Judge every (record, field) text, `max_workers` calls in flight (D59).
 
-    An async judge is awaited under an `asyncio.Semaphore`; a sync one runs one
-    call at a time on this task. A call that raised is carried back as its
-    exception, for `_score_record` to re-raise against that record alone.
+    An async judge is awaited under an `asyncio.Semaphore`; a sync one is serial,
+    so the entry points take it only at `max_workers=1`. A call that raised is
+    carried back as its exception, re-raised against that record alone.
     """
     per_record: list[dict[str, dict | BaseException]] = [{} for _ in records]
     if judge is None:
@@ -345,6 +345,39 @@ async def _judge_prepass(
     for (i, name), result in zip(slots, results, strict=True):
         per_record[i][name] = result
     return per_record
+
+
+def _is_async_judge(judge: Judge | AsyncJudge) -> bool:
+    call = judge if inspect.isfunction(judge) or inspect.ismethod(judge) else type(judge).__call__
+    return inspect.iscoroutinefunction(judge) or inspect.iscoroutinefunction(call)
+
+
+def _guard_judge_concurrency(judge: Judge | AsyncJudge | None, max_workers: int) -> None:
+    if judge is None or max_workers <= 1 or _is_async_judge(judge):
+        return
+    name = getattr(judge, "__name__", type(judge).__name__)
+    raise ConfigError(
+        f"judge {name!r} is synchronous, so max_workers={max_workers} would run one "
+        "call at a time; pass an async judge (eval.openrouter_judge_async) or "
+        "max_workers=1."
+    )
+
+
+def _guard_no_running_loop() -> None:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    raise ConfigError(
+        "score_pairs_file owns an event loop and cannot run inside one; "
+        "await score_pairs_file_async instead."
+    )
+
+
+async def _aclose_judge(judge: Judge | AsyncJudge | None) -> None:
+    aclose = getattr(judge, "aclose", None)
+    if aclose is not None:
+        await aclose()
 
 
 def score_pairs_file(
@@ -366,6 +399,7 @@ def score_pairs_file(
     The sync entry point: it owns an event loop (`asyncio.run`) for the judge
     pass. Call `score_pairs_file_async` from inside a running loop instead.
     """
+    _guard_no_running_loop()
     return asyncio.run(
         score_pairs_file_async(
             pairs_path,
@@ -476,6 +510,7 @@ async def score_pairs_file_async(
     unknown = [f for f in fields if f not in FIELD_EXTRACTORS]
     if unknown:
         raise ConfigError(f"unknown field(s) {unknown}; known: {sorted(FIELD_EXTRACTORS)}")
+    _guard_judge_concurrency(judge, max_workers)
 
     # Prune before reading `seen`: an orphan id would otherwise both survive in
     # the file and count as already-scored.
@@ -499,19 +534,22 @@ async def score_pairs_file_async(
             on_progress(done, total)
 
     batch_size = max(1, _SCORE_BATCH_RECORDS)
-    with out_path.open("a", encoding="utf-8") as fp:
-        for start in range(0, total, batch_size):
-            await _score_slice(
-                fp,
-                todo[start : start + batch_size],
-                result,
-                fields=fields,
-                judge=judge,
-                detector=detector,
-                vale_config=vale_config,
-                max_workers=max_workers,
-                progress=tick,
-            )
+    try:
+        with out_path.open("a", encoding="utf-8") as fp:
+            for start in range(0, total, batch_size):
+                await _score_slice(
+                    fp,
+                    todo[start : start + batch_size],
+                    result,
+                    fields=fields,
+                    judge=judge,
+                    detector=detector,
+                    vale_config=vale_config,
+                    max_workers=max_workers,
+                    progress=tick,
+                )
+    finally:
+        await _aclose_judge(judge)
     return result
 
 

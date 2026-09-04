@@ -7,6 +7,7 @@ gate the batched score schema (`score_pairs_file`) and the judge-reply parser.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import subprocess
@@ -15,12 +16,19 @@ import pytest
 
 from stylebot import eval as ev
 from stylebot import scoring, synth
+from stylebot.errors import ConfigError
 from stylebot.pairs import record_id, validate_pairs_file
 
 
-def fake_judge(prose: str) -> dict:
+def sync_fake_judge(prose: str) -> dict:
     # Deterministic verdict; no API. Carries `prose` length so we know it ran.
     return {"score": 4, "rationale": f"looks dan-shaped ({len(prose)} chars)"}
+
+
+async def fake_judge(prose: str) -> dict:
+    # The same verdict awaited: a corpus pass at max_workers > 1 takes an async
+    # judge only (D59). `score_candidate` still takes the blocking one.
+    return sync_fake_judge(prose)
 
 
 def test_score_candidate_without_judge_runs_keyless():
@@ -35,7 +43,7 @@ def test_score_candidate_without_judge_runs_keyless():
 
 
 def test_score_candidate_with_fake_judge_and_eyeball():
-    rec = ev.score_candidate("Dan-shaped prose.", judge=fake_judge, eyeball="ship it")
+    rec = ev.score_candidate("Dan-shaped prose.", judge=sync_fake_judge, eyeball="ship it")
     assert rec["judge"]["score"] == 4
     assert rec["eyeball"] == "ship it"
 
@@ -381,15 +389,13 @@ def test_score_pairs_file_strips_heading_context(tmp_path):
         captured.append(text)
         return {"score": 3, "rationale": "x"}
 
-    ev.score_pairs_file(pairs, tmp_path / "scores.jsonl", judge=judge)
+    ev.score_pairs_file(pairs, tmp_path / "scores.jsonl", judge=judge, max_workers=1)
     # The judge scored the body only — the shared heading was stripped first.
     assert captured and all("## A Heading" not in t for t in captured)
 
 
 def test_record_id_precedence():
-    assert (
-        record_id({"meta": {"synth_key": "abc", "capture_id": "cap", "chunk_index": 2}}) == "abc"
-    )
+    assert record_id({"meta": {"synth_key": "abc", "capture_id": "cap", "chunk_index": 2}}) == "abc"
     assert record_id({"meta": {"capture_id": "cap", "chunk_index": 2}}) == "cap:2"
     rid = record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}})
     assert rid == record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}})  # stable
@@ -877,7 +883,10 @@ def test_score_pairs_file_batches_the_detector_into_one_call_per_slice(tmp_path,
     calls: list[int] = []
 
     res = ev.score_pairs_file(
-        pairs, tmp_path / "scores.jsonl", judge=None, detector=_batching_detector(calls),
+        pairs,
+        tmp_path / "scores.jsonl",
+        judge=None,
+        detector=_batching_detector(calls),
         max_workers=4,
     )
     assert res.written == 6
@@ -981,6 +990,84 @@ def test_a_judge_error_fails_its_own_record_and_no_other(tmp_path, monkeypatch):
     res = ev.score_pairs_file(pairs, tmp_path / "s.jsonl", judge=judge)
     assert res.written == 2
     assert len(res.errors) == 1 and "the judge fell over" in res.errors[0][1]
+
+
+def test_a_sync_judge_with_max_workers_above_one_is_refused(tmp_path, monkeypatch):
+    """`max_workers` counts judge calls in flight; a sync judge cannot overlap.
+
+    Awaiting one inline under the semaphore ran at concurrency 1 and said
+    nothing about it (F19c). The refusal names the async judge to use instead.
+    """
+    specs = [("A paragraph long enough to be scored as a candidate here.", None, "polish")]
+    pairs = _make_pairs(tmp_path / "c", specs)
+    _count_vale_spawns(monkeypatch)
+    out = tmp_path / "s.jsonl"
+
+    with pytest.raises(ConfigError) as excinfo:
+        ev.score_pairs_file(pairs, out, judge=sync_fake_judge, max_workers=4)
+    assert "openrouter_judge_async" in str(excinfo.value)
+    assert not out.exists()  # refused before it wrote or pruned anything
+
+    with pytest.raises(ConfigError):
+        asyncio.run(
+            scoring.score_pairs_file_async(pairs, out, judge=sync_fake_judge, max_workers=2)
+        )
+
+    # Serial is the sync judge's contract, and it stays allowed.
+    assert ev.score_pairs_file(pairs, out, judge=sync_fake_judge, max_workers=1).written == 1
+
+
+def test_score_pairs_file_inside_a_running_loop_says_which_entry_point_to_await(tmp_path):
+    """The sync wrapper owns a loop; called from inside one it died bare (F19c)."""
+    specs = [("A paragraph long enough to score here.", None, "polish")]
+    pairs = _make_pairs(tmp_path / "c", specs)
+
+    async def main():
+        with pytest.raises(ConfigError) as excinfo:
+            ev.score_pairs_file(pairs, tmp_path / "s.jsonl", judge=None)
+        return str(excinfo.value)
+
+    assert "score_pairs_file_async" in asyncio.run(main())
+
+
+def test_the_async_judges_client_is_built_on_first_await_and_closed_by_the_pass(
+    tmp_path, monkeypatch
+):
+    """An `AsyncOpenAI` built at judge-build time binds no loop and leaks (F19c)."""
+    import sys
+    import types
+
+    built: list[object] = []
+    closed: list[object] = []
+
+    class _FakeAsyncOpenAI:
+        def __init__(self, **kw):
+            built.append(self)
+            completions = types.SimpleNamespace(create=self._create)
+            self.chat = types.SimpleNamespace(completions=completions)
+
+        async def _create(self, **kw):
+            message = types.SimpleNamespace(content='{"score": 4}')
+            choice = types.SimpleNamespace(message=message)
+            return types.SimpleNamespace(choices=[choice], usage=None)
+
+        async def close(self):
+            closed.append(self)
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
+    judge = ev.openrouter_judge_async(api_key="sk-test")
+    assert built == []  # nothing constructed outside an event loop
+
+    specs = [
+        (f"Paragraph number {i}, long enough to be scored as a candidate here.", None, "polish")
+        for i in range(2)
+    ]
+    pairs = _make_pairs(tmp_path / "c", specs)
+    _count_vale_spawns(monkeypatch)
+
+    res = ev.score_pairs_file(pairs, tmp_path / "s.jsonl", judge=judge, max_workers=2)
+    assert res.written == 2
+    assert len(built) == 1 and closed == built  # one client, released when the pass ended
 
 
 def test_chunked_detector_batch_path_agrees_with_the_per_passage_path():

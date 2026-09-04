@@ -203,9 +203,8 @@ def vale_score(text: str, *, config_path: str | Path | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 # Callable contract: prose -> {"score": int, "rationale": str}. Injectable so
-# tests pass a fake (no API). `openrouter_judge` builds the real one;
-# `openrouter_judge_async` is the same judge awaited, which is what a corpus
-# pass wants — the judge is the only network signal in the harness (D59).
+# tests pass a fake (no API). `openrouter_judge` builds the blocking one and
+# `openrouter_judge_async` the awaited one, which a corpus pass takes (D59).
 Judge = Callable[[str], dict]
 AsyncJudge = Callable[[str], Awaitable[dict]]
 
@@ -338,7 +337,7 @@ def openrouter_judge(
 
     For single-passage callers (`score_candidate`). A corpus pass wants
     `openrouter_judge_async`, which is the same request awaited: `score_pairs_file`
-    runs a sync judge one call at a time, on its own task (D59).
+    takes a sync judge only at `max_workers=1`, one call at a time (D59).
     """
     import openai
 
@@ -361,19 +360,31 @@ def openrouter_judge_async(
 ) -> AsyncJudge:
     """`openrouter_judge` on `openai.AsyncOpenAI` — the judge a corpus pass takes.
 
-    The same request, the same verdict shape; `score_pairs_file` overlaps these
-    awaits `max_workers` at a time, which is the harness's only concurrency.
+    `score_pairs_file` overlaps these awaits `max_workers` at a time, the
+    harness's only concurrency. The client is built on the first await, so it
+    binds that loop, and `judge.aclose()` releases it when the pass ends.
     """
     import openai
 
-    client = openai.AsyncOpenAI(**_openrouter_client_kwargs(api_key, base_url))
+    kwargs = _openrouter_client_kwargs(api_key, base_url)
+    client = None
 
     async def judge(prose: str) -> dict:
+        nonlocal client
+        if client is None:
+            client = openai.AsyncOpenAI(**kwargs)
         resp = await client.chat.completions.create(
             **_judge_request(model, system, max_tokens, prose)
         )
         return _judge_verdict(resp, model)
 
+    async def aclose() -> None:
+        nonlocal client
+        if client is not None:
+            await client.close()
+            client = None
+
+    judge.aclose = aclose
     return judge
 
 

@@ -81,7 +81,8 @@ def test_sample_targets_caps_at_population():
 # --- scores report (joins pairs.jsonl + scores.jsonl) -----------------------
 
 
-def _judge(text):
+async def _judge(text):
+    # Async: a corpus pass at max_workers > 1 takes an async judge only (D59).
     # slop side (the fake generator prefixes "slop: ") scores low; Dan scores high.
     return {"score": 1 if text.startswith("slop:") else 4, "rationale": "ok <b>tag</b>"}
 
