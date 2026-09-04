@@ -654,12 +654,36 @@ inference budget is pinned to the training chunk scale (D15).
 
 **Inline anchors would reject a fifth of good rewrites** (2026-08-11, all 4,624
 pairs, inference direction) — share of pairs where a genuine Dan rewrite would be
-disqualified: today (links, fences, headings) **6.4%**; + inline code 11.9%; +
-inline math 13.5%; **+ both 19.0%**. So they default **off** in `run` and are
-**always on** in `rewrite_candidates` (D27, D20). **MLX local-serving parity**
-(2026-07-22, run 2, 20 val pairs @ temp 0.3): detector output means **tinker
-0.4627 vs local 4-bit 0.4529**, Δ **−0.0098**, inside the 0.03 gate; drift within
-the 0.05 gate, zero template artifacts. D8, D48.
+disqualified: today (links, fences, headings) ~~**6.4%**~~ (re-measured under C13,
+below); + inline code 11.9%; + inline math 13.5%; **+ both 19.0%**. So they
+default **off** in `run` and are **always on** in `rewrite_candidates` (D27, D20).
+**MLX local-serving parity** (2026-07-22, run 2, 20 val pairs @ temp 0.3):
+detector output means **tinker 0.4627 vs local 4-bit 0.4529**, Δ **−0.0098**,
+inside the 0.03 gate; drift within the 0.05 gate, zero template artifacts. D8, D48.
+
+### Anchor keys stop at trailing punctuation and email local parts — 2026-09-04
+
+C13: the bare-URL pattern in `infer._ANCHOR_RES` now drops trailing `.,;:!?)`
+(CommonMark's autolink rule) and the citation pattern needs `(?<![\w.\\])@`.
+Instrument: `infer.is_anchor_faithful(record)` — the guard `run` applies,
+symmetric, inline off — and `(…, gain=False)` for the loss half, a keyless
+`uv run python` loop over `livingthing/_training_pairs/pairs/*.jsonl`, run on
+the old patterns and the new; "real" is a record with no `meta.gen`.
+
+| stratum | pairs | loss-only, old → new | symmetric, old → new |
+|---|---:|---:|---:|
+| real captures | 407 | 47 (11.5%) → **44 (10.8%)** | 85 (20.9%) → **83 (20.4%)** |
+| synthetic | 7,750 | 298 → 300 (3.9%) | 298 → 300 (3.9%) |
+| all pairs | 8,157 | 345 → 344 (4.2%) | 383 → 383 (4.7%) |
+
+Four real verdicts flip. Three rescues are the `@` edit, not the URL one — the
+old key was `@k` out of `maj@k` / `Pass@k`; no real pair turns on URL punctuation
+today. The one new failure is right: Dan's target reads `of@Agrawal2019Economics`,
+which pandoc will not cite either. The three new synthetic failures are D32's
+reverse-edit artifact — Dan wrote `\@miteron`, the generator un-escaped it, so the
+slop side carries a key the target never had; `\@` is excluded because a
+pandoc-escaped `@` cannot cite. The struck 6.4% was loss-only over all strata of a
+4,624-pair corpus, not this denominator. D32.
 
 ## Cost: forecast vs actual — v1, through 2026-08-17
 
