@@ -363,11 +363,9 @@ nothing.
 
 ## D58: size budgets are a test with a shrinking allowlist, and each "why" has one layer
 
-**Decision (2026-09-04)**: adopt P1–P8 of the blog's
-`_plans/stylebot-seam-followup-2026-09.md`: one layer per "why" (decisions →
-findings → code → commit), size budgets on modules, functions and docstrings,
-dispatch rules for agents; `tests/test_budget.py` enforces the sizes, P3's and
-P6's doc budgets, and an allowlist of everything over budget as measured.
+**Decision (2026-09-04)**: adopt P1–P8 of the blog's 2026-09 seam follow-up as
+CLAUDE.md "Budgets and layers"; `tests/test_budget.py` enforces the sizes, P3's
+and P6's doc budgets, and an allowlist of everything over budget as measured.
 
 **Alternatives considered**:
 - **An unenforced guideline in `CLAUDE.md`** — already there in spirit, and one
@@ -387,9 +385,11 @@ budget is then wrong; write the new budget, not the exception. The package-wide
 check is a count *or* a pinned ratio, either sufficient (F16c): the count alone
 taxes a documented helper elsewhere; the ratio alone fails the F2/F8 code diet.
 
-**Amended 2026-09-04 (M1b)**: a module that comes under budget still fails the
-test; the allowlist edit rides in the commit that earns it (P5). Rejected:
-hint-not-fail — an unread hint is how the allowlist stops shrinking.
+**Amended 2026-09-04 (M1b, M1c)**: a module that comes under budget still fails
+the test; the allowlist edit rides in the commit that earns it (P5). Rejected:
+hint-not-fail — an unread hint is how the allowlist stops shrinking. (M1c):
+`findings.md` is gated the same way — `FINDINGS_ALLOWLIST` in
+`tests/test_budget.py`, prose after the table ≤ 12, rows only shrink.
 
 ## D59: one mechanism in the scoring path — the judge awaits, everything else batches
 

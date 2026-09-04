@@ -368,6 +368,87 @@ def test_decisions_stay_indexed_and_short() -> None:
 
 
 # ---------------------------------------------------------------------------
+# P4: a findings.md entry is one table plus <= 12 lines of reading
+# ---------------------------------------------------------------------------
+
+#: P4's number: prose lines after an entry's first table row (all its prose
+#: when it has no table). The "one table" half is measured, not enforced (M1c).
+FINDINGS_PROSE_LINES = 12
+
+# heading -> prose lines today, for the entries over budget on 2026-09-04. Same
+# three rules as ALLOWLIST: unlisted-over fails, grown fails, under-budget or
+# gone fails until the row is deleted. A new row needs a D-entry (D58, P8).
+FINDINGS_ALLOWLIST: dict[str, int] = {
+    "Generation experiments": 15,
+    "Data hygiene / QA": 19,
+    "eval_v2 — applied 2026-09-03 (W10 item 4 / D42)": 13,
+}
+
+
+def _findings_entries(path: Path) -> dict[str, int]:
+    """`heading -> prose lines` per section, up to the next heading of any level.
+
+    Prose is a non-blank line that is not a `|` table row; only the prose after
+    the first table row counts, so a group heading with intro prose and no
+    table is measured on all of it.
+    """
+    entries: dict[str, int] = {}
+    heading, prose, seen_table = None, 0, False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if re.match(r"^#{1,6} ", line):
+            if heading is not None:
+                entries[heading] = prose
+            heading, prose, seen_table = line.lstrip("#").strip(), 0, False
+            assert heading not in entries, f"duplicate heading {heading!r}"
+        elif heading is None or not line.strip():
+            continue
+        elif line.lstrip().startswith("|"):
+            if not seen_table:
+                seen_table, prose = True, 0
+        else:
+            prose += 1
+    if heading is not None:
+        entries[heading] = prose
+    return entries
+
+
+def _check_findings(entries: dict[str, int], allowed: dict[str, int]) -> list[str]:
+    problems: list[str] = []
+    for heading, n in entries.items():
+        ceiling = {"prose": allowed[heading]} if heading in allowed else {}
+        problems += _check_scalar(repr(heading), "prose", FINDINGS_PROSE_LINES, n, ceiling)
+    for heading in sorted(set(allowed) - set(entries)):
+        problems.append(f"{heading!r} no longer exists — delete its allowlist entry")
+    return problems
+
+
+def test_findings_entries_stay_one_table_and_short() -> None:
+    path = Path(__file__).resolve().parents[1] / "_plans" / "findings.md"
+    problems = _check_findings(_findings_entries(path), FINDINGS_ALLOWLIST)
+    assert not problems, "findings.md prose after the table (P4, D58):\n  " + "\n  ".join(problems)
+
+
+def _findings_with(tmp_path: Path, prose_lines: int) -> Path:
+    prose = "\n".join(f"reading {i}." for i in range(prose_lines))
+    path = tmp_path / "findings.md"
+    path.write_text(f"## Entry\n\nintro\n\n| a |\n|---|\n| 1 |\n\n{prose}\n")
+    return path
+
+
+def test_a_findings_entry_is_measured_after_its_table(tmp_path: Path) -> None:
+    fits = _findings_entries(_findings_with(tmp_path, FINDINGS_PROSE_LINES))
+    assert fits == {"Entry": FINDINGS_PROSE_LINES}
+    assert _check_findings(fits, {}) == []
+    over = _findings_entries(_findings_with(tmp_path, FINDINGS_PROSE_LINES + 1))
+    problems = _check_findings(over, {})
+    assert problems == [
+        f"'Entry': prose is {FINDINGS_PROSE_LINES + 1} (budget "
+        f"{FINDINGS_PROSE_LINES}) and is not allowlisted"
+    ]
+    assert _check_findings(over, {"Entry": FINDINGS_PROSE_LINES + 1}) == []
+
+
+# ---------------------------------------------------------------------------
 # P6: CLAUDE.md is an operating manual
 # ---------------------------------------------------------------------------
 
