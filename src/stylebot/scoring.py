@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from stylebot.classify import DETECTOR_IDENTITY_KEYS, detect_many
+from stylebot.cli_options import Emitter, silent
 from stylebot.errors import ConfigError, RunError
 from stylebot.eval import (
     SCHEMA_VERSION,
@@ -31,6 +34,10 @@ from stylebot.eval import (
 from stylebot.jsonl import dumps_line, iter_jsonl, read_jsonl, write_jsonl_atomic
 from stylebot.pairs import FIELD_EXTRACTORS, GEN_FACET_KEYS, iter_pairs, record_id
 
+if TYPE_CHECKING:
+    from stylebot.docscale import DocumentPass
+    from stylebot.verdict import EvalOpts, VerdictOpts
+
 # meta keys carried onto each score record, so scores group / filter / join
 # downstream without re-reading the corpus.
 _CARRIED_META = (
@@ -46,6 +53,9 @@ _CARRIED_META = (
 # onto each score record so `summarize_scores(by=…)` can facet by them directly.
 # Real pairs lack `meta.gen` and simply omit these (null bucket).
 _CARRIED_GEN = GEN_FACET_KEYS
+
+#: Judge calls in flight (D59); `verdict.EvalOpts.max_workers` shares it.
+DEFAULT_MAX_WORKERS = 8
 
 
 def existing_scored_ids(out_path: str | Path) -> set[str]:
@@ -391,7 +401,7 @@ def score_pairs_file(
     judge: Judge | AsyncJudge | None = None,
     detector: Detector = null_detector,
     vale_config: str | Path | None = None,
-    max_workers: int = 8,
+    max_workers: int = DEFAULT_MAX_WORKERS,
     limit: int | None = None,
     prune_orphans: bool = True,
     allow_mixed_detector: bool = False,
@@ -486,7 +496,7 @@ async def score_pairs_file_async(
     judge: Judge | AsyncJudge | None = None,
     detector: Detector = null_detector,
     vale_config: str | Path | None = None,
-    max_workers: int = 8,
+    max_workers: int = DEFAULT_MAX_WORKERS,
     limit: int | None = None,
     prune_orphans: bool = True,
     allow_mixed_detector: bool = False,
@@ -629,4 +639,83 @@ def summarize_scores(
             key = (rec.get("meta") or {}).get(by)
             buckets.setdefault("null" if key is None else str(key), []).append(rec)
         summary["by"] = {k: _aggregate_fields(v) for k, v in sorted(buckets.items())}
+    return summary
+
+
+def run_eval(
+    opts: EvalOpts,
+    verdict: VerdictOpts,
+    *,
+    detector: Detector = null_detector,
+    documents: DocumentPass | None = None,
+    emit: Emitter = silent,
+) -> dict:
+    """The `eval` pass (D78): score, summarise, then `verdict.report_eval`.
+
+    `documents` is a finished `docscale.document_pass`: its output replaces the
+    corpus, `output` joins the fields, pruning is off (a different corpus), and
+    `detector` is wrapped at its serving scale (D54). Returns the summary.
+    """
+    from stylebot.eval import chunked_detector, openrouter_judge_async
+    from stylebot.verdict import format_summary, report_eval
+
+    pairs_path, out = Path(opts.pairs_path), opts.scores_path()
+    fields, prune_orphans = opts.score_fields(), opts.prune_orphans
+    if documents is not None:
+        pairs_path, fields = documents.pairs_path, documents.fields
+        prune_orphans = documents.prune_orphans
+        detector = chunked_detector(detector, **documents.chunk_scale)
+    judge = openrouter_judge_async(model=opts.judge_model) if opts.judge else None
+
+    def progress(i: int, total: int) -> None:
+        if i == 1 or i % 25 == 0 or i == total:
+            emit(f"  ... {i}/{total} scored", level="status")
+
+    result = score_pairs_file(
+        pairs_path,
+        out,
+        fields=fields,
+        judge=judge,
+        detector=detector,
+        vale_config=opts.vale_config,
+        max_workers=opts.max_workers,
+        limit=opts.limit,
+        prune_orphans=prune_orphans,
+        allow_mixed_detector=verdict.allow_mixed_detector,
+        on_progress=progress,
+    )
+    # Loud: the prune REWROTE a file the operator may have committed, and a big
+    # count usually means --out belongs to another corpus.
+    if result.pruned_orphans:
+        emit(
+            f"pruned {result.pruned_orphans} orphan score record(s) from {out} "
+            f"— their pair is no longer in {pairs_path}",
+            level="status",
+        )
+    emit(
+        f"scored {result.written} pair(s) "
+        f"({result.skipped_existing} already scored, skipped) -> {out}"
+    )
+    if result.errors:
+        emit(f"{len(result.errors)} scoring error(s):", level="error")
+        for rid, msg in result.errors[:10]:
+            emit(f"  {rid}: {msg}", level="error")
+
+    summary = summarize_scores(out, by=opts.by)
+    for line in format_summary(summary):
+        emit(line)
+    if opts.by is not None:
+        emit(f"by {opts.by}:")
+        for facet, fld in summary["by"].items():
+            parts = ", ".join(
+                f"{fn}=det:{a['mean_detector_score']}/judge:{a['mean_judge_score']}"
+                for fn, a in fld.items()
+            )
+            emit(f"  {facet}: {parts}")
+    if opts.summary_path is not None:
+        Path(opts.summary_path).write_text(
+            json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        emit(f"wrote summary -> {opts.summary_path}")
+    report_eval(out, pairs_path, fields, verdict, opts, emit=emit)
     return summary

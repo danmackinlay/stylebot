@@ -2,8 +2,9 @@
 
 `compare_scores` joins two `scores.jsonl` files on the pair id and reports the
 paired difference with a cluster bootstrap over posts; `paired_delta` is that
-interval on bare sequences. `VerdictOpts` / `DocumentOpts` declare the flags
-both CLIs offer, and `format_summary` / `format_verdict` render for both.
+interval on bare sequences. `EvalOpts` / `VerdictOpts` / `DocumentOpts` declare
+the flags both CLIs offer, `format_summary` / `format_verdict` render for both,
+and `report_eval` is the tail of the `eval` pass (`scoring.run_eval`, D78).
 
 Why posts and not chunks, and why the real facet is the headline: D40. Why a
 cross-detector comparison is refused, and a detector verdict on rows that
@@ -20,11 +21,17 @@ from statistics import mean
 
 import click
 
+from stylebot import report
 from stylebot.classify import DETECTOR_IDENTITY_KEYS
-from stylebot.cli_options import opt
+from stylebot.cli_options import Emitter, opt, silent
 from stylebot.errors import ConfigError
-from stylebot.eval import SCHEMA_VERSION
-from stylebot.scoring import _identity_label, assert_single_detector, load_scores
+from stylebot.eval import DEFAULT_JUDGE_MODEL, SCHEMA_VERSION
+from stylebot.scoring import (
+    DEFAULT_MAX_WORKERS,
+    _identity_label,
+    assert_single_detector,
+    load_scores,
+)
 
 #: How to pull one scalar out of a scored field. Vale reports `null` when the
 #: binary is absent rather than 0, so an unavailable run drops out of the
@@ -106,6 +113,139 @@ def paired_delta(
         "n_boot": len(means),
         "alpha": alpha,
     }
+
+
+@dataclass(frozen=True)
+class EvalOpts:
+    """The scoring surface of `eval` — what `scoring.run_eval` takes (D78).
+
+    Every default is the constant the library function behind it uses.
+    """
+
+    cli_section = "Scoring"
+
+    pairs_path: Path | None = opt(
+        None,
+        "--pairs",
+        "pairs_path",
+        required=True,
+        type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
+        help="The pairs corpus to score (slop + Dan sides of every pair): a "
+        "pairs.jsonl or a pairs/ shard directory.",
+    )
+    fields: tuple[str, ...] = opt(
+        (),
+        "--field",
+        "fields",
+        type=click.Choice(["slop", "target", "output"]),
+        multiple=True,
+        help="Which side(s) to score (repeatable; default both). slop=messages[1], "
+        "target=Dan/messages[2], output=a styler's rewrite (`run --pairs --out`).",
+    )
+    judge: bool = opt(
+        False,
+        "--judge/--no-judge",
+        show_default=True,
+        help="Run the LLM judge (needs $OPENROUTER_API_KEY); off = Vale + null detector, no spend.",
+    )
+    judge_model: str = opt(
+        DEFAULT_JUDGE_MODEL,
+        "--judge-model",
+        show_default=True,
+        help="OpenRouter model id for the judge.",
+    )
+    detector_model: Path | None = opt(
+        None,
+        "--detector-model",
+        "detector_model",
+        type=click.Path(exists=True, file_okay=False, path_type=Path),
+        help="A trained voice-classifier artifact dir (head.json + meta.json) to score "
+        "detector.score; needs the pinned embedder (sentence-transformers) installed.",
+    )
+    vale_config: Path | None = opt(
+        None,
+        "--vale-config",
+        type=click.Path(dir_okay=False, path_type=Path),
+        help="Vale config (.vale.ini); omitted = Vale's own discovery (or Vale absent -> skipped).",
+    )
+    max_workers: int = opt(
+        DEFAULT_MAX_WORKERS,
+        "--max-workers",
+        show_default=True,
+        type=int,
+        help="Concurrent judge calls (asyncio). Vale is a batched pre-pass, not a worker (D59).",
+    )
+    out_path: Path | None = opt(
+        None,
+        "--out",
+        "out_path",
+        type=click.Path(dir_okay=False, path_type=Path),
+        help="scores.jsonl to append (default: <pairs-dir>/scores.jsonl). Resumable — scored "
+        "ids are skipped.",
+    )
+    summary_path: Path | None = opt(
+        None,
+        "--summary",
+        "summary_path",
+        type=click.Path(dir_okay=False, path_type=Path),
+        help="Also write the aggregate summary JSON here.",
+    )
+    by: str | None = opt(
+        None,
+        "--by",
+        "by",
+        help="Facet the summary by a meta key, e.g. slop_strategy or generator.",
+    )
+    limit: int | None = opt(
+        None, "--limit", type=int, help="Cap pairs scored (smoke / cost control)."
+    )
+    prune_orphans: bool = opt(
+        True,
+        "--prune-orphans/--no-prune-orphans",
+        show_default=True,
+        help="Drop score records whose pair is no longer in --pairs (re-cut or regenerated), so "
+        "every summary and exported table counts live pairs only. Turn OFF only when --out belongs "
+        "to a DIFFERENT corpus, where every record reads as orphaned.",
+    )
+    report_path: Path | None = opt(
+        None,
+        "--report",
+        "report_path",
+        type=click.Path(dir_okay=False, path_type=Path),
+        help="Write a self-contained HTML scores report — the pair browser: slop↔Dan side by side, "
+        "judge/detector/Vale chips, generation covariates, facet dropdowns. Works keyless (judge "
+        "badges show — without --judge).",
+    )
+    report_max_rows: int = opt(
+        report.DEFAULT_MAX_ROWS,
+        "--report-max-rows",
+        show_default=True,
+        type=int,
+        help="Cap rows in the HTML report (0 = all).",
+    )
+    facet_by: str = opt(
+        report.DEFAULT_FACET_BY,
+        "--facet-by",
+        "facet_by",
+        show_default=True,
+        help="Group the HTML report headline by this meta covariate (e.g. reasoning_effort, "
+        "prompt_id, generator).",
+    )
+    sample_n: int | None = opt(
+        None,
+        "--sample",
+        "sample_n",
+        type=int,
+        help="Print N random scored pairs (slop vs Dan + scores) to stdout.",
+    )
+
+    def scores_path(self) -> Path:
+        """`--out`, else `scores.jsonl` beside the corpus."""
+        return Path(self.out_path or (Path(self.pairs_path).parent / "scores.jsonl"))
+
+    def score_fields(self) -> tuple[str, ...]:
+        """`--field`s, else both sides of the pair."""
+        return tuple(self.fields) or ("slop", "target")
 
 
 @dataclass(frozen=True)
@@ -207,6 +347,7 @@ class DocumentOpts:
 
 
 VERDICT_PARAMS: dict[str, type] = {"verdict": VerdictOpts, "documents": DocumentOpts}
+EVAL_PARAMS: dict[str, type] = {"eval": EvalOpts, **VERDICT_PARAMS}
 
 
 def verdict_options(**kw):
@@ -219,6 +360,49 @@ def verdict_options(**kw):
     from stylebot.cli_options import bundle_options
 
     return bundle_options([VerdictOpts, DocumentOpts], **kw)
+
+
+def eval_options(**kw):
+    """The whole `eval` surface — `EVAL_PARAMS`'s three bundles, one decorator."""
+    from stylebot.cli_options import bundle_options
+
+    return bundle_options(list(EVAL_PARAMS.values()), **kw)
+
+
+def report_eval(
+    out: Path,
+    pairs_path: Path,
+    fields: Sequence[str],
+    verdict: VerdictOpts,
+    opts: EvalOpts,
+    *,
+    emit: Emitter = silent,
+) -> None:
+    """The tail of the `eval` pass: A-vs-B verdict, sample, HTML report (D78)."""
+    if verdict.compare_path is not None:
+        comparison = compare_scores(
+            out,
+            verdict.compare_path,
+            field=verdict.compare_field,
+            signal=verdict.compare_signal,
+            cluster_by=verdict.cluster_by or None,
+            allow_cross_detector=verdict.allow_cross_detector,
+        )
+        emit("")
+        for line in format_verdict(comparison, out, verdict.compare_path):
+            emit(line, level="warn" if line.lstrip().startswith("WARNING:") else "info")
+    if opts.sample_n is not None:
+        emit(report.format_scores_sample(out, pairs_path, opts.sample_n, fields=fields))
+    if opts.report_path is not None:
+        written = report.render_scores_report(
+            out,
+            pairs_path,
+            opts.report_path,
+            fields=fields,
+            max_rows=(None if opts.report_max_rows == 0 else opts.report_max_rows),
+            facet_by=opts.facet_by,
+        )
+        emit(f"wrote report -> {written}")
 
 
 def format_summary(summary: dict) -> list[str]:

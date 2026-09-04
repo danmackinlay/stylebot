@@ -114,3 +114,64 @@ def test_a_scored_output_file_carries_the_reranker_to_the_verdict(tmp_path):
     ev.score_pairs_file(out, scores, fields=("output",), detector=detector, prune_orphans=False)
     with pytest.raises(ConfigError, match=r"--compare-signal judge"):
         ev.compare_scores(scores, scores)
+
+
+# --- `EvalOpts` and `report_eval`: the eval surface as a library (D78) ------
+
+
+def test_eval_opts_defaults_are_the_library_functions_defaults():
+    import inspect
+
+    from stylebot import report, scoring
+    from stylebot.verdict import EVAL_PARAMS, VERDICT_PARAMS, DocumentOpts, EvalOpts, VerdictOpts
+
+    def default_of(fn, name):
+        return inspect.signature(fn).parameters[name].default
+
+    opts = EvalOpts()
+    assert opts.judge_model == ev.DEFAULT_JUDGE_MODEL == default_of(ev.openrouter_judge, "model")
+    assert opts.judge_model == default_of(ev.openrouter_judge_async, "model")
+    assert opts.max_workers == scoring.DEFAULT_MAX_WORKERS
+    assert opts.max_workers == default_of(scoring.score_pairs_file, "max_workers")
+    assert opts.report_max_rows == report.DEFAULT_MAX_ROWS
+    assert opts.report_max_rows == default_of(report.render_scores_report, "max_rows")
+    assert opts.facet_by == report.DEFAULT_FACET_BY
+    assert opts.facet_by == default_of(report.render_scores_report, "facet_by")
+    assert {"eval": EvalOpts, "verdict": VerdictOpts, "documents": DocumentOpts} == EVAL_PARAMS
+    assert {"verdict": VerdictOpts, "documents": DocumentOpts} == VERDICT_PARAMS
+    assert EvalOpts(pairs_path="c/pairs.jsonl").scores_path().as_posix() == "c/scores.jsonl"
+    assert EvalOpts(fields=("output",)).score_fields() == ("output",)
+    assert EvalOpts().score_fields() == ("slop", "target")
+
+
+def _scores_file(path, ids_and_values):
+    path.write_text("".join(json.dumps(r) + "\n" for r in _rows(ids_and_values)), encoding="utf-8")
+    return path
+
+
+def test_report_eval_renders_the_verdict_and_the_report(tmp_path):
+    from stylebot.verdict import EvalOpts, VerdictOpts, report_eval
+
+    a = _scores_file(tmp_path / "a.jsonl", _PAIRS)
+    b = _scores_file(tmp_path / "b.jsonl", [("r1", 0.5), ("r2", 0.6), ("r3", 0.7)])
+    pairs = tmp_path / "pairs.jsonl"
+    pairs.write_text("", encoding="utf-8")
+    lines: list[tuple[str, str]] = []
+    opts = EvalOpts(pairs_path=pairs, report_path=tmp_path / "scores.html", report_max_rows=0)
+
+    report_eval(
+        a,
+        pairs,
+        ("output",),
+        VerdictOpts(compare_path=b),
+        opts,
+        emit=lambda message, /, *, level="info": lines.append((level, message)),
+    )
+
+    messages = [m for _, m in lines]
+    assert messages[0] == ""
+    assert messages[1].startswith("verdict — detector on 'output', real pairs, clustered by source")
+    assert any(f"a = {a}" in m for m in messages)
+    assert messages[-1] == f"wrote report -> {opts.report_path}"
+    assert opts.report_path.exists()
+    assert not any(level == "warn" for level, _ in lines)

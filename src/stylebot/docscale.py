@@ -15,6 +15,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from stylebot.cli_options import Emitter, silent
+from stylebot.errors import ConfigError
 from stylebot.jsonl import dumps_line
 from stylebot.pairs import iter_pairs, record_id
 
@@ -141,6 +143,79 @@ def rewrite_documents_file(
             if on_progress is not None:
                 on_progress(i, len(docs))
     return result
+
+
+@dataclass(frozen=True)
+class DocumentPass:
+    """What a document-scale rewrite hands the scoring pass that follows it."""
+
+    pairs_path: Path
+    fields: tuple[str, ...]
+    prune_orphans: bool
+    chunk_scale: dict
+
+
+def document_pass(
+    pairs_path: Path,
+    out: Path,
+    doc_opts,
+    score_fields,
+    *,
+    manifest: dict,
+    splits: dict | None,
+    div_is_prose=None,
+    emit: Emitter = silent,
+) -> DocumentPass:
+    """`eval --documents` (D78): rewrite whole documents, say what to score.
+
+    The styler and its diet come from `manifest` alone (`DocumentOpts`); the
+    caller resolves that and `splits`. The output JSONL is a different corpus
+    from `pairs_path`, so pruning is off and `output` joins the fields; the
+    one `chunk_scale` serves the rewrite and, through `eval.chunked_detector`,
+    the scoring (D54) — `div_is_prose` included, or the verdict is computed on
+    a diet serving does not use.
+    """
+    from stylebot import backends
+
+    role = None if doc_opts.documents_role == "all" else doc_opts.documents_role
+    if role is not None and splits is None:
+        raise ConfigError(
+            f"--documents-role {role} needs a splits contract, and none was given",
+            param_hint="--documents-role",
+        )
+    styler = backends.build_styler(
+        backends.opts_from_manifest(manifest, backends.BackendOpts(backend="tinker"))
+    )
+    max_chunk_chars, inline_headings = backends.serving_diet(manifest)
+    docs_out = Path(doc_opts.documents_out or (Path(out).parent / "documents.jsonl"))
+    emit(
+        f"rewriting whole {role or 'all'}-role documents with run "
+        f"{manifest.get('run_id') or '?'} at {max_chunk_chars} chars"
+        f"{', cross-heading' if inline_headings else ''}",
+        level="status",
+    )
+    chunk_scale = {
+        "max_chunk_chars": max_chunk_chars,
+        "inline_headings": inline_headings,
+        "div_is_prose": div_is_prose,
+    }
+    result = rewrite_documents_file(
+        pairs_path,
+        docs_out,
+        styler,
+        splits=splits,
+        role=role,
+        **chunk_scale,
+        on_progress=lambda i, total: emit(f"  ... {i}/{total} documents rewritten", level="status"),
+    )
+    emit(
+        f"rewrote {result.written} document(s) ({result.n_chunks} chunks, "
+        f"{result.n_kept_input} kept verbatim) -> {docs_out}"
+    )
+    for capture_id, message in result.errors[:10]:
+        emit(f"  {capture_id}: {message}", level="warn")
+    fields = (*score_fields, *(() if "output" in score_fields else ("output",)))
+    return DocumentPass(docs_out, fields, False, chunk_scale)
 
 
 def verdict_dir(runs_dir: str | Path, run_id: str) -> Path:

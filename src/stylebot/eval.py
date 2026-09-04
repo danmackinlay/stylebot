@@ -41,6 +41,9 @@ from stylebot.classify import DETECTOR_IDENTITY_KEYS
 # the judge mean moved, so consumers keying on the version should see it move.
 SCHEMA_VERSION = 4
 
+#: The judge's OpenRouter model id: `openrouter_judge*` and `verdict.EvalOpts` share it.
+DEFAULT_JUDGE_MODEL = "anthropic/claude-opus-4-8"
+
 # ---------------------------------------------------------------------------
 # Signal 1 — Vale (mechanical slop)
 # ---------------------------------------------------------------------------
@@ -317,7 +320,7 @@ def _judge_verdict(resp, model: str) -> dict:
 
 def openrouter_judge(
     *,
-    model: str = "anthropic/claude-opus-4-8",
+    model: str = DEFAULT_JUDGE_MODEL,
     api_key: str | None = None,
     base_url: str | None = None,
     system: str = JUDGE_SYSTEM,
@@ -342,7 +345,7 @@ def openrouter_judge(
 
 def openrouter_judge_async(
     *,
-    model: str = "anthropic/claude-opus-4-8",
+    model: str = DEFAULT_JUDGE_MODEL,
     api_key: str | None = None,
     base_url: str | None = None,
     system: str = JUDGE_SYSTEM,
@@ -601,20 +604,27 @@ _SPLIT_OUT = {
         "score_pairs_file_async",
         "split_by_provenance",
         "summarize_scores",
+        "run_eval",
     ),
     "stylebot.verdict": (
         "SIGNAL_EXTRACTORS",
+        "EVAL_PARAMS",
         "VERDICT_PARAMS",
         "DocumentOpts",
+        "EvalOpts",
         "VerdictOpts",
         "compare_scores",
+        "eval_options",
         "format_summary",
         "format_verdict",
         "paired_delta",
+        "report_eval",
         "verdict_options",
     ),
     "stylebot.docscale": (
+        "DocumentPass",
         "DocumentRewriteResult",
+        "document_pass",
         "iter_document_pairs",
         "rewrite_documents_file",
         "verdict_dir",

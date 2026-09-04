@@ -37,6 +37,10 @@ from stylebot.pairs import FIELD_EXTRACTORS, build_pair_content, iter_pairs, rec
 from stylebot.scoring import load_scores, summarize_scores
 from stylebot.targets import Target
 
+#: `render_scores_report`'s table cap and headline facet; `verdict.EvalOpts` shares them.
+DEFAULT_MAX_ROWS = 2000
+DEFAULT_FACET_BY = "slop_strategy"
+
 # ---------------------------------------------------------------------------
 # Shared scaffolding — what both reports are assembled from
 # ---------------------------------------------------------------------------
@@ -313,7 +317,7 @@ def render_targets_report(
     path: Path | str,
     *,
     title: str = "stylebot targets",
-    max_rows: int | None = 2000,
+    max_rows: int | None = DEFAULT_MAX_ROWS,
     histogram_bins: int = 30,
 ) -> Path:
     """Write a self-contained HTML report of `targets`. Returns the path.
@@ -609,9 +613,9 @@ def render_scores_report(
     *,
     title: str = "stylebot eval scores",
     fields: Sequence[str] = ("slop", "target"),
-    max_rows: int | None = 2000,
+    max_rows: int | None = DEFAULT_MAX_ROWS,
     histogram_bins: int = 5,
-    facet_by: str = "slop_strategy",
+    facet_by: str = DEFAULT_FACET_BY,
 ) -> Path:
     """Write a self-contained HTML scores report. Returns the path.
 
