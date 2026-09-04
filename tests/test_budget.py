@@ -41,33 +41,63 @@ PROSE_CEILING: int | None = 4688
 RATIO_PIN: float | None = 0.4072
 
 # module -> the budgets it is over today, at their exact current size.
-# "functions" and "docstrings" list every over-budget span, largest first.
+# "functions" maps each over-budget function's qualified name (`Class.method`,
+# `outer.inner`) to its size, so a swap for a smaller function under a new name
+# is flagged (M1a); a name that recurs in one module maps to a tuple of sizes,
+# largest first. "docstrings" lists every over-budget span, largest first.
 # A failure names the exact number to lower an entry to, or the entry to delete.
 ALLOWLIST: dict[str, dict[str, object]] = {
-    "bin/ai_style.py": {"lines": 1668, "functions": (139, 105, 88), "docstrings": (16,)},
-    "bin/ai_style_data.py": {"functions": (113,)},
-    "capture.py": {"functions": (99, 93)},
+    "bin/ai_style.py": {
+        "lines": 1668,
+        "functions": {"eval_cmd": 139, "run_cmd": 105, "train_clf_cmd": 88},
+        "docstrings": (16,),
+    },
+    "bin/ai_style_data.py": {"functions": {"prune_stale_cmd": 113}},
+    "capture.py": {"functions": {"recut_archives": 99, "capture_pairs": 93}},
     "classify_train.py": {
         "lines": 965,
-        "functions": (82,),
+        "functions": {"train": 82},
         "docstrings": (22, 17),
         "module_docstring": 31,
     },
-    "generators.py": {"functions": (158, 102, 99)},
-    "infer.py": {"lines": 863, "functions": (177, 94), "docstrings": (17, 16)},
-    "report.py": {"lines": 885, "functions": (130,)},
-    "session.py": {"lines": 845, "functions": (110,)},
-    "splits.py": {"functions": (112,), "docstrings": (19,), "module_docstring": 32},
-    "synth.py": {"lines": 1264, "functions": (128, 128), "docstrings": (26,)},
+    "generators.py": {
+        "functions": {
+            "openai_generator": 158,
+            "openai_generator._make_generate": 102,
+            "openai_generator._make_generate.generate": 99,
+        },
+    },
+    "infer.py": {
+        "lines": 863,
+        "functions": {"rewrite_text": 177, "rewrite_candidates": 94},
+        "docstrings": (17, 16),
+    },
+    "report.py": {"lines": 885, "functions": {"render_comparison_report": 130}},
+    "session.py": {"lines": 845, "functions": {"save_session": 110}},
+    "splits.py": {
+        "functions": {"apply_eval_extension": 112},
+        "docstrings": (19,),
+        "module_docstring": 32,
+    },
+    "synth.py": {
+        "lines": 1264,
+        "functions": {"synthesize_pairs": 128, "_run_session": 128},
+        "docstrings": (26,),
+    },
     "synth_cli.py": {
         "lines": 1117,
-        "functions": (259, 123),
+        "functions": {"run_synth": 259, "_report_result": 123},
         "docstrings": (16,),
     },
-    "targets.py": {"functions": (95,)},
+    "targets.py": {"functions": {"_post_targets": 95}},
     "train.py": {
         "lines": 997,
-        "functions": (97, 95, 90, 89),
+        "functions": {
+            "run_training": 97,
+            "_tinker_runner": 95,
+            "assemble_training_corpus": 90,
+            "build_manifest": 89,
+        },
         "docstrings": (26, 23, 20, 18, 17, 17),
         "module_docstring": 35,
     },
@@ -77,8 +107,26 @@ _DEFINITION = (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 _FUNCTION = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 
+def _functions(node: ast.AST, prefix: str = "") -> list[tuple[str, int]]:
+    """`(qualified name, lines)` per function: `Class.method`, `outer.inner`."""
+    found: list[tuple[str, int]] = []
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, _DEFINITION):
+            qualified = prefix + child.name
+            if isinstance(child, _FUNCTION):
+                found.append((qualified, child.end_lineno - child.lineno + 1))
+            found += _functions(child, qualified + ".")
+        else:
+            found += _functions(child, prefix)
+    return found
+
+
 def measure(path: Path) -> dict[str, object]:
-    """Line counts for one module: sizes, and the prose/code split."""
+    """Line counts for one module: sizes, and the prose/code split.
+
+    `functions` is every function's sizes by qualified name, largest first;
+    the other spans are the over-budget ones only.
+    """
     source = path.read_text()
     lines = source.splitlines()
     tree = ast.parse(source)
@@ -99,11 +147,9 @@ def measure(path: Path) -> dict[str, object]:
         else:
             docstrings.append(size)
 
-    functions = [
-        node.end_lineno - node.lineno + 1
-        for node in ast.walk(tree)
-        if isinstance(node, _FUNCTION)
-    ]
+    functions: dict[str, list[int]] = {}
+    for qualified, size in _functions(tree):
+        functions.setdefault(qualified, []).append(size)
 
     comment = code = 0
     for number, line in enumerate(lines, 1):
@@ -117,7 +163,7 @@ def measure(path: Path) -> dict[str, object]:
 
     return {
         "lines": len(lines),
-        "functions": sorted((n for n in functions if n > FUNCTION_LINES), reverse=True),
+        "functions": {q: sorted(s, reverse=True) for q, s in functions.items()},
         "docstrings": sorted(
             (n for n in docstrings if n > DOCSTRING_LINES), reverse=True
         ),
@@ -165,6 +211,41 @@ def _check_spans(name: str, key: str, budget: int, actual: list[int], allowed: d
     return []
 
 
+def _check_functions(name: str, actual: dict[str, list[int]], allowed: dict) -> list[str]:
+    """Per qualified name: unlisted, grown, under budget or gone each fail."""
+    budget = FUNCTION_LINES
+    over = {q: [n for n in s if n > budget] for q, s in actual.items() if s[0] > budget}
+    ceilings = {
+        q: (c,) if isinstance(c, int) else tuple(c)
+        for q, c in dict(allowed.get("functions", {})).items()
+    }
+    problems: list[str] = []
+    for q, sizes in sorted(over.items()):
+        c = ceilings.get(q)
+        if c is None:
+            problems.append(
+                f"{name}: {q} is {sizes} lines (budget {budget}) and is not allowlisted"
+            )
+        elif len(sizes) > len(c):
+            problems.append(
+                f"{name}: {len(sizes)} defs of {q} over {budget} lines, allowlist has {len(c)}"
+            )
+        else:
+            grew = [(a, k) for a, k in zip(sizes, c, strict=False) if a > k]
+            if grew:
+                problems.append(
+                    f"{name}: {q} grew {grew} (actual, ceiling); the allowlist only shrinks"
+                )
+    for q in sorted(set(ceilings) - set(over)):
+        if q in actual:
+            problems.append(
+                f"{name}: {q} is {actual[q]} lines, under budget — delete its allowlist entry"
+            )
+        else:
+            problems.append(f"{name}: {q} no longer exists — delete its allowlist entry")
+    return problems
+
+
 def test_no_module_is_over_budget_or_over_its_allowance() -> None:
     problems: list[str] = []
     for name, m in _modules():
@@ -177,9 +258,26 @@ def test_no_module_is_over_budget_or_over_its_allowance() -> None:
             m["module_docstring"],
             allowed,
         )
-        problems += _check_spans(name, "functions", FUNCTION_LINES, m["functions"], allowed)
+        problems += _check_functions(name, m["functions"], allowed)
         problems += _check_spans(name, "docstrings", DOCSTRING_LINES, m["docstrings"], allowed)
     assert not problems, "size budget (D58):\n  " + "\n  ".join(problems)
+
+
+def _module_with(tmp_path: Path, function: str) -> Path:
+    body = "\n".join(f"    x{i} = {i}" for i in range(FUNCTION_LINES + 10))
+    path = tmp_path / "mod.py"
+    path.write_text(f"def {function}():\n{body}\n    return x0\n")
+    return path
+
+
+def test_a_renamed_over_budget_function_is_flagged(tmp_path: Path) -> None:
+    allowed = {"functions": {"a": FUNCTION_LINES + 12}}
+    as_a = measure(_module_with(tmp_path, "a"))["functions"]
+    assert _check_functions("mod.py", as_a, allowed) == []
+    as_b = measure(_module_with(tmp_path, "b"))["functions"]
+    problems = _check_functions("mod.py", as_b, allowed)
+    assert any(p.startswith("mod.py: b is") and "not allowlisted" in p for p in problems), problems
+    assert any(p.startswith("mod.py: a no longer exists") for p in problems), problems
 
 
 def test_allowlist_names_real_modules() -> None:
