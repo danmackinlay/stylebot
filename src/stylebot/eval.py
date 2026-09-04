@@ -28,7 +28,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time as _time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from pathlib import Path
 from statistics import mean, stdev
@@ -37,7 +36,6 @@ from typing import Protocol
 # `classify` is ML-dependency-free at import, so taking the detector-identity
 # contract from it keeps one definition of "which head scored this".
 from stylebot.classify import DETECTOR_IDENTITY_KEYS
-from stylebot.errors import RunError
 
 # Bumped to 3 on 2026-09-03: the summary gained `by_provenance` +
 # `headline_facet` (D40) and `detectors` (D39). Additive, but the headline
@@ -410,113 +408,6 @@ def null_detector(prose: str) -> dict:
 
 
 null_detector.identity = {key: None for key in DETECTOR_IDENTITY_KEYS} | {"name": "null"}
-
-
-#: Pangram's async task API base. Overridable so the one-shot cross-check can be
-#: pointed at a mock or a future path without editing this module. There is no
-#: synchronous `/predict`: Pangram 3.0 is `POST /task` -> task id ->
-#: `GET /task/{id}`, polled until a terminal stage (findings.md, 2026-09-03).
-PANGRAM_URL = "https://text.external-api.pangram.com/task"
-
-#: Terminal stages of a Pangram task; anything else means keep polling.
-PANGRAM_DONE = "STAGE_SUCCESS"
-PANGRAM_FAILED = "STAGE_FAILED"
-
-
-def pangram_detector(
-    *,
-    api_key: str | None = None,
-    url: str = PANGRAM_URL,
-    model: str = "pangram-4",
-    timeout: float = 30.0,
-    poll_interval: float = 1.0,
-    poll_timeout: float = 180.0,
-    post: Callable[[str, dict, dict], dict] | None = None,
-    fetch: Callable[[str, dict], dict] | None = None,
-) -> Detector:
-    """The **optional, one-shot** independent cross-check (D7).
-
-    A paid API (~$0.05/1k words, `PANGRAM_API_KEY`) that must never be the
-    default detector and never run in a hot loop: use it once, over a bounded
-    sample, to confirm the free detector's direction. What that bought and why
-    it stays one-shot: findings.md, "Pangram cross-check".
-
-    Polarity matches the house convention — ``score = fraction_ai``, higher =
-    more AI-like — so it drops into `mean_detector_score` unchanged. `post` and
-    `fetch` are the transport seams (`(url, payload, headers) -> dict` and
-    `(url, headers) -> dict`), so tests exercise everything but the spend.
-    Networking is stdlib `urllib`: a plain JSON POST to a non-OpenAI endpoint,
-    and eval must stay importable with no SDK installed.
-    """
-    from stylebot import config
-
-    key = api_key or config.require_key("PANGRAM_API_KEY")
-    transport = post or _urllib_post_json
-
-    def detect(prose: str) -> dict:
-        payload = {"text": prose, "model": model}
-        headers = {"Content-Type": "application/json", "x-api-key": key}
-        body = transport(url, payload, headers)
-        # `POST /task` answers with an id, not a verdict. Poll the task until a
-        # terminal stage; `fetch` is the GET seam, so a fake `post` that already
-        # returns a scored body (the shape the tests use) still short-circuits
-        # here rather than needing a second stub.
-        task_id = body.get("task_id") or body.get("id")
-        if task_id and "fraction_ai" not in body:
-            deadline = _time.monotonic() + poll_timeout
-            get = fetch or _urllib_get_json
-            while True:
-                body = get(f"{url}/{task_id}", headers)
-                stage = body.get("stage")
-                if stage == PANGRAM_DONE:
-                    break
-                if stage == PANGRAM_FAILED:
-                    raise RunError(f"pangram task {task_id} failed: {body.get('error') or stage}")
-                if _time.monotonic() > deadline:
-                    raise RunError(
-                        f"pangram task {task_id} still {stage} after {poll_timeout:.0f}s"
-                    )
-                _time.sleep(poll_interval)
-        # `fraction_ai` is the documented field; `ai_likelihood` is what some
-        # responses call it. Neither present = no signal, said out loud rather
-        # than defaulted to 0.0, which would read as "certainly human".
-        score = body.get("fraction_ai")
-        if score is None:
-            score = body.get("ai_likelihood")
-        return {
-            "score": float(score) if score is not None else None,
-            "name": "pangram",
-            "configured": True,
-            "embed_model": None,
-            "git_sha": None,
-            "trained_at": None,
-            "n_pairs": None,
-            "prediction": body.get("prediction"),
-        }
-
-    detect.identity = {key_: None for key_ in DETECTOR_IDENTITY_KEYS} | {"name": "pangram"}
-    return detect
-
-
-def _urllib_get_json(url: str, headers: dict, *, timeout: float = 30.0) -> dict:
-    import urllib.request
-
-    request = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310 - fixed https URL
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def _urllib_post_json(url: str, payload: dict, headers: dict, *, timeout: float = 30.0) -> dict:
-    import urllib.request
-
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310 - fixed https URL
-        return json.loads(resp.read().decode("utf-8"))
 
 
 def detector_identity(detector: Detector) -> dict:

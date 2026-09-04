@@ -343,5 +343,5 @@ Before farming out an open slice, confirm it has:
 - Base-model headroom — `Qwen/Qwen3.5-9B` today; step-up candidates are
   Qwen3.6-27B (dense) or Qwen3.6-35B-A3B (MoE, the Mac-friendliest shape).
 - Detector — **settled (2026-06-30):** the trained Dan-voice classifier
-  (StyleDistance backbone) is the signal, not Pangram/general AI-detectors.
-  Pangram survives only as an optional independent cross-check.
+  (StyleDistance backbone) is the signal, not a general AI-detector; the
+  Pangram cross-check was deleted 2026-09-04 (D7).

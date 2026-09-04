@@ -118,6 +118,8 @@ The old "galaxy-brained reframe" (Goodharting Pangram ≈ de-slopping toward Dan
 
 **Re-evaluate if**: the frozen-embedding head plateaus on the boundary cases that matter most (lightly-humanised hybrids) — then escalate to **Option D** (contrastively fine-tune a style encoder on our own pairs, which is how StyleDistance itself was trained), not back to Pangram. Add a one-shot Pangram cross-check only if an *external, independent* opinion is wanted before trusting the detector as a reward.
 
+**Pangram cross-check deleted 2026-09-04**: endpoint dead (findings, "Pangram cross-check"), no caller in stylebot or the blog; `eval.pangram_detector` and its tests went with X2.
+
 ## D8: DiffusionGemma (speculative, not v1)
 
 **Decision**: not v1. Revisit only as a Phase-7-ish detour if a specific failure mode appears.

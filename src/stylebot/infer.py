@@ -365,15 +365,6 @@ def record_anchor_delta(record: dict, *, inline: bool = False) -> tuple[list[str
     return anchor_delta(extract_slop(record), extract_target(record), inline=inline)
 
 
-def invents_anchors(record: dict, *, inline: bool = False) -> bool:
-    """True if a pair record's Dan-side target conjures anchors its slop lacks.
-
-    Such a pair is an explicit lesson in fabricating links, so it is what the
-    synth write-gate drops (`--drop-invented-anchors`).
-    """
-    return bool(record_anchor_delta(record, inline=inline)[1])
-
-
 def is_anchor_faithful(
     record: dict, *, lose: bool = True, gain: bool = True, inline: bool = False
 ) -> bool:

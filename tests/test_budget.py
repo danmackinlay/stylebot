@@ -68,11 +68,10 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         },
     },
     "infer.py": {
-        "lines": 863,
+        "lines": 854,
         "functions": {"rewrite_text": 177, "rewrite_candidates": 94},
         "docstrings": (17, 16),
     },
-    "report.py": {"lines": 885, "functions": {"render_comparison_report": 130}},
     "session.py": {"lines": 845, "functions": {"save_session": 110}},
     "splits.py": {
         "functions": {"apply_eval_extension": 112},

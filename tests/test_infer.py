@@ -568,7 +568,6 @@ def test_anchor_faithful_rejects_a_fabrication_lesson():
     """The direction the synth gate covers: a target carrying a link its slop
     never had (the reverse-edit swap of a generator that dropped one)."""
     rec = _pair("Slop without the link.", "Dan with [docs](./d.qmd).")
-    assert infer.invents_anchors(rec)
     assert not infer.is_anchor_faithful(rec)
     assert infer.is_anchor_faithful(rec, gain=False)
 
@@ -578,7 +577,6 @@ def test_anchor_faithful_rejects_a_deletion_lesson():
     conjured a link, so after the swap the pair reads *given this URL, produce
     text without it* — the compression-by-deletion habit."""
     rec = _pair("Slop with [docs](./d.qmd) invented.", "Dan without it.")
-    assert not infer.invents_anchors(rec)  # nothing fabricated on the Dan side
     assert not infer.is_anchor_faithful(rec)  # ... and it still fails, symmetrically
     assert infer.is_anchor_faithful(rec, lose=False)
 

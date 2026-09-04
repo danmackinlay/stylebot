@@ -15,8 +15,8 @@ failure already on record:
 4. **Was this scored at chunk scale or document scale?** Everything until now
    scored pre-cut chunks, so a chunk-diet switch could not move its own verdict.
 
-No network, no key, no model: the detector is a stub head, the Pangram transport
-is injected, and the document-scale styler is a stub `rewrite`.
+No network, no key, no model: the detector is a stub head, and the
+document-scale styler is a stub `rewrite`.
 """
 
 from __future__ import annotations
@@ -248,7 +248,7 @@ def test_compare_scores_reports_the_real_facet_by_default():
 
 
 # ---------------------------------------------------------------------------
-# 4. document-scale eval, and the Pangram cross-check
+# 4. document-scale eval
 # ---------------------------------------------------------------------------
 
 
@@ -317,64 +317,6 @@ def test_document_scale_rewrite_emits_a_scorable_output_jsonl(tmp_path):
         pairs, out, styler=object(), splits=splits, rewrite=fake_rewrite
     )
     assert again.written == 0
-
-
-def test_pangram_detector_scores_fraction_ai_through_an_injected_transport():
-    posted = []
-
-    def fake_post(url, payload, headers):
-        posted.append((url, payload, headers))
-        return {"fraction_ai": 0.83, "prediction": "AI"}
-
-    detector = ev.pangram_detector(api_key="k", post=fake_post)
-    result = detector("some prose")
-    assert result["score"] == pytest.approx(0.83)  # polarity: higher = more AI
-    assert result["name"] == "pangram"
-    assert posted[0][1] == {"text": "some prose", "model": "pangram-4"}
-    assert posted[0][2]["x-api-key"] == "k"
-
-
-def test_pangram_polls_the_async_task_until_a_terminal_stage():
-    """`POST /task` answers with an id, not a verdict.
-
-    The URL this module shipped (`text.api.pangram.com/predict`) answered 404
-    against the live API, and nothing caught it because the detector had only
-    ever been driven through its `post=` seam returning an already-scored body.
-    So the poll loop gets its own seam and its own test.
-    """
-    fetched = []
-
-    def fake_post(url, payload, headers):
-        return {"task_id": "t-1"}
-
-    def fake_fetch(url, headers):
-        fetched.append(url)
-        if len(fetched) < 3:
-            return {"stage": "STAGE_PENDING"}
-        return {"stage": "STAGE_SUCCESS", "fraction_ai": 0.42, "prediction": "Mixed"}
-
-    detector = ev.pangram_detector(api_key="k", post=fake_post, fetch=fake_fetch, poll_interval=0)
-    assert detector("prose")["score"] == pytest.approx(0.42)
-    assert fetched[-1].endswith("/task/t-1")
-    assert len(fetched) == 3
-
-
-def test_pangram_raises_rather_than_hanging_on_a_failed_task():
-    from stylebot.errors import RunError
-
-    detector = ev.pangram_detector(
-        api_key="k",
-        post=lambda *a: {"task_id": "t-2"},
-        fetch=lambda *a: {"stage": "STAGE_FAILED", "error": "nope"},
-        poll_interval=0,
-    )
-    with pytest.raises(RunError, match="t-2"):
-        detector("prose")
-
-
-def test_pangram_says_none_rather_than_zero_when_the_field_is_absent():
-    detector = ev.pangram_detector(api_key="k", post=lambda *a: {"unexpected": 1})
-    assert detector("prose")["score"] is None
 
 
 # ---------------------------------------------------------------------------

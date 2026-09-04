@@ -5,8 +5,6 @@ from __future__ import annotations
 import re
 from html.parser import HTMLParser
 
-import pytest
-
 from stylebot import eval as ev
 from stylebot import report, synth
 from stylebot.pairs import iter_pairs, record_id
@@ -549,76 +547,3 @@ def test_middle_field_gets_the_neutral_badge(tmp_path):
     report.render_scores_report(recs, pairs, p, fields=("slop", "output", "target"))
     h = p.read_text()
     assert "s-slop" in h and "s-dan" in h and "s-mid" in h
-
-
-# --- the N-arm comparison report -------------------------------------------
-
-
-def test_comparison_report_puts_every_arm_in_one_table(tmp_path):
-    """The whole point: one table, so a read-through is not two browser tabs
-    scrolled in sync with no shared row anchor."""
-    pairs, scores = _make_scored(tmp_path, judge=_judge)
-    p = tmp_path / "cmp.html"
-    report.render_comparison_report(
-        [("slop in", pairs, scores, "slop"), ("Dan", pairs, scores, "target")], p
-    )
-    h = p.read_text()
-    assert h.count("<table") == 1
-    assert "slop in</th>" in h and "Dan</th>" in h
-    assert "http://" not in h and "https://" not in h  # self-contained
-
-
-def test_comparison_report_drops_the_empty_covariate_columns(tmp_path):
-    """strategy/generator/reasoning/prompt are the widest columns in the per-arm
-    report and read '—' for every real captured pair. A comparison view carries
-    source and the scores, nothing else."""
-    pairs, scores = _make_scored(tmp_path)
-    p = tmp_path / "cmp.html"
-    report.render_comparison_report(
-        [("a", pairs, scores, "slop"), ("b", pairs, scores, "target")], p
-    )
-    h = p.read_text()
-    for col in ("generator</th>", "reasoning</th>", "prompt</th>", "turn</th>"):
-        assert col not in h
-
-
-def test_comparison_report_does_not_truncate_the_text(tmp_path):
-    """Clipping is visual (CSS max-height + an expander), never a substring —
-    a 400-char cut hides exactly the long rewrites whose coherence is under
-    review."""
-    long_text = "Sentence about the thing. " * 60
-    d = tmp_path / "corpus"
-    t = synth.Target(text=long_text, source="post/long.qmd", chunk_index=0, chunk_total=1)
-    synth.synthesize_pairs([t], d, [synth.Generator(name="m", generate=lambda s: "slop: " + s)])
-    pairs, scores = d / "pairs.jsonl", tmp_path / "s.jsonl"
-    ev.score_pairs_file(pairs, scores)
-    p = tmp_path / "cmp.html"
-    report.render_comparison_report(
-        [("a", pairs, scores, "slop"), ("b", pairs, scores, "target")], p
-    )
-    h = p.read_text()
-    assert long_text.strip() in h
-    assert "max-height" in h and "expandAll" in h
-
-
-def test_comparison_report_needs_two_arms(tmp_path):
-    pairs, scores = _make_scored(tmp_path)
-    with pytest.raises(ValueError, match="at least two arms"):
-        report.render_comparison_report([("only", pairs, scores, "slop")], tmp_path / "x.html")
-
-
-def test_comparison_columns_are_equal_width_and_not_a_flex_row(tmp_path):
-    """Two bugs in one test. `.cmp` is already claimed by the per-arm report's
-    `display:flex` rule, which silently stopped this table laying out as a
-    table; and arm widths must be declared equal, because the eye reads column
-    width as significance and one arm holding longer text is not significance."""
-    pairs, scores = _make_scored(tmp_path)
-    p = tmp_path / "cmp.html"
-    report.render_comparison_report(
-        [("a", pairs, scores, "slop"), ("b", pairs, scores, "target")], p
-    )
-    h = p.read_text()
-    assert "class=armtab" in h and "<table class=cmp" not in h
-    widths = re.findall(r"<col style='width:([\d.]+)%'>", h)
-    assert len(widths) == 3  # source + two arms
-    assert widths[1] == widths[2]
