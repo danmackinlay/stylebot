@@ -284,3 +284,115 @@ def test_serve_answers_a_failed_styler_build_and_lives(monkeypatch, tmp_path):
         {"id": 1, "error": "RunError: TINKER_API_KEY is not set"},
         {"id": 2, "scores": [0.9]},
     ]
+
+
+# ---------------------------------------------------------------------------
+# The sidecar as a library: `serve_sidecar` and `preference_recorder` (D78).
+# ---------------------------------------------------------------------------
+
+
+def sidecar_lines(
+    *requests: object, make_styler=None, prefer=None, div_is_prose=None, backend=None
+) -> list[dict]:
+    """Drive `serve_sidecar` over in-memory streams, the way `run_lines` drives the loop."""
+    stdin = io.StringIO("".join(json.dumps(r) + "\n" for r in requests))
+    stdout = io.StringIO()
+    serve.serve_sidecar(
+        backend or backends.BackendOpts(),
+        detector=stub_detector,
+        meta={"name": "stub-clf"},
+        make_styler=make_styler,
+        prefer=prefer,
+        div_is_prose=div_is_prose,
+        stdin=stdin,
+        stdout=stdout,
+    )
+    return [json.loads(line) for line in stdout.getvalue().splitlines()]
+
+
+def test_serve_sidecar_scores_and_segments_without_a_styler():
+    document = "## H\n\n::: {.callout-note}\nCallout prose.\n:::\n"
+    info, scores, unarmed, segments = sidecar_lines(
+        {"id": 1, "op": "info"},
+        {"id": 2, "op": "score", "texts": ["pure slop", "prose"]},
+        {"id": 3, "op": "rewrite", "text": "prose"},
+        {"id": 4, "op": "segment", "text": document},
+        div_is_prose=callout_is_prose,
+    )
+    assert info == {"id": 1, "meta": {"name": "stub-clf"}}
+    assert scores == {"id": 2, "scores": [0.9, 0.1]}
+    assert "without a styler" in unarmed["error"]
+    # The div policy reaches the `segment` op — the loop — and nothing else.
+    assert [document[s["start"] : s["end"]] for s in segments["segments"]] == ["Callout prose."]
+
+
+def test_serve_sidecar_builds_the_styler_lazily_and_once():
+    requests = [
+        {"id": 1, "op": "score", "texts": ["x"]},
+        {"id": 2, "op": "rewrite", "text": "Plain prose here.", "best_of": 2},
+        {"id": 3, "op": "rewrite", "text": "More prose here.", "best_of": 1},
+    ]
+    stdin = io.StringIO("".join(json.dumps(r) + "\n" for r in requests))
+    stdout = io.StringIO()
+    answered_before_build: list[int] = []
+
+    def make_styler():
+        answered_before_build.append(stdout.getvalue().count("\n"))
+        return lambda messages, num_samples=1: ["Rewritten slop."] * num_samples
+
+    serve.serve_sidecar(
+        backends.BackendOpts(max_chunk_chars=400),
+        detector=stub_detector,
+        meta={},
+        make_styler=make_styler,
+        stdin=stdin,
+        stdout=stdout,
+    )
+    scored, first, second = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    assert scored == {"id": 1, "scores": [0.1]}
+    assert answered_before_build == [1]  # built once, and only after scoring was answered
+    assert first["n_sampled"] == 2 and first["input_score"] == 0.1
+    assert {c["text"] for c in first["candidates"]} == {"Rewritten slop."}
+    assert first["candidates"][0]["score"] == 0.9  # the stub detector, as the reranker
+    assert second["id"] == 3 and "candidates" in second
+
+
+def test_serve_sidecar_hands_a_failed_build_to_the_client_and_lives():
+    def unready():
+        raise RunError("TINKER_API_KEY is not set")
+
+    failed, alive = sidecar_lines(
+        {"id": 1, "op": "rewrite", "text": "some prose"},
+        {"id": 2, "op": "score", "texts": ["still slop"]},
+        make_styler=unready,
+    )
+    assert failed == {"id": 1, "error": "RunError: TINKER_API_KEY is not set"}
+    assert alive == {"id": 2, "scores": [0.9]}
+
+
+def test_preference_recorder_stamps_the_record_and_creates_the_directory(tmp_path):
+    path = tmp_path / "nested" / "preferences.jsonl"
+    prefer = serve.preference_recorder(path)
+    (ok,) = sidecar_lines(
+        {"id": 1, "op": "prefer", "decision": {"chosen": 1, "kept_input": False}},
+        prefer=prefer,
+    )
+    assert ok == {"id": 1, "ok": True}
+    (record,) = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert record["ts"].startswith("20") and "T" in record["ts"]
+    assert {k: v for k, v in record.items() if k != "ts"} == {
+        "run_id": None,
+        "chooser": None,
+        "chosen": 1,
+        "kept_input": False,
+    }
+
+    # The blog's shape: a run id, a default chooser, and the client's own wins.
+    tagged = serve.preference_recorder(path, run_id="r7", default_chooser="human")
+    tagged({"chosen": 0})
+    tagged({"chosen": 2, "chooser": "detector"})
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert [(r["run_id"], r["chooser"], r["chosen"]) for r in rows[1:]] == [
+        ("r7", "human", 0),
+        ("r7", "detector", 2),
+    ]

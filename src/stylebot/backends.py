@@ -11,27 +11,45 @@ copy passed no `max_tokens` (D35). Errors follow the package vocabulary (D47).
 the corpus's current policy. Serving at the wrong diet is out-of-distribution
 and the styler falls back to copying its input, and the two diverge the moment
 training policy moves ahead of the promoted run.
+
+`RunOpts` and the two `run` passes (`rewrite_corpus`, `rewrite_document`) are
+the command body as a library, so `dan-style run` calls them with its policy
+hooks instead of retyping them (D78).
 """
 
 from __future__ import annotations
 
+import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 
 from stylebot import config
-from stylebot.cli_options import bundle_options, opt
+from stylebot.cli_options import Emitter, bundle_options, opt, silent
 from stylebot.errors import ConfigError, RunError
+
+if TYPE_CHECKING:
+    from stylebot.infer import RewriteResult, Styler
 
 logger = logging.getLogger(__name__)
 
 # Minimum share of the training corpus a chunk budget needs before `serving_diet`
 # will serve at it. One-sided on purpose — see the function.
 MIN_SCALE_SUPPORT = 0.10
+
+# Samples per chunk under `run`; 1 means nothing reranks and no scorer is needed.
+DEFAULT_BEST_OF = 1
+
+MANIFEST_HELP = (
+    "A training-run manifest to serve: supplies --sampler-path, --base-model, --renderer and "
+    "the chunk diet (--max-chunk-chars/--inline-headings) the adapter was TRAINED on. Explicit "
+    "flags win over it. Serving at the wrong diet is out-of-distribution — the styler falls back "
+    "to copying its input — so prefer this over retyping four flags."
+)
 
 
 @dataclass(frozen=True)
@@ -329,3 +347,238 @@ def opts_from_manifest(
     for note in manifest_mismatches(manifest, opts):
         logger.warning("%s", note)
     return replace(opts, **fill)
+
+
+# ---------------------------------------------------------------------------
+# `run` as a library: the option bundle and the two passes (D78)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RunOpts:
+    """The `run` surface — what `rewrite_corpus` and `rewrite_document` take (D78).
+
+    `BackendOpts` says how to reach the styler; this says what to do with it.
+    """
+
+    cli_section = "Rewrite"
+
+    best_of: int = opt(
+        DEFAULT_BEST_OF,
+        "--best-of",
+        show_default=True,
+        type=int,
+        help="Sample N candidates per chunk and keep the most Dan-scored (needs --detector-model).",
+    )
+    strict_anchors: bool = opt(
+        False,
+        "--strict-anchors",
+        is_flag=True,
+        help="Also require inline code spans and inline math to survive a rewrite, not just links "
+        "and citations. Measured over the corpus this roughly triples the rate at which every "
+        "candidate is rejected and the input is kept verbatim — hence off by default.",
+    )
+    anchor_log: Path | None = opt(
+        None,
+        "--anchor-log",
+        type=click.Path(dir_okay=False, path_type=Path),
+        help="Append per-chunk anchor accounting to this JSONL (anchor keys and lengths, never "
+        "candidate text). The headline counts say whether a run went wrong; this says how the "
+        "model behaves, which is what decides whether masking is worth building at all "
+        "(D32, D33).",
+    )
+    write_in_place: bool = opt(
+        False,
+        "--write",
+        "write_in_place",
+        is_flag=True,
+        help="Rewrite FILE in place (a .bak backup is left beside it). Default prints to stdout.",
+    )
+    pairs_path: Path | None = opt(
+        None,
+        "--pairs",
+        "pairs_path",
+        type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
+        help="Corpus mode: rewrite the slop side of every pair in this pairs.jsonl instead of a "
+        "file, writing an output-bearing JSONL for `ai-style eval --field output`. This is how a "
+        "trained adapter gets a number rather than an impression. Needs --out.",
+    )
+    out_path: Path | None = opt(
+        None,
+        "--out",
+        "out_path",
+        type=click.Path(dir_okay=False, path_type=Path),
+        help="[--pairs] Where the output-bearing JSONL goes. Appended to and resumable: ids "
+        "already present are skipped, so an interrupted sweep continues rather than re-paying "
+        "for them.",
+    )
+    limit: int | None = opt(
+        None,
+        "--limit",
+        type=int,
+        help="[--pairs] Cap how many pairs are rewritten.",
+    )
+    manifest_path: Path | None = opt(
+        None,
+        "--manifest",
+        "manifest_path",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        help=MANIFEST_HELP,
+    )
+
+
+RUN_PARAMS: dict[str, type] = {"run": RunOpts, "opts": BackendOpts}
+
+
+def run_options(**kw):
+    """The whole `run` surface — `RUN_PARAMS`'s two bundles, one decorator."""
+    return bundle_options(list(RUN_PARAMS.values()), **kw)
+
+
+def load_manifest(manifest_path: str | Path | None, *, param_hint: str = "--manifest") -> dict:
+    """A training manifest as a dict, or `{}` when none was named."""
+    if manifest_path is None:
+        return {}
+    try:
+        return json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise ConfigError(
+            f"{manifest_path}: not valid JSON ({exc})", param_hint=param_hint
+        ) from exc
+
+
+def corpus_mode(opts: RunOpts, *, source: Path | None = None) -> bool:
+    """Whether `opts` asks for corpus mode, after the flag checks both CLIs used to retype.
+
+    Raises `ConfigError` for `--pairs` beside a FILE or without `--out`, and
+    for `--out`/`--limit` outside corpus mode.
+    """
+    if opts.pairs_path is not None:
+        if source is not None:
+            raise ConfigError(
+                "--pairs rewrites a corpus; pass it or a FILE, not both", param_hint="--pairs"
+            )
+        if opts.out_path is None:
+            raise ConfigError(
+                "--pairs needs --out (the output-bearing JSONL to write)", param_hint="--out"
+            )
+        return True
+    if opts.out_path is not None or opts.limit is not None:
+        raise ConfigError("--out/--limit only apply in corpus mode (--pairs)")
+    return False
+
+
+def rewrite_corpus(
+    opts: RunOpts,
+    styler: Styler,
+    *,
+    scorer: Callable[[str], float] | None = None,
+    selector: Callable[[dict], bool] | None = None,
+    emit: Emitter = silent,
+) -> int:
+    """Corpus mode: style the slop side of `opts.pairs_path` into `opts.out_path`.
+
+    `selector` is the caller's stratum policy over pair records (the blog keeps
+    its role selector); progress and the closing count go to `emit` at
+    `status`. Returns the number of pairs written (`infer.rewrite_pairs_file`).
+    """
+    from stylebot import infer
+
+    if opts.pairs_path is None:
+        raise ConfigError("corpus mode needs --pairs (and --out)", param_hint="--pairs")
+    corpus_mode(opts)
+
+    def progress(i: int, total: int) -> None:
+        if i == 1 or i % 10 == 0 or i == total:
+            emit(f"  ... {i}/{total} rewritten", level="status")
+
+    written = infer.rewrite_pairs_file(
+        opts.pairs_path,
+        opts.out_path,
+        styler,
+        limit=opts.limit,
+        selector=selector,
+        best_of=opts.best_of,
+        scorer=scorer,
+        on_progress=progress,
+    )
+    emit(f"rewrote {written} pair(s) -> {opts.out_path}", level="status")
+    return written
+
+
+def rewrite_document(
+    text: str,
+    opts: RunOpts,
+    backend: BackendOpts,
+    styler: Styler,
+    *,
+    scorer: Callable[[str], float] | None = None,
+    on_decision: Callable[..., None] | None = None,
+    div_is_prose=None,
+    rewrite: Callable[..., RewriteResult] | None = None,
+    source: Path | None = None,
+    emit: Emitter = silent,
+) -> RewriteResult:
+    """Document mode: one text through the styler at the backend's diet.
+
+    `rewrite` replaces `infer.rewrite_text` (same keywords; the blog's masking
+    defence); `div_is_prose` is the caller's container policy. Decisions are
+    emitted at `status` when something chose (a scorer, or a custom `rewrite`),
+    the anchor audit lands in `opts.anchor_log`, and under `opts.write_in_place`
+    a `source` file is rewritten beside a `.bak`. Printing the text is the
+    caller's.
+    """
+    from stylebot import infer
+
+    if corpus_mode(opts, source=source):
+        raise ConfigError(
+            "--pairs rewrites a corpus; pass it or a FILE, not both", param_hint="--pairs"
+        )
+    rewriter = rewrite or infer.rewrite_text
+    result = rewriter(
+        text,
+        styler,
+        max_chunk_chars=backend.chunk_chars(),
+        best_of=opts.best_of,
+        scorer=scorer,
+        on_decision=on_decision,
+        inline_headings=backend.headings(),
+        inline_anchors=opts.strict_anchors,
+        div_is_prose=div_is_prose,
+    )
+    if scorer is not None or rewrite is not None:
+        for line in result.decisions:
+            emit(f"  {line}", level="status")
+    if opts.anchor_log is not None:
+        n = infer.write_anchor_audit(
+            opts.anchor_log, result, source=str(source) if source else None
+        )
+        emit(f"  {n} chunk(s) of anchor accounting -> {opts.anchor_log}", level="status")
+    emit(format_rewrite_summary(result), level="status")
+    if opts.write_in_place and source:
+        source.with_suffix(source.suffix + ".bak").write_text(text, encoding="utf-8")
+        source.write_text(result.text, encoding="utf-8")
+        emit(f"rewrote {source} (backup at {source}.bak)", level="status")
+    return result
+
+
+def format_rewrite_summary(result: RewriteResult) -> str:
+    """The one-line run report: `[N chunk(s), M sample(s), ...]`.
+
+    Anchor rejections are broken out by cause — losing a link wants a better
+    sample, inventing one wants a model that stops making things up — and
+    truncation is reported apart from them because it usually means the token
+    budget, not the sample.
+    """
+    return (
+        f"[{result.n_chunks} chunk(s), {result.n_candidates} sample(s)"
+        + (f", {result.n_kept_input} kept as input" if result.n_kept_input else "")
+        + (
+            f", {result.n_anchor_rejected} sample(s) rejected for anchor damage "
+            f"({result.n_anchor_lost} lost, {result.n_anchor_invented} invented)"
+            if result.n_anchor_rejected
+            else ""
+        )
+        + (f", {result.n_truncated} truncated (raise --max-tokens?)" if result.n_truncated else "")
+        + "]"
+    )

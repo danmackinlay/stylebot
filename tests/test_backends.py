@@ -190,3 +190,189 @@ def test_the_warning_is_skipped_when_the_manifest_pins_no_renderer():
     unpinned["result"].pop("renderer_name", None)
     unpinned["hyperparameters"].pop("renderer_name", None)
     assert backends.manifest_mismatches(unpinned, BackendOpts(backend="openai")) == []
+
+
+# --- `run` as a library: RunOpts and the two passes (D78) -------------------
+
+from stylebot.ai_core import STYLE_SYSTEM  # noqa: E402
+from stylebot.backends import RunOpts  # noqa: E402
+from stylebot.errors import ConfigError  # noqa: E402
+
+
+def _identity(messages, num_samples=1):
+    return [messages[1]["content"]] * num_samples
+
+
+def _pairs(tmp_path, n=3):
+    pairs = tmp_path / "pairs.jsonl"
+    recs = [
+        {
+            "messages": [
+                {"role": "system", "content": STYLE_SYSTEM},
+                {"role": "user", "content": f"slop {i}"},
+                {"role": "assistant", "content": f"dan {i}"},
+            ],
+            "meta": {"source": f"p{i}", "capture_id": f"c{i}", "chunk_index": 0},
+        }
+        for i in range(n)
+    ]
+    pairs.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+    return pairs
+
+
+def _emitted():
+    lines: list[tuple[str, str]] = []
+
+    def emit(message, /, *, level="info"):
+        lines.append((level, message))
+
+    return lines, emit
+
+
+def test_run_options_render_both_bundles_with_named_defaults():
+    import click
+
+    @click.command()
+    @backends.run_options(defaults=[BackendOpts(backend="tinker")])
+    def cmd(**kw):
+        pass
+
+    flags = {o for p in cmd.params for o in p.opts}
+    assert {"--best-of", "--write", "--pairs", "--out", "--limit", "--manifest"} <= flags
+    assert {"--backend", "--max-tokens", "--detector-model"} <= flags
+    by_name = {p.name: p for p in cmd.params}
+    assert by_name["best_of"].default == backends.DEFAULT_BEST_OF == 1
+    assert by_name["backend"].default == "tinker"
+    assert by_name["manifest_path"].help == backends.MANIFEST_HELP
+
+
+def test_load_manifest_is_empty_for_none_and_a_config_error_for_bad_json(tmp_path):
+    assert backends.load_manifest(None) == {}
+    good = tmp_path / "m.json"
+    good.write_text('{"run_id": "r1"}', encoding="utf-8")
+    assert backends.load_manifest(good) == {"run_id": "r1"}
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    with pytest.raises(ConfigError, match="not valid JSON") as info:
+        backends.load_manifest(bad)
+    assert info.value.param_hint == "--manifest"
+    with pytest.raises(ConfigError) as info:
+        backends.load_manifest(bad, param_hint="--documents-manifest")
+    assert info.value.param_hint == "--documents-manifest"
+
+
+def test_corpus_mode_refuses_the_three_flag_combinations(tmp_path):
+    pairs = _pairs(tmp_path)
+    assert backends.corpus_mode(RunOpts()) is False
+    assert backends.corpus_mode(RunOpts(pairs_path=pairs, out_path=tmp_path / "o.jsonl")) is True
+    with pytest.raises(ConfigError, match="not both"):
+        backends.corpus_mode(RunOpts(pairs_path=pairs, out_path=tmp_path / "o"), source=pairs)
+    with pytest.raises(ConfigError, match="needs --out"):
+        backends.corpus_mode(RunOpts(pairs_path=pairs))
+    with pytest.raises(ConfigError, match="only apply in corpus mode"):
+        backends.corpus_mode(RunOpts(limit=2))
+    with pytest.raises(ConfigError, match="only apply in corpus mode"):
+        backends.corpus_mode(RunOpts(out_path=tmp_path / "o.jsonl"))
+
+
+def test_rewrite_corpus_styles_the_selected_pairs_and_reports(tmp_path):
+    out = tmp_path / "outputs.jsonl"
+    lines, emit = _emitted()
+    opts = RunOpts(pairs_path=_pairs(tmp_path), out_path=out, limit=2)
+    n = backends.rewrite_corpus(opts, _identity, emit=emit)
+    assert n == 2
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert [r["output"] for r in rows] == ["slop 0", "slop 1"]
+    assert lines[-1] == ("status", f"rewrote 2 pair(s) -> {out}")
+    assert all(level == "status" for level, _ in lines)
+
+    # The caller's stratum policy: a selector over pair records.
+    out2 = tmp_path / "outputs2.jsonl"
+    n = backends.rewrite_corpus(
+        RunOpts(pairs_path=opts.pairs_path, out_path=out2),
+        _identity,
+        selector=lambda rec: rec["meta"]["source"] == "p2",
+    )
+    assert n == 1
+    assert json.loads(out2.read_text())["meta"]["source"] == "p2"
+
+    with pytest.raises(ConfigError, match="needs --pairs"):
+        backends.rewrite_corpus(RunOpts(out_path=out), _identity)
+
+
+def test_rewrite_document_rewrites_in_place_with_a_backup_and_a_summary(tmp_path):
+    src = tmp_path / "d.qmd"
+    text = "---\ntitle: T\n---\n\nSome prose to style.\n"
+    src.write_text(text, encoding="utf-8")
+    lines, emit = _emitted()
+
+    def upper(messages, num_samples=1):
+        return [messages[1]["content"].upper()] * num_samples
+
+    result = backends.rewrite_document(
+        text, RunOpts(write_in_place=True), BackendOpts(), upper, source=src, emit=emit
+    )
+    assert result.text == "---\ntitle: T\n---\n\nSOME PROSE TO STYLE.\n"
+    assert src.read_text(encoding="utf-8") == result.text
+    assert src.with_suffix(".qmd.bak").read_text(encoding="utf-8") == text
+    assert lines == [
+        ("status", backends.format_rewrite_summary(result)),
+        ("status", f"rewrote {src} (backup at {src}.bak)"),
+    ]
+    assert lines[0][1] == "[1 chunk(s), 1 sample(s)]"
+    # Without --write the file is untouched and only the summary is emitted.
+    lines.clear()
+    backends.rewrite_document(text, RunOpts(), BackendOpts(), upper, source=src, emit=emit)
+    assert [level for level, _ in lines] == ["status"]
+    with pytest.raises(ConfigError, match="not both"):
+        backends.rewrite_document(
+            text, RunOpts(pairs_path=src, out_path=tmp_path / "o"), BackendOpts(), upper
+        )
+
+
+def test_rewrite_document_takes_the_rewrite_hook_and_the_anchor_log(tmp_path):
+    """The blog's masking defence is a `rewrite` with `rewrite_text`'s
+    keywords; a custom hook's decisions are emitted like a scorer's would be."""
+    seen: dict = {}
+    text = "Read [the notes](./real.qmd) whenever you get the chance.\n"
+
+    def hook(text, styler, **kw):
+        seen.update(kw)
+        result = infer.rewrite_text(text, styler, **kw)
+        result.decisions.append("mask: nothing to mask")
+        return result
+
+    def inventor(messages, num_samples=1):
+        return ["Read the notes, invented [here](https://fake.example/x)."] * num_samples
+
+    log = tmp_path / "anchors.jsonl"
+    lines, emit = _emitted()
+    opts = RunOpts(anchor_log=log, strict_anchors=True)
+    backend = BackendOpts(max_chunk_chars=900, inline_headings=True)
+    result = backends.rewrite_document(
+        text, opts, backend, inventor, rewrite=hook, div_is_prose=lambda a: True, emit=emit
+    )
+    assert seen["max_chunk_chars"] == 900 and seen["inline_headings"] is True
+    assert seen["inline_anchors"] is True and seen["div_is_prose"] is not None
+    assert result.text == text  # the only candidate lost the link: input kept
+    (entry,) = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
+    assert entry["source"] is None and entry["source_anchors"] == ["./real.qmd"]
+    summary = backends.format_rewrite_summary(result)
+    assert "1 kept as input" in summary and "(1 lost, 1 invented)" in summary
+    assert ("status", "  mask: nothing to mask") in lines
+    assert ("status", f"  1 chunk(s) of anchor accounting -> {log}") in lines
+    assert lines[-1] == ("status", summary)
+
+
+def test_format_rewrite_summary_breaks_rejections_out_by_cause():
+    r = infer.RewriteResult(
+        text="", n_chunks=3, n_candidates=12, n_kept_input=1,
+        n_anchor_rejected=2, n_anchor_lost=1, n_anchor_invented=2, n_truncated=1,
+    )
+    assert backends.format_rewrite_summary(r) == (
+        "[3 chunk(s), 12 sample(s), 1 kept as input, 2 sample(s) rejected for anchor damage "
+        "(1 lost, 2 invented), 1 truncated (raise --max-tokens?)]"
+    )
+    assert backends.format_rewrite_summary(infer.RewriteResult(text="")) == (
+        "[0 chunk(s), 0 sample(s)]"
+    )

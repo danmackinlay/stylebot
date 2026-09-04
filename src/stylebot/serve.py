@@ -23,21 +23,28 @@ tens of milliseconds, a live marker's budget (`_plans/vscode-marker.md`, D20).
 `stylebot.markdown` under the `div_is_prose` policy the sidecar started with.
 `rewrite` and `prefer` arm only when their seam is injected — a rewriter
 `(text, context, best_of)` and a sink whose schema the caller owns; unarmed,
-they error politely. `info` doubles as the ready handshake. One request is
-in flight at a time: the reply is written before the next line is read, so a
-long `rewrite` delays a queued `score`. An error never kills the loop; EOF on
-stdin shuts down. Like `stylebot.classify`, all ML is injected, none imported.
+they error politely. `info` doubles as the ready handshake. One request is in
+flight at a time, so a long `rewrite` delays a queued `score`; an error never
+kills the loop; EOF shuts down; all ML is injected, none imported. `serve_sidecar`
+is the command body as a library, `preference_recorder` its `prefer` sink (D78).
 """
 
 from __future__ import annotations
 
 import bisect
 import json
+import sys
 from collections.abc import Callable
-from typing import IO
+from functools import cache
+from pathlib import Path
+from typing import IO, TYPE_CHECKING
 
 from stylebot import markdown
 from stylebot.classify import detect_many
+
+if TYPE_CHECKING:
+    from stylebot.backends import BackendOpts
+    from stylebot.infer import Styler
 
 
 def _utf16_mapper(text: str) -> Callable[[int], int]:
@@ -239,3 +246,75 @@ def serve_loop(
             )
         stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
         stdout.flush()
+
+
+def preference_recorder(
+    path: str | Path, *, run_id: str | None = None, default_chooser: str | None = None
+) -> Callable[[dict], None]:
+    """A `prefer` sink appending `{ts, run_id, chooser, **decision}` to a JSONL.
+
+    `chooser` comes off the decision when the client names one, else
+    `default_chooser`; the parent directory is created on first write.
+    """
+    from stylebot.jsonl import append_jsonl
+    from stylebot.provenance import now_iso
+
+    def prefer(decision: dict) -> None:
+        rest = dict(decision)
+        chooser = rest.pop("chooser", default_chooser)
+        append_jsonl(path, {"ts": now_iso(), "run_id": run_id, "chooser": chooser, **rest})
+
+    return prefer
+
+
+def serve_sidecar(
+    backend: BackendOpts,
+    *,
+    detector: Callable[[str], dict],
+    meta: dict,
+    make_styler: Callable[[], Styler] | None,
+    prefer: Callable[[dict], None] | None = None,
+    div_is_prose: markdown.DivIsProse | None = None,
+    stdin: IO[str] | None = None,
+    stdout: IO[str] | None = None,
+) -> None:
+    """The sidecar: `serve_loop` with the `rewrite` op armed from `make_styler`.
+
+    The styler is built lazily, once, on the first `rewrite` — a backend that
+    dials out at construction must not take paragraph scoring down with it at
+    editor start — and `None` leaves the op unarmed (score-only serving). The
+    reranker is `infer.detector_scorer(detector)`; the chunk diet is
+    `backend`'s. `div_is_prose` reaches the loop's `segment` op only: the
+    single-chunk contract refuses a `:::` line before any policy applies.
+    Streams default to the process's at call time.
+    """
+    from stylebot import infer
+
+    rewriter = None
+    if make_styler is not None:
+        styler = cache(make_styler)
+        scorer = infer.detector_scorer(detector)
+        chunk_chars, inline_headings = backend.chunk_chars(), backend.headings()
+
+        def rewrite_op(text: str, *, context: str | None = None, best_of: int = 4) -> dict:
+            return infer.rewrite_candidates(
+                text,
+                styler(),
+                context=context,
+                best_of=best_of,
+                scorer=scorer,
+                max_chunk_chars=chunk_chars,
+                inline_headings=inline_headings,
+            )
+
+        rewriter = rewrite_op
+
+    serve_loop(
+        detector,
+        stdin if stdin is not None else sys.stdin,
+        stdout if stdout is not None else sys.stdout,
+        meta=meta,
+        rewriter=rewriter,
+        prefer=prefer,
+        div_is_prose=div_is_prose,
+    )
