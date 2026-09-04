@@ -8,6 +8,34 @@ one table per measurement, ≤ 12 lines of reading, each carrying its **date**, 
 gets a one-line strike. These are dated records of what was true then and must
 never be edited to match today (D52).
 
+## The cull's baseline — 2026-09-04
+
+Stylebot `src/` before and after X2, the first ship-shape cull, by
+`tests/test_budget.py`'s `measure()` over every module; the last row is
+`rg -c "legacy|compat|deprecated|shim"` over both `src` trees. No spend.
+
+| | before X2 | after X2 |
+|---|---|---|
+| `src/` lines (37 modules) | 18,056 | 17,745 |
+| code lines | 11,477 | 11,250 |
+| docstring + comment lines | 4,687 | 4,630 |
+| prose / code | 0.4084 | **0.4116** |
+| CLI layer (`bin/*.py`, `cli_options.py`, `synth_cli.py`) | 3,995 | 3,995 |
+| `report.py` / `eval.py` / `infer.py` | 885 / 754 / 863 | 692 / 645 / 854 |
+| `rg -c`, stylebot / blog | 25 / 24 | 25 / 24 |
+
+The cull removed 311 lines, 227 of them code, and **raised the ratio**: what
+went was code-heavy (two HTML templates, a poll loop), so the prose explaining
+the rest is now a larger share of it. Nothing in the blog called any of the
+three, so its count did not move, nor did the CLI layer. The `rg -c` hits are
+unchanged because none of the deleted lines said "legacy", "compat",
+"deprecated" or "shim". `report.py` left the D58 allowlist at 692 lines and
+`infer.py`'s row fell to 854; `PROSE_CEILING` (4,688) still holds at 4,630
+while `RATIO_PIN` (0.4072) no longer does, which is what the count-first pin
+was picked for — a code diet must not fail the budget. Nine tests went with
+their subject. Decided: D7 (the cross-check goes), D58 (the budgets it is
+measured against).
+
 ## Threading audit — 2026-09-03/04: the eval pool bought nothing; batching bought 1.7x
 
 Every threading construct in stylebot and the blog, against D56's rule. No spend:
