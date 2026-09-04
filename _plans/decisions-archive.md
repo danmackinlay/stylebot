@@ -256,8 +256,8 @@ M2, M5 and M6 remain cheap and unexplored; M3 is dead on evidence.
 The Tinker cookbook's row-shuffle `test_size` would have leaked val posts'
 sibling chunks into training — the same post's paragraphs are far from
 independent. The val split is 10% of styler *posts*, seeded shuffle. The same
-by-POST discipline is what makes the detector reward-safe (see D7 and the split
-contract in `eval-harness.md`).
+by-POST discipline is what makes the detector reward-safe (see D7 and the
+`stylebot.splits` docstring).
 
 ## D18: keep near-copy pairs for the styler, drop them for the detector
 
@@ -305,8 +305,8 @@ produced a pair. Retired 2026-08-10 with its four flags. `openai_generator`
 stays — `openrouter_generator` is built on it. Kept against the same evidence:
 `--temperature` and `--top-p`, unset on every pair, because their importance is
 *untested* rather than disproven and they were designed as recorded-but-unkeyed
-covariates precisely so sampling can be swept without re-keying. Full audit and
-the remaining open proposals: [`synth-flag-audit.md`](synth-flag-audit.md).
+covariates precisely so sampling can be swept without re-keying. Full audit:
+[`synth-flag-audit.md`](synth-flag-audit.md); closed 2026-08-13, D83.
 
 ## D22: register conditioning, parked
 
@@ -701,8 +701,7 @@ re-synthesis — plus one retrain (~$1.50 at run-2 scale).
 
 **How to decide it**: on the frozen eval stratum, and **adopt only on a
 judge-signal win**. A detector-only improvement is exactly the reward-hacking
-failure [`eval-harness.md`](eval-harness.md) warns about in its own guardrail
-section: the detector is a proxy, and masking changes the surface statistics the
+failure D7's guardrail names: the detector is a proxy, and masking changes the surface statistics the
 proxy reads.
 
 **Why it is written here and not built**: this is D4's stated re-evaluation
@@ -1154,9 +1153,9 @@ post, so the effective n is nearer the post count; and an unfaceted headline is
 substantially a measurement of this month's slop roster.
 
 **Alternatives.** *A mixed model or a cluster-robust SE* — the verdict path must
-import with no extras (`_plans/eval-harness.md`), and a random-effects fit would
-drag statsmodels into a module the trainer imports; a percentile bootstrap over
-resampled posts is a dozen lines. *Cluster by capture* — captures nest inside
+import with no extras (`stylebot.verdict` imports stdlib and `click` only), and
+a random-effects fit would drag statsmodels into a module the trainer imports; a
+percentile bootstrap over resampled posts is a dozen lines. *Cluster by capture* — captures nest inside
 posts, so the finer level leaves the between-post correlation uncounted, which is
 the correlation that exists.
 

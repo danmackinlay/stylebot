@@ -48,6 +48,9 @@ keep their numbers — the second index below is how you find them.
 | D75 | a sampled message's content may be parts, not a string | live |
 | D76 | an unclosed `:::` opener yields no span; the source is where it is fixed | live |
 | D77 | `index_blog` is a package of stages under a click shell | live |
+| D81 | captures are gap-coalesced, not windowed — untouched prose is not endorsed | live |
+| D82 | the scale arms are nested — three honest analyses, and the stamp is not a facet | live |
+| D83 | the synth flag audit closed 2026-08-13 — four retired, four kept, one deferred | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D48)
 
@@ -889,3 +892,93 @@ and all 1,679 related JSONs — which a move gives and a rewrite does not.
 
 **Re-evaluate if** the exporter or the UMAP transform is next touched for its own
 reasons: that is when the 80-line function budget gets paid, not before.
+
+## D81: captures are gap-coalesced, not windowed — untouched prose is not endorsed
+
+**Decision (2026-08-04, v2 step 2; recorded 2026-09-04, T1).** A capture pair is
+cut from the *changed* regions of a `before.md`/`after.md` archive, and two
+regions merge only when the untouched run between them is within both
+tolerances (`capture.diff_chunks(coalesce_gap_paras=, coalesce_gap_chars=)`,
+`ai-style log recut --gap-paras --gap-chars`, `session.recut`). A pair never
+grows by padding out to a byte budget. The asymmetry with synthesis is
+deliberate: a synthetic target is Dan's published prose, all of it endorsed, so
+cross-heading windows may be long (D15); a capture's before-side is
+slop-bearing and only the edited stretch is endorsed, so capture pairs stay
+changed-region-focused.
+
+**Alternatives.** *A fixed-width window around each edit* — the plan's first
+draft; untouched prose in a capture is text the author did not get to, not text
+he approved, so the pair would teach the styler to leave slop alone. *No
+bridging at all* — one multi-paragraph rewrite fragments into several short
+pairs, the chunk-scale problem v2 exists to fix. *Also pair pure insert/delete
+opcodes* — not worth a mechanism: skipping them costs one opcode in 41 archives.
+
+**Deciding constraint.** Changed-fraction measures what a pair endorses: 0.96
+under coalescing against 0.41 under a 4500-char window, with pairs a third as
+many and longer (`findings.md` "Capture diffing loses almost nothing"). The
+do-no-harm lesson is the one D18's near-copies had already taught.
+
+**Re-evaluate if** captures start arriving from a whole-document review, where
+every untouched paragraph *was* read and approved — a window is then honest —
+or the tolerances change, which re-opens the changed-fraction measurement.
+
+## D82: the scale arms are nested — three honest analyses, and the stamp is not a facet
+
+**Decision (2026-08-12, v2; recorded 2026-09-04, T1).** `meta.merge_max_chars`
+records which batch first produced a passage's text, not a design cell, because
+`synth._synth_key` hashes the target text and not the budget (D11): a section
+shorter than the smallest budget is packed identically at every budget and is
+one cell. So "did scale help" is put one of three ways, and the write-up says
+which: (1) restrict to targets **unique** to one budget — disjoint by
+construction, immune to run order; (2) treat the corpus as the one mixed-scale
+diet the curriculum intends and ask the *adapter*, by evaluating it on
+length-stratified inputs — measures what the run is for and needs no clean
+strata; (3) facet on the stamp anyway, stated as a short-versus-long-target
+contrast that is neither randomised nor clean.
+
+**Alternatives.** *Key the budget into `synth_key`* — mints a duplicate pair per
+budget for identical text, multiplying the weight of exactly the short passages
+the section wall already over-represents; `--skip-covered` exists to prevent
+that. *Re-stamp every pair with its design cell* — there is none to record; a
+short passage belongs to all three arms at once.
+
+**Deciding constraint.** The overlap is measured: 5–19% of each arm's targets
+sit in another arm, the stamp is contaminated by run order at the ~2–16% level,
+and anchor density rises with budget (`findings.md` "Chunk budgets overlap",
+"v2 post-gate distributions"). Run 4 trained the mixed diet; no
+length-stratified verdict has been read yet; D43 made multiplicity the knob.
+
+**Re-evaluate if** a run is trained on budget-unique targets only, or the corpus
+stops being cut at several budgets — the arms are then disjoint and a facet is
+honest.
+
+## D83: the synth flag audit closed 2026-08-13 — four retired, four kept, one deferred
+
+**Decision (2026-08-13; recorded 2026-09-04, T1).** The audit's remaining
+retirement candidates were reviewed together and the file closed. Retired:
+`--sort`, `--report-max-rows`, `--all`, `--tag` — each non-`synth_key` by
+construction and each surviving as a library knob at its old value
+(`synth_cli.InspectOpts.report_max_rows`, `run_synth(extra_tags=)`;
+`ChunkPolicy.sort_name` was deleted outright 2026-09-03, D43), so no cell
+re-keyed and no paid corpus regenerated. Kept: `--capture-reasoning` — reading
+what a model deliberated has no substitute, the tokens are paid for whether or
+not the trace is saved, and "never run" is not evidence against a diagnostic.
+Kept: `--splits` / `--role` / `--sample-frac` / `--sample-salt` — retiring
+them bets that no measurement run will ever need a substrate disjoint from the
+detector's pool, and the masking work (D33) needs exactly that `--role styler`
+case. Deferred: `--assign-seed` — a `synth_key` input (it picks the arm, hence
+the generator name in the hash, D12), so outside the rule this pass ran under.
+
+**Alternatives.** *Retire the substrate cluster as the "biggest single win"* —
+declined for the bet above. *Retire `--assign-seed` with the rest* — re-keys the
+corpus. *Keep everything* — 54 options against 19 for the next-largest
+subcommand was the defect (`findings.md` "Surface size").
+
+**Deciding constraint.** Retire only non-key flags, and hardcode the value they
+supplied: D11's key is the line between a flag whose removal is free and one
+whose removal regenerates a paid corpus. D21 is the 2026-08-10 half of the
+same audit.
+
+**Re-evaluate if** the masking work ships without ever using `--role styler`,
+or a use for re-randomised arm assignment appears — `--assign-seed` is then
+decided, not deferred.
