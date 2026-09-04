@@ -9,6 +9,7 @@ which is exactly what the extraction buys a non-CLI producer.
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -502,3 +503,37 @@ def test_recut_records_carry_provenance(tmp_path):
         assert prov["source_automation"] == 1
         assert prov["policy_digest"]
     assert validate_pairs_file(pairs_path) == []
+
+
+def test_capture_pairs_appends_under_the_corpus_lock(tmp_path):
+    """A `log save` is a locked rewrite, then an append: the append has to wait
+    for a concurrent rewrite rather than land inside its critical section and be
+    overwritten by it (D60)."""
+    pairs_path = tmp_path / "pairs"
+    pairs_path.mkdir()
+    kw = dict(pairs_path=pairs_path, source="post/foo.qmd", snapped_at="2026-07-07T00:00:00+00:00")
+    capture.capture_pairs("## S\n\nIt is worth noting the tapestry.", "## S\n\nWe dig in.", **kw)
+    entered, proceed = threading.Event(), threading.Event()
+
+    def tag(records):
+        entered.set()
+        proceed.wait(5)
+        for r in records:
+            r["meta"]["tag"] = "rewritten"
+        return records
+
+    rewriter = threading.Thread(target=corpus.rewrite_with, args=(pairs_path, tag))
+    rewriter.start()
+    assert entered.wait(5)
+    appender = threading.Thread(
+        target=capture.capture_pairs,
+        args=("## T\n\nIt is worth noting the rich tapestry.", "## T\n\nWe dig in."),
+        kwargs=kw,
+    )
+    appender.start()
+    appender.join(0.5)  # an unlocked append would land here, inside the rewrite
+    proceed.set()
+    rewriter.join(5)
+    appender.join(5)
+    on_disk = corpus.read_records(pairs_path)
+    assert [r["meta"].get("tag") for r in on_disk] == ["rewritten", None]

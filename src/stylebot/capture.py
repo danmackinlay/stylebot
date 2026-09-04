@@ -345,25 +345,25 @@ def capture_pairs(
         before_text=before_text,
         after_text=after_text,
     )
-    total = len(chunk_pairs)
     written: list[dict] = []
-    for i, (b, a, context) in enumerate(chunk_pairs):
-        record = build_pair_record(
-            before_body=b,
-            after_body=a,
-            source=source,
-            snapped_at=snapped_at,
-            before_frontmatter=before_meta if i == 0 else None,
-            after_frontmatter=after_meta if i == 0 else None,
-            capture_id=cap_id,
-            chunk_index=i,
-            chunk_total=total,
-            context=context,
-            extra_meta=extra_meta,
-            provenance=provenance,
-        )
-        append_jsonl(corpus.shard_path_for(pairs_path, record), record)
-        written.append(record)
+    with corpus.corpus_lock(pairs_path):  # an append is a writer too (D60)
+        for i, (b, a, context) in enumerate(chunk_pairs):
+            record = build_pair_record(
+                before_body=b,
+                after_body=a,
+                source=source,
+                snapped_at=snapped_at,
+                before_frontmatter=before_meta if i == 0 else None,
+                after_frontmatter=after_meta if i == 0 else None,
+                capture_id=cap_id,
+                chunk_index=i,
+                chunk_total=len(chunk_pairs),
+                context=context,
+                extra_meta=extra_meta,
+                provenance=provenance,
+            )
+            append_jsonl(corpus.shard_path_for(pairs_path, record), record)
+            written.append(record)
     return written
 
 
