@@ -456,8 +456,8 @@ def iter_archives(pairs_path: Path):
     Directories only. Support for the superseded `captures/<capture_id>.json`
     blobs was dropped in 0.3, but they are REFUSED rather than skipped: a silent
     skip would look exactly like "that capture had no changed regions", so the
-    caller would never learn an archive had dropped out of the corpus. Migrate
-    with `ai-style data migrate-captures`, which still reads the old form.
+    caller would never learn an archive had dropped out of the corpus. Their
+    migration is spent and gone (D38), so the message names no command.
     """
     cap_dir = pairs_path.parent / "captures"
     if not cap_dir.is_dir():
@@ -474,9 +474,9 @@ def iter_archives(pairs_path: Path):
     if legacy:
         raise RunError(
             f"{len(legacy)} legacy JSON capture archive(s) in {cap_dir} "
-            f"(e.g. {legacy[0].name}). Support was removed in stylebot 0.3; "
-            "migrate them with:\n"
-            f"  uv run ai-style data migrate-captures {pairs_path.parent} --apply"
+            f"(e.g. {legacy[0].name}). Support was removed in stylebot 0.3 and its "
+            "migration retired; lay each out by hand as "
+            "captures/<capture_id>/{before.md, after.md, meta.json}, or move it aside."
         )
     archives.sort(key=lambda d: (d.get("snapped_at") or "", d.get("capture_id") or ""))
     yield from archives

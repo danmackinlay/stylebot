@@ -1,9 +1,9 @@
 """Tests for the one-off migrations in `stylebot.migrations` and `ai-style data`.
 
-These delete corpus records and unlink archive files, so their safety
-properties are pinned even though the code is deletable by design: a prune
-spares captured (non-synthetic) records unless asked, and no command writes
-anything without `--apply`. Every command in the group is covered here.
+These delete corpus records, so their safety properties are pinned even
+though the code is deletable by design: a prune spares captured (non-synthetic)
+records unless asked, and no command writes anything without `--apply`. Every
+command in the group is covered here.
 """
 
 from __future__ import annotations
@@ -39,111 +39,12 @@ def _write(tmp_path: Path, records: list[dict]) -> Path:
     return path
 
 
-# ---------------------------------------------------------------------------
-# migrate-captures
-# ---------------------------------------------------------------------------
-
-
-def _legacy_capture(data_dir: Path, cap_id: str = "cap1") -> Path:
-    cap_dir = data_dir / "captures"
-    cap_dir.mkdir(parents=True, exist_ok=True)
-    path = cap_dir / f"{cap_id}.json"
-    path.write_text(
-        json.dumps(
-            {
-                "capture_id": cap_id,
-                "source": "post/x.qmd",
-                "snapped_at": "2026-08-01T00:00:00+00:00",
-                "whole": False,
-                "before_text": "Slop before.\n",
-                "after_text": "Dan after.\n",
-            }
-        ),
-        encoding="utf-8",
-    )
-    return path
-
-
-def _legacy_snapshot(data_dir: Path) -> Path:
-    snap = data_dir / "snapshots" / "post"
-    snap.mkdir(parents=True, exist_ok=True)
-    path = snap / "x.qmd.json"
-    path.write_text(
-        json.dumps(
-            {
-                "source": "post/x.qmd",
-                "snapped_at": "2026-08-01T00:00:00+00:00",
-                "content": "Original text.\n",
-            }
-        ),
-        encoding="utf-8",
-    )
-    return path
-
-
-def test_migrate_dry_run_writes_nothing(tmp_path):
-    legacy = _legacy_capture(tmp_path)
-    snap = _legacy_snapshot(tmp_path)
-    res = CliRunner().invoke(data_cli, ["migrate-captures", str(tmp_path)])
-    assert res.exit_code == 0, res.output
-    assert legacy.is_file() and snap.is_file()
-    assert not (tmp_path / "captures" / "cap1").exists()
-    assert "dry run: 2 item(s) would convert" in res.output
-
-
-def test_migrate_apply_converts_and_unlinks(tmp_path):
-    """The documents land on disk as ordinary files, and the legacy blob goes
-    only after the new form reads back identical."""
-    legacy = _legacy_capture(tmp_path)
-    _legacy_snapshot(tmp_path)
-    res = CliRunner().invoke(data_cli, ["migrate-captures", str(tmp_path), "--apply"])
-    assert res.exit_code == 0, res.output
-
-    arch = tmp_path / "captures" / "cap1"
-    assert not legacy.exists()
-    assert (arch / "before.md").read_text(encoding="utf-8") == "Slop before.\n"
-    assert (arch / "after.md").read_text(encoding="utf-8") == "Dan after.\n"
-    assert json.loads((arch / "meta.json").read_text())["source"] == "post/x.qmd"
-
-    snap = tmp_path / "snapshots" / "post" / "x.qmd"
-    assert snap.is_dir() and not snap.with_suffix(".qmd.json").exists()
-    assert (snap / "content.md").read_text(encoding="utf-8") == "Original text.\n"
-
-
-def test_a_legacy_archive_is_refused_and_the_named_command_exists(tmp_path):
-    """`capture.iter_archives` refuses a legacy blob and names its migration.
-
-    That coupling is the whole reason these moved into the package: as a loose
-    file under `scripts/` the named command was absent from the wheel, so the
-    message told a `pip install stylebot` user to run a file they did not have.
-    Asserting the command *resolves* is the half of the coupling that can be
-    checked here; the message itself is `capture.py`'s to keep in step.
-    """
-    from stylebot import capture
-
-    _legacy_capture(tmp_path)
-    (tmp_path / "pairs.jsonl").write_text("", encoding="utf-8")
-    try:
-        list(capture.iter_archives(tmp_path / "pairs.jsonl"))
-    except (ValueError, RuntimeError) as exc:
-        # Widened 2026-09-03 with `stylebot.errors`: the refusal is a `RunError`
-        # (a `RuntimeError`) now, not a bare `ValueError`. Both are caught
-        # because what this asserts is the MESSAGE, not the class.
-        message = str(exc)
-    else:  # pragma: no cover - a legacy blob must be refused
-        raise AssertionError("iter_archives accepted a legacy JSON archive")
-
-    assert "ai-style data migrate-captures" in message and "--apply" in message
-    help_text = CliRunner().invoke(data_cli, ["migrate-captures", "--help"]).output
-    assert "--apply" in help_text
-
-
 def test_data_group_is_hidden_from_the_help_tree():
     """Hidden, not absent: `--help` stays the pipeline, the command still ships."""
     from stylebot.bin.ai_style_data import main as group
 
     assert group.hidden is True
-    assert set(group.commands) == {"migrate-captures", "prune-stale", "shard-pairs"}
+    assert set(group.commands) == {"prune-stale"}
 
 
 # ---------------------------------------------------------------------------

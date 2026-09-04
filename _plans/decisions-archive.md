@@ -1104,7 +1104,8 @@ command that exists. Everything else follows from putting the migrations where
 the error can reach them.
 
 **Re-evaluate if**: nothing. A migration is deleted once the only corpus that
-exists has been through it — function, command and test together.
+exists has been through it — function, command and test together. So went
+`migrate-captures` and `shard-pairs` on 2026-09-04 (X1), the corpus having run both.
 
 ## D39: a score carries the instrument that produced it, and two instruments never share a mean
 

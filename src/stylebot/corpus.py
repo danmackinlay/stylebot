@@ -186,24 +186,6 @@ def line_of(record: dict) -> str:
     return dumps_line(record) + "\n"
 
 
-def shard_corpus(corpus_file: str | Path, out_dir: str | Path) -> dict[str, int]:
-    """Migrate a single-file corpus into a shard directory. Returns per-shard counts.
-
-    Reads with `keep_undecodable` so a corrupt line is carried across rather than
-    silently dropped, and leaves the source file alone: the caller decides
-    whether to remove it, and the round-trip is checkable while both exist.
-    """
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    records = list(iter_jsonl(corpus_file, keep_undecodable=True))
-    rewrite(out_dir, records)
-    counts: dict[str, int] = {}
-    for rec in records:
-        name = shard_of(rec)
-        counts[name] = counts.get(name, 0) + 1
-    return counts
-
-
 def content_sha256(corpus: str | Path) -> str | None:
     """A 16-hex content hash of a corpus, for pinning in a run manifest.
 

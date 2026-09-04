@@ -20,7 +20,7 @@ from stylebot import config, corpus
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.bin.ai_style import main as ai_style
 from stylebot.bin.ai_style_data import main as data_cli
-from stylebot.jsonl import read_jsonl
+from stylebot.jsonl import iter_jsonl, read_jsonl
 from stylebot.pairs import dedupe_pairs_file, iter_pairs, record_id, validate_pairs_file
 
 
@@ -84,7 +84,8 @@ def sharded(tmp_path, write_pairs_corpus):
     data_dir.mkdir()
     src = write_pairs_corpus(data_dir / "pairs.jsonl", n_posts=4, chunks=2, n_synth_posts=2)
     before = read_jsonl(src)
-    corpus.shard_corpus(src, data_dir / "pairs")
+    (data_dir / "pairs").mkdir()
+    corpus.rewrite(data_dir / "pairs", before)
     src.unlink()
     return data_dir, before
 
@@ -157,8 +158,9 @@ def test_an_unparseable_line_survives_a_round_trip(tmp_path):
     """`keep_undecodable` is why: a corrupt line is preserved, not silently dropped."""
     src = tmp_path / "pairs.jsonl"
     src.write_text(json.dumps(_rec()) + "\n{not json\n", encoding="utf-8")
-    counts = corpus.shard_corpus(src, tmp_path / "pairs")
-    assert counts == {"captures.jsonl": 1, "unparsed.jsonl": 1}
+    (tmp_path / "pairs").mkdir()
+    written = corpus.rewrite(tmp_path / "pairs", iter_jsonl(src, keep_undecodable=True))
+    assert {p.name for p in written} == {"captures.jsonl", "unparsed.jsonl"}
     assert (tmp_path / "pairs" / "unparsed.jsonl").read_text(encoding="utf-8") == "{not json\n"
 
 
@@ -498,36 +500,6 @@ def test_content_sha_of_a_single_file_is_still_the_file_sha(tmp_path, write_pair
 
     src = write_pairs_corpus(tmp_path / "pairs.jsonl", n_posts=1, chunks=1)
     assert corpus.content_sha256(src) == file_sha256(src)
-
-
-def test_shard_pairs_migration_is_dry_run_by_default(tmp_path, write_pairs_corpus):
-    data_dir = tmp_path / "dd"
-    data_dir.mkdir()
-    write_pairs_corpus(data_dir / "pairs.jsonl", n_posts=2, chunks=2, n_synth_posts=1)
-    res = CliRunner().invoke(data_cli, ["shard-pairs", str(data_dir)])
-    assert res.exit_code == 0, res.output
-    assert "dry run" in res.output
-    assert not (data_dir / "pairs").exists()
-    assert (data_dir / "pairs.jsonl").exists()
-
-
-def test_shard_pairs_migration_removes_the_source_file(tmp_path, write_pairs_corpus):
-    data_dir = tmp_path / "dd"
-    data_dir.mkdir()
-    src = write_pairs_corpus(data_dir / "pairs.jsonl", n_posts=2, chunks=2, n_synth_posts=1)
-    before = read_jsonl(src)
-    res = CliRunner().invoke(data_cli, ["shard-pairs", str(data_dir), "--apply"])
-    assert res.exit_code == 0, res.output
-    assert not src.exists()
-    assert {record_id(r) for r in iter_pairs(data_dir / "pairs")} == {record_id(r) for r in before}
-
-
-def test_shard_pairs_refuses_a_corpus_that_is_already_sharded(sharded):
-    data_dir, _ = sharded
-    (data_dir / "pairs.jsonl").write_text("", encoding="utf-8")
-    res = CliRunner().invoke(data_cli, ["shard-pairs", str(data_dir), "--apply"])
-    assert res.exit_code != 0
-    assert "already sharded" in res.output
 
 
 def test_eval_sees_every_shards_record_ids(sharded):

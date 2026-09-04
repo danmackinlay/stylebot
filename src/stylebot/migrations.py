@@ -6,177 +6,33 @@ loose files under `scripts/`, and why the group is hidden: D38.
 
 Everything here is *deletable*. A migration is spent once the only corpus that
 exists has been through it (`restamp_style_system` and `prune_stale_synth_pairs`
-went that way in 0.3); users migrate on version increment rather than carrying
-dead code. Delete the function, its command and its test together.
+went that way in 0.3, the archive and shard conversions in X1); users migrate
+on version increment rather than carrying dead code. Delete the function, its
+command and its test together (D38).
 
-Two live migrations:
+One live migration:
 
 `plan_stale_prune`
     The corpus consequence of a policy change (D53): synthetic cells no current
     cut reproduces, and synthetic cells sitting on frozen-eval prose.
-
-`migrate_captures` / `migrate_snapshots`
-    The superseded `captures/<id>.json` blobs -> `captures/<id>/` directories.
-    The only remaining reader of the old format, which is why it parses the
-    blobs itself rather than calling `capture.read_archive` on them.
 """
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from stylebot import corpus
-from stylebot.capture import read_archive, write_archive
 from stylebot.errors import RunError
 from stylebot.pairs import backup_corpus, extract_target, iter_pairs
 from stylebot.splits import canonical_source, role_of
 from stylebot.targets import ChunkPolicy, iter_targets
 
-#: Where a migration reports progress. Injectable so the CLI can route it
-#: through `click.echo` and a test can capture it without touching stdout.
-Log = Callable[[str], None]
-
-
-# ---------------------------------------------------------------------------
-# Legacy capture archives -> directories
-#
-#     captures/<id>.json        -> captures/<id>/{before.md, after.md, meta.json}
-#     snapshots/<p>.qmd.json    -> snapshots/<p>.qmd/{content.md, meta.json}
-#
-# The old form escaped whole documents into one JSON line: unopenable and
-# undiffable, given the before->after diff IS the training signal. `.md` and not
-# `.qmd` deliberately — the blog's pre-commit hook reformats staged `*.qmd`, the
-# `qmd` index would return captured slop as Dan's, and `iter_targets` samples
-# `**/*.qmd`. `.md` is invisible to all three.
-# ---------------------------------------------------------------------------
-
 
 class MigrationError(RunError):
     """A migration refused to continue; nothing further was written."""
-
-
-def migrate_captures(cap_dir: Path, *, apply: bool, log: Log = print) -> tuple[int, int]:
-    """Convert `captures/*.json`. Returns `(converted, skipped)`.
-
-    Each conversion writes the new directory first and unlinks the legacy file
-    only once the directory reads back with byte-identical text, so an
-    interrupted run leaves both forms rather than neither — nothing is lost, but
-    re-run it until `captures/` holds no `*.json`: since 0.3 `iter_archives`
-    reads only directories and REFUSES (rather than silently skipping) a
-    leftover blob.
-    """
-    converted = skipped = 0
-    if not cap_dir.is_dir():
-        return 0, 0
-    for path in sorted(cap_dir.glob("*.json")):
-        try:
-            blob = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            log(f"  SKIP {path.name}: unreadable ({exc})")
-            skipped += 1
-            continue
-        cap_id = blob.get("capture_id") or path.stem
-        target = cap_dir / cap_id
-        if target.exists():
-            log(f"  SKIP {path.name}: {target.name}/ already exists")
-            skipped += 1
-            continue
-        log(
-            f"  {path.name} -> {cap_id}/  ({len(blob.get('before_text') or '')} -> "
-            f"{len(blob.get('after_text') or '')} chars)"
-        )
-        if not apply:
-            converted += 1
-            continue
-        write_archive(
-            target,
-            capture_id=cap_id,
-            source=blob.get("source"),
-            snapped_at=blob.get("snapped_at"),
-            whole=bool(blob.get("whole")),
-            before_text=blob.get("before_text") or "",
-            after_text=blob.get("after_text") or "",
-        )
-        back = read_archive(target)
-        if (
-            back is None
-            or back["before_text"] != (blob.get("before_text") or "")
-            or back["after_text"] != (blob.get("after_text") or "")
-        ):
-            raise MigrationError(f"round-trip mismatch for {path.name}; legacy file kept")
-        path.unlink()  # only after the new form verifies
-        converted += 1
-    return converted, skipped
-
-
-def migrate_snapshots(snap_root: Path, *, apply: bool, log: Log = print) -> tuple[int, int]:
-    """Convert `snapshots{,-closed}/**/<name>.json`. Returns `(converted, skipped)`."""
-    converted = skipped = 0
-    if not snap_root.is_dir():
-        return 0, 0
-    for path in sorted(snap_root.rglob("*.json")):
-        if path.name == "meta.json":
-            continue  # already migrated
-        try:
-            blob = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            log(f"  SKIP {path}: unreadable ({exc})")
-            skipped += 1
-            continue
-        # snapshots/post/foo.qmd.json -> snapshots/post/foo.qmd/
-        target = path.with_suffix("")
-        if target.exists():
-            log(f"  SKIP {path}: {target.name}/ already exists")
-            skipped += 1
-            continue
-        content = blob.get("content") or ""
-        log(f"  {path.relative_to(snap_root)} -> {target.name}/  ({len(content)} chars)")
-        if not apply:
-            converted += 1
-            continue
-        target.mkdir(parents=True)
-        (target / "content.md").write_text(content, encoding="utf-8")
-        (target / "meta.json").write_text(
-            json.dumps(
-                {"source": blob.get("source"), "snapped_at": blob.get("snapped_at")},
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        if (target / "content.md").read_text(encoding="utf-8") != content:
-            raise MigrationError(f"round-trip mismatch for {path}; legacy file kept")
-        path.unlink()
-        converted += 1
-    return converted, skipped
-
-
-def migrate_capture_archives(data_dir: Path, *, apply: bool, log: Log = print) -> int:
-    """Run both archive conversions over a data dir. Returns items converted.
-
-    Dry-run unless `apply`, in which case every conversion is verified by
-    reading it back before the legacy file is removed.
-    """
-    if not data_dir.is_dir():
-        raise MigrationError(f"no such directory: {data_dir}")
-    total = 0
-    log(f"captures/  ({'APPLY' if apply else 'dry run'})")
-    c, s = migrate_captures(data_dir / "captures", apply=apply, log=log)
-    log(f"  -> {c} converted, {s} skipped")
-    total += c
-    for name in ("snapshots", "snapshots-closed"):
-        log(f"{name}/")
-        c, s = migrate_snapshots(data_dir / name, apply=apply, log=log)
-        log(f"  -> {c} converted, {s} skipped")
-        total += c
-    if not apply and total:
-        log(f"\ndry run: {total} item(s) would convert. Re-run with --apply.")
-    return total
 
 
 # ---------------------------------------------------------------------------

@@ -607,7 +607,6 @@ def test_recut_refuses_legacy_archives_as_a_session_error(store):
     with pytest.raises(SessionError) as exc:
         session.recut(store, gap_paras=2, gap_chars=800, max_chars=8000)
     assert "1 legacy JSON capture archive" in str(exc.value)
-    assert "ai-style data migrate-captures" in str(exc.value)
 
 
 def test_recut_with_no_archives_reports_nothing(store):
