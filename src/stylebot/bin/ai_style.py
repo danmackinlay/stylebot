@@ -51,6 +51,7 @@ import click
 # decorator; a default cannot be lazy). D49 has the `--help` numbers and why
 # neither a lazy-command group nor deferring `asyncio` earned its keep.
 from stylebot import backends, config, pairs, synth, synth_cli
+from stylebot import classify_cli as cc
 from stylebot import classify_train as ct
 from stylebot import eval as ev
 from stylebot import splits as sp
@@ -423,33 +424,6 @@ def serve_cmd(
     serve.serve_loop(detector, sys.stdin, sys.stdout, meta=meta, rewriter=rewriter, prefer=prefer)
 
 
-def _echo_clf_metrics(metrics: dict, indent: str = "") -> None:
-    """Echo a classify_train metrics dict: headline, per-fold Cs, provenance facet."""
-    pa, auc = metrics["pairwise_accuracy"], metrics["auc"]
-    label = (
-        "holdout (unseen posts)"
-        if metrics.get("mode") == "holdout"
-        else f"cross-val ({metrics.get('n_splits')} POST folds)"
-    )
-    c_info = metrics.get("C") or {}
-    c_note = (
-        f"  [C: nested, per-fold {c_info['selected']}]"
-        if c_info.get("mode") == "nested_cv"
-        else (f"  [C fixed at {c_info['value']}]" if c_info else "")
-    )
-    click.echo(
-        f"{indent}{label}: pairwise_acc={pa['mean']}±{pa['std']}  "
-        f"auc={auc['mean']}±{auc['std']}{c_note}"
-    )
-    for name, facet in (metrics.get("by_provenance") or {}).items():
-        fpa, fauc = facet["pairwise_accuracy"], facet["auc"]
-        click.echo(
-            f"{indent}  {name} ({facet['n_pairs']} pairs): "
-            f"pairwise_acc={fpa['mean']}±{fpa['std']}  "
-            f"auc={fauc['mean']}±{fauc['std']}"
-        )
-
-
 @main.command("make-splits")
 @click.option(
     "--pairs",
@@ -659,104 +633,9 @@ def extend_eval_cmd(**kw) -> None:
     sp.apply_eval_extension(opts, emit=click_emitter())
 
 
-@main.command("train-clf")
-@click.option(
-    "--pairs",
-    "pairs_path",
-    required=True,
-    type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
-    help="The content-matched pairs corpus to train on (pairs.jsonl or a pairs/ directory).",
-)
-@click.option(
-    "--out",
-    "out_dir",
-    required=True,
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Artifact directory to write (head.json + meta.json).",
-)
-@click.option(
-    "--splits",
-    "splits_path",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help="The shared splits.json (make-splits): fit on the detector pool only, never touch the "
-    "frozen eval posts, report a styler-posts holdout metric. Mutually exclusive with "
-    "--holdout-*.",
-)
-@click.option(
-    "--blog-root",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default=None,
-    help="Tree the pinned eval posts must still exist in; a renamed one fails the run (D34).",
-)
-@click.option(
-    "--test-size",
-    default=ct.DEFAULT_TEST_SIZE,
-    show_default=True,
-    type=float,
-    help="Held-out POST fraction per CV split.",
-)
-@click.option(
-    "--n-splits",
-    default=ct.DEFAULT_N_SPLITS,
-    show_default=True,
-    type=int,
-    help="GroupShuffleSplit folds for the CV metric.",
-)
-@click.option(
-    "--C",
-    "C",
-    default=None,
-    type=float,
-    help="FIXED C override. Default (unset) selects C per training side by inner group-CV over "
-    "C_GRID — do NOT sweep this flag against the printed metric; that is tuning on the test set.",
-)
-@click.option(
-    "--embed-model",
-    default=ct.DEFAULT_EMBED_MODEL,
-    show_default=True,
-    help="Style backbone (sentence-transformers id); pinned into meta.json.",
-)
-@click.option(
-    "--holdout-frac",
-    default=0.0,
-    show_default=True,
-    type=float,
-    help="Ad-hoc: hold out this fraction of POSTs and ship the head fit on the rest. Prefer "
-    "--splits for the shared contract.",
-)
-@click.option(
-    "--holdout-seed",
-    default=0,
-    show_default=True,
-    type=int,
-    help="Seed for the deterministic by-POST holdout split.",
-)
-@click.option(
-    "--holdout-posts",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help="Ad-hoc: file of POST source ids (one per line) to hold out. Prefer --splits.",
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    help="Report data assembly (n_pairs, n_posts, class balance) without embedding or writing.",
-)
-def train_clf_cmd(
-    pairs_path: Path,
-    out_dir: Path,
-    splits_path: Path | None,
-    blog_root: Path | None,
-    test_size: float,
-    n_splits: int,
-    C: float | None,
-    embed_model: str,
-    holdout_frac: float,
-    holdout_seed: int,
-    holdout_posts: Path | None,
-    dry_run: bool,
-) -> None:
+@main.command("train-clf", cls=SectionedCommand)
+@cc.train_clf_options()
+def train_clf_cmd(**kw) -> None:
     """Train a voice classifier (linear head over a style embedding).
 
     Generic slop-vs-author trainer over a pairs corpus: embeds both sides of every
@@ -765,72 +644,8 @@ def train_clf_cmd(
     `--detector-model` / `serve` consume. Needs the `classifier` extra. Extra
     positives are a library argument (`classify_train.train(extra_positives=…)`).
     """
-    if splits_path is not None and (holdout_frac or holdout_posts is not None):
-        raise click.UsageError("--splits is mutually exclusive with --holdout-frac/--holdout-posts")
-
-    ds = ct.assemble_dataset(pairs_path)
-    n_slop = sum(1 for label in ds.labels if label == ct.LABEL_SLOP)
-    n_author = sum(1 for label in ds.labels if label == ct.LABEL_DAN)
-    provenance = (
-        f"; {ds.n_pairs_real} real / {ds.n_pairs_synthetic} synthetic"
-        if ds.n_pairs_synthetic
-        else ""
-    )
-    click.echo(
-        f"{ds.n_pairs} content-matched pair(s) from {ds.n_posts} post(s)  "
-        f"[{n_slop} slop / {n_author} author{provenance}]"
-    )
-    if ds.n_pairs == 0:
-        raise click.ClickException(f"no content-matched pairs in {pairs_path}")
-    if dry_run:
-        if splits_path is not None:
-            splits_doc = sp.load_splits(splits_path)
-            if blog_root is not None:
-                sp.require_pinned_posts(splits_doc, blog_root)
-            for role, entry in sp.summarize_roles(splits_doc, ds).items():
-                click.echo(
-                    f"  {role:>8}: {entry['posts']} post(s), {entry['pairs']} pair(s) "
-                    f"({entry['pairs_real']} real / {entry['pairs_synthetic']} synthetic)"
-                )
-            for warning in sp.check_splits(splits_doc, ds):
-                click.secho(f"WARNING: {warning}", fg="yellow", err=True)
-        click.echo("[dry-run] no embedding, no artifact written")
-        return
-
-    holdout_list = None
-    if holdout_posts is not None:
-        holdout_list = [ln.strip() for ln in holdout_posts.read_text().splitlines() if ln.strip()]
-
-    click.echo(f"embedding with {embed_model} (downloads on first use) ...")
-    out, metrics = ct.train(
-        pairs_path,
-        out_dir,
-        test_size=test_size,
-        n_splits=n_splits,
-        C=C,
-        embed_model=embed_model,
-        holdout_frac=holdout_frac,
-        holdout_seed=holdout_seed,
-        holdout_posts=holdout_list,
-        splits_path=splits_path,
-        blog_root=blog_root,
-    )
-
-    _echo_clf_metrics(metrics)
-    if "styler_holdout" in metrics:
-        click.echo("styler posts (unseen by this head — the reward-relevant number):")
-        _echo_clf_metrics(metrics["styler_holdout"], indent="  ")
-
-    # The artifact is the source of truth for what shipped: surface its own
-    # record of the chosen C and any danger warnings.
-    meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
-    head_c = meta.get("head_C") or {}
-    if head_c:
-        chosen = head_c.get("value")
-        click.echo(f"shipped head C: {chosen} ({head_c.get('mode')})")
-    for warning in (meta.get("split") or {}).get("warnings") or []:
-        click.secho(f"WARNING: {warning}", fg="yellow", err=True)
-    click.echo(f"wrote artifact -> {out}/ (head.json, meta.json)")
+    opts = bundles_from_kwargs(kw, cc.TRAIN_CLF_PARAMS)["opts"]
+    cc.train_clf(opts, emit=click_emitter())
 
 
 @main.command("train", cls=SectionedCommand)

@@ -48,8 +48,8 @@ RATIO_PIN: float | None = 0.4072
 # A failure names the exact number to lower an entry to, or the entry to delete.
 ALLOWLIST: dict[str, dict[str, object]] = {
     "bin/ai_style.py": {
-        "lines": 1378,
-        "functions": {"run_cmd": 105, "train_clf_cmd": 88},
+        "lines": 1193,
+        "functions": {"run_cmd": 105},
         "docstrings": (16,),
     },
     "bin/ai_style_data.py": {"functions": {"prune_stale_cmd": 113}},

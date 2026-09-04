@@ -184,3 +184,26 @@ def test_format_clf_metrics_renders_nested_c_and_the_provenance_facet():
     ]
     bare = {"pairwise_accuracy": {"mean": 1, "std": 0}, "auc": {"mean": 1, "std": 0}}
     assert cc.format_clf_metrics(bare) == ["cross-val (None POST folds): pairwise_acc=1±0  auc=1±0"]
+
+
+def test_ai_style_train_clf_is_the_pass_behind_flags(tmp_path, write_pairs_corpus):
+    from click.testing import CliRunner
+
+    from stylebot.bin.ai_style import main
+
+    pairs = write_pairs_corpus(n_posts=2, chunks=1)
+    out = str(tmp_path / "clf")
+    args = ["train-clf", "--pairs", str(pairs), "--out", out, "--dry-run"]
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert "2 content-matched pair(s) from 2 post(s)" in result.output
+    assert "[dry-run] no embedding, no artifact written" in result.output
+
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("", encoding="utf-8")
+    refused = CliRunner().invoke(main, ["train-clf", "--pairs", str(empty), "--out", out])
+    assert refused.exit_code == 2 and "--pairs" in refused.output
+
+    help_text = CliRunner().invoke(main, ["train-clf", "--help"]).output
+    assert "Voice classifier" in help_text
+    assert "--holdout-frac" in help_text and f"[default: {ct.DEFAULT_TEST_SIZE}]" in help_text
