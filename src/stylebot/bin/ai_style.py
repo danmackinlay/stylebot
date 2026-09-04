@@ -48,10 +48,8 @@ import click
 # `infer` stays lazy — it owns no default declared here.
 #
 # `synth`/`synth_cli` are here for the same reason (`synth_options()` is a
-# decorator; a default cannot be lazy), and cost 4.2 ms of a 43.7 ms `--help`
-# measured 2026-09-03. asyncio was the other 6 ms and is gone — `synth` imports
-# it inside the four coroutine functions that use it. D49 has the numbers and
-# why the remaining 4.2 ms is not worth a lazy-command group.
+# decorator; a default cannot be lazy). D49 has the `--help` numbers and why
+# neither a lazy-command group nor deferring `asyncio` earned its keep.
 from stylebot import backends, config, pairs, synth, synth_cli
 from stylebot import classify_train as ct
 from stylebot import eval as ev
@@ -67,7 +65,7 @@ from stylebot.cli_options import (
     bundles_from_kwargs,
     click_emitter,
 )
-from stylebot.errors import ConfigError, RunError
+from stylebot.errors import RunError
 from stylebot.jsonl import append_jsonl
 from stylebot.lib import is_human_authored
 
@@ -341,7 +339,7 @@ def _echo_verdict(verdict: dict, a_path: Path, b_path: Path) -> None:
     default=8,
     show_default=True,
     type=int,
-    help="Concurrent scoring workers (judge/Vale are IO-bound).",
+    help="Concurrent judge calls (asyncio). Vale is a batched pre-pass, not a worker (D59).",
 )
 @click.option(
     "--out",
@@ -674,14 +672,7 @@ def serve_cmd(
         # ones reuse the client.
         @cache
         def make_styler():
-            try:
-                return backends.build_styler(opts)
-            except (RuntimeError, ImportError) as exc:
-                # A sidecar answers, it does not exit: a `RunError`/`MissingExtra`
-                # is re-raised as a `ConfigError` so the failing rewrite request
-                # gets an {"error"} and scoring lives. (`build_styler`'s own
-                # `ConfigError`s are already caught by serve's `except ValueError`.)
-                raise ConfigError(str(exc)) from exc
+            return backends.build_styler(opts)
 
         scorer = infer.detector_scorer(detector)
 

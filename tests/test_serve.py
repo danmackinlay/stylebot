@@ -11,7 +11,11 @@ import io
 import json
 from pathlib import Path
 
-from stylebot import markdown, serve
+from click.testing import CliRunner
+
+from stylebot import backends, classify, markdown, serve
+from stylebot.bin import ai_style
+from stylebot.errors import RunError
 
 PARITY = Path(__file__).parent / "fixtures" / "protection_parity.qmd"
 
@@ -316,3 +320,31 @@ def test_score_op_still_works_for_a_detector_with_no_batch_path():
 
     resp = serve.handle_request({"id": 2, "op": "score", "texts": ["slop", "ok"]}, detect, {})
     assert resp == {"id": 2, "scores": [0.9, 0.1]}
+
+
+def test_serve_answers_a_failed_styler_build_and_lives(monkeypatch, tmp_path):
+    """`handle_request` catches `Exception`, so `build_styler`'s `RunError`
+    reaches the client under its own D47 name with no re-raise in `serve_cmd`."""
+    monkeypatch.setattr(classify, "load_artifact_meta", lambda p: {"name": "stub"})
+    monkeypatch.setattr(classify, "sklearn_detector", lambda p: stub_detector)
+
+    def unready(opts):
+        raise RunError("TINKER_API_KEY is not set")
+
+    monkeypatch.setattr(backends, "build_styler", unready)
+    requests = [
+        {"id": 1, "op": "rewrite", "text": "some prose"},
+        {"id": 2, "op": "score", "texts": ["still slop"]},
+    ]
+    result = CliRunner().invoke(
+        ai_style.main,
+        ["serve", "--detector-model", str(tmp_path), "--backend", "tinker"]
+        + ["--sampler-path", "s", "--base-model", "b"],
+        input="".join(json.dumps(r) + "\n" for r in requests),
+    )
+    assert result.exit_code == 0, result.output
+    replies = [json.loads(line) for line in result.output.splitlines()]
+    assert replies == [
+        {"id": 1, "error": "RunError: TINKER_API_KEY is not set"},
+        {"id": 2, "scores": [0.9]},
+    ]

@@ -118,9 +118,8 @@ class SynthGenerationError(SynthRunError):
 
 
 # Slop models are selected by `--openrouter-model` alone: one key reaches many
-# upstream models, which is what a multi-source rotation wants. There is no
-# direct-API preset path (decisions.md D30). A library caller that wants a
-# different provider injects its own `synth.Generator`s.
+# upstream models, which is what a multi-source rotation wants. The direct-API
+# presets are retired (D21); another provider is an injected `synth.Generator`.
 
 
 # ---------------------------------------------------------------------------

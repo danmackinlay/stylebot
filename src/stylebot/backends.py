@@ -156,10 +156,8 @@ def backend_options(**kw):
 def build_styler(opts: BackendOpts):
     """Construct the styler backend described by `opts` — the one build site.
 
-    Raises `ValueError` for a flag combination the user must fix, `RuntimeError`
-    for an unready environment, and `ImportError` for a missing extra. The CLI
-    translates those into exit codes; `serve` re-raises them as `ValueError` so
-    the failing request gets an `{"error"}` instead of taking the sidecar down.
+    Raises `ConfigError` for a flag combination the caller must fix, `RunError`
+    for an unready world (D47); the extras raise `MissingExtra`/`ImportError`.
     """
     from stylebot import infer
 
