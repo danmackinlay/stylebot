@@ -1,0 +1,54 @@
+---
+title: VS Code / VS Codium
+---
+
+:::{#fig-hooded-sketcher .figure .illustration .right}
+![](/images/hooded_sketcher.webp)
+:::
+
+## Search
+
+[Multiline search expressions](https://code.visualstudio.com/updates/v1_30#_multiline-search-input) require you to type `⇧-⏎`/`Shift-Enter`.
+In regex matching, if I want to match multiline search I need to [explicitly add newline characters](https://stackoverflow.com/a/41151078) to my character classes, i.e. `[\s\S\r]+`.
+
+To replace regex groups you do the usual thing - `$1` is the first group etc and `$$` is a dollar sign. Putting this together, if I wished to replace LaTeX equation bracket syntax with LaTeX dollar syntax, I would replace
+```text
+\\$$ *([\s\S\r]+?) *\\$$
+```
+with
+```text
+$$$$$1$$$$
+```
+
+🤢
+
+## Extensions
+
+> When Jumpy is activated, decorations (two-letter codes) are created in the area around your cursor. Then simply type in a two-letter code to jump to that position.
+
+## Settings
+
+```json
+{
+  "editor.formatOnSave": true,
+  "editor.rulers": [80]
+}
+```
+
+Fences that quote fences, for a keybinding cheat-sheet:
+
+````markdown
+```json
+{ "key": "ctrl+k z", "command": "workbench.action.toggleZenMode" }
+```
+````
+
+And a shell one:
+
+```bash
+code --profile quartosites --list-extensions
+```
+
+```fish
+set -x EDITOR "code --wait"
+```

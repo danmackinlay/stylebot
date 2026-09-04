@@ -53,6 +53,8 @@ keep their numbers — the second index below is how you find them.
 | D65 | `--include-real` defaults off — the two strata invent different things | live |
 | D66 | the `anthropic/` arms bill through OpenRouter BYOK | live |
 | D67 | the blog's Linux/CI machinery for `stylebot` is deleted | live |
+| D68 | segmenter tests run thirteen hard posts; the sweep is opt-in | live; amended 2026-09-04 (eleven) |
+| D69 | a closing code fence back-references its opener's length | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D33)
 
@@ -1057,4 +1059,71 @@ no interpreter either way, and a job elsewhere never shared its filesystem.
 **Re-evaluate if:** a second environment actually resolves this project — a
 container, an HPC box — or CI is wanted as a merge gate. The pin then returns
 with a RUNBOOK step that refreshes it, not without one.
+## D68: segmenter tests run thirteen hard posts; the whole-blog sweep is opt-in
+
+**Decision.** `tests/test_segment_hard.py` runs thirteen real blog posts copied
+into `tests/fixtures/hard/`, pinned span-by-span in `spans.json`, on every
+`pytest` run: **0.09 s**, against **3.0 s** for the same invariants over all
+1,757 blog `.qmd` behind `STYLEBOT_SWEEP_BLOG_ROOT`, which is the pre-release
+check. Both paths call one `violations()`, and a test asserts the sweep pointed
+at the fixtures equals the fast path, so the fast one is a proxy rather than a
+second opinion. `KNOWN_DEFECTS` is a shrinking allowlist in `test_budget.py`'s
+idiom (D58): two live corpus defects, one in the fixtures.
+
+**Alternatives.** Keep sweeping every change — rejected: four agents did it in
+one week, minutes a run, so it happened once at the end instead of every commit.
+Extend the synthetic `segmenter_conformance.qmd` instead of copying posts —
+rejected: it was written from the constructs already known, and the defects W2
+found were interactions a fixture author does not think to combine. Pick the
+dozen by eye — rejected: the ranking (in `fixtures/hard/manifest.json`) put the
+sole instance of three constructs outside any plausible hand-picked set.
+
+**Deciding constraint.** The first sweep this file ran found the selection
+wrong: two posts break the fence-closer rule that neither the twelve nor the
+synthetic fixture carried — an outer fence longer than the inner one it quotes,
+so the inner closer closes the outer and the outer's own closer line re-opens,
+into 1,525 and 744 chars of prose. `blogdown.qmd` was added for it. The one
+uncoverable construct is an unclosed fence at EOF: zero corpus-wide since the
+blog fixed `vs_code.qmd`, so `segmenter_conformance.qmd` keeps it.
+
+**Re-evaluate if** the fast path stops failing on a break the sweep catches —
+the answer is another fixture, never a loosened assertion — or if the fixtures
+outgrow ~140 KB, at which point excerpting beats copying whole posts.
+
+### D68 amendment (2026-09-04, F15): eleven posts, and `KNOWN_DEFECTS` is empty
+
+D69 emptied the allowlist, and two fixtures left with it.
+`statistical_learning_theory_dependent_data.qmd` and
+`minimum_description_length.qmd` were selected only for an unclosed `:::`
+opener; blog `25cf42e5c5` fixed the five asymmetric div fences that produced it,
+so the construct was a source typo rather than markdown and is now zero
+corpus-wide. It joins the unclosed fence in `segmenter_conformance.qmd`, on this
+entry's own rule. Neither post carried a landmark or a protected kind the
+remaining eleven miss, so the set cover holds.
+
+## D69: a closing code fence back-references its opener's character and length
+
+**Decision (2026-09-04, F15).** `markdown.CODE_FENCE_RE` captures the opener's
+whole run of backticks or tildes and requires the closer to be the same
+character and at least as long — CommonMark's rule. W2 relaxed the closer to
+`{3,}` so a longer line could close a shorter opener, and left the length
+unmatched: a `` `````{verbatim} `` quoting a `` ```{r} `` was closed by the
+inner fence, and its own closing line re-read as a fresh opener, merging two
+spans. Numbers: `findings.md` "The fence closer".
+
+**Alternatives.** Allowlist the two posts and leave it — rejected: this is the
+one segmenter, so the damage lands in training targets, `segment_for_edit` and
+the marker's `segment` op, not in a test. Fix the posts — rejected: variable
+fence lengths are what CommonMark has them for, and the segmenter must read the
+markdown the corpus is allowed to contain. Make the opener's run atomic
+(`{2,}+`) so a failed search cannot re-read it shorter — measured identical on
+all 1,758 posts, because the run-to-EOF alternative always matches and the
+opener never backtracks; rejected as mechanism with nothing to buy (P8).
+
+**Deciding constraint.** The sweep: 2 posts of 1,758 move, both corrections,
+1,525 and 744 chars of prose returned from a fence span to the document.
+
+**Re-evaluate if** a post wants a fence closed by a *shorter* line — Pandoc
+accepts it, CommonMark does not, and the answer is a count of how many posts do
+it before any loosening.
 

@@ -1,0 +1,17 @@
+---
+title: "Indented div (excerpt)"
+---
+
+Placeholder prose written for this fixture; see `manifest.json` for why the
+source post's own words are not here.
+
+* A list item whose continuation lines are indented two spaces, so that the
+  div below opens at a column the block scanner has to tolerate.
+
+  A second paragraph of the same list item, also indented.
+
+  :::{#fig-damore-bell-curves .figure .foreign}
+  ![](/images/damore_bell_curves.webp)
+  :::
+
+More placeholder prose, resuming at the left margin after the indented div.

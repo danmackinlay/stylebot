@@ -1,0 +1,35 @@
+---
+title: Depate and interactive proof
+---
+
+:::{#fig-burn-after-reading .figure .illustration .right}
+![](/images/burn_after_reading.webp)
+:::
+
+[Neural Interactive Proofs](https://neural-interactive-proofs.com/) [@Hammond2025Neural]:
+
+> In our new paper, we study how a trusted, weak model can learn to interact with one or more stronger but untrusted models in order to solve tasks beyond the weak model’s capabilities. We introduce several new interaction protocols and evaluate them both theoretically and empirically alongside a range of earlier proposals.
+>
+> […]
+> The main theoretical challenges are to: i) represent a given protocol in the form of a prover-verifier game [@Kirchner2024ProverVerifier]; and ii) train the models to approximate the right equilibria of this game.
+
+:::{#tbl-proof-protocols-complexity}
+| Model     | Rounds | Complexity | Zero-knowledge |
+| --------- | :----: | :--------: | :------------: |
+| `adp`     |    2   |     NP     |        ❌       |
+| `debate`  |  $T$   |   PSPACE   |        ❌       |
+| `mac`     |    2   |     MA     |        ❌       |
+| `nip`     |  $T$   |   PSPACE   |        ❌       |
+| `mnip`    |  $T$   |    NEXP    |        ❌       |
+| `zk-nip`  |  $T$   |   PSPACE   |        ✅       |
+| `zk-mnip` |  $T$   |    NEXP    |        ✅       |
+
+(from @Hammond2025Neural) A comparison of the various proof protocols we discuss in our work.
+:::
+
+> The second theoretical challenge arises because the equilibria that form this equivalence are (approximate) [*Stackelberg* equilibria](https://en.wikipedia.org/wiki/Stackelberg_competition) over the worst-case loss, which are difficult to optimise for using conventional machine learning algorithms.
+
+## References
+
+::: {#refs}
+:::

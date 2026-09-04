@@ -1,0 +1,59 @@
+---
+title: (Kernelized) Stein variational gradient descent
+---
+
+:::{#fig-cosmoballs .figure .illustration .right}
+![](/images/cosmoballs.webp)
+:::
+
+## Stein operators
+
+For an operator $\mathcal{A}_{x}$ to be a Stein operator for a target distribution $p(x)$, it must satisfy the following key property:
+
+$$
+\mathbb{E}_{X\sim p}[\mathcal{A}_{X} f(X)] = 0.
+$${#eq-stein-op}
+
+For $\mathcal{F}$ which include a non-trivial linear subspace, we can see that $\mathcal{A}_{x}$ must be linear, because expectation is linear.
+
+<!-- A commented-out paragraph, written for this fixture, standing in for the
+two draft asides the source post carries: the segmenter must protect it under
+the livingthing configuration and ignore it under stylebot's. -->
+
+A popular choice is to set the Stein Operator to
+$$
+\mathcal{A}_{x} f(x):=f(x)  \nabla_x \cdot \log p(x)+\nabla_x \cdot f(x).
+$${#eq-langevin-stein-op}
+
+## Stein discrepancy
+
+We make @eq-stein-op into a quantity that depends on two, potentially-_different_ densities by taking the expectation over a different density $q$:
+
+$$
+\mathbb{E}_{x\sim q}[\mathcal{A}_{x} f(X)]=0
+$$ {#eq-inner-stein-disc}
+
+Spoiler: it turns out that this _does_ do something useful.
+Thus
+$$\begin{aligned}
+S(q, p)
+&=\left\|\beta_{q, p}\right\|_{\mathcal{H}^d}^2\\
+&=\mathbb{E}_{x, x' \sim q}\left[\kappa_p\left(x, x'\right)\right]
+\end{aligned}$$
+where
+
+$$
+S(p, q)=\mathbb{E}_{x, x' \sim p}\left[\boldsymbol{\delta}_{q, p}(x)^{\top} k\left(x, x'\right) \boldsymbol{\delta}_{q, p}\left(x'\right)\right], $$ where $\boldsymbol{\delta}_{q, p}(x)=s_q(x)-s_p(x)$ is the score difference between $p$ and $q$.
+
+It _is_ a mess to write out in full though.
+
+```python
+def stein_kernel(k, score_p):
+    """The Steinalized kernel, for the record."""
+    return k
+```
+
+## References
+
+::: {#refs}
+:::

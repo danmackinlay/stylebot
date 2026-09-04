@@ -1,0 +1,52 @@
+---
+title: Python CLIs
+---
+
+:::{#fig-officer-kitty .figure .illustration .left}
+![](/images/officer_kitty.webp)
+:::
+
+### argparse scripts but in jupyter or ipython or VS Code etc
+
+If I’m developing a CLI script in a notebook, I can’t just run it as a script because the notebook was already invoked _as_ a script.
+Here is a simple one:
+
+```python
+def parse_args():
+    """
+    parse CLI args in a way that is robust to jupyter notebooks and scripts
+    """
+    parser = argparse.ArgumentParser(description="experiment args")
+    parser.add_argument(
+        'N_c', type=int, nargs='?', default=10, help="Number of categories (default: 10)")
+
+    known_args = parser.parse_known_args()[0]
+    return vars(known_args)
+
+def main(**args):
+  # do stuff
+    print(args)
+
+if (
+        __name__ == '__main__'  # if running as a script
+        and 'get_ipython' not in dir()  # and not in jupyter notebook
+        ):
+    args = parse_args()
+    main(**args)
+```
+
+## hydra
+
+“[Hydra](https://hydra.cc/) is a framework for elegantly [configuring complex applications](./configuring_ml.qmd#).”
+As a special case it [builds CLIs](https://hydra.cc/docs/tutorial/simple_cli) with autocomplete and other fun stuff.
+
+<script type='text/javascript' src='https://www.openhub.net/p/hydra-cli/widgets/project_factoids_stats?format=js'></script>
+
+## docopt
+
+[docopt/docopt: Pythonic command line arguments parser, that will make you smile](https://github.com/docopt/docopt)
+
+> docopt helps you:
+>
+> * define the interface for your command-line app, and
+> * automatically generate a parser for it.

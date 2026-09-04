@@ -1,0 +1,607 @@
+{
+ "configurations": {
+  "stylebot": {
+   "block_only": true,
+   "raw_html": false,
+   "html_comments": false,
+   "div_is_prose": null
+  },
+  "livingthing": {
+   "block_only": false,
+   "raw_html": true,
+   "html_comments": true,
+   "div_is_prose": null
+  }
+ },
+ "posts": {
+  "blogdown.qmd": {
+   "sha256": "6b19be2f48ef1f7a9e67fbf6049e7065b854f6cfbb73f554dcdf6e2f3149ab79",
+   "spans": {
+    "stylebot": [
+     {
+      "start": 126,
+      "end": 292,
+      "kind": "fence"
+     },
+     {
+      "start": 345,
+      "end": 443,
+      "kind": "fence"
+     }
+    ],
+    "livingthing": [
+     {
+      "start": 126,
+      "end": 292,
+      "kind": "fence"
+     },
+     {
+      "start": 345,
+      "end": 443,
+      "kind": "fence"
+     }
+    ]
+   }
+  },
+  "browser_automation.qmd": {
+   "sha256": "ca0768b0efe92d9dd829d31bc94fe83d884ed7c95978e0e3a8c8747086e6013e",
+   "spans": {
+    "stylebot": [
+     {
+      "start": 39,
+      "end": 155,
+      "kind": "div"
+     },
+     {
+      "start": 450,
+      "end": 596,
+      "kind": "div"
+     },
+     {
+      "start": 743,
+      "end": 1143,
+      "kind": "blockquote"
+     },
+     {
+      "start": 1144,
+      "end": 1272,
+      "kind": "fence"
+     }
+    ],
+    "livingthing": [
+     {
+      "start": 39,
+      "end": 155,
+      "kind": "div"
+     },
+     {
+      "start": 450,
+      "end": 596,
+      "kind": "div"
+     },
+     {
+      "start": 743,
+      "end": 1143,
+      "kind": "blockquote"
+     },
+     {
+      "start": 1144,
+      "end": 1272,
+      "kind": "fence"
+     }
+    ]
+   }
+  },
+  "debate.qmd": {
+   "sha256": "14c805517ca9bb137408dc9775f7945a84b5fbb00c6b1318176d7b677bf8258c",
+   "spans": {
+    "stylebot": [
+     {
+      "start": 45,
+      "end": 144,
+      "kind": "div"
+     },
+     {
+      "start": 236,
+      "end": 786,
+      "kind": "blockquote"
+     },
+     {
+      "start": 787,
+      "end": 1400,
+      "kind": "div"
+     },
+     {
+      "start": 1401,
+      "end": 1703,
+      "kind": "blockquote"
+     },
+     {
+      "start": 1719,
+      "end": 1735,
+      "kind": "div"
+     }
+    ],
+    "livingthing": [
+     {
+      "start": 45,
+      "end": 144,
+      "kind": "div"
+     },
+     {
+      "start": 236,
+      "end": 786,
+      "kind": "blockquote"
+     },
+     {
+      "start": 787,
+      "end": 1400,
+      "kind": "div"
+     },
+     {
+      "start": 1401,
+      "end": 1703,
+      "kind": "blockquote"
+     },
+     {
+      "start": 1719,
+      "end": 1735,
+      "kind": "div"
+     }
+    ]
+   }
+  },
+  "indented_div_excerpt.qmd": {
+   "sha256": "f103279078218bf8cdd2a48f7e615668c22f1a25c9c7718e7a88c99ebea39816",
+   "spans": {
+    "stylebot": [
+     {
+      "start": 358,
+      "end": 451,
+      "kind": "div"
+     }
+    ],
+    "livingthing": [
+     {
+      "start": 358,
+      "end": 451,
+      "kind": "div"
+     }
+    ]
+   }
+  },
+  "learning_with_ai.qmd": {
+   "sha256": "7d96e24b8eef53b57cb2f9072ca0ed33114cb1607dcf41c1ccc8252a3b924a13",
+   "spans": {
+    "stylebot": [
+     {
+      "start": 28,
+      "end": 151,
+      "kind": "div"
+     },
+     {
+      "start": 651,
+      "end": 788,
+      "kind": "div"
+     },
+     {
+      "start": 804,
+      "end": 820,
+      "kind": "div"
+     }
+    ],
+    "livingthing": [
+     {
+      "start": 28,
+      "end": 151,
+      "kind": "div"
+     },
+     {
+      "start": 651,
+      "end": 788,
+      "kind": "div"
+     },
+     {
+      "start": 804,
+      "end": 820,
+      "kind": "div"
+     }
+    ]
+   }
+  },
+  "pde_solvers.qmd": {
+   "sha256": "e061ff01bbcbfedb784ebd18c85a8d31d101245c3ced82b56aebc479bb912a3d",
+   "spans": {
+    "stylebot": [
+     {
+      "start": 38,
+      "end": 151,
+      "kind": "div"
+     },
+     {
+      "start": 163,
+      "end": 402,
+      "kind": "blockquote"
+     },
+     {
+      "start": 494,
+      "end": 697,
+      "kind": "blockquote"
+     },
+     {
+      "start": 844,
+      "end": 945,
+      "kind": "blockquote"
+     },
+     {
+      "start": 1100,
+      "end": 1259,
+      "kind": "fence"
+     },
+     {
+      "start": 1275,
+      "end": 1291,
+      "kind": "div"
+     }
+    ],
+    "livingthing": [
+     {
+      "start": 38,
+      "end": 151,
+      "kind": "div"
+     },
+     {
+      "start": 163,
+      "end": 402,
+      "kind": "blockquote"
+     },
+     {
+      "start": 494,
+      "end": 843,
+      "kind": "blockquote"
+     },
+     {
+      "start": 844,
+      "end": 945,
+      "kind": "blockquote"
+     },
+     {
+      "start": 1100,
+      "end": 1259,
+      "kind": "fence"
+     },
+     {
+      "start": 1275,
+      "end": 1291,
+      "kind": "div"
+     }
+    ]
+   }
+  },
+  "python_cli.qmd": {
+   "sha256": "c1204100f670b00c59adb8a8ad947123369a1645e94c9c57a3a4d03db099f655",
+   "spans": {
+    "stylebot": [
+     {
+      "start": 28,
+      "end": 116,
+      "kind": "div"
+     },
+     {
+      "start": 337,
+      "end": 953,
+      "kind": "fence"
+     },
+     {
+      "start": 1452,
+      "end": 1574,
+      "kind": "blockquote"
+     }
+    ],
+    "livingthing": [
+     {
+      "start": 28,
+      "end": 116,
+      "kind": "div"
+     },
+     {
+      "start": 337,
+      "end": 953,
+      "kind": "fence"
+     },
+     {
+      "start": 1199,
+      "end": 1323,
+      "kind": "raw_html"
+     },
+     {
+      "start": 1452,
+      "end": 1574,
+      "kind": "blockquote"
+     }
+    ]
+   }
+  },
+  "python_cluster.qmd": {
+   "sha256": "926166ca21f375bbf6ef18e658fa1596c21e59e6fd4fe5d5d49f1c87e44fb695",
+   "spans": {
+    "stylebot": [
+     {
+      "start": 41,
+      "end": 156,
+      "kind": "div"
+     },
+     {
+      "start": 168,
+      "end": 364,
+      "kind": "fence"
+     },
+     {
+      "start": 713,
+      "end": 822,
+      "kind": "blockquote"
+     }
+    ],
+    "livingthing": [
+     {
+      "start": 41,
+      "end": 156,
+      "kind": "div"
+     },
+     {
+      "start": 168,
+      "end": 364,
+      "kind": "fence"
+     },
+     {
+      "start": 492,
+      "end": 613,
+      "kind": "raw_html"
+     },
+     {
+      "start": 713,
+      "end": 822,
+      "kind": "blockquote"
+     },
+     {
+      "start": 881,
+      "end": 1002,
+      "kind": "raw_html"
+     }
+    ]
+   }
+  },
+  "quarto.qmd": {
+   "sha256": "9bf238a1e49ffa4b8b385c473938c7457edf32429b981530dc4d29aa20147679",
+   "spans": {
+    "stylebot": [
+     {
+      "start": 23,
+      "end": 120,
+      "kind": "div"
+     },
+     {
+      "start": 154,
+      "end": 548,
+      "kind": "div"
+     },
+     {
+      "start": 549,
+      "end": 1145,
+      "kind": "div"
+     },
+     {
+      "start": 1146,
+      "end": 1320,
+      "kind": "div"
+     },
+     {
+      "start": 1321,
+      "end": 1671,
+      "kind": "div"
+     }
+    ],
+    "livingthing": [
+     {
+      "start": 23,
+      "end": 120,
+      "kind": "div"
+     },
+     {
+      "start": 154,
+      "end": 548,
+      "kind": "div"
+     },
+     {
+      "start": 549,
+      "end": 1145,
+      "kind": "div"
+     },
+     {
+      "start": 1146,
+      "end": 1320,
+      "kind": "div"
+     },
+     {
+      "start": 1321,
+      "end": 1671,
+      "kind": "div"
+     }
+    ]
+   }
+  },
+  "stein_vgd.qmd": {
+   "sha256": "232c9317f63b26e71a21a924ff86f292bb692948b8e7cf26c760a7c299b183bc",
+   "spans": {
+    "stylebot": [
+     {
+      "start": 64,
+      "end": 147,
+      "kind": "div"
+     },
+     {
+      "start": 304,
+      "end": 371,
+      "kind": "math"
+     },
+     {
+      "start": 790,
+      "end": 892,
+      "kind": "math"
+     },
+     {
+      "start": 1065,
+      "end": 1138,
+      "kind": "math"
+     },
+     {
+      "start": 1205,
+      "end": 1363,
+      "kind": "math"
+     },
+     {
+      "start": 1666,
+      "end": 1773,
+      "kind": "fence"
+     },
+     {
+      "start": 1789,
+      "end": 1805,
+      "kind": "div"
+     }
+    ],
+    "livingthing": [
+     {
+      "start": 64,
+      "end": 147,
+      "kind": "div"
+     },
+     {
+      "start": 304,
+      "end": 371,
+      "kind": "math"
+     },
+     {
+      "start": 518,
+      "end": 739,
+      "kind": "html_comment"
+     },
+     {
+      "start": 790,
+      "end": 892,
+      "kind": "math"
+     },
+     {
+      "start": 1065,
+      "end": 1138,
+      "kind": "math"
+     },
+     {
+      "start": 1205,
+      "end": 1363,
+      "kind": "math"
+     },
+     {
+      "start": 1371,
+      "end": 1523,
+      "kind": "math"
+     },
+     {
+      "start": 1666,
+      "end": 1773,
+      "kind": "fence"
+     },
+     {
+      "start": 1789,
+      "end": 1805,
+      "kind": "div"
+     }
+    ]
+   }
+  },
+  "vs_code.qmd": {
+   "sha256": "e1ffddc2633208b99533348e4756f4c0b45cb9185497afd99128da64b93eb21c",
+   "spans": {
+    "stylebot": [
+     {
+      "start": 36,
+      "end": 129,
+      "kind": "div"
+     },
+     {
+      "start": 687,
+      "end": 724,
+      "kind": "fence"
+     },
+     {
+      "start": 729,
+      "end": 752,
+      "kind": "fence"
+     },
+     {
+      "start": 771,
+      "end": 937,
+      "kind": "blockquote"
+     },
+     {
+      "start": 951,
+      "end": 1022,
+      "kind": "fence"
+     },
+     {
+      "start": 1080,
+      "end": 1177,
+      "kind": "fence"
+     },
+     {
+      "start": 1196,
+      "end": 1253,
+      "kind": "fence"
+     },
+     {
+      "start": 1254,
+      "end": 1294,
+      "kind": "fence"
+     }
+    ],
+    "livingthing": [
+     {
+      "start": 36,
+      "end": 129,
+      "kind": "div"
+     },
+     {
+      "start": 547,
+      "end": 752,
+      "kind": "math"
+     },
+     {
+      "start": 771,
+      "end": 937,
+      "kind": "blockquote"
+     },
+     {
+      "start": 951,
+      "end": 1022,
+      "kind": "fence"
+     },
+     {
+      "start": 1080,
+      "end": 1177,
+      "kind": "fence"
+     },
+     {
+      "start": 1196,
+      "end": 1253,
+      "kind": "fence"
+     },
+     {
+      "start": 1254,
+      "end": 1294,
+      "kind": "fence"
+     }
+    ]
+   }
+  }
+ }
+}

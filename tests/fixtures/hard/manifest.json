@@ -1,0 +1,97 @@
+{
+  "blog_repo": "danmackinlay.github.io (~/Source/livingthing)",
+  "blog_commit": "25cf42e5c5430ba2cd5f882d8b2c58af28f7cdfd",
+  "selected": "2026-09-04, by the difficulty ranking D68 describes. Two posts left the set the same day: 'statistical_learning_theory_dependent_data.qmd' and 'minimum_description_length.qmd' were here only for an unclosed ':::' opener, and blog 25cf42e5c5 fixed the asymmetric fences that produced it -- zero corpus-wide, so it is the synthetic 'segmenter_conformance.qmd' that keeps the construct (D69).",
+  "scoring": "3 * (distinct protected kinds) + sum(min(count, 10) per kind) + 10 * sum(log2(1757 / posts_with_feature)) over 22 edge-case features. The set is a greedy set cover of the 22, not the top N by score.",
+  "content": "Every fixture is an EXCERPT, not a copy. The blog source is private and this repo is public, so a post's frontmatter and prose may not live here: each file is cut to the construct its `hard_case_for` names plus enough surrounding prose to segment, its frontmatter reduced to `title`, and its HTML comments replaced by ones written here (F17). `source` names the post the construct was found in, not a file this repo reproduces.",
+  "posts": [
+    {
+      "fixture": "stein_vgd.qmd",
+      "source": "notebook/stein_vgd.qmd",
+      "content": "excerpt",
+      "bytes": 1805,
+      "sha256": "232c9317f63b26e71a21a924ff86f292bb692948b8e7cf26c760a7c299b183bc",
+      "hard_case_for": "Top of the ranking (score 463.8): the only fixture with HTML comments, and it carries mid-line $$ math, $$..$$ {#eq-} attributes so it is where the stylebot and livingthing configurations disagree most."
+    },
+    {
+      "fixture": "quarto.qmd",
+      "source": "notebook/quarto.qmd",
+      "content": "excerpt",
+      "bytes": 1675,
+      "sha256": "9bf238a1e49ffa4b8b385c473938c7457edf32429b981530dc4d29aa20147679",
+      "hard_case_for": "W2's runaway fence: a fence span ran 999 chars past its own closer and swallowed three .callout-tip divs. Also nested divs and a four-backtick fence, and the interaction is the bug, so the excerpt keeps the callouts and the fences that swallowed them together."
+    },
+    {
+      "fixture": "blogdown.qmd",
+      "source": "notebook/blogdown.qmd",
+      "content": "excerpt",
+      "bytes": 712,
+      "sha256": "6b19be2f48ef1f7a9e67fbf6049e7065b854f6cfbb73f554dcdf6e2f3149ab79",
+      "hard_case_for": "The construct the first twelve missed and the sweep caught: a '`````{verbatim}' fence quoting a shorter '```{r}' one. Under the pre-D69 closer the inner ' ``` ' closed the outer fence and the outer's own '`````' line re-opened, running 1,525 chars into the prose. Live in 2 posts corpus-wide; this fixture is where the fast path pins the fix."
+    },
+    {
+      "fixture": "vs_code.qmd",
+      "source": "notebook/vs_code.qmd",
+      "content": "excerpt",
+      "bytes": 1301,
+      "sha256": "e1ffddc2633208b99533348e4756f4c0b45cb9185497afd99128da64b93eb21c",
+      "hard_case_for": "W4's unclosed fence at EOF (since fixed in the blog); still the plain-fence fixture, with fences that quote fences and mid-line math."
+    },
+    {
+      "fixture": "learning_with_ai.qmd",
+      "source": "notebook/learning_with_ai.qmd",
+      "content": "excerpt",
+      "bytes": 828,
+      "sha256": "7d96e24b8eef53b57cb2f9072ca0ed33114cb1607dcf41c1ccc8252a3b924a13",
+      "hard_case_for": "W2's four-backtick Quarto include -- and the include sits inside a callout div, so the fence span merges into the div's. The excerpt keeps the include inside its div for that reason."
+    },
+    {
+      "fixture": "python_cli.qmd",
+      "source": "notebook/python_cli.qmd",
+      "content": "excerpt",
+      "bytes": 1582,
+      "sha256": "c1204100f670b00c59adb8a8ad947123369a1645e94c9c57a3a4d03db099f655",
+      "hard_case_for": "A raw <script>/<style> block (3 posts corpus-wide), plus '  # comment' lines inside an indented fence that ATX_HEADING_RE reads as headings."
+    },
+    {
+      "fixture": "python_cluster.qmd",
+      "source": "notebook/python_cluster.qmd",
+      "content": "excerpt",
+      "bytes": 1142,
+      "sha256": "926166ca21f375bbf6ef18e658fa1596c21e59e6fd4fe5d5d49f1c87e44fb695",
+      "hard_case_for": "The second raw-HTML-block instance, in a different shape from python_cli's."
+    },
+    {
+      "fixture": "browser_automation.qmd",
+      "source": "notebook/browser_automation.qmd",
+      "content": "excerpt",
+      "bytes": 1356,
+      "sha256": "ca0768b0efe92d9dd829d31bc94fe83d884ed7c95978e0e3a8c8747086e6013e",
+      "hard_case_for": "Indented fences (8 posts corpus-wide) whose bodies contain indented '#' comment lines -- the fence reading must win over the heading reading."
+    },
+    {
+      "fixture": "pde_solvers.qmd",
+      "source": "notebook/pde_solvers.qmd",
+      "content": "excerpt",
+      "bytes": 1291,
+      "sha256": "e061ff01bbcbfedb784ebd18c85a8d31d101245c3ced82b56aebc479bb912a3d",
+      "hard_case_for": "A blockquote glued to the prose beneath it (31 posts) -- the blockquote span must stop at the quote, not run on into the paragraph."
+    },
+    {
+      "fixture": "debate.qmd",
+      "source": "notebook/debate.qmd",
+      "content": "excerpt",
+      "bytes": 1753,
+      "sha256": "14c805517ca9bb137408dc9775f7945a84b5fbb00c6b1318176d7b677bf8258c",
+      "hard_case_for": "The only '{#tbl-...}' layout div in the corpus, and the only div class in the set that is neither .callout-*, #fig- nor #refs."
+    },
+    {
+      "fixture": "indented_div_excerpt.qmd",
+      "source": "notebook/x_is_yer_than_z.qmd",
+      "content": "excerpt",
+      "bytes": 528,
+      "sha256": "f103279078218bf8cdd2a48f7e615668c22f1a25c9c7718e7a88c99ebea39816",
+      "hard_case_for": "The corpus's ONLY indented ':::' div -- a fig div inside a list item at two spaces of indent. The source post is 'draft: true', so only the three markup lines are reproduced; the prose around them is placeholder text written here."
+    }
+  ]
+}

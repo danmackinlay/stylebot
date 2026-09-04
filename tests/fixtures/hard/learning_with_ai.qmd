@@ -1,0 +1,27 @@
+---
+title: AI tutoring
+---
+
+:::{#fig-safe-practice-for-paratroopers .figure .illustration .right}
+![](/images/safe_practice_for_paratroopers.webp)
+:::
+
+A working session needs me to occasionally prompt back: “no, ask me the next question.”
+Even half-enforced Socratic mode beats plain chat for learning maths.
+
+The same trick should work with a PDF (or any reference document) attached: condition the chatbot on the source material *plus* the Socratic stance, and now we have a tutor that knows the specific text and is restrained from spoiling it.
+
+[Download the prompt as a markdown file](./_socratic_tutor_prompt.md){download=”socratic-tutor.md”}
+
+:::{.callout-note collapse="true"}
+## My current `socratic-tutor` skill
+
+````markdown
+{{< include _socratic_tutor_prompt.md >}}
+````
+:::
+
+## References
+
+::: {#refs}
+:::

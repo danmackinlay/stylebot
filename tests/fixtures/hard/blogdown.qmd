@@ -1,0 +1,34 @@
+---
+title: Blogdown
+---
+
+## Custom chunk hooks
+
+We can define a hook that wraps a chunk's output in a `div` of our choosing:
+
+```{r}
+knitr::knit_hooks$set(class = function(before, options, envir) {
+  if(before){
+    sprintf("<div class='%s'>", options$class)
+  }else{
+    "</div>"
+  }
+})
+```
+
+Then in the chunk, we can use the new hook thusly:
+
+`````{verbatim}
+```{r example-plot, class="blue-outline"}
+plot(1:10, pch=21, bg="blue")
+```
+`````
+
+🤮
+
+### Pro-tip: double code fences
+
+Wondering how I got the previous line of code to print?
+It was not quite obvious.
+See the [double code fences](https://github.com/yihui/knitr/blob/master/NEWS.md#new-features-1=) trick.
+**tl;dr** uses the code type `{verbatim}`.

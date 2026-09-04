@@ -75,18 +75,18 @@ def protected_kinds(*, raw_html: bool = False, html_comments: bool = False) -> f
 ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+(?P<title>.*?))?[ \t]*$")
 
 # Protected-block patterns. Three shapes here are load-bearing and were each
-# arrived at against the live corpus (D27, findings.md "W2's fence rule"):
-# opener and closer alternate **independently** rather than back-referencing,
-# so a longer outer fence cannot swallow the inner fences of a post that
-# documents nested ones; the closer takes ``{3,}`` where the opener takes a bare
-# three, so a ```` ```` ```` line can close as well as open; and an **unclosed
-# fence runs to end of document** (the second alternative, and CommonMark's own
-# reading) here rather than in a consumer, so inference and `editable_prose`
-# cannot disagree about a runaway fence. The closed alternative is tried first
-# and is lazy, so only a document with no closer reaches the greedy branch.
+# arrived at against the live corpus (D27, D69, findings.md "the fence closer"):
+# the opener captures its whole run and the closer back-references it — same
+# character, at least as long, CommonMark's rule — so a five-backtick fence
+# quoting a three-backtick one is not closed by the inner fence, while a longer
+# line still closes a shorter opener (W2); and an **unclosed fence runs to end
+# of document** (the second alternative, CommonMark's own reading) here rather
+# than in a consumer, so inference and `editable_prose` cannot disagree about a
+# runaway fence. That alternative always matches, so the opener's run never
+# backtracks shorter and takes an inner closer instead.
 CODE_FENCE_RE = re.compile(
-    r"^[ \t]*(?:```|~~~).*?$"
-    r"(?:.*?^[ \t]*(?:`{3,}|~{3,})[ \t]*$(?:\n|\Z)|.*\Z)",
+    r"^[ \t]*(?P<fence>(?P<fc>[`~])(?P=fc){2,}).*?$"
+    r"(?:.*?^[ \t]*(?P=fence)(?P=fc)*[ \t]*$(?:\n|\Z)|.*\Z)",
     re.MULTILINE | re.DOTALL,
 )
 MATH_BLOCK_RE = re.compile(r"\$\$.*?\$\$[ \t]*(?:\{[^}\n]*\})?", re.DOTALL)

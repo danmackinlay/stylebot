@@ -1,0 +1,66 @@
+---
+title: Quarto
+---
+
+:::{#fig-book-of-conjuring .figure .illustration .right}
+![](/images/book_of_conjuring.webp)
+:::
+
+## Tips
+
+I have some of my own:
+
+::: {.callout-tip}
+If I get an error like this:
+
+```text
+Error running filter /Applications/quarto/share/filters/main.lua:
+/Applications/quarto/share/filters/main.lua:2479: attempt to index a nil value (local 'el')
+```
+
+It means I had a `.qmd` file containing a plain markdown link with empty text, e.g.
+
+```markdown
+[](https://github.com)
+```
+
+This is valid markdown but not valid Quarto.
+:::
+
+::: {.callout-tip #divs-figs}
+Citations inside figure captions ~~do not~~ work, we need to use [figure divs](https://quarto.org/docs/authoring/figures.html#figure-divs)
+e.g. this is ~~no good~~ fine actually
+
+````qmd
+![See @Hall2022Can — the attention economy of road signs](/images/science.abm3427-fa.avif)
+````
+
+But this is fine:
+
+````qmd
+:::{#fig-hallcan2022}
+![](/images/science.abm3427-fa.avif)
+
+See @Hall2022Can — the attention economy of road signs
+:::
+````
+
+**UPDATE: [maybe I was dreaming about that](https://github.com/quarto-dev/quarto-cli/discussions/8799). It seems to work now.
+:::
+
+::: {.callout-tip #divs-figs}
+Corollary: `#fig-` is a magic prefix for IDs in Quarto, which means you cannot use it for anything else, or _that_ will turn into a figure.
+:::
+
+:::{.callout-tip}
+## Python script dependencies
+
+Python is a [packaging disaster](./python_packaging.qmd).
+So, e.g. my image processing script for this blog is invoked as
+```yaml
+  post-render:
+    - uv rn massage_header_img
+```
+
+To make them work in a continuous integration setting I found it wise to also wrap the scripts with a shell script.
+:::

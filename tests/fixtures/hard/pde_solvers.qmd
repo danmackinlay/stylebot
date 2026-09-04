@@ -1,0 +1,37 @@
+---
+title: Numerical PDE solvers
+---
+
+:::{#fig-electric-massage-boogaloo .figure .illustration .right}
+![](/images/electric_massage_boogaloo.webp)
+:::
+
+## FEniCS
+
+>[FEniCS](https://fenicsproject.org/) is a popular open-source (LGPLv3) computing platform for solving partial differential equations (PDEs).
+>FEniCS enables users to quickly translate scientific models into efficient finite element code.
+.FEniCS runs on a multitude of platforms ranging from laptops to high-performance clusters.
+>
+>As an illustration of how to program a simple PDE model with FEniCS, consider the Stokes equations in variational form:
+>
+>
+>$$\int_{\Omega} \mathrm{grad} \, u : \mathrm{grad} \, v \,\mathrm{d}x \, -
+\int_{\Omega} p \, \mathrm{div} \, v \,\mathrm{d}x +
+\int_{\Omega} \mathrm{div} \, u \, q \,\mathrm{d}x =
+\int_{\Omega} f \cdot v \,\mathrm{d}x.$$
+>
+>The variational problem is easily transcribed into Python using mathematical operators in FEniCS:
+The quote ends on the line above with no blank line before this paragraph, which is the shape the blockquote span has to stop at rather than run on into.
+
+```python
+# Define function space
+P2 = VectorElement('P', tetrahedron, 2)
+P1 = FiniteElement('P', tetrahedron, 1)
+TH = P2 * P1
+W = FunctionSpace(mesh, TH)
+```
+
+## References
+
+::: {#refs}
+:::

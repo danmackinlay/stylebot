@@ -777,6 +777,23 @@ styler has never been asked to *emit* a sentinel `STYLE_SYSTEM` has always
 promised it would preserve — the gap that makes inference-side masking
 out-of-distribution today. Decided: D33.
 
+## The fence closer — measured 2026-09-04 (F15)
+
+`STYLEBOT_SWEEP_BLOG_ROOT=~/Source/livingthing uv run pytest
+tests/test_segment_hard.py`, over 1,758 blog `.qmd` at blog `f36033d713`, run
+with the old `CODE_FENCE_RE` and the new one in the same pass.
+
+| post | fence span before | after | prose returned |
+|---|---|---|---|
+| `notebook/blogdown.qmd` | 5612–7229 | 5612–5710, 7037–7229 | **1,327 chars**, three `###` headings and their paragraphs |
+| `notebook/quarto_websites.qmd` | 21660–22610 | 21660–21871, 22499–22610 | 628 chars |
+
+**The other 1,756 posts are span-identical under both named configurations**,
+and the sweep's invariants now pass everywhere (2 files broke them before).
+Re-cutting these two under the blog's `chunk_policy()` moves 9 of their 28
+targets, so `prune-stale` would newly orphan pairs cut there — 79 of the corpus
+come from these two posts, and D53 does not prune. Decided: D69.
+
 ## Surface size
 
 **`ai-style synth` flag audit** (2026-08-10): **54** click options against **19**

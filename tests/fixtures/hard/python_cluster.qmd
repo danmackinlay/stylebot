@@ -1,0 +1,37 @@
+---
+title: Python cluster computing
+---
+
+:::{#fig-hercules-crab-hydra .figure .illustration .right}
+![](/images/hercules_crab_hydra_RP-P-H-H-1138.webp)
+:::
+
+## Joblib
+
+```pycon
+>>> from math import sqrt
+>>> from joblib import Parallel, delayed
+>>> Parallel(n_jobs=2)(delayed(sqrt)(i ** 2) for i in range(10))
+[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+```
+
+* [Embarrassingly parallel for loops](https://joblib.readthedocs.io/en/latest/parallel.html#parallel-reference-documentation)
+
+<script type='text/javascript' src='https://www.openhub.net/p/joblib/widgets/project_factoids_stats?format=js'></script>
+
+### Multiprocess
+
+For scientific computing I might want to use `multiprocess` instead.
+
+## Pathos
+
+> systems, thus allowing large computations to be easily launched on
+> high-performance computing resources.
+
+Integrates well with [jupyter notebooks](./jupyter.qmd).
+
+<script type='text/javascript' src='https://www.openhub.net/p/pathos/widgets/project_factoids_stats?format=js'></script>
+
+## Dask
+
+[dask](https://dask.readthedocs.io/en/latest/) seems to parallelize certain python tasks well and claims to scale up elastically.

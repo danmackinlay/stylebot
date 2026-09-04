@@ -1,0 +1,37 @@
+---
+title: Web browser automation
+---
+
+:::{#fig-let-the-machine-do-the-work .figure .illustration .full}
+![](/images/let_the_machine_do_the_work.webp)
+:::
+
+The attention economy of late capitalism demands I spend time clicking on a browser window to do things, rather than automating the drudgery like we thought we would have all worked out by now.
+
+This should be easier!
+Surely I can automate it?
+
+Here are some options of increasing complexity.
+
+::: {.callout-note}
+This is an old page and probably out of date.
+The only option I have recent experience with is [playwright](#playwright).
+:::
+
+## Selenium
+
+* [webdriver docs](http://www.seleniumhq.org/docs/03_webdriver.jsp)
+* [helium](https://github.com/mherrmann/selenium-python-helium)
+
+  >Under the hood, Helium forwards each call to Selenium. The difference is that Helium’s API is much more high-level. In Selenium, you need to use HTML IDs, XPaths and CSS selectors to identify web page elements. Helium on the other hand lets you refer to elements by user-visible labels.
+  >
+  >Because Helium is simply a wrapper around Selenium, you can freely mix the two libraries. For example:
+
+  ```python
+  # A Helium function:
+  driver = start_chrome()
+  # A Selenium API:
+  driver.execute_script("alert('Hi!');")
+  ```
+
+So in other words, you don’t lose anything by using Helium over pure Selenium?
