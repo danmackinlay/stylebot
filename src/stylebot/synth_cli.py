@@ -343,11 +343,9 @@ class SubstrateOpts:
 class CorpusOpts:
     """What gets written, under which design cell — feeds `synthesize_pairs`.
 
-    Two clusters that both bear on corpus identity: the arm-assignment design
-    (`per_generator` / `assign_seed` / `replicate` / `skip_covered`, which
-    decide *which cells exist* and therefore what resume regenerates) and the
-    write gates (`context_dropout` and the two hygiene thresholds, which decide
-    which generated pairs survive to the file).
+    The arm-assignment design (`per_generator` / `assign_seed` / `replicate` /
+    `skip_covered`: which cells exist, so what resume regenerates), the write
+    gates (`context_dropout`, the hygiene thresholds), and where draws land.
     """
 
     cli_section = "Corpus (design cell + write gates)"
@@ -376,6 +374,13 @@ class CorpusOpts:
         "the goal is one pair per passage — without it, a re-key epoch (e.g. an "
         "effort-default change) regenerates already-covered targets and doubles their "
         "training weight.",
+    )
+    draws_dir: Path | None = opt(
+        None,
+        "--draws",
+        "draws_dir",
+        type=click.Path(file_okay=False, path_type=Path),
+        help="One draw per generator call, accepted or not (D84). Default: <data-dir>/draws.",
     )
     max_transform_sim: float | None = opt(
         None,
@@ -992,26 +997,20 @@ def run_synth(
         dry_run=gen.dry_run,
     )
 
-    # Everything below writes: a data-dir is mandatory from here on. The
-    # inspection modes returned above, which is why the caller is free to hand
-    # in None for them (and to keep its own "no silent default" policy message
-    # where it belongs — see `synth_cmd`).
+    # Everything below writes: a data-dir is mandatory from here on (the
+    # inspection modes returned above; `synth_cmd` owns the refusal message).
     if data_dir is None:
         raise SynthConfigError("a data-dir is required to write pairs.jsonl")
-    resolved_dir = data_dir
 
-    # Heartbeat on wall-clock, not pair count: at high reasoning effort a pair
-    # takes ~1-2 min, so count-gated echoes (every 25th) sit silent for half an
-    # hour and look like a hang. on_progress fires before each pair, so after
-    # any slow pair the very next tick prints.
+    # Heartbeat on wall-clock, not pair count: at high effort a pair takes ~1-2
+    # min, so count-gated echoes sit silent for half an hour and look like a hang.
     last_echo = [0.0]
 
     def _progress(i: int, total: int, live: synth.SynthResult) -> None:
         now = time.monotonic()
         if i == 1 or i == total or now - last_echo[0] >= _HEARTBEAT_SECS:
             last_echo[0] = now
-            # Billed credits so far (OpenRouter usage.include ground truth);
-            # silent for generators that report no cost.
+            # Billed credits so far (OpenRouter ground truth); silent without a cost.
             spent = f"  ≈${live.total_cost:.2f}" if live.total_cost else ""
             say(f"  ... {i}/{total} pairs{spent}", level="status")
 
@@ -1021,7 +1020,7 @@ def run_synth(
 
     result = synth.synthesize_pairs(
         targets,
-        resolved_dir,
+        data_dir,
         generators,
         per_generator=corpus.per_generator,
         assign_seed=corpus.assign_seed,
@@ -1041,11 +1040,12 @@ def run_synth(
         drop_invented_anchors=corpus.drop_invented_anchors,
         gate_retries=corpus.gate_retries,
         gen_retries=corpus.gen_retries,
+        draws_dir=corpus.draws_dir if corpus.draws_dir is not None else data_dir / "draws",
     )
 
     _report_result(
         result,
-        config.pairs_path(resolved_dir),
+        config.pairs_path(data_dir),
         dry_run=gen.dry_run,
         session_turns=session.session_turns,
         emit=say,

@@ -11,7 +11,7 @@ synthetic pairs are mixable; synthetic records add `meta.synthetic`,
 `meta.generator`, `meta.slop_strategy`, `meta.synth_key` and `meta.tags`.
 Generators and slop prompts are injected knobs, both folded into `synth_key`;
 rotate ≥2 generators so the styler undoes AI writing broadly, not one model's
-tics.
+tics. `draws_dir` also records every generator call as one draw (D84).
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from stylebot import config, corpus
+from stylebot import config, corpus, draws
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.generators import (
     DEFAULT_REASONING_EFFORT,
@@ -518,6 +518,7 @@ class _RunState:
     on_progress: Callable[[int, int, SynthResult], None] | None = None
     on_error: Callable[[str, str], None] | None = None
     repo_prov: Mapping | None = None  # tree provenance, resolved once per run
+    draws_dir: Path | None = None  # where every generator call lands as a draw (D84)
     # The synth_keys actually ON DISK, handed to `PairsWriter`. Deliberately
     # NOT the planner's `seen`, which additionally holds every cell this run
     # PLANS to write — feeding that to the writer would make it refuse its own
@@ -755,16 +756,8 @@ def _record_lost_draw(
 ) -> None:
     """Append one draw that produced no pair to `<data-dir>/lost_draws.jsonl`.
 
-    **One file for both ways a draw is lost**, `kind="gate"` and `kind="error"`,
-    because the operational question is which of the two is eating a run. A
-    gated draw is paid for and never written, so this is the only record that it
-    happened — the denominator for an arm's rejection rate (every pair left in
-    the corpus passed the gate) and the discarded half of its spend, neither
-    recoverable from `pairs.jsonl` (D32).
-
-    Unconditional, like `prompts.jsonl`: one short line, no prose. `attempt` is
-    0 for the first draw; `redrawn=false` marks a cell actually lost rather than
-    recovered.
+    One file for `kind="gate"` and `kind="error"`, the denominator for an arm's
+    rejection rate and its discarded spend (D32) until step 4 folds it into draws.
     """
     append_jsonl(
         data_dir / "lost_draws.jsonl",
@@ -818,19 +811,16 @@ def _record_gate_drop(
     turn: _Turn,
     gen: Generator,
     gen_meta: dict,
+    slop: str,
+    verdict: tuple[str, str],
     *,
-    gate: str,
-    reason: str,
     attempt: int,
     redrawn: bool,
 ) -> None:
-    """Account for one gated draw: sidecar line, arm rejection count, spend.
-
-    All three happen on BOTH gate paths — the redraw that will try again, and
-    the final give-up — because a gated draw is paid for either way. They were
-    written out twice, twenty lines apart, which is how an arm's rejection rate
-    and its true cost get to disagree.
-    """
+    """Account for one gated draw — the draw itself, sidecar line, rejection count,
+    spend — on BOTH gate paths, redraw and give-up: it is paid for either way."""
+    gate, reason = verdict
+    _record_draw(st, turn, gen, gen_meta, slop, f"gate:{gate}")
     _record_lost_draw(
         st.data_dir,
         turn,
@@ -844,6 +834,33 @@ def _record_gate_drop(
     )
     st.result.drops_by_generator[gen.name] = st.result.drops_by_generator.get(gen.name, 0) + 1
     st.result.add_gen_stats(gen.name, gen_meta)  # the discarded draw was paid for
+
+
+def _record_draw(
+    st: _RunState,
+    turn: _Turn,
+    gen: Generator,
+    gen_meta: Mapping,
+    raw_output: str | None,
+    outcome: str,
+    record: dict | None = None,
+) -> None:
+    """Append the draw one generator call made to `st.draws_dir`, when set (D84).
+    A plain `draws.append`, no lock: this run is the only writer of its month shard."""
+    if st.draws_dir is None:
+        return
+    draw = draws.new_draw(
+        gen,
+        st.repo_prov,
+        turn.target,
+        turn.context,
+        gen=gen_meta,
+        raw_output=raw_output,
+        outcome=outcome,
+        record=record,
+        replicate=st.replicate or 0,
+    )
+    draws.append(st.draws_dir, draw)
 
 
 async def _attempt(fn, text: str, history: Sequence[dict]) -> tuple[str, dict]:
@@ -910,16 +927,7 @@ async def _draw_past_gates(
     verdict = _gate_verdict(slop, turn.target.text, st)
     redraws = 0
     while verdict is not None and redraws < st.gate_retries:
-        _record_gate_drop(
-            st,
-            turn,
-            gen,
-            gen_meta,
-            gate=verdict[0],
-            reason=verdict[1],
-            attempt=redraws,
-            redrawn=True,
-        )
+        _record_gate_drop(st, turn, gen, gen_meta, slop, verdict, attempt=redraws, redrawn=True)
         redraws += 1
         logger.info(
             "gate redraw %d/%d: %s %s (%s)",
@@ -942,14 +950,11 @@ async def _draw_past_gates(
 async def _run_session(sess: _Session, writer: PairsWriter, st: _RunState) -> list[_Turn]:
     """Run one session's turns in order, appending records as they complete.
 
-    Returns the turns this session could NOT run, for the caller to reflow into a
-    fresh session — never silently dropped. A binding token budget returns every
-    remaining turn; a turn erroring (after the one re-pin retry) returns the
-    turns AFTER it, while the failed turn retries next run under the same key.
-
-    Termination: the budget check is skipped while history is empty, so a fresh
-    session always attempts its first turn — every reflow either writes a pair or
-    sheds an errored turn, strictly shrinking the leftover list.
+    Returns the turns this session could NOT run, for the caller to reflow —
+    never silently dropped: a binding token budget returns every remaining turn,
+    an erroring turn returns the turns AFTER it (the failed cell retries next
+    run). The budget check is skipped while history is empty, so every reflow
+    writes a pair or sheds an errored turn, strictly shrinking the leftovers.
     """
     gen = sess.generator
     # Multi-turn sessions get a per-session callable when the generator offers
@@ -978,8 +983,7 @@ async def _run_session(sess: _Session, writer: PairsWriter, st: _RunState) -> li
             raise
         except Exception as exc:
             # A failed pair is never written, so its synth_key resolves to
-            # nothing — the recorded error must carry its config or be
-            # unattributable.
+            # nothing: the recorded error must carry its config to be attributable.
             who = f"{gen.name} strategy={gen.strategy} effort={gen.reasoning_effort}"
             if sess.session_id:
                 who += f" turn={turn.index}"
@@ -997,13 +1001,12 @@ async def _run_session(sess: _Session, writer: PairsWriter, st: _RunState) -> li
                 attempt=st.gen_retries,
                 redrawn=False,
             )
+            _record_draw(st, turn, gen, {}, None, f"error:{type(exc).__name__}")
             st.result.errors_by_generator[gen.name] = (
                 st.result.errors_by_generator.get(gen.name, 0) + 1
             )
-            # The REST of the session still reflows into fresh sessions rather
-            # than being dropped — sticky routing means a session that has
-            # started failing usually keeps failing, and the leftover turns
-            # deserve a healthy provider. Only this cell is lost.
+            # Only this cell is lost; the REST of the session reflows to a fresh
+            # provider, since a sticky session that started failing keeps failing.
             return list(sess.turns[pos + 1 :])
 
         prompt_tokens = gen_meta.get("prompt_tokens")
@@ -1038,21 +1041,20 @@ async def _run_session(sess: _Session, writer: PairsWriter, st: _RunState) -> li
             counter, reason = verdict
             setattr(st.result, counter, getattr(st.result, counter) + 1)
             _record_gate_drop(
-                st, turn, gen, gen_meta, gate=counter, reason=reason, attempt=redraws, redrawn=False
+                st, turn, gen, gen_meta, slop, verdict, attempt=redraws, redrawn=False
             )
-            # "gate dropped a draw", not "degenerate output": two of the three
-            # gates catch a degenerate generator, but the anchor gate catches a
-            # perfectly fluent draw that merely deleted a link, and calling that
-            # degenerate sent readers looking for the wrong defect.
+            # "gate dropped a draw", not "degenerate output": the anchor gate
+            # catches a fluent draw that merely deleted a link (D32).
             logger.warning("gate dropped a draw: %s — %s (%s)", gen.name, reason, turn.key)
         elif writer.write(turn.key, record):
+            _record_draw(st, turn, gen, gen_meta, slop, draws.ACCEPTED, record)
             st.result.written += 1
             st.result.per_generator[gen.name] = st.result.per_generator.get(gen.name, 0) + 1
             st.result.add_gen_stats(gen.name, gen_meta)
         else:
-            # Another writer claimed this cell between our plan and our write.
-            # The draw is paid for and discarded rather than appended: one cell,
-            # one record, whoever got there first (`PairsWriter`).
+            # Another writer claimed this cell between plan and write (`PairsWriter`):
+            # the draw is kept without its record, so a view renders theirs.
+            _record_draw(st, turn, gen, gen_meta, slop, draws.ACCEPTED)
             st.result.skipped_existing += 1
             logger.info("cell already written by a concurrent run: %s", turn.key)
         st.done += 1
@@ -1115,32 +1117,28 @@ def synthesize_pairs(
     gate_retries: int = 0,
     gen_retries: int = DEFAULT_GEN_RETRIES,
     blog_root: Path | str | None = None,
+    draws_dir: Path | str | None = None,
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
     Idempotent and resumable: cells whose content-only `meta.synth_key` is
     already in the corpus are skipped, so re-running never duplicates and a
-    crashed run resumes where it stopped (D11). Missing cells are freshly packed
-    into sessions each run.
-
-    **Concurrency**: sessions run on an asyncio event loop, `max_workers` at a
-    time, single-threaded, so no locks (D56). Generator callables may be sync or
+    crashed run resumes where it stopped (D11). Sessions run on one asyncio
+    loop, `max_workers` at a time, no locks (D56); generators may be sync or
     async.
 
     **Sessions** (`session_turns > 1`): missing cells are chunked into live
-    multi-turn sessions, so every turn sees the real prior exchanges and fill is
-    *measured* (`prompt_tokens`, `context_window`, `window_fill` in `meta.gen`).
-    **The token budget is the depth control**: a session ends at
-    `min(session_budget or session_max_tokens, SESSION_WINDOW_FILL_CAP x window)`
-    estimated prompt tokens, and turns it could not run REFLOW into fresh
-    sessions rather than being dropped.
+    multi-turn sessions, fill is *measured* (`prompt_tokens`, `context_window`,
+    `window_fill` in `meta.gen`), and **the token budget is the depth control**:
+    a session ends at `min(session_budget or session_max_tokens,
+    SESSION_WINDOW_FILL_CAP x window)` and the turns it could not run REFLOW
+    into fresh sessions rather than being dropped.
 
-    **Hygiene gates** share one shape: count loudly, write nothing, leave the
-    cell un-keyed so a re-run retries it (D32). Heading `context` is prepended
-    verbatim to both sides while slop is generated from the body alone (D14);
-    `context_dropout` keeps a deterministic fraction heading-less. `dry_run`
-    plans without calling a generator. **Provenance** is resolved once per run
-    and stamped on every record (D36).
+    **Hygiene gates** count loudly, write nothing and leave the cell un-keyed so
+    a re-run retries it (D32). Heading `context` is prepended verbatim to both
+    sides, slop is generated from the body alone (D14). `dry_run` only plans.
+    **Provenance** is resolved once per run (D36); with `draws_dir`, every
+    generator call is also one appended draw (D84).
     """
     data_dir = Path(data_dir)
     pairs_path = config.pairs_path(data_dir)
@@ -1213,6 +1211,7 @@ def synthesize_pairs(
         on_progress=on_progress,
         on_error=on_error,
         repo_prov=repo_provenance(blog_root if blog_root is not None else data_dir),
+        draws_dir=Path(draws_dir) if draws_dir is not None else None,
         disk_keys=disk_keys,
     )
     asyncio.run(_run_sessions(sessions, pairs_path, st, max_workers))

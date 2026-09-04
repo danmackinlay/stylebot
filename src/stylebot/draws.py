@@ -13,7 +13,8 @@ plus a rebuild.
 
 Step 1 (W4) is read-side: `draws_from_pairs` lifts today's pair records into
 accepted draws, and `build_view` under an identity policy reproduces `pairs/`
-byte-for-byte (`findings.md` "The view reproduces the corpus"). Nothing here
+byte-for-byte (`findings.md` "The view reproduces the corpus"). Step 2 adds
+`new_draw`, the native draw `synth` appends per generator call. Nothing here
 writes to `pairs/`; there is no lock, thread or process (P8).
 """
 
@@ -22,13 +23,16 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from stylebot import corpus, pairs
 from stylebot.errors import ConfigError
+from stylebot.generators import Generator
 from stylebot.jsonl import append_jsonl, iter_jsonl
+from stylebot.provenance import now_iso
+from stylebot.targets import Target
 
 #: The one outcome a view may render. Anything else is a kept, paid-for reject.
 ACCEPTED = "accepted"
@@ -138,6 +142,43 @@ def draw_from_pair(record: dict) -> Draw:
         raw_output=pairs.extract_slop(record) if synthetic else None,
         outcome=ACCEPTED,
         drawn_at=meta.get("captured_at"),
+        record=record,
+    )
+
+
+def new_draw(
+    arm: Generator,
+    repo_prov: Mapping | None,
+    target: Target,
+    context: str | None,
+    *,
+    gen: Mapping | None,
+    raw_output: str | None,
+    outcome: str,
+    record: dict | None = None,
+    replicate: int | str = 0,
+) -> Draw:
+    """A native draw for one generator call, as `synth` makes it (W4 step 2).
+
+    `draw_id` is the cell — `arm` supplies generator, strategy, prompt and
+    effort; `repo_prov` the blog SHA (`provenance.repo_provenance`) — with
+    `span=None` until step 3 records offsets. A `reasoning_text` in `gen` is
+    dropped: traces are diagnostics, not corpus (`synth`'s sidecar keeps them).
+    """
+    prov = repo_prov or {}
+    sha = prov.get("blog_sha")
+    cell = (target.source, sha, None, arm.name, arm.strategy, arm.prompt_id, arm.reasoning_effort)
+    return Draw(
+        draw_id=draw_id(*cell, replicate),
+        source=target.source,
+        blog_sha=sha,
+        blog_dirty=prov.get("blog_dirty"),
+        target_text=target.text,
+        context=context or None,
+        gen={k: v for k, v in gen.items() if k != "reasoning_text"} if gen else None,
+        raw_output=raw_output,
+        outcome=outcome,
+        drawn_at=now_iso(),
         record=record,
     )
 
