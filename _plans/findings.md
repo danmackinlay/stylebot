@@ -8,6 +8,30 @@ one table per measurement, ≤ 12 lines of reading, each carrying its **date**, 
 gets a one-line strike. These are dated records of what was true then and must
 never be edited to match today (D52).
 
+## The view reproduces the corpus — 2026-09-04 (W4 step 1)
+
+`STYLEBOT_SWEEP_BLOG_ROOT=~/Source/livingthing uv run pytest tests/test_draws.py
+-s -k reproduces_the_blog`: `draws.draws_from_pairs` over the blog's
+`_training_pairs/pairs/` (three shards), `draws.build_view` under the identity
+`ViewPolicy()` into a temp dir, both sides hashed by `corpus.content_sha256`.
+No spend.
+
+| | `pairs/` (source) | the view |
+|---|---|---|
+| records | 8,157 | 8,157 |
+| distinct `record_id` | 8,157 | 8,157 (same set) |
+| `content_sha256` | `d49ba7ad60774ea6` | **`d49ba7ad60774ea6`** |
+| shards | captures, synth-2026-07, synth-2026-08 | the same three, same order |
+| clauses fired / `policy_sha` | — | none / `7c57099c31be0a0c` |
+
+Byte-identical: every record round-trips through `json.loads` and
+`corpus.line_of` unchanged, and routing by `corpus.shard_of` in read order
+lands each in the shard it came from. So the view layer costs nothing today
+and the `dan-style status` sha is the one number that must hold through step
+4. The identity policy's sha names today's corpus as a view; the blog's
+`view_policy()` (S1b) must hash to a policy under which no clause fires, or
+the done-criterion fails by design. Decided: D84.
+
 ## The cull's baseline — 2026-09-04
 
 Stylebot `src/` before and after X2, the first ship-shape cull, by
