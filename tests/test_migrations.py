@@ -403,6 +403,18 @@ def test_backfill_resolve_hook_fills_provenance_and_rekeys(sharded, tmp_path):
     assert _view_sha(tmp_path / "draws", tmp_path / "view") == corpus.content_sha256(sharded)
 
 
+def test_lift_pair_keeps_a_labelled_replicate_in_the_cell():
+    # 374 blog records carry `gen.replicate = "verbose1"`, a label, not a count.
+    record = _pair("slop text", "target text", synthetic=True)
+    record["meta"]["gen"] = {"prompt_id": "p1", "reasoning_effort": "off", "replicate": "verbose1"}
+    resolve = lambda _r: ("abc123", False, (0, 11))  # noqa: E731
+    draw = migrations._lift_pair(record, resolve, {})
+    cell = ("post/x.qmd", "abc123", (0, 11), "g", None, "p1", "off")
+    assert draw.draw_id == draws.draw_id(*cell, "verbose1")
+    record["meta"]["gen"]["replicate"] = None
+    assert migrations._lift_pair(record, resolve, {}).draw_id == draws.draw_id(*cell, 0)
+
+
 def test_backfill_superseded_marks_the_session_and_the_default_policy_drops_it(sharded, tmp_path):
     report = migrations.backfill_draws(
         sharded,

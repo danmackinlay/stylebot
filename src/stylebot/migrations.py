@@ -454,7 +454,7 @@ def _lift_pair(record: dict, resolve: Resolve | None, superseded: Mapping[str, s
                 meta.get("slop_strategy"),
                 gen.get("prompt_id"),
                 gen.get("reasoning_effort"),
-                int(gen.get("replicate") or 0),
+                gen.get("replicate") or 0,  # an int, or a label such as `verbose1`
             )
     capture_id = meta.get("capture_id")
     if not meta.get("synthetic") and capture_id in superseded:
