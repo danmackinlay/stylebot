@@ -32,6 +32,38 @@ and the `dan-style status` sha is the one number that must hold through step
 `view_policy()` (S1b) must hash to a policy under which no clause fires, or
 the done-criterion fails by design. Decided: D84.
 
+## The backfill's recovery — 2026-09-05 (W4 step 3)
+
+`uv run ai-style data backfill-draws _training_pairs --side-file
+lost_draws.jsonl --side-file gate_drops.jsonl --resolve
+livingthing.corpus_provenance:resolve_record --superseded <SUPERSEDED_CAPTURES>
+--apply` in the blog worktree at `5ed9df8572`, reading `_training_pairs/pairs/`
+(`d49ba7ad60774ea6`) and the two reject logs; 9.0 s wall (dry run 8.4 s). No spend.
+
+| | count |
+|---|---|
+| pair records → accepted draws | 8,157 |
+| resolved at a pinned revision (`corpus_provenance.PINS`) | 7,741: 3,132 verbatim, 4,609 gapped |
+| resolved by the history walk (4 sources, 210 commits read) | 7: 3 verbatim, 4 gapped |
+| unresolved synthetic (no sha, no span) | 2: `83f5f1989128f20b`, `e58c7711ba3a8806`, both `notebook/fish.qmd`, legacy, 2026-07-21 |
+| real records (no sha, `blog_dirty`) | 407: 174 with a span into `before.md` (171 verbatim, 3 gapped), 233 with no archive |
+| tombstones by outcome | 6,429: `gate:skipped_invented_anchors` 5,769, `gate:skipped_degenerate` 565, `gate:skipped_inflated` 93, `error:RuntimeError` 2 |
+| superseded (`SUPERSEDED_CAPTURES`, 8 sessions) | 11 draws |
+| duplicate draw ids | 7, all real: 6 interim/successor pairs, 1 unmapped (`d89d26a4`/`f608a742`) |
+| `draws/` | 3 shards, 14,586 lines, 73 MB (`pairs/`: 37 MB) |
+| `dan-style build-view` under `view_policy()` | `content_sha256=d49ba7ad60774ea6`; excluded `outcome: 6429`, nothing else |
+
+"Gapped" means the cutter had dropped a protected block (display math, a fence)
+from inside the cell, so the target is not a contiguous substring: the span is
+the bounding region its lines occur in, in order. The design's "five
+unreachable cells" were counted by re-cutting; by text presence three of them
+sit in a committed blob and two `fish.qmd` cells sit in none. `draws/` is 2.0×
+`pairs/`, not the estimated 1.6×: an accepted draw carries its record whole
+plus `target_text` and `raw_output` again. The seven duplicate ids are a real
+draw's cell lacking its capture id, a key-shape question for step 4. The
+labelled replicate (`gen.replicate = "verbose1"`, 374 records) crashed
+`_lift_pair`'s `int()`; fixed on this branch. Decided: D84 (amended, step 3).
+
 ## The cull's baseline — 2026-09-04
 
 Stylebot `src/` before and after X2, the first ship-shape cull, by
