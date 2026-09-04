@@ -54,8 +54,9 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
   nothing. A superseded measurement keeps its table and gets a one-line strike.
 - **P5. Commits: subject ≤ 72 chars, body ≤ 12 lines, one concern.** The body
   says what changed and cites the decision or work item. No commit touches a
-  file its subject does not cover. "Could not be separated in the working tree"
-  is the working tree's problem — P8.
+  file its subject does not cover — except that an allowlist edit in
+  `tests/test_budget.py` rides in the commit that earns it. "Could not be
+  separated in the working tree" is the working tree's problem — P8.
 - **P6. This file is an operating manual ≤ 160 lines.** Every bullet is a rule
   plus a pointer; how the rule was learned belongs in `decisions.md`.
 - **P7. A plan retires when its work ships** — within a week of the last item

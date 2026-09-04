@@ -364,14 +364,12 @@ nothing.
 ## D58: size budgets are a test with a shrinking allowlist, and each "why" has one layer
 
 **Decision (2026-09-04)**: adopt P1–P8 of the blog's
-`_plans/stylebot-seam-followup-2026-09.md` — one layer per "why" (decisions →
-findings → code → commit), size budgets on modules, functions and docstrings, and
-dispatch rules for agents. `tests/test_budget.py` enforces the sizes against an
-allowlist of everything over budget, plus P3's and P6's doc budgets; the blog
-runs a copy over `src/livingthing`. The allowlist records the sizes as measured.
+`_plans/stylebot-seam-followup-2026-09.md`: one layer per "why" (decisions →
+findings → code → commit), size budgets on modules, functions and docstrings,
+dispatch rules for agents; `tests/test_budget.py` enforces the sizes, P3's and
+P6's doc budgets, and an allowlist of everything over budget as measured.
 
 **Alternatives considered**:
-
 - **An unenforced guideline in `CLAUDE.md`** — already there in spirit, and one
   day's seam pass (2026-09-03) showed what it held.
 - **Hard budgets with no allowlist** — red on day one, so the first agent to meet
@@ -380,16 +378,18 @@ runs a copy over `src/livingthing`. The allowlist records the sizes as measured.
   public API, and a blog suite that goes red on a stale git pin.
 
 **Deciding constraint**: the bloat was a good instinct (say why) applied at four
-layers at once, so the same paragraph exists three or four times and every later
-reader pays for all of them. Review does not see that; a line count does. The
-allowlist is what makes a number safe to adopt mid-flight — a ratchet, not a
-cliff — and a deleted entry is the only evidence of progress the process keeps.
+layers at once, so one paragraph exists three or four times and every reader
+pays for all of them; review misses that, a line count does not. The allowlist
+is a ratchet, not a cliff, and a deleted entry is the only progress it records.
 
-**Re-evaluate if** an allowlist entry has to *grow* for a change that is plainly
-right: the budget is then wrong, and what gets written is the new budget, not the
-exception. The package-wide check is a prose count *or* a pinned ratio, either
-sufficient (F16c): the count alone makes one documented helper cost a docstring
-deleted elsewhere, and the ratio alone fails the code diet F2/F8 exist to do.
+**Re-evaluate if** an allowlist entry must *grow* for a plainly right change: the
+budget is then wrong; write the new budget, not the exception. The package-wide
+check is a count *or* a pinned ratio, either sufficient (F16c): the count alone
+taxes a documented helper elsewhere; the ratio alone fails the F2/F8 code diet.
+
+**Amended 2026-09-04 (M1b)**: a module that comes under budget still fails the
+test; the allowlist edit rides in the commit that earns it (P5). Rejected:
+hint-not-fail — an unread hint is how the allowlist stops shrinking.
 
 ## D59: one mechanism in the scoring path — the judge awaits, everything else batches
 
