@@ -224,324 +224,43 @@ def synth_cmd(
     )
 
 
-def _document_pass(pairs_path: Path, out: Path, doc_opts, score_fields):
-    """Rewrite whole eval-stratum documents; return what to score instead.
-
-    Returns `(pairs_path, fields, prune_orphans, chunk_scale)` for the scoring
-    pass that follows: the output JSONL is a DIFFERENT corpus from `pairs.jsonl`,
-    so orphan pruning must be off (every row would read as orphaned) and `output`
-    joins the scored fields. `chunk_scale` is the manifest's serving diet, handed
-    to `eval.chunked_detector` so the documents are scored at the scale the
-    detector head was fit on rather than as one 25k-char embedding.
-    """
-    if doc_opts.documents_manifest is None:
-        raise click.UsageError("--documents needs --documents-manifest (the adapter to serve)")
-    manifest = _load_manifest(doc_opts.documents_manifest)
-    styler = backends.build_styler(
-        backends.opts_from_manifest(manifest, BackendOpts(backend="tinker"))
-    )
-    max_chunk_chars, inline_headings = backends.serving_diet(manifest)
-
-    splits_file = config.splits_path(pairs_path.parent)
-    splits_doc = sp.load_splits(splits_file) if splits_file.exists() else None
-    role = None if doc_opts.documents_role == "all" else doc_opts.documents_role
-    if role is not None and splits_doc is None:
-        raise click.UsageError(
-            f"--documents-role {role} needs a splits contract; none at {splits_file}"
-        )
-
-    docs_out = doc_opts.documents_out or (out.parent / "documents.jsonl")
-
-    def _doc_progress(i: int, total: int) -> None:
-        click.echo(f"  ... {i}/{total} documents rewritten", err=True)
-
-    result = ev.rewrite_documents_file(
-        pairs_path,
-        docs_out,
-        styler,
-        splits=splits_doc,
-        role=role,
-        max_chunk_chars=max_chunk_chars,
-        inline_headings=inline_headings,
-        on_progress=_doc_progress,
-    )
-    click.echo(
-        f"rewrote {result.written} document(s) ({result.n_chunks} chunks, "
-        f"{result.n_kept_input} kept verbatim) -> {docs_out}"
-    )
-    for capture_id, message in result.errors[:10]:
-        click.secho(f"  {capture_id}: {message}", fg="yellow", err=True)
-    fields = (*score_fields, *(() if "output" in score_fields else ("output",)))
-    chunk_scale = {"max_chunk_chars": max_chunk_chars, "inline_headings": inline_headings}
-    return docs_out, fields, False, chunk_scale
-
-
-def _echo_summary(summary: dict) -> None:
-    for line in ev.format_summary(summary):
-        click.echo(line)
-
-
-def _echo_verdict(verdict: dict, a_path: Path, b_path: Path) -> None:
-    click.echo("")
-    for line in ev.format_verdict(verdict, a_path, b_path):
-        if line.lstrip().startswith("WARNING:"):
-            click.secho(line, fg="yellow", err=True)
-        else:
-            click.echo(line)
-
-
-@main.command("eval")
-@click.option(
-    "--pairs",
-    "pairs_path",
-    required=True,
-    type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
-    help="The pairs corpus to score (slop + Dan sides of every pair): a "
-    "pairs.jsonl or a pairs/ shard directory.",
-)
-@click.option(
-    "--field",
-    "fields",
-    type=click.Choice(["slop", "target"]),
-    multiple=True,
-    default=(),
-    help="Which side(s) to score (repeatable; default both). slop=messages[1], "
-    "target=Dan/messages[2].",
-)
-@click.option(
-    "--judge/--no-judge",
-    default=False,
-    show_default=True,
-    help="Run the LLM judge (needs $OPENROUTER_API_KEY); off = Vale + null detector, no spend.",
-)
-@click.option(
-    "--judge-model",
-    default="anthropic/claude-opus-4-8",
-    show_default=True,
-    help="OpenRouter model id for the judge.",
-)
-@click.option(
-    "--detector-model",
-    "detector_model",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default=None,
-    help="A trained voice-classifier artifact dir (head.json + meta.json) to score "
-    "detector.score; needs the pinned embedder (sentence-transformers) installed.",
-)
-@click.option(
-    "--vale-config",
-    type=click.Path(dir_okay=False, path_type=Path),
-    default=None,
-    help="Vale config (.vale.ini); omitted = Vale's own discovery (or Vale absent -> skipped).",
-)
-@click.option(
-    "--max-workers",
-    default=8,
-    show_default=True,
-    type=int,
-    help="Concurrent judge calls (asyncio). Vale is a batched pre-pass, not a worker (D59).",
-)
-@click.option(
-    "--out",
-    "out_path",
-    type=click.Path(dir_okay=False, path_type=Path),
-    default=None,
-    help="scores.jsonl to append (default: <pairs-dir>/scores.jsonl). Resumable — scored ids are "
-    "skipped.",
-)
-@click.option(
-    "--summary",
-    "summary_path",
-    type=click.Path(dir_okay=False, path_type=Path),
-    default=None,
-    help="Also write the aggregate summary JSON here.",
-)
-@click.option(
-    "--by",
-    "by",
-    default=None,
-    help="Facet the summary by a meta key, e.g. slop_strategy or generator.",
-)
-@click.option("--limit", type=int, default=None, help="Cap pairs scored (smoke / cost control).")
-@click.option(
-    "--prune-orphans/--no-prune-orphans",
-    default=True,
-    show_default=True,
-    help="Drop score records whose pair is no longer in --pairs (re-cut or regenerated), so "
-    "every summary and exported table counts live pairs only. Turn OFF only when --out belongs "
-    "to a DIFFERENT corpus, where every record reads as orphaned.",
-)
-@click.option(
-    "--report",
-    "report_path",
-    type=click.Path(dir_okay=False, path_type=Path),
-    default=None,
-    help="Write a self-contained HTML scores report — the pair browser: slop↔Dan side by side, "
-    "judge/detector/Vale chips, generation covariates, facet dropdowns. Works keyless (judge "
-    "badges show — without --judge).",
-)
-@click.option(
-    "--report-max-rows",
-    default=2000,
-    show_default=True,
-    type=int,
-    help="Cap rows in the HTML report (0 = all).",
-)
-@click.option(
-    "--facet-by",
-    "facet_by",
-    default="slop_strategy",
-    show_default=True,
-    help="Group the HTML report headline by this meta covariate (e.g. reasoning_effort, "
-    "prompt_id, generator).",
-)
-@click.option(
-    "--sample",
-    "sample_n",
-    type=int,
-    default=None,
-    help="Print N random scored pairs (slop vs Dan + scores) to stdout.",
-)
-@ev.verdict_options()
-def eval_cmd(
-    pairs_path: Path,
-    fields: tuple[str, ...],
-    judge: bool,
-    judge_model: str,
-    detector_model: Path | None,
-    vale_config: Path | None,
-    max_workers: int,
-    out_path: Path | None,
-    summary_path: Path | None,
-    by: str | None,
-    limit: int | None,
-    prune_orphans: bool,
-    report_path: Path | None,
-    report_max_rows: int,
-    facet_by: str,
-    sample_n: int | None,
-    **kw,
-) -> None:
+@main.command("eval", cls=SectionedCommand)
+@ev.eval_options()
+def eval_cmd(**kw) -> None:
     """Score a pairs corpus across the eval signals (offline, batched).
 
-    Reads the corpus, scores the slop and Dan sides of each pair, and appends one
-    id-keyed record per pair to scores.jsonl (joinable back to the corpus, and
-    resumable — re-running skips already-scored ids). Runs keyless by default
-    (Vale + null detector); add --judge to score voice via OpenRouter. The
-    summary aggregates per field, and per --by facet (e.g. slop_strategy) so you
-    can compare strategies with a number. --report is also the *pair browser* —
-    a keyless run (no --judge) is the cheap way to eyeball a fresh synth batch:
-    slop↔Dan side by side with generation covariates (model, strategy, prompt,
-    reasoning), faceted and sortable. A Phase-4 styler run scores the same way
-    once it emits an output-bearing JSONL (add an "output" field then).
+    Scores the slop and Dan sides of each pair and appends one id-keyed record
+    per pair to scores.jsonl (joinable back to the corpus; resumable — re-running
+    skips scored ids). Keyless by default (Vale + null detector); --judge scores
+    voice via OpenRouter. The summary aggregates per field and per --by facet
+    (e.g. slop_strategy). --report is also the *pair browser*: a keyless run is
+    the cheap way to eyeball a fresh synth batch, slop↔Dan side by side with
+    generation covariates, faceted and sortable. A styler run scores the same
+    way from an output-bearing JSONL (`run --pairs --out`, then --field output).
     """
-    parsed = bundles_from_kwargs(kw, ev.VERDICT_PARAMS)
-    verdict_opts, doc_opts = parsed["verdict"], parsed["documents"]
-
-    out = out_path or (pairs_path.parent / "scores.jsonl")
-    score_fields = fields or ("slop", "target")
-
-    judge_fn = ev.openrouter_judge_async(model=judge_model) if judge else None
-
-    def _progress(i: int, total: int) -> None:
-        if i == 1 or i % 25 == 0 or i == total:
-            click.echo(f"  ... {i}/{total} scored", err=True)
-
-    chunk_scale = None
-    if doc_opts.documents:
-        # --documents samples the adapter first, then scores what came back in
-        # the same process (D59).
-        pairs_path, score_fields, prune_orphans, chunk_scale = _document_pass(
-            pairs_path, out, doc_opts, score_fields
-        )
-
-    # A trained voice-classifier artifact, if given, supplies a real detector
-    # (P(slop)); else the null detector. The embedder is rebuilt lazily from
-    # the artifact's pinned meta.embed_model — heavy imports stay inside
-    # classify.
-    detector_fn = ev.null_detector
-    if detector_model is not None:
+    parsed = bundles_from_kwargs(kw, ev.EVAL_PARAMS)
+    opts, verdict_opts, doc_opts = parsed["eval"], parsed["verdict"], parsed["documents"]
+    emit = click_emitter()
+    detector = ev.null_detector
+    if opts.detector_model is not None:
         from stylebot import classify
 
-        try:
-            detector_fn = classify.sklearn_detector(detector_model)
-        except ImportError as exc:
-            raise click.ClickException(
-                f"--detector-model needs the embedder installed (sentence-transformers): {exc}"
-            ) from exc
-    if chunk_scale is not None:
-        # Score a document at the scale it was served at, not whole (D54).
-        detector_fn = ev.chunked_detector(detector_fn, **chunk_scale)
-
-    result = ev.score_pairs_file(
-        pairs_path,
-        out,
-        fields=score_fields,
-        judge=judge_fn,
-        detector=detector_fn,
-        vale_config=vale_config,
-        max_workers=max_workers,
-        limit=limit,
-        prune_orphans=prune_orphans,
-        allow_mixed_detector=verdict_opts.allow_mixed_detector,
-        on_progress=_progress,
-    )
-    # Loud, never silent: the prune REWROTE a file the operator may have
-    # committed, and a big count usually means --out belongs to another corpus.
-    if result.pruned_orphans:
-        click.echo(
-            f"pruned {result.pruned_orphans} orphan score record(s) from {out} "
-            f"— their pair is no longer in {pairs_path}",
-            err=True,
+        detector = classify.sklearn_detector(opts.detector_model)
+    documents = None
+    if doc_opts.documents:
+        if doc_opts.documents_manifest is None:
+            raise click.UsageError("--documents needs --documents-manifest (the adapter to serve)")
+        splits_file = config.splits_path(opts.pairs_path.parent)
+        documents = ev.document_pass(
+            opts.pairs_path,
+            opts.scores_path(),
+            doc_opts,
+            opts.score_fields(),
+            manifest=_load_manifest(doc_opts.documents_manifest),
+            splits=sp.load_splits(splits_file) if splits_file.exists() else None,
+            emit=emit,
         )
-    click.echo(
-        f"scored {result.written} pair(s) "
-        f"({result.skipped_existing} already scored, skipped) -> {out}"
-    )
-    if result.errors:
-        click.echo(f"{len(result.errors)} scoring error(s):", err=True)
-        for rid, msg in result.errors[:10]:
-            click.echo(f"  {rid}: {msg}", err=True)
-
-    summary = ev.summarize_scores(out, by=by)
-    _echo_summary(summary)
-    if by is not None:
-        click.echo(f"by {by}:")
-        for facet, fld in summary["by"].items():
-            parts = ", ".join(f"{fn}={a['mean_judge_score']}" for fn, a in fld.items())
-            click.echo(f"  {facet}: {parts}")
-    if summary_path is not None:
-        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
-        click.echo(f"wrote summary -> {summary_path}")
-
-    if verdict_opts.compare_path is not None:
-        verdict = ev.compare_scores(
-            out,
-            verdict_opts.compare_path,
-            field=verdict_opts.compare_field,
-            signal=verdict_opts.compare_signal,
-            cluster_by=verdict_opts.cluster_by or None,
-            allow_cross_detector=verdict_opts.allow_cross_detector,
-        )
-        _echo_verdict(verdict, out, verdict_opts.compare_path)
-
-    # Read-only visualisations over the (just-written) scores.jsonl + the corpus.
-    # No extra scoring — re-rendering an already-scored corpus is a no-op pass.
-    if sample_n is not None or report_path is not None:
-        from stylebot import report
-
-        if sample_n is not None:
-            click.echo(report.format_scores_sample(out, pairs_path, sample_n, fields=score_fields))
-        if report_path is not None:
-            written = report.render_scores_report(
-                out,
-                pairs_path,
-                report_path,
-                fields=score_fields,
-                max_rows=(None if report_max_rows == 0 else report_max_rows),
-                facet_by=facet_by,
-            )
-            click.echo(f"wrote report -> {written}")
+    ev.run_eval(opts, verdict_opts, detector=detector, documents=documents, emit=emit)
 
 
 @main.command("export-table")

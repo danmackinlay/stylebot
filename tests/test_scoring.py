@@ -156,3 +156,21 @@ def test_run_eval_scores_a_document_pass_at_its_serving_scale(tmp_path, monkeypa
     assert row["scores"]["output"]["detector"]["n_chunks"] == 3
     assert sum("Rewritten paragraph" in text for text in seen) == 3
     assert opts.out_path.exists() and not (tmp_path / "scores.jsonl").exists()
+
+
+def test_ai_style_eval_is_the_pass_behind_flags(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+
+    from stylebot.bin.ai_style import main
+
+    monkeypatch.setattr(ev.shutil, "which", lambda name: None)
+    pairs = _corpus(tmp_path)
+    result = CliRunner().invoke(
+        main, ["eval", "--pairs", str(pairs), "--by", "slop_strategy", "--field", "output"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "scored 2 pair(s)" in result.output and "by slop_strategy:" in result.output
+    assert "output=det:None/judge:None" in result.output
+
+    refused = CliRunner().invoke(main, ["eval", "--pairs", str(pairs), "--documents"])
+    assert refused.exit_code == 2 and "--documents-manifest" in refused.output
