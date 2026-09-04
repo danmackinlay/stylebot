@@ -29,7 +29,7 @@ from stylebot import classify, synth
 from stylebot import eval as ev
 from stylebot import splits as sp
 from stylebot.classify_train import Dataset
-from stylebot.errors import ConfigError, RunError
+from stylebot.errors import ConfigError
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -735,79 +735,3 @@ def test_chunk_wise_document_scores_keep_the_ordinary_scores_jsonl_shape(tmp_pat
     assert summary["fields"]["slop"]["mean_detector_score"] == pytest.approx(0.6)
     assert any("slop" in line for line in ev.format_summary(summary))
     assert summary["detectors"][0]["name"] == "stub/chunked:40"
-
-
-# --- the isolated scoring pass (the SIGSEGV) ---------------------------------
-
-
-def test_score_job_round_trips_through_json():
-    job = ev.ScoreJob(
-        pairs="p.jsonl",
-        out="s.jsonl",
-        fields=("slop", "output"),
-        detector_model="_models/voice-clf",
-        chunk_scale={"max_chunk_chars": 4500, "inline_headings": True},
-    )
-    assert ev.ScoreJob.from_dict(json.loads(json.dumps(job.to_dict()))) == job
-
-
-def test_score_job_refuses_an_unknown_key():
-    with pytest.raises(ConfigError, match="unknown ScoreJob key"):
-        ev.ScoreJob.from_dict({"pairs": "p", "out": "s", "detector": "a callable"})
-
-
-def test_isolated_scoring_reports_a_crashing_child_instead_of_an_empty_file(tmp_path):
-    """The bug this exists for: exit 139 that a `| tail` turned into 0.
-
-    The rewrite half flushes per record, so `documents.jsonl` looked complete;
-    the scores file was created and left empty and nothing said why. A crash
-    must now be an exception naming the status.
-    """
-    job = ev.ScoreJob(pairs=str(tmp_path / "p.jsonl"), out=str(tmp_path / "s.jsonl"))
-    calls = []
-
-    def fake_run(argv, **kw):
-        calls.append((argv, kw))
-        return type("P", (), {"returncode": -11})()
-
-    with pytest.raises(RunError, match="SIGSEGV"):
-        ev.run_score_job_isolated(job, run=fake_run)
-    assert calls[0][0][1:3] == ["-m", "stylebot.eval"]
-    assert calls[0][1]["env"][ev.SCORE_CHILD_ENV] == "1"
-
-
-def test_isolated_scoring_runs_the_job_in_a_real_child_process(tmp_path):
-    """`python -m stylebot.eval` really is spawnable and really scores.
-
-    A stub `run` proves the marshalling; only an actual subprocess proves the
-    module has a working `__main__`, which is the class of thing three paths
-    shipped without on 2026-09-03. Null detector, so no model loads.
-    """
-    data_dir = tmp_path / "c"
-    pairs = _make_pairs(data_dir, [("A paragraph long enough to score.", "post/a.qmd")])
-    out = tmp_path / "scores.jsonl"
-    result = ev.run_score_job_isolated(
-        ev.ScoreJob(pairs=str(pairs), out=str(out), fields=("slop", "target"))
-    )
-    assert result.written == 1
-    rec = json.loads(out.read_text().splitlines()[0])
-    assert set(rec["scores"]) == {"slop", "target"}
-    assert rec["scores"]["slop"]["detector"]["name"] == "null"
-
-
-def test_the_document_pass_never_builds_the_detector_in_the_sampling_process(tmp_path):
-    """The parent samples (Tinker SDK); the child scores.
-
-    The scoring pass runs in its own process so a crash in it is a named error
-    rather than the bare exit 139 of 2026-09-03, which means the `--documents`
-    branch must DESCRIBE the detector (a path in a `ScoreJob`) rather than build
-    one here. Asserted against the source because the property is which imports
-    happen where, which a functional test with a stub detector cannot see.
-    """
-    from pathlib import Path as _Path
-
-    src = _Path(ev.__file__).parent / "bin" / "ai_style.py"
-    body = src.read_text(encoding="utf-8")
-    documents_branch = body.split("if doc_opts.documents:")[1].split("    else:")[0]
-    assert "run_score_job_isolated" in documents_branch
-    assert "sklearn_detector" not in documents_branch

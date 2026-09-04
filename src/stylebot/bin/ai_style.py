@@ -443,64 +443,51 @@ def eval_cmd(
     out = out_path or (pairs_path.parent / "scores.jsonl")
     score_fields = fields or ("slop", "target")
 
-    judge_fn = ev.openrouter_judge(model=judge_model) if judge else None
+    judge_fn = ev.openrouter_judge_async(model=judge_model) if judge else None
 
     def _progress(i: int, total: int) -> None:
         if i == 1 or i % 25 == 0 or i == total:
             click.echo(f"  ... {i}/{total} scored", err=True)
 
+    chunk_scale = None
     if doc_opts.documents:
-        # --documents samples the adapter in THIS process (the Tinker SDK) and
-        # scores in a child, so a crash in the scoring pass is a named error
-        # rather than the bare exit 139 of 2026-09-03. The detector is therefore
-        # described (a path in a ScoreJob) rather than built here.
+        # --documents samples the adapter first, then scores what came back in
+        # the same process (D59).
         pairs_path, score_fields, prune_orphans, chunk_scale = _document_pass(
             pairs_path, out, doc_opts, score_fields
         )
-        result = ev.run_score_job_isolated(
-            ev.ScoreJob(
-                pairs=str(pairs_path),
-                out=str(out),
-                fields=tuple(score_fields),
-                detector_model=str(detector_model) if detector_model else None,
-                judge_model=judge_model if judge else None,
-                vale_config=str(vale_config) if vale_config else None,
-                max_workers=max_workers,
-                limit=limit,
-                prune_orphans=prune_orphans,
-                allow_mixed_detector=verdict_opts.allow_mixed_detector,
-                chunk_scale=chunk_scale,
-            )
-        )
-    else:
-        # A trained voice-classifier artifact, if given, supplies a real detector
-        # (P(slop)); else the null detector. The embedder is rebuilt lazily from
-        # the artifact's pinned meta.embed_model — heavy imports stay inside
-        # classify.
-        detector_fn = ev.null_detector
-        if detector_model is not None:
-            from stylebot import classify
 
-            try:
-                detector_fn = classify.sklearn_detector(detector_model)
-            except ImportError as exc:
-                raise click.ClickException(
-                    f"--detector-model needs the embedder installed (sentence-transformers): {exc}"
-                ) from exc
+    # A trained voice-classifier artifact, if given, supplies a real detector
+    # (P(slop)); else the null detector. The embedder is rebuilt lazily from
+    # the artifact's pinned meta.embed_model — heavy imports stay inside
+    # classify.
+    detector_fn = ev.null_detector
+    if detector_model is not None:
+        from stylebot import classify
 
-        result = ev.score_pairs_file(
-            pairs_path,
-            out,
-            fields=score_fields,
-            judge=judge_fn,
-            detector=detector_fn,
-            vale_config=vale_config,
-            max_workers=max_workers,
-            limit=limit,
-            prune_orphans=prune_orphans,
-            allow_mixed_detector=verdict_opts.allow_mixed_detector,
-            on_progress=_progress,
-        )
+        try:
+            detector_fn = classify.sklearn_detector(detector_model)
+        except ImportError as exc:
+            raise click.ClickException(
+                f"--detector-model needs the embedder installed (sentence-transformers): {exc}"
+            ) from exc
+    if chunk_scale is not None:
+        # Score a document at the scale it was served at, not whole (D54).
+        detector_fn = ev.chunked_detector(detector_fn, **chunk_scale)
+
+    result = ev.score_pairs_file(
+        pairs_path,
+        out,
+        fields=score_fields,
+        judge=judge_fn,
+        detector=detector_fn,
+        vale_config=vale_config,
+        max_workers=max_workers,
+        limit=limit,
+        prune_orphans=prune_orphans,
+        allow_mixed_detector=verdict_opts.allow_mixed_detector,
+        on_progress=_progress,
+    )
     # Loud, never silent: the prune REWROTE a file the operator may have
     # committed, and a big count usually means --out belongs to another corpus.
     if result.pruned_orphans:

@@ -824,12 +824,11 @@ def test_real_pair_without_gen_buckets_null():
     assert set(by) == {"null"}
 
 
-# --- the batched detector pre-pass inside score_pairs_file ------------------
+# --- the three pre-passes inside score_pairs_file ---------------------------
 #
-# The mirror of the Vale pre-pass, and the second half of the 2026-09-03
-# threading audit (D57): the detector's backbone is a transformer, so scoring
-# one passage at a time from inside the thread pool made every embed a batch of
-# one. It now runs once per slice, on the calling thread, before the pool.
+# One pre-pass per signal per slice: Vale and the detector batch on the calling
+# task, the judge is gathered under a semaphore (D57, D59). There is no pool and
+# no lock, so every scoring signal below is exercised on one thread.
 
 
 def _batching_detector(record: list):
@@ -852,17 +851,6 @@ def _batching_detector(record: list):
     detect.identity = {key: None for key in ev.DETECTOR_IDENTITY_KEYS} | {"name": "stub"}
     detect.batch_detect = batch_detect
     return detect
-
-
-def test_detect_many_falls_back_when_the_detector_has_no_batch_path():
-    calls: list[int] = []
-
-    def plain(prose: str) -> dict:
-        calls.append(1)
-        return {"score": 0.5, "configured": True, "name": "plain"}
-
-    assert [r["score"] for r in ev.detect_many(plain, ["a", "b", "c"])] == [0.5] * 3
-    assert calls == [1, 1, 1]  # the obvious loop; the caller never had to ask
 
 
 def test_score_candidate_accepts_a_precomputed_detector_result():
@@ -900,7 +888,11 @@ def test_score_pairs_file_batches_the_detector_into_one_call_per_slice(tmp_path,
 
 
 def test_a_failing_detector_batch_falls_back_to_per_text_scoring(tmp_path, monkeypatch):
-    """A signal is never a run-ender: a broken batch path degrades, it does not fail records."""
+    """A signal is never a run-ender: a broken batch path degrades to per text.
+
+    The retry happens on the calling task, not in a pool — the pool is gone
+    (D59), and putting the detector back into one was the shape that segfaulted.
+    """
     specs = [
         (f"Paragraph number {i}, long enough to be scored as a candidate here.", None, "polish")
         for i in range(3)
@@ -921,7 +913,74 @@ def test_a_failing_detector_batch_falls_back_to_per_text_scoring(tmp_path, monke
 
     res = ev.score_pairs_file(pairs, tmp_path / "s.jsonl", judge=None, detector=detect)
     assert res.written == 3 and res.errors == []
-    assert len(per_text) == 6  # 3 pairs x 2 fields, scored the old way inside the pool
+    assert len(per_text) == 6  # 3 pairs x 2 fields, one text at a time
+
+
+def test_a_detector_that_fails_per_text_too_records_the_error_in_the_field(tmp_path, monkeypatch):
+    """The last resort: the field says why it has no score, and the record survives."""
+    specs = [("A paragraph long enough to score here.", None, "polish")]
+    pairs = _make_pairs(tmp_path / "c", specs)
+    _count_vale_spawns(monkeypatch)
+
+    def detect(prose: str) -> dict:
+        raise RuntimeError("the backbone fell over")
+
+    detect.identity = {key: None for key in ev.DETECTOR_IDENTITY_KEYS} | {"name": "stub"}
+    detect.batch_detect = lambda texts: (_ for _ in ()).throw(RuntimeError("and so did the batch"))
+
+    res = ev.score_pairs_file(pairs, tmp_path / "s.jsonl", judge=None, detector=detect)
+    assert res.written == 1 and res.errors == []
+    row = json.loads((tmp_path / "s.jsonl").read_text().splitlines()[0])
+    det_field = row["scores"]["slop"]["detector"]
+    assert det_field["score"] is None and det_field["name"] == "stub"
+    assert "the backbone fell over" in det_field["error"]
+
+
+def test_an_async_judge_is_awaited_with_max_workers_calls_in_flight(tmp_path, monkeypatch):
+    """The judge is the harness's only concurrency, and it is a semaphore (D59)."""
+    import asyncio
+
+    specs = [
+        (f"Paragraph number {i}, long enough to be scored as a candidate here.", None, "polish")
+        for i in range(6)
+    ]
+    pairs = _make_pairs(tmp_path / "c", specs)
+    _count_vale_spawns(monkeypatch)
+    live = 0
+    peak = 0
+
+    async def judge(prose: str) -> dict:
+        nonlocal live, peak
+        live += 1
+        peak = max(peak, live)
+        await asyncio.sleep(0)  # a window every other pending call can enter
+        live -= 1
+        return {"score": 4, "rationale": "fine"}
+
+    res = ev.score_pairs_file(pairs, tmp_path / "s.jsonl", judge=judge, max_workers=3)
+    assert res.written == 6 and res.errors == []
+    assert peak == 3, f"{peak} judge calls in flight against max_workers=3"
+    row = json.loads((tmp_path / "s.jsonl").read_text().splitlines()[0])
+    assert row["scores"]["slop"]["judge"]["score"] == 4
+
+
+def test_a_judge_error_fails_its_own_record_and_no_other(tmp_path, monkeypatch):
+    """The gathered pass carries an exception back per call, not per slice."""
+    specs = [
+        (f"Paragraph number {i}, long enough to be scored as a candidate here.", None, "polish")
+        for i in range(3)
+    ]
+    pairs = _make_pairs(tmp_path / "c", specs)
+    _count_vale_spawns(monkeypatch)
+
+    async def judge(prose: str) -> dict:
+        if "number 1" in prose:
+            raise RuntimeError("the judge fell over")
+        return {"score": 4, "rationale": "fine"}
+
+    res = ev.score_pairs_file(pairs, tmp_path / "s.jsonl", judge=judge)
+    assert res.written == 2
+    assert len(res.errors) == 1 and "the judge fell over" in res.errors[0][1]
 
 
 def test_chunked_detector_batch_path_agrees_with_the_per_passage_path():

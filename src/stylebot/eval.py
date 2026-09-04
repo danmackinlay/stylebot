@@ -27,8 +27,10 @@ detector.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import datetime as _dt
+import inspect
 import json
 import random
 import re
@@ -36,10 +38,8 @@ import shutil
 import subprocess
 import tempfile
 import time as _time
-from collections.abc import Callable, Iterable, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
-from dataclasses import fields as dataclass_fields
+from collections.abc import Awaitable, Callable, Iterable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import mean, stdev
 from typing import Protocol
@@ -53,7 +53,7 @@ import click
 # `classify` is ML-dependency-free at import (that is its whole design), so
 # taking the detector-identity contract from it here costs nothing and keeps one
 # definition of "which head scored this".
-from stylebot.classify import DETECTOR_IDENTITY_KEYS
+from stylebot.classify import DETECTOR_IDENTITY_KEYS, detect_many
 from stylebot.cli_options import opt
 from stylebot.errors import ConfigError, RunError
 from stylebot.jsonl import dumps_line, iter_jsonl, read_jsonl, write_jsonl_atomic
@@ -236,8 +236,11 @@ def vale_score(text: str, *, config_path: str | Path | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 # Callable contract: prose -> {"score": int, "rationale": str}. Injectable so
-# tests pass a fake (no API). `openrouter_judge` builds the real one.
+# tests pass a fake (no API). `openrouter_judge` builds the real one;
+# `openrouter_judge_async` is the same judge awaited, which is what a corpus
+# pass wants — the judge is the only network signal in the harness (D59).
 Judge = Callable[[str], dict]
+AsyncJudge = Callable[[str], Awaitable[dict]]
 
 JUDGE_SYSTEM = (
     "You are a discerning editor judging whether a passage reads like Dan "
@@ -308,6 +311,54 @@ def _first_json_object(text: str) -> dict | None:
     return None
 
 
+def _openrouter_client_kwargs(api_key: str | None, base_url: str | None) -> dict:
+    """Key + endpoint for either OpenRouter client, resolved via `stylebot.config`.
+
+    `OPENROUTER_API_KEY` is required (`config.require_key`);
+    `OPENROUTER_BASE_URL` overrides the default endpoint. Nothing prints a key.
+    """
+    from stylebot import config
+
+    return {
+        "api_key": api_key or config.require_key("OPENROUTER_API_KEY"),
+        "base_url": base_url
+        or config.get_key("OPENROUTER_BASE_URL")
+        or "https://openrouter.ai/api/v1",
+    }
+
+
+def _judge_request(model: str, system: str, max_tokens: int, prose: str) -> dict:
+    return {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prose},
+        ],
+        # OpenRouter returns the billed cost on the usage object when asked for
+        # it. Without this the judge is the one signal whose price is unknowable
+        # after the fact — the detector and Vale are free and local. Per call
+        # rather than aggregated: a per-call figure is what sizes a subsample.
+        "extra_body": {"usage": {"include": True}},
+    }
+
+
+def _judge_verdict(resp, model: str) -> dict:
+    verdict = parse_judge_reply(resp.choices[0].message.content or "")
+    verdict["model"] = model
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        verdict["usage"] = {
+            "prompt_tokens": getattr(usage, "prompt_tokens", None),
+            "completion_tokens": getattr(usage, "completion_tokens", None),
+            # Absent on providers that do not report it, and — per the blog's
+            # BYOK note — potentially the 5% fee rather than list price when the
+            # arm bills to a bring-your-own key. Treat as an indication.
+            "cost": getattr(usage, "cost", None),
+        }
+    return verdict
+
+
 def openrouter_judge(
     *,
     model: str = "anthropic/claude-opus-4-8",
@@ -316,55 +367,45 @@ def openrouter_judge(
     system: str = JUDGE_SYSTEM,
     max_tokens: int = 256,
 ) -> Judge:
-    """Build a `Judge` backed by OpenRouter via the OpenAI-compatible SDK.
+    """Build a blocking `Judge` backed by OpenRouter (OpenAI-compatible SDK).
 
-    Keys/paths resolve through `stylebot.config`: `OPENROUTER_API_KEY` is
-    required (via `config.require_key`); `OPENROUTER_BASE_URL` overrides the
-    default endpoint (via `config.get_key`). Nothing here prints a key.
+    For single-passage callers (`score_candidate`). A corpus pass wants
+    `openrouter_judge_async`, which is the same request awaited: `score_pairs_file`
+    runs a sync judge one call at a time, on its own task (D59).
     """
     import openai
 
-    from stylebot import config
-
-    resolved_base = (
-        base_url or config.get_key("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
-    )
-    client = openai.OpenAI(
-        api_key=api_key or config.require_key("OPENROUTER_API_KEY"),
-        base_url=resolved_base,
-    )
+    client = openai.OpenAI(**_openrouter_client_kwargs(api_key, base_url))
 
     def judge(prose: str) -> dict:
-        resp = client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prose},
-            ],
-            # OpenRouter returns the billed cost on the usage object when asked
-            # for it. Without this the judge is the one signal whose price is
-            # unknowable after the fact — the detector and Vale are free and
-            # local, so "is the judge worth it?" is a question only this field
-            # can answer. Recorded per call rather than aggregated: a stratified
-            # subsample is the standing recommendation, and a per-call figure is
-            # what sizes one.
-            extra_body={"usage": {"include": True}},
+        resp = client.chat.completions.create(**_judge_request(model, system, max_tokens, prose))
+        return _judge_verdict(resp, model)
+
+    return judge
+
+
+def openrouter_judge_async(
+    *,
+    model: str = "anthropic/claude-opus-4-8",
+    api_key: str | None = None,
+    base_url: str | None = None,
+    system: str = JUDGE_SYSTEM,
+    max_tokens: int = 256,
+) -> AsyncJudge:
+    """`openrouter_judge` on `openai.AsyncOpenAI` — the judge a corpus pass takes.
+
+    The same request, the same verdict shape; `score_pairs_file` overlaps these
+    awaits `max_workers` at a time, which is the harness's only concurrency.
+    """
+    import openai
+
+    client = openai.AsyncOpenAI(**_openrouter_client_kwargs(api_key, base_url))
+
+    async def judge(prose: str) -> dict:
+        resp = await client.chat.completions.create(
+            **_judge_request(model, system, max_tokens, prose)
         )
-        reply = resp.choices[0].message.content or ""
-        verdict = parse_judge_reply(reply)
-        verdict["model"] = model
-        usage = getattr(resp, "usage", None)
-        if usage is not None:
-            verdict["usage"] = {
-                "prompt_tokens": getattr(usage, "prompt_tokens", None),
-                "completion_tokens": getattr(usage, "completion_tokens", None),
-                # Absent on providers that do not report it, and — per the blog's
-                # BYOK note — potentially the 5% fee rather than list price when
-                # the arm bills to a bring-your-own key. Treat as an indication.
-                "cost": getattr(usage, "cost", None),
-            }
-        return verdict
+        return _judge_verdict(resp, model)
 
     return judge
 
@@ -650,23 +691,6 @@ def chunked_detector(
     return detect
 
 
-def detect_many(detector: Detector, texts: Sequence[str]) -> list[dict]:
-    """Score many passages with `detector`, batched when it can be.
-
-    A `Detector` is ``detect(prose) -> dict`` by contract, and one at a time is
-    all a caller could ever do with it. Where the detector also carries
-    ``.batch_detect`` (every embedding-backed one does —
-    `classify.embedding_classifier_detector`), this routes the whole list
-    through the backbone in one call; otherwise it is the obvious loop, so the
-    caller never has to ask which kind it holds.
-    """
-    texts = list(texts)
-    batch = getattr(detector, "batch_detect", None)
-    if batch is None:
-        return [detector(text) for text in texts]
-    return list(batch(texts))
-
-
 def _identity_of_row(scores: dict) -> tuple | None:
     """The detector identity recorded on one score record, as a hashable tuple.
 
@@ -739,6 +763,7 @@ def score_candidate(
     eyeball: str | None = None,
     vale: dict | None = None,
     detector_result: dict | None = None,
+    judge_result: dict | None = None,
 ) -> dict:
     """Score one candidate passage across the available signals.
 
@@ -746,18 +771,21 @@ def score_candidate(
     its field comes back ``None``. `eyeball` is an optional human note carried
     verbatim into the record.
 
-    `vale` injects an already-computed Vale result (from `vale_score_many`)
-    instead of spending a process here; leave it `None` — the default — and this
-    calls `vale_score` itself exactly as before. `detector_result` is the same
-    deal for the detector (from `detect_many`).
+    Each signal has an injection slot for an already-computed result, which is
+    how `score_pairs_file` feeds a whole slice's pre-passes back in: `vale`
+    (from `vale_score_many`), `detector_result` (from `classify.detect_many`),
+    `judge_result` (from the awaited judge pass). Leave them `None` — the
+    default — and this computes each signal itself, one passage at a time.
 
     Returns a stable, JSON-able record keyed
     ``text_chars`` / ``vale`` / ``judge`` / ``detector`` / ``eyeball``.
     """
+    if judge_result is None and judge is not None:
+        judge_result = judge(text)
     return {
         "text_chars": len(text),
         "vale": vale if vale is not None else vale_score(text, config_path=vale_config),
-        "judge": judge(text) if judge is not None else None,
+        "judge": judge_result,
         "detector": detector_result if detector_result is not None else detector(text),
         "eyeball": eyeball,
     }
@@ -887,10 +915,10 @@ class ScoreResult:
     errors: list[tuple[str, str]] = field(default_factory=list)  # (id, message)
 
 
-# Records per slice of the scoring loop. Each slice takes one batched Vale
-# pre-pass then one thread-pool drain, so this is the granularity at which
-# results reach the file: bigger amortises `vale` startup further, smaller keeps
-# a crashed run's lost work smaller. `fields` multiplies it into texts per batch.
+# Records per slice of the scoring loop. Each slice takes one pre-pass per
+# signal, so this is the granularity at which results reach the file: bigger
+# amortises `vale` startup and the judge's concurrency further, smaller keeps a
+# crashed run's lost work smaller. `fields` multiplies it into texts per slice.
 _SCORE_BATCH_RECORDS = 128
 
 
@@ -903,17 +931,22 @@ def _score_record(
     vale_config: str | Path | None,
     vale_by_field: dict[str, dict] | None = None,
     detector_by_field: dict[str, dict] | None = None,
+    judge_by_field: dict[str, dict | BaseException] | None = None,
 ) -> dict:
     """Score the requested fields of one pair record -> a `scores.jsonl` line.
 
-    `vale_by_field` and `detector_by_field` carry the batched pre-passes'
-    results (field name -> that signal's record); a field missing from either
-    falls back to scoring that signal inline.
+    The three `*_by_field` maps carry the slice's pre-pass results (field name
+    -> that signal's record); a field missing from one falls back to scoring
+    that signal inline. A judge call that raised is carried as the exception and
+    re-raised here, so it fails its own record and no other.
     """
     meta = record.get("meta") or {}
     scores: dict[str, dict] = {}
     for name in fields:
         text = FIELD_EXTRACTORS[name](record)
+        verdict = (judge_by_field or {}).get(name)
+        if isinstance(verdict, BaseException):
+            raise verdict
         scores[name] = score_candidate(
             text,
             judge=judge,
@@ -921,6 +954,7 @@ def _score_record(
             vale_config=vale_config,
             vale=(vale_by_field or {}).get(name),
             detector_result=(detector_by_field or {}).get(name),
+            judge_result=verdict,
         )
     gen = meta.get("gen") or {}
     carried = {k: meta.get(k) for k in _CARRIED_META if k in meta}
@@ -980,36 +1014,78 @@ def _vale_prepass(
     return per_record
 
 
+def _detector_error(detector: Detector, exc: BaseException) -> dict:
+    """An unscored detector record that still says which head was asked (D39)."""
+    return detector_identity(detector) | {
+        "score": None,
+        "configured": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+
+
 def _detector_prepass(
     records: Sequence[dict],
     *,
     fields: Sequence[str],
     detector: Detector,
 ) -> list[dict[str, dict]]:
-    """Batch-score every (record, field) text with the detector, Vale-style.
+    """Score every (record, field) text with the detector, Vale-style (D57).
 
-    The detector's backbone is a transformer, and `score_pairs_file` had been
-    handing it one passage at a time from inside a thread pool — so every embed
-    was a **batch of one**, which is the shape that pays the per-call overhead
-    N times and got nothing back from the pool (embedding is CPU-bound, and
-    since 2026-09-03 it is behind a lock besides). This is the same move Vale
-    already made: one call for the whole slice, on this thread, before the pool.
+    The backbone is a transformer, so the whole slice crosses it in one
+    `classify.detect_many` call. A failing batch retries per text on this task
+    and, if that fails too, records the error in the field rather than failing
+    the record: a signal is never a run-ender.
 
     Returns one ``{field: detector_record}`` dict per record, aligned to
-    `records` — empty dicts when the detector has no batch path or the batch
-    call fails, which puts every field back on the per-text path inside the
-    pool exactly as before. A signal is never a run-ender.
+    `records`.
     """
     per_record: list[dict[str, dict]] = [{} for _ in records]
-    if getattr(detector, "batch_detect", None) is None:
-        return per_record
     texts, slots = _slice_texts(records, fields)
     if not texts:
         return per_record
     try:
         results = detect_many(detector, texts)
-    except Exception:  # noqa: BLE001 - fall back to per-text scoring in the pool
-        return [{} for _ in records]
+    except Exception:  # noqa: BLE001 - a bad batch degrades to one text at a time
+        results = []
+        for text in texts:
+            try:
+                results.append(detector(text))
+            except Exception as exc:  # noqa: BLE001 - and a bad text degrades to a note
+                results.append(_detector_error(detector, exc))
+    for (i, name), result in zip(slots, results, strict=True):
+        per_record[i][name] = result
+    return per_record
+
+
+async def _judge_prepass(
+    records: Sequence[dict],
+    *,
+    fields: Sequence[str],
+    judge: Judge | AsyncJudge | None,
+    max_workers: int,
+) -> list[dict[str, dict | BaseException]]:
+    """Judge every (record, field) text, `max_workers` calls in flight (D59).
+
+    The judge is the harness's only network signal and therefore its only
+    concurrency: an async judge (`openrouter_judge_async`) is awaited under an
+    `asyncio.Semaphore`, and a sync one runs one call at a time on this task.
+    A call that raised is carried back as its exception, for `_score_record` to
+    re-raise against that record alone.
+    """
+    per_record: list[dict[str, dict | BaseException]] = [{} for _ in records]
+    if judge is None:
+        return per_record
+    texts, slots = _slice_texts(records, fields)
+    if not texts:
+        return per_record
+    gate = asyncio.Semaphore(max(1, max_workers))
+
+    async def _one(text: str) -> dict:
+        async with gate:
+            verdict = judge(text)
+            return await verdict if inspect.isawaitable(verdict) else verdict
+
+    results = await asyncio.gather(*(_one(t) for t in texts), return_exceptions=True)
     for (i, name), result in zip(slots, results, strict=True):
         per_record[i][name] = result
     return per_record
@@ -1020,7 +1096,43 @@ def score_pairs_file(
     out_path: str | Path,
     *,
     fields: Sequence[str] = ("slop", "target"),
-    judge: Judge | None = None,
+    judge: Judge | AsyncJudge | None = None,
+    detector: Detector = null_detector,
+    vale_config: str | Path | None = None,
+    max_workers: int = 8,
+    limit: int | None = None,
+    prune_orphans: bool = True,
+    allow_mixed_detector: bool = False,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> ScoreResult:
+    """Score a `pairs.jsonl` corpus -> an id-keyed `scores.jsonl` (batched).
+
+    The sync entry point: it owns an event loop (`asyncio.run`) for the judge
+    pass. Call `score_pairs_file_async` from inside a running loop instead.
+    """
+    return asyncio.run(
+        score_pairs_file_async(
+            pairs_path,
+            out_path,
+            fields=fields,
+            judge=judge,
+            detector=detector,
+            vale_config=vale_config,
+            max_workers=max_workers,
+            limit=limit,
+            prune_orphans=prune_orphans,
+            allow_mixed_detector=allow_mixed_detector,
+            on_progress=on_progress,
+        )
+    )
+
+
+async def score_pairs_file_async(
+    pairs_path: str | Path,
+    out_path: str | Path,
+    *,
+    fields: Sequence[str] = ("slop", "target"),
+    judge: Judge | AsyncJudge | None = None,
     detector: Detector = null_detector,
     vale_config: str | Path | None = None,
     max_workers: int = 8,
@@ -1036,25 +1148,19 @@ def score_pairs_file(
     corpus. Idempotent + resumable: ids already in `out_path` are skipped.
 
     Records are processed in slices of `_SCORE_BATCH_RECORDS`, and each slice
-    runs its two local signals as **batched pre-passes** on this thread before
-    anything is submitted: Vale (`vale_score_many` — one `vale` process per ~256
-    texts rather than one per text, which on the live corpus would be ~9k
-    processes and dominated by startup cost) and the detector (`detect_many` —
-    one `encode` through the backbone rather than a batch of one per passage).
-    Only the **judge** then goes out over `max_workers` threads, which is the
-    only signal that is a network wait; both pre-pass results are injected. A
-    single writer appends results as they complete and flushes per line, so the
-    file still grows during the run and a crash still costs at most the slice in
-    flight. A field/judge error on one record is captured in
-    `ScoreResult.errors` and never aborts the run; a Vale batch failure degrades
-    to ``available: False`` and a detector batch failure falls back to per-text
-    scoring in the pool, rather than failing the records.
+    runs **one pre-pass per signal**: Vale (one `vale` process per ~256 texts),
+    the detector (one `encode` through the backbone), then the judge, whose
+    calls are awaited `max_workers` at a time. The two local signals are
+    CPU-bound and batch on this task; the judge is the network wait and is the
+    one place this harness is concurrent (`_plans/decisions.md` D59). Results
+    are appended and flushed per record, so the file grows during the run and a
+    crash costs at most the slice in flight. A field/judge error on one record
+    is captured in `ScoreResult.errors` and never aborts the run; a Vale or
+    detector batch failure degrades that signal rather than failing records.
 
-    That division is measured, not assumed (`_plans/decisions.md` D57): with the
-    detector in the pool and no judge, eight workers scored the 34 document-scale
-    records in 24.25 s against 23.96 s at one worker — the pool bought **nothing**,
-    because embedding is CPU-bound and locked. Batched it is 16.4 s. With a judge,
-    the pool is worth 6.4x (103.3 s -> 16.1 s at eight workers, 1 s/call).
+    `max_workers` counts judge calls in flight. A **sync** judge blocks the
+    loop, so it is called one at a time: pass `openrouter_judge_async` (which
+    every CLI here does) for a corpus pass.
 
     On entry, `out_path` is pruned of records whose pair no longer exists
     (`prune_orphan_scores`; count in `ScoreResult.pruned_orphans` — surface it,
@@ -1104,15 +1210,19 @@ def score_pairs_file(
     with out_path.open("a", encoding="utf-8") as fp:
         for start in range(0, total, batch_size):
             batch = todo[start : start + batch_size]
-            # One `vale` run and one `encode` for the whole slice, up front, on
-            # this thread. What is left for the pool is the judge — the one
-            # signal that is a network wait.
+            # One `vale` run, one `encode`, and one gathered judge pass for the
+            # whole slice. Assembling the records afterwards is pure bookkeeping.
             vale_results = _vale_prepass(batch, fields=fields, vale_config=vale_config)
             det_results = _detector_prepass(batch, fields=fields, detector=detector)
-            with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
-                futures = {
-                    pool.submit(
-                        _score_record,
+            judge_results = await _judge_prepass(
+                batch, fields=fields, judge=judge, max_workers=max_workers
+            )
+            for i, rec in enumerate(batch):
+                done += 1
+                if on_progress is not None:
+                    on_progress(done, total)
+                try:
+                    line = _score_record(
                         rec,
                         fields=fields,
                         judge=judge,
@@ -1120,197 +1230,15 @@ def score_pairs_file(
                         vale_config=vale_config,
                         vale_by_field=vale_results[i],
                         detector_by_field=det_results[i],
-                    ): rec
-                    for i, rec in enumerate(batch)
-                }
-                for fut in as_completed(futures):
-                    done += 1
-                    if on_progress is not None:
-                        on_progress(done, total)
-                    rec = futures[fut]
-                    try:
-                        line = fut.result()
-                    except Exception as exc:  # a field/judge error on one record — log, continue
-                        result.errors.append((record_id(rec), f"{type(exc).__name__}: {exc}"))
-                        continue
-                    fp.write(dumps_line(line) + "\n")
-                    fp.flush()
-                    result.written += 1
+                        judge_by_field=judge_results[i],
+                    )
+                except Exception as exc:  # a field/judge error on one record — log, continue
+                    result.errors.append((record_id(rec), f"{type(exc).__name__}: {exc}"))
+                    continue
+                fp.write(dumps_line(line) + "\n")
+                fp.flush()
+                result.written += 1
     return result
-
-
-# ---------------------------------------------------------------------------
-# The isolated scoring pass — one process may not hold both OpenMP runtimes
-# ---------------------------------------------------------------------------
-#
-# `ai-style eval --documents` does two things in one command: it SAMPLES the
-# adapter (Tinker SDK) and then it SCORES the result (sentence-transformers /
-# torch, through `classify`). On 2026-09-03 it exited **139 (SIGSEGV)** after
-# the rewrite and before a single score was written, reproducibly, and a `|
-# tail` in the RUNBOOK meant the shell reported tail's 0.
-#
-# (The detector left that pool the next day — D57, the D56 threading audit: it
-# is now a batched pre-pass, and the pool overlaps the judge alone. The lock
-# below stays for the per-text callers that remain.)
-#
-# The diagnosis on the day was the libomp double-load that `index-blog` guards
-# against, and this isolation was built to it. **That diagnosis was wrong**, and
-# isolating the pass proved it: the child crashed too, on its own, with no
-# sampling SDK anywhere near it. The cause was concurrent forward passes through
-# one `SentenceTransformer` from `score_pairs_file`'s eight workers, and the fix
-# is the lock in `classify.sentence_transformers_batch_embed_fn`. With that lock
-# one process holds both the SDK and the embedder and scores 34 documents fine —
-# measured.
-#
-# The isolation stays anyway, for the reason it earned rather than the one it was
-# built for: **it is what made the crash legible**. An in-process segfault is
-# exit 139 into a half-written file with nothing said; a child's is a `RunError`
-# naming the status. That is the same posture the `index-blog-pipeline` skill
-# takes about its own subprocess — the guarantee is loudness, and the guard
-# against a double-load is defence-in-depth over a mechanism never reproduced.
-# A scoring pass has to cross the process boundary as DATA rather than as an
-# injected `Detector`, which is what `ScoreJob` is: the same run, in JSON.
-
-
-#: Set on the isolated scoring child, so it can be recognised in a process list
-#: and in its own logs (mirrors index-blog's `_LT_MAP_CHILD` sentinel).
-SCORE_CHILD_ENV = "STYLEBOT_SCORE_CHILD"
-
-
-@dataclass(frozen=True)
-class ScoreJob:
-    """A `score_pairs_file` run described entirely by data — no callables.
-
-    Everything `score_pairs_file` takes as an injected object (the detector, the
-    judge) becomes a path or a model id here, so the run can be handed to
-    another process. `chunk_scale` is the document-scale switch: given
-    ``{"max_chunk_chars": …, "inline_headings": …}`` the detector is wrapped in
-    `chunked_detector` and every field is scored chunk-wise and aggregated.
-
-    This is deliberately NOT the general scoring API — library callers inject
-    their own detector and call `score_pairs_file`. It exists because a
-    subprocess boundary cannot carry a closure.
-    """
-
-    pairs: str
-    out: str
-    fields: tuple[str, ...] = ("slop", "target")
-    detector_model: str | None = None
-    judge_model: str | None = None
-    vale_config: str | None = None
-    max_workers: int = 8
-    limit: int | None = None
-    prune_orphans: bool = True
-    allow_mixed_detector: bool = False
-    chunk_scale: dict | None = None
-
-    def to_dict(self) -> dict:
-        data = asdict(self)
-        data["fields"] = list(self.fields)
-        return data
-
-    @classmethod
-    def from_dict(cls, data: dict) -> ScoreJob:
-        data = dict(data)
-        data["fields"] = tuple(data.get("fields") or ("slop", "target"))
-        known = {f.name for f in dataclass_fields(cls)}
-        unknown = sorted(set(data) - known)
-        if unknown:
-            raise ConfigError(f"unknown ScoreJob key(s): {unknown}")
-        return cls(**data)
-
-
-def build_job_detector(job: ScoreJob) -> Detector:
-    """The detector a `ScoreJob` describes — this is where the embedder loads.
-
-    Called only in the child (or in-process by `run_score_job`), which is the
-    point: the parent of an isolated run must never reach here, or it has
-    already loaded torch beside the sampling SDK.
-    """
-    detector: Detector = null_detector
-    if job.detector_model:
-        from stylebot import classify
-
-        detector = classify.sklearn_detector(job.detector_model)
-    if job.chunk_scale is not None:
-        detector = chunked_detector(detector, **job.chunk_scale)
-    return detector
-
-
-def run_score_job(
-    job: ScoreJob, *, on_progress: Callable[[int, int], None] | None = None
-) -> ScoreResult:
-    """Run one `ScoreJob` IN THIS PROCESS (the child's body; also directly usable)."""
-    judge = openrouter_judge(model=job.judge_model) if job.judge_model else None
-    return score_pairs_file(
-        job.pairs,
-        job.out,
-        fields=job.fields,
-        judge=judge,
-        detector=build_job_detector(job),
-        vale_config=job.vale_config,
-        max_workers=job.max_workers,
-        limit=job.limit,
-        prune_orphans=job.prune_orphans,
-        allow_mixed_detector=job.allow_mixed_detector,
-        on_progress=on_progress,
-    )
-
-
-def run_score_job_isolated(
-    job: ScoreJob, *, run: Callable[..., object] | None = None
-) -> ScoreResult:
-    """Run a `ScoreJob` in a CHILD process; return its `ScoreResult`.
-
-    `python -m stylebot.eval --job … --result …`. The child's stdout/stderr are
-    inherited, so progress still streams live; the result crosses back as JSON
-    in a file rather than as parse-the-output. A crashing child — a SIGSEGV
-    included, which is the failure this exists to make legible — raises
-    `RunError` naming the exit status, instead of leaving an empty scores file
-    and a 0 exit code for a `| tail` to launder.
-
-    `run` is the subprocess seam, so tests exercise the marshalling without
-    spawning an interpreter.
-    """
-    import os
-    import sys
-
-    runner = run or subprocess.run
-    with tempfile.TemporaryDirectory(prefix="stylebot-score-") as tmp:
-        job_path = Path(tmp) / "job.json"
-        result_path = Path(tmp) / "result.json"
-        job_path.write_text(json.dumps(job.to_dict()), encoding="utf-8")
-        env = dict(os.environ, **{SCORE_CHILD_ENV: "1"})
-        completed = runner(
-            [
-                sys.executable,
-                "-m",
-                "stylebot.eval",
-                "--job",
-                str(job_path),
-                "--result",
-                str(result_path),
-            ],
-            env=env,
-            check=False,
-        )
-        code = getattr(completed, "returncode", 0)
-        if code != 0:
-            crashed = code in (-11, 139)
-            raise RunError(
-                f"the isolated scoring pass exited {code}"
-                + (" (SIGSEGV — the libomp double-load; see _plans/findings.md)" if crashed else "")
-                + f"; {job.out} holds only what it had flushed"
-            )
-        if not result_path.exists():
-            raise RunError(f"the isolated scoring pass wrote no result for {job.out}")
-        payload = json.loads(result_path.read_text(encoding="utf-8"))
-    return ScoreResult(
-        written=payload.get("written", 0),
-        skipped_existing=payload.get("skipped_existing", 0),
-        pruned_orphans=payload.get("pruned_orphans", 0),
-        errors=[tuple(e) for e in payload.get("errors") or []],
-    )
 
 
 def load_scores(scores: str | Path | Iterable[dict]) -> list[dict]:
@@ -2035,52 +1963,3 @@ def write_covariate_table(
         "columns": columns,
         "constants": constants,
     }
-
-
-# ---------------------------------------------------------------------------
-# The child entry point — `python -m stylebot.eval --job … --result …`
-# ---------------------------------------------------------------------------
-#
-# Not a CLI and not a second entry point in the CLAUDE.md sense: it takes no
-# human-facing flags, it is spawned only by `run_score_job_isolated`, and it
-# exists so the scoring pass gets a process that never imported the sampling
-# SDK. Same shape as index-blog's `python -m livingthing.bin.index_blog map`
-# child. It lives HERE, in the module whose work it does, so the job schema and
-# the thing that reads it cannot drift.
-
-
-def _child_main(argv: Sequence[str] | None = None) -> int:
-    import argparse
-    import sys
-
-    parser = argparse.ArgumentParser(
-        prog="python -m stylebot.eval",
-        description="Internal: run one stylebot.eval ScoreJob in this process.",
-    )
-    parser.add_argument("--job", required=True, help="Path to the ScoreJob JSON.")
-    parser.add_argument("--result", required=True, help="Where to write the ScoreResult JSON.")
-    args = parser.parse_args(list(argv) if argv is not None else None)
-
-    job = ScoreJob.from_dict(json.loads(Path(args.job).read_text(encoding="utf-8")))
-
-    def _progress(i: int, total: int) -> None:
-        if i == 1 or i % 25 == 0 or i == total:
-            print(f"  ... {i}/{total} scored", file=sys.stderr, flush=True)
-
-    result = run_score_job(job, on_progress=_progress)
-    Path(args.result).write_text(
-        json.dumps(
-            {
-                "written": result.written,
-                "skipped_existing": result.skipped_existing,
-                "pruned_orphans": result.pruned_orphans,
-                "errors": [list(e) for e in result.errors],
-            }
-        ),
-        encoding="utf-8",
-    )
-    return 0
-
-
-if __name__ == "__main__":  # pragma: no cover - exercised as a subprocess
-    raise SystemExit(_child_main())

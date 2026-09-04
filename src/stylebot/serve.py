@@ -56,7 +56,7 @@ from collections.abc import Callable
 from typing import IO
 
 from stylebot import markdown
-from stylebot.eval import detect_many
+from stylebot.classify import detect_many
 
 
 def _utf16_mapper(text: str) -> Callable[[int], int]:

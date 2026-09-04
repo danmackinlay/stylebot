@@ -257,15 +257,12 @@ it consumes the `meta.gen` covariates synth records per pair.
       [--out scores.jsonl] [--summary summary.json] [--by slop_strategy] [--limit N]
       [--report scores.html] [--sample N]`. Batched, concurrent, resumable.
 
-      **What `--max-workers` actually parallelises is the judge, and only the
-      judge** (D57, 2026-09-03). Both local signals run as batched pre-passes on
-      the calling thread before anything is submitted: Vale one process per
-      slice, and — since the threading audit — the detector one `encode` per
-      slice. The detector had been inside the pool since the harness shipped,
-      where it was a batch-of-one embed per passage and, measured, bought
-      nothing: 24.25 s at eight workers against 23.96 s at one. Batched it is
-      12.6 s. The judge is worth 6.4x (103.3 s -> 16.1 s at eight, 1 s/call), so
-      the pool stays for it. Numbers: `findings.md`, "Threading audit".
+      **`--max-workers` is the judge's concurrency and nothing else** (D59).
+      A slice runs one pre-pass per signal on the calling task: Vale one process,
+      the detector one `encode`, then the judge's calls gathered `max_workers` at
+      a time under an `asyncio.Semaphore`. The judge is the only network wait and
+      the only thing worth overlapping (6.4x at eight, 1 s/call). Numbers:
+      `findings.md`, "Threading audit".
 - [x] **Eval integrity** (2026-09-03, W10; D39-D42): every score row names the
       detector artifact that produced it and mixing two is refused; the paired
       verdict bootstraps over POSTs; the headline is the real facet; the eval
@@ -360,13 +357,9 @@ unchanged and v2 is what made two of them survivable.
    whole-document reading with a chunk-wise one. Numbers: `findings.md`,
    "Document-scale eval, chunk-wise".
 
-   The scoring half runs in a **child process**
-   (`eval.run_score_job_isolated` / `ScoreJob`), so a crash in it is a named
-   `RunError` rather than a bare exit 139 into a half-written file (D55). The
-   crash that motivated it turned out to be concurrent forward passes through
-   one `SentenceTransformer`, fixed by a lock in
-   `classify.sentence_transformers_batch_embed_fn`, not the libomp double-load
-   it was first diagnosed as.
+   The rewrite and the scoring both run in the command's own process. They ran
+   in two for a day, to make a segfault legible; the segfault was the scoring
+   pass's thread pool, and both the pool and the child are gone (D59).
 
 Verdict outputs belong under `runs/<run_id>/` (`eval.verdict_dir`,
 `dan-style eval --run-id`), beside the manifest of the adapter they judge. Run

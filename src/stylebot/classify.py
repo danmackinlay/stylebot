@@ -109,14 +109,8 @@ def embedding_classifier_detector(
 
     Given a `batch_embed_fn` (``encode(texts, batch_size=…) -> [N, D]``), the
     detector also carries a **``.batch_detect(texts) -> list[dict]``** attribute
-    that scores many passages through ONE `encode` call. The backbone is a
-    transformer: feeding it one text at a time pays the per-call overhead N
-    times over. Measured over the 1,690 serving-scale chunks of the 34
-    document-scale eval records (`_plans/findings.md`, D57): 22.2 s of
-    batch-of-one encodes against 14.2 s batched, 1.56x, and the same numbers to
-    the last bit. Callers that have a whole slice in hand — `eval` scoring a
-    corpus, `serve` answering an editor's `score` op — should use it; a caller
-    holding one passage calls the detector.
+    that scores many passages through ONE `encode` call (1.56x; D57). A caller
+    holding many texts should reach it through `detect_many`.
     """
     coef = head["coef"]
     intercept = float(head["intercept"])
@@ -156,6 +150,21 @@ def embedding_classifier_detector(
     return detect
 
 
+def detect_many(detector: Callable[[str], dict], texts: Sequence[str]) -> list[dict]:
+    """Score many passages with `detector`, batched when it can be.
+
+    A detector is ``detect(prose) -> dict`` by contract. Where it also carries
+    ``.batch_detect`` (every embedding-backed one does), this routes the whole
+    list through the backbone in one call; otherwise it is the obvious loop, so
+    the caller never has to ask which kind it holds.
+    """
+    texts = list(texts)
+    batch = getattr(detector, "batch_detect", None)
+    if batch is None:
+        return [detector(text) for text in texts]
+    return list(batch(texts))
+
+
 def load_artifact_meta(artifact_dir: str | Path) -> dict:
     """Read an artifact's `meta.json` (embed_model, embed_dim, normalize, …)."""
     meta_path = Path(artifact_dir) / "meta.json"
@@ -174,37 +183,23 @@ def sentence_transformers_batch_embed_fn(model_id: str, *, normalize: bool = Tru
     the training-time `classify_train.embed_texts` both wrap it, so
     normalize/encode semantics can't drift between training and serving.
 
-    **Serialized.** One `SentenceTransformer` driven concurrently from several
-    Python threads crashes the process — measured 2026-09-03, deterministically,
-    scoring 34 documents chunk-wise through `eval.score_pairs_file`'s default
-    eight workers: **SIGSEGV/SIGBUS before a single record was written**, and
-    survivable only at `--max-workers 1`. The forward pass and the Rust
-    tokenizer under it are not ours to make re-entrant, so the model gets a
-    lock. Embedding is CPU-bound anyway: threads bought it nothing but a race —
-    measured the next day at 24.25 s over eight workers against 23.96 s over
-    one, which is what took the detector out of `eval`'s pool entirely and put
-    it in a batched pre-pass (D57). The lock stays for the callers that still
-    hold one text at a time: `infer`'s best-of-N reranking, and any detector
-    built without a batch path. Note it makes an *instrument* serial, not the
-    run — the pool still overlaps the judge, which is the network wait it is
-    for.
+    **Single-threaded by contract**, and unguarded because nothing in this
+    package drives it from more than one thread (D59). The forward pass and the
+    Rust tokenizer under it are not ours to make re-entrant: a caller that
+    introduces threads here must serialize them itself.
     """
-    import threading
-
     from sentence_transformers import SentenceTransformer
 
     model = SentenceTransformer(model_id)
-    lock = threading.Lock()
 
     def encode(texts: Sequence[str], *, batch_size: int = 32):
-        with lock:
-            return model.encode(
-                list(texts),
-                batch_size=batch_size,
-                convert_to_numpy=True,
-                normalize_embeddings=normalize,
-                show_progress_bar=False,
-            )
+        return model.encode(
+            list(texts),
+            batch_size=batch_size,
+            convert_to_numpy=True,
+            normalize_embeddings=normalize,
+            show_progress_bar=False,
+        )
 
     return encode
 
