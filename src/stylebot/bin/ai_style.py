@@ -30,11 +30,9 @@ detector), which are `click.UsageError` at the point of parsing.
 
 from __future__ import annotations
 
-import datetime
 import json
-import sys
 from dataclasses import replace
-from functools import cache, partial
+from functools import partial
 from pathlib import Path
 
 import click
@@ -67,7 +65,6 @@ from stylebot.cli_options import (
     click_emitter,
 )
 from stylebot.errors import RunError
-from stylebot.jsonl import append_jsonl
 from stylebot.lib import is_human_authored
 
 
@@ -102,24 +99,6 @@ main.add_command(_data, name="data")
 # `serve` defaults --temperature hotter, and serve's --detector-model is
 # required (it IS the service) where run's only feeds --best-of.
 # ---------------------------------------------------------------------------
-
-
-MANIFEST_HELP = (
-    "A training-run manifest to serve: supplies --sampler-path, --base-model, --renderer and "
-    "the chunk diet (--max-chunk-chars/--inline-headings) the adapter was TRAINED on. Explicit "
-    "flags win over it. Serving at the wrong diet is out-of-distribution — the styler falls back "
-    "to copying its input — so prefer this over retyping four flags."
-)
-
-
-def _load_manifest(manifest_path: Path | None) -> dict:
-    """A training manifest as a dict, or `{}` when none was named."""
-    if manifest_path is None:
-        return {}
-    try:
-        return json.loads(manifest_path.read_text(encoding="utf-8"))
-    except ValueError as exc:
-        raise click.ClickException(f"{manifest_path}: not valid JSON ({exc})") from exc
 
 
 @main.command("synth", cls=synth_cli.SectionedCommand)
@@ -257,7 +236,9 @@ def eval_cmd(**kw) -> None:
             opts.scores_path(),
             doc_opts,
             opts.score_fields(),
-            manifest=_load_manifest(doc_opts.documents_manifest),
+            manifest=backends.load_manifest(
+                doc_opts.documents_manifest, param_hint="--documents-manifest"
+            ),
             splits=sp.load_splits(splits_file) if splits_file.exists() else None,
             emit=emit,
         )
@@ -348,7 +329,7 @@ def export_table_cmd(
     "manifest_path",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     default=None,
-    help=MANIFEST_HELP,
+    help=backends.MANIFEST_HELP,
 )
 @backend_options(defaults=[BackendOpts(temperature=0.7)], exclude=["detector_model"])
 def serve_cmd(
@@ -367,13 +348,13 @@ def serve_cmd(
     anchor-flagged, none auto-chosen); with --preferences, the 'prefer' op
     records the client's choice. Protocol details: stylebot.serve.
     """
-    from stylebot import classify, infer, serve
+    from stylebot import classify, serve
 
+    manifest = backends.load_manifest(manifest_path)
     opts = backends.opts_from_manifest(
-        _load_manifest(manifest_path),
+        manifest,
         replace(bundles_from_kwargs(kw, BACKEND_PARAMS)["opts"], detector_model=detector_model),
     )
-
     try:
         meta = classify.load_artifact_meta(detector_model)
         detector = classify.sklearn_detector(detector_model)
@@ -381,47 +362,16 @@ def serve_cmd(
         raise click.ClickException(
             f"--detector-model needs the embedder installed (sentence-transformers): {exc}"
         ) from exc
-
-    chunk_chars = opts.chunk_chars()
-
-    rewriter = None
-    if opts.backend is not None:
-        # Build the styler LAZILY: the tinker client dials out at construction,
-        # and a flaky network at editor start must not take scoring down with it.
-        # `cache` is what makes it lazy-once — the first rewrite op pays, later
-        # ones reuse the client.
-        @cache
-        def make_styler():
-            return backends.build_styler(opts)
-
-        scorer = infer.detector_scorer(detector)
-
-        def rewrite_op(text, *, context=None, best_of=4):
-            return infer.rewrite_candidates(
-                text,
-                make_styler(),
-                context=context,
-                best_of=best_of,
-                scorer=scorer,
-                max_chunk_chars=chunk_chars,
-                inline_headings=opts.headings(),
-            )
-
-        rewriter = rewrite_op
-
     prefer = None
     if preferences_path is not None:
-
-        def prefer_op(decision: dict) -> None:
-            record = {
-                "ts": datetime.datetime.now(datetime.UTC).isoformat(),
-                **decision,
-            }
-            append_jsonl(preferences_path, record)
-
-        prefer = prefer_op
-
-    serve.serve_loop(detector, sys.stdin, sys.stdout, meta=meta, rewriter=rewriter, prefer=prefer)
+        prefer = serve.preference_recorder(preferences_path, run_id=manifest.get("run_id"))
+    serve.serve_sidecar(
+        opts,
+        detector=detector,
+        meta=meta,
+        make_styler=partial(backends.build_styler, opts) if opts.backend is not None else None,
+        prefer=prefer,
+    )
 
 
 @main.command("make-splits")
@@ -876,75 +826,8 @@ def merge_adapter_cmd(
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     required=False,
 )
-@click.option(
-    "--best-of",
-    default=1,
-    show_default=True,
-    type=int,
-    help="Sample N candidates per chunk and keep the most Dan-scored (needs --detector-model).",
-)
-@click.option(
-    "--strict-anchors",
-    is_flag=True,
-    help="Also require inline code spans and inline math to survive a rewrite, not just links "
-    "and citations. Measured over the corpus this roughly triples the rate at which every "
-    "candidate is rejected and the input is kept verbatim — hence off by default.",
-)
-@click.option(
-    "--anchor-log",
-    type=click.Path(dir_okay=False, path_type=Path),
-    help="Append per-chunk anchor accounting to this JSONL (anchor keys and lengths, never "
-    "candidate text). The headline counts say whether a run went wrong; this says how the "
-    "model behaves, which is what decides whether masking is worth building at all "
-    "(D32, D33).",
-)
-@click.option(
-    "--write",
-    "write_in_place",
-    is_flag=True,
-    help="Rewrite FILE in place (a .bak backup is left beside it). Default prints to stdout.",
-)
-@click.option(
-    "--pairs",
-    "pairs_path",
-    type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
-    help="Corpus mode: rewrite the slop side of every pair in this pairs.jsonl instead of a "
-    "file, writing an output-bearing JSONL for `ai-style eval --field output`. This is how a "
-    "trained adapter gets a number rather than an impression. Needs --out.",
-)
-@click.option(
-    "--out",
-    "out_path",
-    type=click.Path(dir_okay=False, path_type=Path),
-    help="[--pairs] Where the output-bearing JSONL goes. Appended to and resumable: ids already "
-    "present are skipped, so an interrupted sweep continues rather than re-paying for them.",
-)
-@click.option(
-    "--limit",
-    type=int,
-    default=None,
-    help="[--pairs] Cap how many pairs are rewritten.",
-)
-@click.option(
-    "--manifest",
-    "manifest_path",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help=MANIFEST_HELP,
-)
-@backend_options(defaults=[BackendOpts(backend="tinker")])
-def run_cmd(
-    file: Path | None,
-    best_of: int,
-    strict_anchors: bool,
-    anchor_log: Path | None,
-    write_in_place: bool,
-    pairs_path: Path | None,
-    out_path: Path | None,
-    limit: int | None,
-    manifest_path: Path | None,
-    **kw,
-) -> None:
+@backends.run_options(defaults=[BackendOpts(backend="tinker")])
+def run_cmd(file: Path | None, **kw) -> None:
     """Phase 4: rewrite FILE (or stdin) through the trained styler.
 
     Chunks prose at training granularity (frontmatter and code fences
@@ -960,83 +843,30 @@ def run_cmd(
     """
     from stylebot import infer
 
+    parsed = bundles_from_kwargs(kw, backends.RUN_PARAMS)
+    run: backends.RunOpts = parsed["run"]
     # The manifest is the committed reproducibility record: it carries the
     # checkpoint, the base model, the renderer AND the chunk diet the adapter
     # was trained on. Explicit flags still win over every one of them.
-    opts: BackendOpts = backends.opts_from_manifest(
-        _load_manifest(manifest_path),
-        bundles_from_kwargs(kw, BACKEND_PARAMS)["opts"],
-    )
-    if pairs_path is not None:
-        if file is not None:
-            raise click.UsageError("--pairs rewrites a corpus; pass it or a FILE, not both")
-        if out_path is None:
-            raise click.UsageError("--pairs needs --out (the output-bearing JSONL to write)")
-    elif out_path is not None or limit is not None:
-        raise click.UsageError("--out/--limit only apply in corpus mode (--pairs)")
-
+    opts = backends.opts_from_manifest(backends.load_manifest(run.manifest_path), parsed["opts"])
+    corpus = backends.corpus_mode(run, source=file)
     styler = backends.build_styler(opts)
-
     scorer = None
-    if best_of > 1:
+    if run.best_of > 1:
         if opts.detector_model is None:
             raise click.UsageError("--best-of needs --detector-model for the p_dan scoring")
         from stylebot.classify import sklearn_detector
 
         scorer = infer.detector_scorer(sklearn_detector(opts.detector_model))
-
-    if pairs_path is not None:
-        def _progress(i: int, total: int) -> None:
-            if i == 1 or i % 10 == 0 or i == total:
-                click.echo(f"  ... {i}/{total} rewritten", err=True)
-
-        written = infer.rewrite_pairs_file(
-            pairs_path, out_path, styler,
-            limit=limit, best_of=best_of, scorer=scorer, on_progress=_progress,
-        )
-        click.echo(f"rewrote {written} pair(s) -> {out_path}", err=True)
+    emit = click_emitter()
+    if corpus:
+        backends.rewrite_corpus(run, styler, scorer=scorer, emit=emit)
         return
-
     text = file.read_text(encoding="utf-8") if file else click.get_text_stream("stdin").read()
-    result = infer.rewrite_text(
-        text,
-        styler,
-        max_chunk_chars=opts.chunk_chars(),
-        best_of=best_of,
-        scorer=scorer,
-        inline_headings=opts.headings(),
-        inline_anchors=strict_anchors,
+    result = backends.rewrite_document(
+        text, run, opts, styler, scorer=scorer, source=file, emit=emit
     )
-    if scorer is not None:
-        for line in result.decisions:
-            click.echo(f"  {line}", err=True)
-    if anchor_log is not None:
-        n = infer.write_anchor_audit(anchor_log, result, source=str(file) if file else None)
-        click.echo(f"  {n} chunk(s) of anchor accounting -> {anchor_log}", err=True)
-    click.echo(
-        f"[{result.n_chunks} chunk(s), {result.n_candidates} sample(s)"
-        + (f", {result.n_kept_input} kept as input" if result.n_kept_input else "")
-        + (
-            # Broken out by cause: losing a link wants a better sample, inventing
-            # one wants a model that stops making things up.
-            f", {result.n_anchor_rejected} sample(s) rejected for anchor damage "
-            f"({result.n_anchor_lost} lost, {result.n_anchor_invented} invented)"
-            if result.n_anchor_rejected
-            else ""
-        )
-        + (
-            # Reported apart from anchor loss on purpose: this one usually means
-            # the token budget, not the sample.
-            f", {result.n_truncated} truncated (raise --max-tokens?)" if result.n_truncated else ""
-        )
-        + "]",
-        err=True,
-    )
-    if write_in_place and file:
-        file.with_suffix(file.suffix + ".bak").write_text(text, encoding="utf-8")
-        file.write_text(result.text, encoding="utf-8")
-        click.echo(f"rewrote {file} (backup at {file}.bak)", err=True)
-    else:
+    if not (run.write_in_place and file):
         click.echo(result.text, nl=not result.text.endswith("\n"))
 
 
