@@ -30,7 +30,7 @@ keep their numbers — the second index below is how you find them.
 | D57 | the detector is batched out of the pool; the pool kept for the judge | **superseded** by D59 |
 | D58 | size budgets are a test with a shrinking allowlist | live |
 | D59 | one mechanism in the scoring path — the judge awaits, the rest batches | live |
-| D60 | a rewrite is a writer — it takes the corpus lock | live |
+| D60 | a rewrite is a writer — it takes the corpus lock | **superseded** by D84 |
 | D61 | the executables package holds no libraries | live |
 | D62 | `stylebot.eval` keeps a lazy re-export map after the split | live |
 | D63 | orphan score rows are pruned where they are read | live |
@@ -428,34 +428,10 @@ per signal), or if anything drives the embedder from more than one thread again.
 
 ## D60: a rewrite is a writer — it takes the corpus lock, and appenders re-check the inode
 
-**Decision (2026-09-04)**: `corpus.rewrite` runs under `corpus_lock`, and
-`PairsWriter` compares its open handle's `fstat` (and its remembered byte
-offset) against the shard's current inode before trusting either. The lock stays
-non-re-entrant and stays at one file per corpus.
-
-**Alternatives considered**:
-
-- **Lock only the appender** (the shipped state). Rejected: `rewrite` replaces
-  each shard by rename, so an append landing inside one is lost, and the
-  writer's `ab+` handle is left on an unlinked inode — every later append in
-  that run then vanished with `write()` still returning `True`.
-- **Hold the lock for `PairsWriter`'s lifetime** instead of per write. Rejected:
-  a synth run is minutes to hours long and would block `log save` for all of it,
-  which is the daily write on the irreplaceable captures shard.
-- **Make the lock re-entrant** so the six read-filter-write callers could wrap
-  read *and* rewrite. Rejected: re-entrancy was never the blocker — a transform
-  passed *into* the critical section wraps both without one (F19d).
-
-**Deciding constraint**: the corpus holds human captures that cannot be
-regenerated and the failure was silent — no exception, no short count, a `True`
-return. Cheap detection beats a bigger lock: inode identity is one `stat` per
-shard per write, and it makes the loss impossible rather than unlikely.
-
-**Closed (2026-09-04, F19d)**: `corpus.rewrite_with(corpus, transform)` reads,
-transforms and writes in one critical section, so nothing is held across a gap;
-all six callers use it and `rewrite` is now only for a caller that already holds
-the records. **Re-evaluate if** a transform ever needs to write to the corpus it
-was handed, which the non-re-entrant lock still forbids.
+**Superseded by D84 on 2026-09-05 (W4 step 4).** Nothing rewrites the corpus —
+a save is a draw, a prune a policy clause plus a rebuild — so there is no
+writer lock: `corpus.rewrite`, `rewrite_with`, `corpus_lock` and `PairsWriter`'s
+inode re-check are deleted.
 
 ## D61: the executables package holds no libraries — `synth_cli` left `bin/`
 
@@ -1080,14 +1056,13 @@ decided, not deferred.
 **Decision (2026-09-04, W4 step 1).** Two layers. *Draws* record what happened —
 one per generator call or human edit, keyed on its cell (`draws.draw_id`), raw
 generator output kept, `outcome` of `accepted | gate:<name> | error:<class>`;
-every interim save of a capture session stays a draw with `superseded_by` naming
-its successor. *Views* are a function of the draws and a `ViewPolicy` whose sha
-names the file; built, never committed. Data flows draws → views, never back: a
-prune is a policy clause plus a rebuild, a recut a chunk-policy change plus a
-rebuild; nothing edits a draw. The five null-provenance cells are kept. One new
-module, `src/stylebot/draws.py` (≤ 800, P2), no thread, lock or process;
-`corpus.iter_records` reads a view unchanged. `dan-style promote`,
-`SourcePolicy` and an author slot ride step 4 (D74, D36, D64).
+an interim save stays a draw and its successor names it (`supersedes`). *Views*
+are a function of the draws and a `ViewPolicy` whose sha names the file; built,
+never committed. Data flows draws → views, never back: a prune is a policy
+clause plus a rebuild, a recut a chunk-policy change plus a rebuild; nothing
+edits a draw. The five null-provenance cells are kept. `draws.py` is the one new
+module (≤ 800, P2; no thread, lock or process); readers are unchanged.
+`dan-style promote`, `SourcePolicy` and an author slot ride step 4 (D74, D36, D64).
 
 **Alternatives.** *Keep the store, add a draws side file for rejects only* —
 recovers the rejects but `synth_key` stays keyed on cut text, so a recut still
@@ -1101,8 +1076,9 @@ first* — no save order is recorded, so the "final" save is a guess.
 `synth_key` hashes the cut text, and 6,429 rejected draws (45% of spend) are
 unrecoverable because only the pair was kept (`findings.md` "The view reproduces the corpus").
 
-**Amended 2026-09-05 (step 3)**: the `resolve` hook is the blog's
-`livingthing.corpus_provenance` (≤ 300 lines, D45); `keep_superseded` until step 5.
+**Amended 2026-09-05**: (step 3) `resolve` is the blog's `livingthing.corpus_provenance`
+(≤ 300 lines, D45); `keep_superseded` until step 5. (Step 4) `build_view` honours
+`superseded_by` and `supersedes`; D60's lock, the migrations and every rewrite go.
 
 **Re-evaluate if** a draw shard passes a few hundred MB (finer shards, not a
 database) or a view is needed offline more often than it is rebuilt.

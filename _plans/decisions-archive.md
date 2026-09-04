@@ -1107,7 +1107,9 @@ the error can reach them.
 
 **Re-evaluate if**: nothing. A migration is deleted once the only corpus that
 exists has been through it — function, command and test together. So went
-`migrate-captures` and `shard-pairs` on 2026-09-04 (X1), the corpus having run both.
+`migrate-captures` and `shard-pairs` on 2026-09-04 (X1), the corpus having run both;
+so went `prune-stale` and `backfill-draws` on 2026-09-05 (W4 step 4), which emptied
+the group — its mount is gone, and a future migration recreates it.
 
 ## D39: a score carries the instrument that produced it, and two instruments never share a mean
 
