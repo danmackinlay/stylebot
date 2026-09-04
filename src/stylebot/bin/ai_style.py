@@ -974,6 +974,12 @@ def extend_eval_cmd(**kw) -> None:
     "--holdout-*.",
 )
 @click.option(
+    "--blog-root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Tree the pinned eval posts must still exist in; a renamed one fails the run (D34).",
+)
+@click.option(
     "--test-size",
     default=ct.DEFAULT_TEST_SIZE,
     show_default=True,
@@ -1031,6 +1037,7 @@ def train_clf_cmd(
     pairs_path: Path,
     out_dir: Path,
     splits_path: Path | None,
+    blog_root: Path | None,
     test_size: float,
     n_splits: int,
     C: float | None,
@@ -1042,15 +1049,11 @@ def train_clf_cmd(
 ) -> None:
     """Train a voice classifier (linear head over a style embedding).
 
-    Generic slop-vs-author trainer over a pairs.jsonl corpus: embeds both sides
-    of every content-matched pair, fits a logistic regression, evaluates
-    leakage-safely (split by POST, C selected by nested group-CV), and writes
-    the head.json + meta.json artifact that `--detector-model` / `serve`
-    consume. Needs the `classifier` extra (`uv add 'stylebot[classifier]'`).
-    With --splits, honours the shared three-role contract (see make-splits).
-    Free-standing extra positives are a library-level policy argument
-    (`classify_train.train(extra_positives=…)`) — callers with a corpus policy
-    wrap this, as livingthing's train-voice-clf does.
+    Generic slop-vs-author trainer over a pairs corpus: embeds both sides of every
+    content-matched pair, fits a logistic regression, evaluates leakage-safely (by
+    POST, C by nested group-CV), and writes the head.json + meta.json artifact that
+    `--detector-model` / `serve` consume. Needs the `classifier` extra. Extra
+    positives are a library argument (`classify_train.train(extra_positives=…)`).
     """
     if splits_path is not None and (holdout_frac or holdout_posts is not None):
         raise click.UsageError("--splits is mutually exclusive with --holdout-frac/--holdout-posts")
@@ -1072,6 +1075,8 @@ def train_clf_cmd(
     if dry_run:
         if splits_path is not None:
             splits_doc = sp.load_splits(splits_path)
+            if blog_root is not None:
+                sp.require_pinned_posts(splits_doc, blog_root)
             for role, entry in sp.summarize_roles(splits_doc, ds).items():
                 click.echo(
                     f"  {role:>8}: {entry['posts']} post(s), {entry['pairs']} pair(s) "
@@ -1098,6 +1103,7 @@ def train_clf_cmd(
         holdout_seed=holdout_seed,
         holdout_posts=holdout_list,
         splits_path=splits_path,
+        blog_root=blog_root,
     )
 
     _echo_clf_metrics(metrics)
@@ -1148,6 +1154,12 @@ def train_clf_cmd(
     "make-splits). Omit only for fixture/experiment corpora.",
 )
 @click.option(
+    "--blog-root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Tree the pinned eval posts must still exist in; a renamed one fails the run (D34).",
+)
+@click.option(
     "--val-frac",
     default=tr.DEFAULT_VAL_FRAC,
     show_default=True,
@@ -1186,6 +1198,7 @@ def train_cmd(
     manifest_out: Path,
     work_dir: Path,
     splits_path: Path | None,
+    blog_root: Path | None,
     val_frac: float,
     run_id: str | None,
     train_price_per_mtok: float | None,
@@ -1196,11 +1209,9 @@ def train_cmd(
 ) -> None:
     """Phase 3: LoRA-SFT the styler on Tinker (stylebot.train.run_training).
 
-    Assembles the corpus (styler-role posts only under --splits, near-copy
-    pairs KEPT by design), cuts a deterministic by-POST val split, writes the
-    reproducibility manifest, and runs the Tinker cookbook's supervised recipe.
-    Needs the `trainer` extra (`uv add 'stylebot[trainer]'`) and
-    TINKER_API_KEY for the paid step; --dry-run needs neither.
+    Assembles the corpus (styler-role posts only under --splits, near-copy pairs
+    KEPT), cuts a by-POST val split, writes the manifest, runs the Tinker recipe.
+    Needs the `trainer` extra and TINKER_API_KEY; --dry-run needs neither.
     """
     pairs_path = config.pairs_path(data_dir)
     if not pairs_path.exists():
@@ -1209,6 +1220,7 @@ def train_cmd(
     kwargs = dict(
         hp=bundles_from_kwargs(kw, {"hp": tr.Hyperparameters})["hp"],
         splits_path=splits_path,
+        blog_root=blog_root,
         val_frac=val_frac,
         run_id=run_id,
         train_price_per_mtok=train_price_per_mtok,

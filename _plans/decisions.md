@@ -966,72 +966,34 @@ the one number that changes after step 2 trains on them.
 
 ## D34: a post's role is keyed on an alias-resolved identity, and synth refuses the eval stratum unasked
 
-**Decision**: `splits.json` gains an optional `aliases` map and `role_of`
-resolves every source through it before doing anything else
-(`splits.canonical_source`). An entry reads **`{path the post has now: path its
-pairs are already keyed under}`** — new → old, which is the opposite of the
-direction the name suggests. `ai-style synth` then refuses any target whose post
-resolves to `eval`, consulting the corpus's own `<data-dir>/splits.json` when no
-`--splits` was passed, and `--role eval` is the only way past it. `ai-style log
-save` says so but does not refuse. `check_splits(…, blog_root=…)` reports a
-pinned eval post that is on disk under no known spelling as an **error**
-(`ERROR_PREFIX`), and `ai-style check-splits` exits non-zero on one.
+**Decision** (2026-09-03; amended 2026-09-04, F3). `splits.json` carries an
+optional `aliases` map, `{path the post has now: path its pairs are already keyed
+under}` — new → old, the opposite of what the name suggests — and every path
+passes `splits.canonical_source` before anything reads a role. Both sides of the
+pinned test resolve: `role_of` compares a canonical query against
+`{canonical(p) for p in eval_posts}`, and `extend_eval` stores the canonical
+spelling, so a post added under its new path is pinned by identity. `synth`
+refuses a target resolving to `eval` — reading the corpus's own `splits.json`
+when `--splits` is absent, `--role eval` the only way past — while `log save`
+notices without refusing, a capture being legitimate data. A pinned post on disk
+under no known spelling is an error, not a warning: `check_splits(blog_root=…)`
+marks it `ERROR_PREFIX`, `check-splits` exits non-zero, and
+`require_pinned_posts` raises it from `train`/`train-clf --blog-root`, since
+nothing forces `check-splits` first. Numbers: `findings.md` "The alias seam".
 
-**The defect.** Roles are keyed on the post's *path*, and paths move: `post-op
-move` renamed `notebook/empowerment.qmd` → `notebook/informational_empowerment.qmd`
-and `notebook/learning_from_madness_of_crowds.qmd` →
-`notebook/wisdom_from_madness_of_crowds.qmd` (blog `77a1b398aa`). Measured
-2026-09-03: the new paths hashed to `styler` and `detector`. Nothing caught it,
-and the reasons compound — the STALE warning is about pairs, and the old paths
-still carried theirs; `role_of` is open-world by design, so an unknown path gets
-a role rather than a question; and the canonical corpus run (blog RUNBOOK §6)
-passes no `--role`, so the next synth would have cut frozen-eval prose as
-training targets. Two independent single points of failure, so the fix is two:
-an identity that survives a rename, and a guard that does not wait to be asked.
+**Why the direction is inverted.** Roles come from `meta.source` as recorded at
+capture time, so the corpus is keyed on the OLD path; aliasing old → new re-hashes
+every existing pair into whatever the new path draws, silently for the roles
+nothing pins. New → old moves nothing:
+`test_aliases_need_no_migration_of_existing_pairs` asserts it over 50 posts.
 
-**Why the alias direction is inverted.** Roles are assigned from `meta.source`
-as recorded at capture/synth time, so the corpus is keyed on the OLD path.
-Aliasing old → new (the plan's `renames: {old: new}` reading) re-hashes every
-existing pair of a renamed post into whatever role the new path draws — a
-migration of the corpus, and a silent one for `styler`/`detector` posts, where
-nothing pins the answer. Aliasing new → old moves nothing: `test_aliases_need_no
-_migration_of_existing_pairs` asserts exactly that over 50 hash-assigned posts.
-The pinned list keeps **both** spellings (add-only), and `eval_post_spellings`
-groups by identity so six pinned posts under eight names still count six.
+**Rejected**: a frontmatter `id:` (mint it across ~1,700 posts, and `role_of`, a
+per-pair string function, becomes a disk read); `make-splits --force` (un-freezes
+eval to repair a symptom); bumping `schema_version` (`aliases` is additive, and a
+bump makes every older checkout refuse the file); requiring `--blog-root`.
 
-**Rejected: a frontmatter `id:` as the stable identity.** The right answer if
-the blog had one — it does not (`lib.read_w_frontmatter_text` reads whatever is
-there; the quality ladder keys on the path too), so it would have to be minted
-across ~1700 posts. Worse, `role_of` takes a string and is called per pair and
-per chunk with no filesystem in reach; an id-keyed contract makes it a disk read,
-and every existing `meta.source` would have to be rewritten to the new key. That
-is precisely the migration W0 says to avoid. The alias map is the same idea with
-the path as the id and the map as the rename log.
-
-**Rejected: re-cutting the splits.** `make-splits --force` would repair the
-symptom and un-freeze the eval stratum, which is the one thing the contract
-exists to prevent.
-
-**Rejected: bumping `schema_version`.** `load_splits` compares the version for
-exact equality, so a bump makes every stylebot checkout without this commit
-refuse the file outright. `aliases` is additive and optional: a reader that has
-never heard of it degrades to exactly today's behaviour rather than to an error.
-The cost is that such a reader disagrees about a renamed post silently — accepted
-because both repos pin stylebot as an editable path dependency, and because the
-disagreement is the status quo, not a regression.
-
-**Why `synth` refuses and `log save` only notices.** Cutting eval prose as a
-synthesis target trains the styler on the metric — the eval is no longer frozen
-and no downstream number means anything. A *captured* rewrite of an eval post is
-Dan's own editing work, is legitimate corpus data, and is kept out of every
-fitting stage by the same contract; the only thing worth saying is that the
-capture will never train anything.
-
-**Re-evaluate if**: the blog gains real post ids (then the alias map becomes the
-migration record and `role_of` can key on the id), or `aliases` grows past a
-handful of entries — at which point it wants generating from `post-op move`
-rather than hand-editing, which is the natural next step and deliberately not
-built here.
+**Re-evaluate if**: the blog gains real post ids (the map becomes the migration
+record and `role_of` keys on it), or `aliases` outgrows hand-editing.
 
 ## D35: the styler backend is a library (`stylebot.backends`), and the manifest is what configures it
 

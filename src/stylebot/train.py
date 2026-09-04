@@ -693,6 +693,7 @@ def run_training(
     *,
     hp: Hyperparameters | None = None,
     splits_path: str | Path | None = None,
+    blog_root: str | Path | None = None,
     selector: Callable[[dict], bool] | None = None,
     per_passage: Callable[[list[dict]], list[dict]] | None = None,
     pair_weight: Callable[[dict], int] | None = None,
@@ -707,23 +708,20 @@ def run_training(
 ) -> TrainResult:
     """Assemble → manifest → (unless dry-run) train on Tinker → export adapter.
 
-    The training knobs arrive as a `Hyperparameters` bundle
-    (`run_training(pairs, work, out, hp=Hyperparameters(lora_rank=64))`),
-    defaulting to the cookbook-recipe defaults; everything left here is a knob
-    that is *not* a hyperparameter — where the data comes from, which policy
-    hooks filter it, and what to do with the artifacts.
+    The training knobs arrive as a `Hyperparameters` bundle; everything left
+    here is a knob that is *not* a hyperparameter — where the data comes from,
+    which policy hooks filter it, and what to do with the artifacts.
 
     `val_frac` stays out of the bundle deliberately: it shapes the data split,
-    not the fit, and the manifest records its *outcome* (`data.val_posts`)
-    rather than the fraction. `hp.seed` drives both the split and epoch
-    shuffling, and is recorded, so it belongs in the bundle.
+    not the fit, and the manifest records its *outcome* (`data.val_posts`). The
+    seed drives both the split and the epoch shuffle, so it belongs in the bundle.
+    `blog_root` (with `splits_path`) refuses a run whose pinned eval posts have
+    left the tree — D34's check, before the spend rather than after it.
 
-    The manifest at `manifest_out` is written twice: once pre-run (so even an
-    interrupted run leaves its record) and once with `result` filled in. On
-    `dry_run` only the pre-run manifest is written — no tinker import, no key,
-    no spend. `runner` is the paid-execution seam:
-    `(corpus, manifest, work_dir, hp, *, download_adapter) -> result dict`,
-    defaulting to `_tinker_runner`; tests inject a fake.
+    The manifest at `manifest_out` is written twice — pre-run (so an interrupted
+    run still leaves its record) and again with `result`; on `dry_run` only the
+    first, keyless and free. `runner` is the paid seam
+    `(corpus, manifest, work_dir, hp, *, download_adapter) -> result dict`.
     """
     pairs_path = Path(pairs_path)
     work_dir = Path(work_dir)
@@ -735,6 +733,8 @@ def run_training(
         from stylebot import splits as splits_mod
 
         splits = splits_mod.load_splits(splits_path)
+        if blog_root is not None:
+            splits_mod.require_pinned_posts(splits, blog_root)
 
     corpus = assemble_training_corpus(
         pairs_path,

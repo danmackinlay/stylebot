@@ -712,6 +712,29 @@ not just on-save.
 
 ---
 
+## The alias seam — measured 2026-09-03 (D34), re-measured 2026-09-04 (F3)
+
+Command: `uv run python` over `stylebot.splits` and a **tmp copy** of the live
+`_training_pairs/splits.json` (eval_v2, `splits_sha256=05b495adac68cdc4`).
+
+| post, as `meta.source` keys it | renamed to (blog `77a1b398aa`) | role the new path hashes to |
+|---|---|---|
+| `notebook/empowerment.qmd` | `notebook/informational_empowerment.qmd` | styler |
+| `notebook/learning_from_madness_of_crowds.qmd` | `notebook/wisdom_from_madness_of_crowds.qmd` | detector |
+
+Both are pinned eval posts. Nothing caught the move: the STALE warning is about
+pairs and the old paths still carried theirs, and `role_of` is open-world, so an
+unknown path gets a role rather than a question. Hence the `aliases` map (D34) —
+and the canonical corpus run passes no `--role`, so the next `synth` would have
+cut frozen-eval prose as targets.
+
+**2026-09-04, the same seam one layer up.** `role_of` canonicalised the query and
+then tested it against the RAW pinned list, while `extend_eval` appended the
+caller's spelling verbatim. Extending the tmp copy with the renamed post under its
+new path left **both** spellings answering `styler`; the live stratum was safe
+only because both spellings happen to be pinned. Canonicalising both sides fixes
+it — `test_extending_with_a_renamed_post_pins_both_spellings` (D34).
+
 ## Eval-stratum composition — re-measured 2026-09-03 (W10)
 
 The frozen eval stratum, against the live 8,244-pair corpus:

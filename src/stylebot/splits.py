@@ -143,13 +143,13 @@ def extend_eval(splits: dict, posts, *, note: str | None = None) -> dict:
     new is a no-op that returns the input unchanged rather than churning the
     version.
 
-    Two things this deliberately does NOT do. It does not touch `aliases`: a
-    renamed post is the same identity and is already handled (D34). And it does
-    not renumber or re-key any pair — role is derived from the recorded
-    `meta.source` at read time, so extending the stratum needs no migration.
+    A post is pinned by *identity*: the path is canonicalised through `aliases`
+    first, so adding a renamed post under its new spelling pins the path its
+    pairs are already keyed under (D34). Nothing is renumbered or re-keyed —
+    role is derived from the recorded `meta.source` at read time.
     """
     known = {canonical_source(p, splits) for p in splits["eval_posts"]}
-    additions = sorted({p for p in posts if canonical_source(p, splits) not in known})
+    additions = sorted({canonical_source(p, splits) for p in posts} - known)
     if not additions:
         return splits
     out = dict(splits)
@@ -197,16 +197,11 @@ def canonical_source(source: str, splits: dict) -> str:
     """Resolve a post path to the identity its role is keyed on.
 
     `splits["aliases"]` is an optional `{alias: canonical}` map, consulted
-    transitively. **The direction is load-bearing and is the opposite of the
-    obvious one**: an entry reads "the path this post has *now* → the path its
-    pairs are *already keyed under*", i.e. new → old, not old → new. Roles are
-    assigned from `meta.source` as recorded at capture/synth time, so pointing
-    the old path at the new one would re-hash every existing pair into a
-    different role; pointing the new path at the old one leaves the whole corpus
-    exactly where it is and needs no migration. Absent the key this is the
-    identity function, so an old `splits.json` behaves as before.
-
-    A cycle raises rather than looping.
+    transitively. **The direction is the opposite of the obvious one**: an entry
+    reads new → old — "the path this post has *now* → the path its pairs are
+    *already keyed under*" — because pointing old at new would re-hash every
+    existing pair into a different role (D34). Absent the key this is the
+    identity function, so an old `splits.json` behaves as before; a cycle raises.
     """
     aliases = splits.get("aliases") or {}
     seen = {source}
@@ -227,13 +222,13 @@ def role_of(source: str, splits: dict) -> str:
     the pairs — it had under its old path.
     """
     source = canonical_source(source, splits)
-    # Scan the pinned list directly. It holds a handful of posts and this runs
-    # per-pair/per-chunk, so `set(...)` was building a set per call to answer one
-    # question — strictly more work than the scan it replaced. A *memoised* set
-    # was tried and reverted (870d030): a module-global cache made `role_of`
-    # non-reentrant and went stale on in-place edits to `eval_posts`, which
-    # `test_role_of_memo_does_not_leak_between_splits_docs` still guards against.
-    if source in splits["eval_posts"]:
+    # BOTH sides go through `canonical_source`: a pin may be spelled with the
+    # post's new path while the query arrives under the old one, or the reverse,
+    # and only one of those matched a raw scan (D34). Rebuilt per call because a
+    # memoised set was tried and reverted (870d030) — a module-global cache made
+    # `role_of` non-reentrant and went stale on in-place edits to `eval_posts`,
+    # which `test_role_of_memo_does_not_leak_between_splits_docs` guards.
+    if source in {canonical_source(p, splits) for p in splits["eval_posts"]}:
         return "eval"
     rule = splits["rest_rule"]
     if rule["kind"] != "hash":  # future-proof the schema
@@ -315,6 +310,21 @@ def missing_eval_posts(splits: dict, blog_root: str | Path) -> list[str]:
         for canonical, paths in eval_post_spellings(splits).items()
         if not any((root / path).exists() for path in paths)
     ]
+
+
+def require_pinned_posts(splits: dict, blog_root: str | Path) -> None:
+    """`missing_eval_posts`, raised — the gate a run passes before it spends.
+
+    `check_splits` reports the same fact, and nothing forces `check-splits`
+    before a paid run, so the training entry points call this instead (D34).
+    """
+    missing = missing_eval_posts(splits, blog_root)
+    if missing:
+        raise ConfigError(
+            f"{len(missing)} pinned eval post(s) are not on disk under {blog_root}: "
+            f"{', '.join(missing)} — renamed or deleted, so the role has silently moved. "
+            f"Add the new path to 'aliases' in splits.json (`ai-style check-splits`)."
+        )
 
 
 def is_error(message: str) -> bool:

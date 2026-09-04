@@ -15,7 +15,7 @@ import pytest
 from stylebot import provenance
 from stylebot import splits as sp
 from stylebot import train as tr
-from stylebot.errors import RunError
+from stylebot.errors import ConfigError, RunError
 
 # The styler-corpus shape: contract-complete (assemble_training_corpus validates
 # by default), two chunks per post, the last two posts synthetic and carrying the
@@ -348,3 +348,62 @@ def test_manifest_pins_the_partition_the_selection_and_the_stack(tmp_path, write
     assert filtered["data"]["pairs_sha256"] == data["pairs_sha256"]
     assert filtered["data"]["record_ids_sha256"] != data["record_ids_sha256"]
     assert filtered["data"]["selector_constants"] == {"RETIRED_ARMS": ["m1"]}
+
+
+def test_blog_root_refuses_a_run_whose_eval_pins_left_the_tree(tmp_path, write_pairs_corpus):
+    """D34's missing-pin check, moved in front of the spend.
+
+    `check_splits(blog_root=…)` has always reported it, but only `check-splits`
+    calls that and nothing forces `check-splits` before a paid run (F3).
+    """
+    corpus_path = write_pairs_corpus(n_posts=6, **CORPUS)
+    splits_path = tmp_path / "splits.json"
+    sp.save_splits(sp.make_splits([f"post/p{i}.qmd" for i in range(6)], seed=0), splits_path)
+    pinned = sp.load_splits(splits_path)["eval_posts"]
+    blog_root = tmp_path / "blog"
+    (blog_root / "post").mkdir(parents=True)
+
+    def run(**kw):
+        return tr.run_training(
+            corpus_path,
+            tmp_path / "work",
+            tmp_path / "runs" / "r.json",
+            dry_run=True,
+            splits_path=splits_path,
+            **kw,
+        )
+
+    with pytest.raises(ConfigError, match=pinned[0]):
+        run(blog_root=blog_root)
+    # Without --blog-root the run is unchanged: the check is opt-in, so the blog
+    # can adopt it in its own commit.
+    assert run().manifest["data"]["splits_sha256"] == sp.splits_sha256(splits_path)
+    # And with the pinned posts on disk it passes.
+    for post in pinned:
+        (blog_root / post).write_text("x", encoding="utf-8")
+    assert run(blog_root=blog_root).manifest["data"]["eval_version"] == 1
+
+
+def test_train_cli_exits_2_on_a_missing_pin(tmp_path, write_pairs_corpus):
+    """The CLI half: a broken contract is a ConfigError, so exit 2, not a warning."""
+    from click.testing import CliRunner
+
+    from stylebot import config
+    from stylebot.bin import ai_style
+
+    data_dir = tmp_path / "corpus"
+    data_dir.mkdir()
+    write_pairs_corpus(path=config.pairs_path(data_dir), n_posts=6, **CORPUS)
+    splits_path = tmp_path / "splits.json"
+    sp.save_splits(sp.make_splits([f"post/p{i}.qmd" for i in range(6)], seed=0), splits_path)
+    blog_root = tmp_path / "blog"
+    blog_root.mkdir()
+
+    result = CliRunner().invoke(
+        ai_style.main,
+        ["train", "--data-dir", str(data_dir), "--dry-run"]
+        + ["--splits", str(splits_path), "--blog-root", str(blog_root)]
+        + ["--work-dir", str(tmp_path / "w"), "--manifest-out", str(tmp_path / "m.json")],
+    )
+    assert result.exit_code == 2, result.output
+    assert "not on disk under" in result.output

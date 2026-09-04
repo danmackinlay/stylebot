@@ -17,15 +17,13 @@ All heavy imports are lazy, so importing the module is free and
 content-matched pairs (slop vs author of the *same* passage), split by POST
 (`GroupShuffleSplit` — never by paragraph), `class_weight='balanced'`. The
 headline metric is content-matched pairwise accuracy ("pick the author's version
-of the same passage") plus AUC. The training modes — fit-all, holdout, and the
-three-role splits contract — are documented on `train` below; the holdout ones
-are the leakage-safe configurations to use when the detector is a *reward*.
+of the same passage") plus AUC. The three training modes are documented on
+`train`; the holdout ones are the leakage-safe ones when the detector is a
+*reward*.
 
-On a mixed corpus (real edit-pairs + `meta.synthetic` machine paraphrases) both
-modes additionally facet the metric by provenance (`by_provenance.real` /
-`.synthetic`): synthetic pairs may augment the *fit*, but "how well do we detect
-our own paraphrase generator" must never masquerade as the honest number — that
-is `by_provenance.real`.
+On a mixed corpus both modes facet the metric by provenance
+(`by_provenance.real` / `.synthetic`): synthetic pairs may augment the *fit*, but
+detecting our own paraphrase generator never masquerades as the honest number.
 
 Polarity: slop is the positive class (`LABEL_SLOP=1`), so
 `predict_proba[:, slop] = P(slop)` and the served detector's ``score = P(slop)``
@@ -753,6 +751,7 @@ def _train_splits_mode(
     ds: Dataset,
     splits_path: str | Path,
     *,
+    blog_root: str | Path | None,
     test_size: float,
     n_splits: int,
     C: float | None,
@@ -770,6 +769,8 @@ def _train_splits_mode(
     from stylebot import splits as splits_mod
 
     sp = splits_mod.load_splits(splits_path)
+    if blog_root is not None:
+        splits_mod.require_pinned_posts(sp, blog_root)
     warnings = splits_mod.check_splits(sp, ds)
     for w in warnings:
         logger.warning("splits: %s", w)
@@ -800,10 +801,9 @@ def _train_splits_mode(
         "mode": "splits",
         "path": str(splits_path),
         "seed": sp.get("seed"),
-        # The partition this head was fit under, pinned by content and by
-        # version: `eval_v2 = eval_v1 ∪ new posts` moves posts INTO the frozen
-        # stratum, so an artifact fit before the extension saw prose that a
-        # later verdict treats as held out.
+        # The partition this head was fit under, pinned by content and version:
+        # extending the stratum moves posts INTO it, so an artifact fit before
+        # the extension saw prose a later verdict treats as held out (D42).
         "eval_version": sp.get("eval_version"),
         "rest_rule": sp["rest_rule"],
         "roles": splits_mod.summarize_roles(sp, ds),
@@ -897,6 +897,7 @@ def train(
     holdout_seed: int = 0,
     holdout_posts=None,
     splits_path: str | Path | None = None,
+    blog_root: str | Path | None = None,
     pair_ok: Callable[[dict], bool] | None = None,
 ) -> tuple[Path, dict]:
     """End-to-end: assemble → embed → evaluate → fit → write artifact.
@@ -909,14 +910,12 @@ def train(
       then ship the head fit on ALL posts. Honest for *measuring* an independent
       styler; not for grading one trained on these posts.
     - **holdout** (`holdout_frac`>0 or `holdout_posts`): hold out a set of POSTs,
-      report the single-split unseen-posts metric, and ship the head fit on the
-      train posts ONLY.
-    - **splits** (`splits_path`): the shared three-role contract
-      (`stylebot.splits`). The head is fit on the **detector** pool only; the
-      frozen **eval** posts are never even embedded; the **styler** posts supply
-      a bonus unseen-posts metric (`metrics.styler_holdout`). Role counts, the
-      danger-report warnings, and the rest-rule are recorded in `meta.split` so
-      styler-train + eval consume the same partition.
+      report the single-split unseen-posts metric, ship the head fit on the rest.
+    - **splits** (`splits_path`): the shared three-role contract. Fit on the
+      **detector** pool only; the frozen **eval** posts are never embedded; the
+      **styler** posts give a bonus unseen-posts metric (`styler_holdout`); role
+      counts, warnings and the rest-rule land in `meta.split`. `blog_root` fails
+      the run on a pinned eval post that has left the tree (D34).
     """
     ds = assemble_dataset(pairs_path, extra_positives=extra_positives, pair_ok=pair_ok)
     if ds.n_pairs == 0:
@@ -936,6 +935,7 @@ def train(
         return _train_splits_mode(
             ds,
             splits_path,
+            blog_root=blog_root,
             test_size=test_size,
             n_splits=n_splits,
             C=C,

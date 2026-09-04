@@ -10,7 +10,7 @@ import pytest
 
 from stylebot import splits as sp
 from stylebot.classify_train import Dataset
-from stylebot.errors import RunError
+from stylebot.errors import ConfigError, RunError
 
 
 def _dataset(posts_pairs: dict[str, int], synth_posts: set | None = None) -> Dataset:
@@ -305,3 +305,47 @@ def test_check_splits_without_blog_root_checks_no_paths(tmp_path):
     """The on-disk check is opt-in: `check_splits` has corpus-only callers."""
     ds = _dataset({"notebook/old.qmd": 2})
     assert not any(sp.is_error(line) for line in sp.check_splits(_renamed_splits(), ds))
+
+
+def test_role_of_reads_the_pinned_list_through_the_alias_map():
+    """A pin spelled with the post's NEW path still names the same identity.
+
+    `role_of` canonicalised the query and then compared it against the RAW list,
+    so a pin under the new spelling matched neither name (F3, D34).
+    """
+    splits = {
+        "schema_version": 1,
+        "eval_posts": ["notebook/new.qmd"],
+        "aliases": {"notebook/new.qmd": "notebook/old.qmd"},
+        "rest_rule": {"kind": "hash", "detector_frac": 0.4, "salt": "0"},
+    }
+    assert sp.role_of("notebook/new.qmd", splits) == "eval"
+    assert sp.role_of("notebook/old.qmd", splits) == "eval"
+
+
+def test_extending_with_a_renamed_post_pins_both_spellings():
+    """`extend_eval` stores the identity, not the caller's spelling (F3, D34)."""
+    splits = {
+        "schema_version": 1,
+        "eval_posts": [],
+        "aliases": {"notebook/new.qmd": "notebook/old.qmd"},
+        "rest_rule": {"kind": "hash", "detector_frac": 0.4, "salt": "0"},
+    }
+    extended = sp.extend_eval(splits, ["notebook/new.qmd"], note="F3")
+    assert extended["eval_posts"] == ["notebook/old.qmd"]
+    assert extended["eval_history"][-1]["added"] == ["notebook/old.qmd"]
+    assert sp.role_of("notebook/new.qmd", extended) == "eval"
+    assert sp.role_of("notebook/old.qmd", extended) == "eval"
+    # Re-adding under either spelling is a no-op, not a version churn.
+    assert sp.extend_eval(extended, ["notebook/new.qmd"]) is extended
+    assert sp.extend_eval(extended, ["notebook/old.qmd"]) is extended
+
+
+def test_require_pinned_posts_is_the_gate_check_splits_only_reported(tmp_path):
+    """The same fact as `missing_eval_posts`, raised — for pre-run callers."""
+    splits = _renamed_splits()
+    (tmp_path / "notebook").mkdir()
+    with pytest.raises(ConfigError, match="notebook/old.qmd"):
+        sp.require_pinned_posts(splits, tmp_path)
+    (tmp_path / "notebook" / "new.qmd").write_text("x")
+    assert sp.require_pinned_posts(splits, tmp_path) is None

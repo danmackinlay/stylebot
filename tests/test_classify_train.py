@@ -448,3 +448,17 @@ def test_assemble_dataset_pair_ok_is_the_callers_policy(write_pairs_corpus):
     assert everything.n_pairs_synthetic > 0
     assert kept.n_pairs_synthetic == 0
     assert kept.n_pairs == everything.n_pairs_real
+
+
+def test_train_refuses_a_splits_file_whose_pins_left_the_tree(tmp_path, write_pairs_corpus):
+    """`blog_root` gates the fit on D34's missing-pin check, before embedding."""
+    from stylebot import splits as sp
+
+    corpus = write_pairs_corpus(n_posts=6, chunks=2, **MINIMAL)
+    posts = sorted(set(ct.assemble_dataset(corpus).groups))
+    splits_path = sp.save_splits(sp.make_splits(posts, seed=0), tmp_path / "splits.json")
+    blog_root = tmp_path / "blog"
+    (blog_root / "post").mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="not on disk under"):
+        ct.train(corpus, tmp_path / "clf", splits_path=splits_path, blog_root=blog_root)
