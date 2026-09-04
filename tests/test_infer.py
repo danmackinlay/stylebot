@@ -950,3 +950,40 @@ def test_prose_chunks_honours_the_diet_it_is_handed():
 
 def test_prose_chunks_of_a_document_with_no_prose_is_empty():
     assert infer.prose_chunks("# Only a heading\n\n```\ncode\n```\n", max_chunk_chars=100) == []
+
+
+# ---------------------------------------------------------------------------
+# The sampled message's content is `str | list[ContentPart]` (D75)
+# ---------------------------------------------------------------------------
+
+
+def test_message_text_passes_a_plain_string_through():
+    assert infer._message_text("just prose") == "just prose"
+
+
+def test_message_text_rewraps_a_thinking_part_rather_than_dropping_it():
+    parts = [
+        {"type": "text", "text": "the `"},
+        {"type": "thinking", "thinking": "`…`"},
+        {"type": "text", "text": "` convention"},
+    ]
+    assert infer._message_text(parts) == "the `<think>`…`</think>` convention"
+
+
+def test_message_text_survives_an_empty_or_unknown_part():
+    assert infer._message_text(None) == ""
+    assert infer._message_text([{"type": "image", "image": "x"}, "junk"]) == ""
+
+
+def test_a_literal_think_block_round_trips_through_the_renderer_parser():
+    """The live defect: capture 43f0e688 rewrote `<think>` and the styler died.
+
+    `parse_content_blocks` splits any sample containing a literal `<think>`
+    block into parts, so `content` is a list and `.strip()` raised
+    `AttributeError`. `_message_text` is that parser's inverse.
+    """
+    parse = pytest.importorskip("tinker_cookbook.renderers.base").parse_content_blocks
+    sampled = "the `<think>`…`</think>` convention is common enough\n"
+    parts, tool_calls = parse(sampled)
+    assert not isinstance(parts, str) and not tool_calls
+    assert infer._message_text(parts) == sampled

@@ -179,10 +179,8 @@ def test_fixture_contains_every_named_case(doc: str):
 
 def test_an_unclosed_div_protects_nothing(doc: str):
     # An opener with no closer yields no span, on either side: over-protecting
-    # to end-of-document would swallow the rest of the post. (A `:::` opener,
-    # note — an unclosed *fence* does exactly the opposite; see below. The two
-    # differ because a div's contents are markdown that renders either way,
-    # while a fence's are code that a rewrite would destroy.)
+    # to end-of-document would swallow the rest of the post (D76). A `:::`
+    # opener, note — an unclosed *fence* does exactly the opposite; see below.
     assert "never-closed" not in "".join(
         seg for seg, editable in segment_for_edit(doc) if not editable
     )

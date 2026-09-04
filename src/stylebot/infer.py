@@ -454,14 +454,12 @@ def rewrite_candidates(
     Single-chunk contract: `text` must be prose at training chunk scale, so
     frontmatter, a heading, a protected block (D27) or prose over
     `max_chunk_chars` raises ValueError with a message fit for an editor. Under
-    `inline_headings` a selection MAY span headings and **any `context` is
-    ignored**.
+    `inline_headings` a selection MAY span headings and any `context` is ignored.
 
     Returns `{"input_score", "n_sampled", "candidates": [{"text", "score",
     "anchors_lost", "anchors_gained", "truncated", "identity"}, ...]}` in
-    sampled order; the caller owns presentation order and should log it.
-    Duplicate texts are collapsed, and a candidate byte-equal to the input is
-    flagged `identity: true`.
+    sampled order; the caller owns presentation order. Duplicates collapse, and
+    a candidate byte-equal to the input is flagged `identity: true`.
     """
     from stylebot.pairs import build_pair_content, pair_body
 
@@ -546,31 +544,20 @@ def rewrite_text(
 ) -> RewriteResult:
     """Rewrite prose chunk-by-chunk through the styler, mirroring training.
 
-    Frontmatter, headings and every protected block pass through verbatim,
-    matching what `lib.editable_prose` drops before a target is cut (D27); each
-    prose chunk is sent with the nearest preceding heading prepended exactly as
-    `build_pair_content` did at capture time, and the prefix is stripped from
-    the sample (`pair_body`) before reassembly. Whitespace is reassembled
-    verbatim; a blank styler answer falls back to the input chunk.
+    Frontmatter, headings and protected blocks pass through verbatim (D27); a
+    prose chunk carries the nearest preceding heading as `context` unless
+    `inline_headings` selects the cross-heading diet, where a heading is chunk
+    content instead — set it from the adapter's `data.chunk_scale`. Whitespace
+    is reassembled verbatim and a blank answer keeps the input chunk.
 
-    `inline_headings` selects the cross-heading diet, in which headings are
-    chunk content rather than `context`. Set it to match the promoted adapter's
-    `data.chunk_scale`.
-
-    Candidates are disqualified in order — TRUNCATED first (truncation causes
-    anchor loss and would otherwise be filed as anchor damage), then anchor
-    damage in both directions (D32) — and counted in `n_truncated`,
-    `n_anchor_rejected`, `n_anchor_lost`, `n_anchor_invented`, with per-chunk
-    detail in `result.anchor_audit`. `inline_anchors` widens the guard to inline
-    code and math; default off (`_plans/anchor-integrity.md`).
-
-    With a `scorer` (lower = better) the INPUT chunk competes: the do-no-harm
-    guard replaces a chunk only with a strictly better rewrite, and each decision
-    lands in `result.decisions`.
-    `on_decision(chunk, context, candidates, scores, chosen_index, kept_input)`
-    fires once per prose chunk — the preference-data seam; `scores` aligns with
-    `candidates` (None when unscored or rejected) and `chosen_index` indexes it
-    (None when the input was kept).
+    Candidates are disqualified TRUNCATED first, then for anchor damage either
+    way (D32), counted in `n_truncated`, `n_anchor_rejected`, `n_anchor_lost`,
+    `n_anchor_invented` with detail in `result.anchor_audit`; `inline_anchors`
+    widens the guard to inline code and math, default off. With a `scorer`
+    (lower = better) the input chunk competes (D20) and `on_decision(chunk,
+    context, candidates, scores, chosen_index, kept_input)` fires per chunk —
+    the preference seam; `scores` aligns with `candidates` and `chosen_index`
+    indexes it, None when the input was kept.
     """
     from stylebot.pairs import build_pair_content, pair_body
 
@@ -613,10 +600,7 @@ def rewrite_text(
         result.n_candidates += len(candidates)
         raw = [pair_body(c, context).strip() for c in candidates if c and c.strip()]
         raw = [c for c in raw if c]
-        # Two disqualifications, in this order, both BEFORE any voice scoring:
-        # TRUNCATION first, because it *causes* anchor loss (and is the failure
-        # anchors cannot catch on a chunk carrying no link), then ANCHOR
-        # INTEGRITY in both directions (`anchor_delta`, D32).
+        # Truncation first (it CAUSES anchor loss), then anchor integrity — D32.
         lost: list[str] = []
         invented: list[str] = []
         n_lost = n_invented = 0  # SAMPLES, not anchors, for this chunk's decision line
@@ -628,10 +612,7 @@ def rewrite_text(
             if is_truncated(chunk, c):
                 cut.append(len(c.strip()) / max(1, len(chunk.strip())))
                 result.n_truncated += 1
-                # Recorded as truncation with no anchor verdict at all: a cut
-                # sample's anchor delta measures the token budget, not the
-                # model's link handling, and averaging the two together is
-                # exactly what the audit exists to avoid.
+                # No anchor verdict: a cut sample's delta measures the budget.
                 audit.append({"truncated": True, "chars": len(c.strip())})
                 continue
             gone, new = anchor_delta(chunk, c, inline=inline_anchors)
@@ -670,10 +651,7 @@ def rewrite_text(
                     f"shortest {min(cut):.0%} of input — raise --max-tokens?)"
                 )
             elif lost or invented:
-                # Loss and invention want different fixes (a better sample vs a
-                # model that stops making things up), and a chunk can suffer
-                # both, so they are reported side by side rather than merged
-                # into one "anchor damage" count.
+                # Side by side, never merged: they want different fixes (D32).
                 bits = []
                 if lost:
                     bits.append(f"{n_lost} sample(s) lost anchors: {_anchor_summary(lost)}")
@@ -786,6 +764,26 @@ def rewrite_pairs_file(
 # ---------------------------------------------------------------------------
 
 
+def _message_text(content: object) -> str:
+    """Flatten a renderer `Message.content` — `str | list[ContentPart]` — to text.
+
+    A sample carrying a literal `<think>` block parses to content PARTS, and a
+    thinking part is re-wrapped rather than dropped: under a thinking-disabled
+    renderer it is the author's prose, not the model's reasoning (D75).
+    """
+    if isinstance(content, str):
+        return content
+    out: list[str] = []
+    for part in content or ():
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text":
+            out.append(part.get("text") or "")
+        elif part.get("type") == "thinking":
+            out.append(f"<think>{part.get('thinking') or ''}</think>")
+    return "".join(out)
+
+
 def tinker_backend(
     sampler_path: str,
     base_model: str,
@@ -827,7 +825,7 @@ def tinker_backend(
         outs = []
         for seq in response.sequences:
             message, _ok = renderer.parse_response(seq.tokens)
-            outs.append((message.get("content") or "").strip())
+            outs.append(_message_text(message.get("content")).strip())
         return outs
 
     return styler

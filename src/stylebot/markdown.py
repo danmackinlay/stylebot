@@ -97,8 +97,8 @@ BLOCKQUOTE_RE = re.compile(r"^(?:[ \t]{0,3}>[^\n]*\n?)+", re.MULTILINE)
 #: than markup, so reflowing them is never right (join the line after a ``//``
 #: comment onto it and the line is commented out). Every other element's content
 #: *is* markup, so prose inside a raw ``<div>`` stays rewritable. DOTALL so a
-#: blank line cannot end the match; an unclosed opener yields no span, as
-#: `CODE_FENCE_RE` and `_div_spans` do.
+#: blank line cannot end the match; an unclosed opener yields no span, as an
+#: unclosed `:::` does (D76) — unlike a code fence, which runs to end of document.
 RAW_HTML_BLOCK_RE = re.compile(
     r"^[ \t]*<(?P<tag>script|style)\b[^>]*>.*?</(?P=tag)[ \t]*>[ \t]*$(?:\n|\Z)",
     re.MULTILINE | re.DOTALL | re.IGNORECASE,
@@ -155,7 +155,7 @@ def _div_spans(
 
     Pandoc rule: a closing fence is a line that is exactly ``:::`` (whitespace
     allowed); a ``:::`` line with arguments opens a *nested* div. An unclosed
-    opener produces no span at all — scanning simply continues past it.
+    opener produces no span at all — deliberately, and not pandoc's reading (D76).
 
     With `div_is_prose` returning true for an opener, only the opener and closer
     lines are protected (ground 3) and the interior is rescanned for nested

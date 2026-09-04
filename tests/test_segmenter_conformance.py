@@ -302,10 +302,11 @@ def test_the_headings_are_not_swallowed_by_any_span(doc: str):
 def test_the_unclosed_div_protects_nothing(doc: str):
     """A `:::` opener with no closer yields no span — the opposite of a fence.
 
-    Deliberately opposite, and both readings are pandoc's: a div's contents are
-    markdown that renders the same either way, so over-protecting to EOF would
-    cost the rest of the post for nothing, while an unclosed fence's contents
-    ARE code to the end of the document and a rewrite would destroy them.
+    Deliberately opposite, and not pandoc's reading of the div half: pandoc
+    closes it implicitly at EOF and warns. A div's contents render the same
+    either way, so over-protecting to EOF would cost the rest of the post for
+    nothing; an unclosed fence's contents ARE code and a rewrite destroys them.
+    D76 argues it, and the count that decided it.
     """
     opener = doc.index("::: an-opener-that-is-never-closed")
     for name in CONFIGURATIONS:

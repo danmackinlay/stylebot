@@ -10,10 +10,9 @@ never be edited to match today (D52).
 
 ## Threading audit — 2026-09-03/04: the eval pool bought nothing; batching bought 1.7x
 
-Every threading construct in stylebot and the blog, audited against D56's rule.
-No spend: the corpus is the 34 already-paid-for rewritten documents in
-`runs/docscale-20260903/documents.jsonl` plus the live pairs corpus. Apple
-silicon, torch 2.13, 6 torch threads; timings are interleaved repeats.
+Every threading construct in stylebot and the blog, against D56's rule. No spend:
+the 34 already-paid-for documents in `runs/docscale-20260903/documents.jsonl` plus
+the live corpus. Apple silicon, torch 2.13, 6 torch threads, interleaved repeats.
 
 | measurement | `max_workers=8` | `max_workers=1` |
 |---|---|---|
@@ -91,9 +90,8 @@ deltas move inside their own interval widths. D54; supersedes the entry below.
 ## Document-scale eval, chunk-wise — 2026-09-03: it separates
 
 ~~Superseded 2026-09-04 by `docscale-20260904` above, which re-ran it on the
-serving `div_is_prose`.~~ Same 34 documents, same detector, same command — **only
-the scoring changed**: each field is segmented the way serving segments it and
-the document's number is the mean over its chunks. No new sampling.
+serving `div_is_prose`.~~ Same 34 documents, detector and command; **only the
+scoring changed**, to the mean over serving-scale chunks. No new sampling.
 
 | | whole-document embedding | **chunk-wise mean** |
 |---|---|---|
@@ -108,16 +106,15 @@ the document's number is the mean over its chunks. No new sampling.
 | output − target | −0.0037 (−0.0172, +0.0022) | +0.0036 (−0.0055, +0.0288) |
 
 The direction is now right and both intervals exclude zero; the identical
-min/max across all three fields is gone, which was the tell that the embedding
-read the document rather than the writing, and 0.735 against the head's own
-chunk-scale 0.784 says the instrument is inside its range. Chunk counts
-563 / 564 / 563 are a coincidence, **not** an alignment. Decided: D54.
+min/max is gone — the tell that the embedding read the document rather than the
+writing — and 0.735 against the head's own chunk-scale 0.784 says the instrument
+is inside its range. Chunk counts 563 / 564 / 563 coincide, **not** align. D54.
 
 ## Document-scale eval, whole-document — 2026-09-03 (W10 item 7): the instrument has no resolution there
 
-~~Superseded the same day by the chunk-wise re-score above.~~ The first run of
-`rewrite_text` over whole eval posts rather than pre-cut chunks: 34 of 35
-eval-role archives rewritten by run 4a, scored with the refit detector. ~$0.27.
+~~Superseded the same day by the chunk-wise re-score above.~~ `rewrite_text` over
+whole eval posts rather than pre-cut chunks: 34 of 35 eval-role archives, run 4a,
+refit detector, ~$0.27. The 35th is D75.
 
 | field | n | mean P(slop) | sd | min | max |
 |---|---:|---:|---:|---:|---:|
@@ -128,18 +125,15 @@ eval-role archives rewritten by run 4a, scored with the refit detector. ~$0.27.
 **The verdict is that there is no verdict, and that is the result.** The min and
 max are byte-identical across all three fields and the styler scored *closer to
 slop* than the draft in 34 of 34: over 25k chars the shared 90-odd percent of two
-variants dominates the embedding. One document (`43f0e688`) still fails to
-rewrite with `AttributeError: 'list' object has no attribute 'strip'` — caught by
-the guard, never diagnosed. Decided: D54.
+variants dominates the embedding. Decided: D54.
 
 ## Pangram cross-check — 2026-09-03, PARTIAL (W10 item 6)
 
-The one-shot independent-detector check, against the eval_v2 stratum. Two things
-went wrong before a number came out, and both are the finding. **The shipped
-endpoint was dead** — 404, because Pangram 3.0 replaced it with an async task
-API, and the detector had only ever been exercised through its `post=` stub,
-which cannot tell you the URL is wrong. **The account ran out of credit mid-run**
-(HTTP 402 after 92 of 149), so the table is that sample, resumable by id.
+The one-shot independent-detector check, against the eval_v2 stratum. **The
+shipped endpoint was dead** (404: Pangram 3.0 moved to an async task API, and the
+detector had only been exercised through its `post=` stub, which cannot tell you
+a URL is wrong), and **the account ran out of credit** (402 after 92 of 149), so
+the table is that sample, resumable by id.
 
 | | |
 |---|---|
@@ -151,11 +145,10 @@ which cannot tell you the URL is wrong. **The account ran out of credit mid-run*
 | answers exactly on a rail (1.0 or 0.0) | 153 / 184 = 83% |
 | Dan's own prose scored exactly 1.0 | **47 / 92** |
 
-**The direction holds** — when Pangram distinguishes the two sides at all it
-agrees with the voice classifier 88% of the time — **but it is a blunt instrument
-on this corpus**, the more useful result: an 83% saturation rate has no gradient
-and would veto half of Dan's real prose. A one-shot check, never a signal
-(D7, D39).
+**The direction holds** — where Pangram separates the sides at all it agrees with
+the voice classifier 88% of the time — **but it is blunt on this corpus**, which
+is the more useful result: 83% saturation has no gradient and would veto half of
+Dan's real prose. A one-shot check, never a signal (D7, D39).
 
 ## Corpus and target selection — 2026-06-27/28, live blog
 
@@ -316,18 +309,33 @@ styler data**: **~19%** exceed 0.85 — label noise for the detector, restraint 
 the styler. D18.
 
 **Unanchored `$$` mangled sentences inside training targets** (defect A5,
-2026-08-11). `MATH_BLOCK_RE` was not line-anchored, so a mid-sentence `$$k$$` was
-excised as a display block and the remnants joined: `high-$$d$$ behaviour` →
-`high- behaviour` **in a training target**. **145 of 1,751** blog files contain a
-non-standalone `$$`; blast radius **24 target texts, 29 pairs (0.70%), 15 posts**
-— corpus 4,624 → **4,595** after a one-off prune (deleted in 0.3). The other four
-A-series defects had **zero** corpus impact. D29, D38.
+2026-08-11): `high-$$d$$ behaviour` → `high- behaviour` **in a training target**.
+**145 of 1,751** blog files contain a non-standalone `$$`; blast radius **24
+target texts, 29 pairs (0.70%), 15 posts** — corpus 4,624 → **4,595** after a
+one-off prune (deleted in 0.3). The other four A-series defects had **zero**
+corpus impact. D29, D38.
 
 **Capture diffing loses almost nothing** (2026-08-04, all 41 archives): the
 theory that `diff_chunks` discarded paragraph-count-changing edits died on
 measurement — **1** dropped opcode. **Gap-coalescing vs fixed-width windowing**:
 coalescing gives **87 pairs, median 1191 chars, p90 4230** and changed-fraction
 **0.96** against **0.41**; bridging tolerance **2 paragraphs / 800 chars**.
+
+### Two constructs the corpus no longer holds — 2026-09-04 (F12g/j)
+
+`migrations.find_inventing` over `_training_pairs/pairs/`, and a `:::` depth scan
+over `lib.gather_qmd_files(base=~/Source/livingthing)`. Read-only, no spend.
+
+| scan | over | found |
+|---|---|---|
+| synthetic pairs inventing an anchor | 8,156 records | **0** |
+| the same scan under `--include-real` | 8,156 records | **49** real, all Dan's own cross-references |
+| an unclosed `:::` opener | 1,758 blog `.qmd` | **0** |
+
+The first says the cull is spent (D73) and the second says why `--include-real`
+was never its default (D65) — those 49 are the author wiring a note into his own
+graph, not a generator hallucinating. The third is why the segmenter's "an
+unclosed opener yields no span at all" stays as it is (D76).
 
 ### The synth walker's gap is empty — 2026-09-03
 
@@ -361,28 +369,26 @@ Measured on the run-4 eval: 160 opus-4-8 calls over 40 eval chunks.
 
 **Cost is not the problem — the estimate was wrong by an order of magnitude.**
 122,103 prompt + 11,685 completion tokens over 160 calls: **~$2.71 at claude-opus
-list**; a full 127-chunk four-field pass is ~$8.60, and OpenRouter reported
-$0.0000 because the Anthropic arm bills through BYOK (D66). **The problem is that
-it cannot see real slop**: its competence is carried entirely by synthetic slop,
-while on real slop it is worse than chance and ties on 14 of 20 — the 1–5 integer
-scale has no resolution at the distances that matter. Aggregates still look sane
-(slop 3.25 → output 4.08 → Dan 4.20), which is how this went unnoticed. **It
-cannot arbitrate between two adapters** (4a−4b +0.025, CI [−0.124, +0.174] at
-n=40; resolving 0.10 needs n ≈ 88). An aggregate smoke alarm, never a
-tie-breaker; the fix worth trying is a pairwise A/B judge. D40, D7.
+list**, a full 127-chunk four-field pass ~$8.60, and OpenRouter reported $0.0000
+because the Anthropic arm bills through BYOK (D66). **The problem is that it
+cannot see real slop**: its competence is carried entirely by synthetic slop,
+while on real slop it is worse than chance and ties 14 of 20 — the 1–5 integer
+scale has no resolution at the distances that matter, and the aggregates still
+look sane (3.25 → 4.08 → 4.20), which is how it went unnoticed. **It cannot
+arbitrate two adapters** (4a−4b +0.025, CI [−0.124, +0.174] at n=40; resolving
+0.10 needs n ≈ 88). A smoke alarm, never a tie-breaker. D40, D7.
 
 ## Register — the labels are not free (2026-08-17)
 
 Prompted by "my style has many registers and the model is struggling to hit a
 median register". A single SFT LoRA on a multimodal target learns the conditional
-mean, so a median register is the expected outcome, not a defect of any run. The
-cheap fix would be a register label — if labels were free. K-means over
-StyleDistance embeddings of **2,500 distinct Dan-side chunks** (≥400 chars):
-silhouette **0.232** at k=2, 0.231 at k=3, **0.117** at k=4, 0.090 at k=6, and
-reading the exemplars what separates is **topic, not register**. The same
-backbone supports a *supervised* Dan-vs-slop direction at 0.73 real pairwise
-despite that: supervision picks the direction, k-means picks the biggest one.
-Decided: D22.
+mean, so a median register is expected, not a defect of any run; the cheap fix
+would be a register label, if labels were free. K-means over StyleDistance
+embeddings of **2,500 distinct Dan-side chunks** (≥400 chars): silhouette **0.232**
+at k=2, 0.231 at k=3, **0.117** at k=4, 0.090 at k=6, and reading the exemplars
+what separates is **topic, not register**. The same backbone still supports a
+*supervised* Dan-vs-slop direction at 0.73 real pairwise: supervision picks the
+direction, k-means picks the biggest one. Decided: D22.
 
 ## The voice classifier (the detector signal)
 
@@ -397,12 +403,12 @@ and AUC, split by POST:
 | Wegmann CISR | 0.73 | 0.67 |
 
 The AUC column is the tell: mxbai's topic-dominance collapses on the absolute
-"is this slop" question while a content-independent *style* embedding holds,
-which made both Pangram and a contrastive fine-tune unnecessary for v1. **Score
-distribution is narrow** (2026-07-06, 264 pairs): it all lives in ≈[0.32, 0.68] —
-Dan side p5/p50/p95 .32/.46/.62, slop side .40/.55/.68 — hence the warped editor
-buckets `[0.51, 0.55, 0.59, 0.65]`. **Editor latency is a non-issue** (same day,
-MPS): 5.0 s cold load once, **34 ms** for a 30-paragraph notebook. D7, D20, D44.
+"is this slop" question while a content-independent *style* embedding holds —
+which made Pangram and a contrastive fine-tune unnecessary for v1. **The score
+distribution is narrow** (2026-07-06, 264 pairs): all of it in ≈[0.32, 0.68], Dan
+p5/p50/p95 .32/.46/.62 against slop .40/.55/.68, hence the warped editor buckets
+`[0.51, 0.55, 0.59, 0.65]`. **Editor latency is a non-issue** (same day, MPS):
+5.0 s cold load once, **34 ms** for a 30-paragraph notebook. D7, D20, D44.
 
 ## The alias seam — 2026-09-03 (D34), re-measured 2026-09-04 (F3)
 
@@ -414,14 +420,13 @@ MPS): 5.0 s cold load once, **34 ms** for a 30-paragraph notebook. D7, D20, D44.
 | `notebook/empowerment.qmd` | `notebook/informational_empowerment.qmd` | styler |
 | `notebook/learning_from_madness_of_crowds.qmd` | `notebook/wisdom_from_madness_of_crowds.qmd` | detector |
 
-Both are pinned eval posts. Nothing caught the move: the STALE warning is about
-pairs and the old paths still carried theirs, and `role_of` is open-world, so an
-unknown path gets a role rather than a question — and the canonical corpus run
-passes no `--role`, so the next `synth` would have cut frozen-eval prose. **The
-same seam one layer up, 2026-09-04**: `role_of` canonicalised the query and then
-tested it against the RAW pinned list while `extend_eval` appended the caller's
-spelling verbatim, so extending with the renamed post left **both** spellings
-answering `styler`. Decided: D34.
+Both are pinned eval posts, and nothing caught the move: the STALE warning is
+about pairs and the old paths still carried theirs, `role_of` is open-world, and
+the canonical run passes no `--role` — so the next `synth` would have cut
+frozen-eval prose. **The same seam one layer up, 2026-09-04**: `role_of`
+canonicalised the query then tested it against the RAW pinned list while
+`extend_eval` appended the caller's spelling, so extending with the renamed post
+left **both** spellings answering `styler`. Decided: D34.
 
 ## Eval-stratum composition — re-measured 2026-09-03 (W10)
 
@@ -439,10 +444,10 @@ Pairs by source-post `automation`, alias-resolved:
 | styler | 4,112 | 569 | 208 | 11 / 33 / 134 |
 
 **168 of the detector pool's 179 real pairs (94%) sit on `automation: 1/2`
-posts** — the post is marked AI-touched *because* Dan captured himself
-de-slopping it. Capping at `automation: 0` outright leaves the `real` facet with
-11 pairs; capping only the **synthetic** ones drops 488 of 3,252 (15%) and costs
-no real pair (D41). **What an eval re-cut would buy, and take:**
+posts** — the post is marked AI-touched *because* Dan captured himself de-slopping
+it. Capping at `automation: 0` leaves the `real` facet 11 pairs; capping only the
+**synthetic** ones drops 488 of 3,252 (15%) and costs no real pair (D41). **What
+an eval re-cut would buy, and take:**
 
 | eval_v2 | posts | pairs | real | top-post share | detector real left | styler real left |
 |---|---:|---:|---:|---:|---:|---:|
@@ -483,12 +488,11 @@ document-scale eval goes from 3 documents to **35**, ≈$0.015 → ≈$0.27.
 | paired slop − Dan Δ on the *same* 41 v1 pairs | **0.1466** | **0.1724** |
 
 The pool shrank for reasons that are *not* eval_v2, and the real facet rising on
-36 fewer pairs is inside the ±0.05 fold spread. **A refit alone shifts Δ by
-0.026, against run 4a's headline movement of 0.038**, and `compare_scores`
-refuses the pair. The **chunk-level** interval narrows as n grows (0.137 → 0.081)
-while the **cluster** interval *widens* (0.076 → 0.099): at 6 clusters the
-bootstrap resampled post-means that happened to agree, which only ever means "too
-few clusters to say". Decided: D39, D42.
+36 fewer pairs is inside the ±0.05 fold spread. **A refit alone shifts Δ by 0.026,
+against run 4a's headline 0.038**, so `compare_scores` refuses the pair. The
+**chunk-level** interval narrows as n grows (0.137 → 0.081) while the **cluster**
+interval *widens* (0.076 → 0.099) — at 6 clusters the bootstrap resampled
+post-means that happened to agree. Decided: D39, D42.
 
 ## What a stale-corpus prune would cost and buy — measured 2026-09-03 (W12)
 
@@ -508,26 +512,24 @@ UNCHECKED rather than clean. Why cells stopped reproducing:
 | **prose Dan has edited since generation** | 227 | 265 | **492** |
 | irreducible residue (synthesis ran against an uncommitted tree) | 5 | 12 | 17 |
 
-**So W12's premise is wrong about its own cause**: the two files whose protected
-spans W2 moved carry zero corpus cells, and four fifths of the orphans are Dan
-having edited the post since. The 70 `div_is_prose` cells sit on the **frozen**
-section-bounded arm, so pruning those 349 pairs is permanent loss. **Eval
-contamination: 62 synthetic pairs, all from `automatic_coding.qmd`**, 41 real
-captures spared; 25 in both sets, so the two prunes drop 709, not 734. **And it
-does not touch the dilution it was wanted for**: 4.06 → 4.04. D53.
+**W12's premise is wrong about its own cause**: the two files whose spans W2
+moved carry zero cells, and four fifths of the orphans are Dan having edited the
+post since. The 70 `div_is_prose` cells sit on the **frozen** section-bounded arm,
+so pruning those 349 pairs is permanent loss. **Eval contamination: 62 synthetic
+pairs, all `automatic_coding.qmd`**, 41 real captures spared, 25 in both sets — so
+the two prunes drop 709, not 734, and the dilution it was wanted for barely moves
+(4.06 → 4.04). D53.
 
 ## Corpus blob cost — measured 2026-09-03 (W6)
 
-The W6 brief cited "1.56 GB of blobs under `_training_pairs/`, 1.54 GB of it 122
-versions of a 38 MB `pairs.jsonl`, in a repo whose `.git` is 1.8 GB" — which
-reads as the corpus being ~85% of the repository. That is **logical
-(uncompressed) blob size**. On disk, in the packfile (`%(objectsize:disk)`), the
-same 124 versions cost **49.5 MiB**, because an append-only JSONL deltifies
-almost perfectly: everything under `_training_pairs/` is 52 MiB of 1,107 MiB of
-packed blob content — **4.7%**. Meanwhile `.git/subtree-cache` is **683 MB**, a
-`git subtree` scratch directory and not history at all: deleting it reclaims 13×
-what a filter-repo pass would, with no rewrite and no force-push.
-Decided: D51, D50.
+W6 cited "1.56 GB of blobs under `_training_pairs/`… in a repo whose `.git` is
+1.8 GB", which reads as the corpus being ~85% of the repository. That is
+**logical** blob size. On disk (`%(objectsize:disk)`) the same 124 versions cost
+**49.5 MiB** — an append-only JSONL deltifies almost perfectly — so everything
+under `_training_pairs/` is 52 MiB of 1,107 MiB of packed blob content, **4.7%**.
+Meanwhile `.git/subtree-cache` is **683 MB**, a `git subtree` scratch directory
+and not history: deleting it reclaims 13× what a filter-repo pass would, with no
+rewrite and no force-push. Decided: D51, D50.
 
 ## Training runs — 2026-07-21 to 2026-08-17 (D19, D39, D42)
 
@@ -574,12 +576,10 @@ them from `automatic_coding.qmd`):
 
 ~~The earlier headline — "paired 4a − run 2 = −0.0376, 95% CI [−0.0616, −0.0136],
 excludes zero" — was a chunk-level normal-approximation interval.~~ Clustered by
-post the same point estimate straddles zero, and on the *real* pairs alone the
-effect is eleven times smaller: run 4a's promotion rests on treating 127 chunks
-from 6 posts as independent and on counting our own generators' paraphrases in
-the headline. Neither is a reason to un-promote it, but "a real gain" is not what
-this data supports. A tight interval over 6 clusters means six per-post
-differences agreed in sign, not that the effect is established. Decided: D40, D42.
+post it straddles zero, and on the *real* pairs alone the effect is eleven times
+smaller: 4a's promotion rests on treating 127 chunks from 6 posts as independent
+and on counting our own generators' paraphrases. Not a reason to un-promote it,
+but "a real gain" is not what this data supports. Decided: D40, D42.
 
 ### Effective passage weight — measured 2026-09-03 (W9)
 
@@ -595,12 +595,11 @@ post**, carrying **6,157 pairs (74.7%)**. Reproducing run 4a's selection:
 | passages (source + containment) | **982** | **4.05** pairs each, max **15** |
 | val pairs / passages | 392 / 95 | 4.13 |
 
-Two readings. The multiplicity is the **budget sweep**, not generator replicates
-(653 of the 678 multi-pair passages span ≥2 budgets). And it re-weights the
-scarce side — real pairs are **3.09% of train pairs but 12.2% of train passages**
-— which the by-post val split cannot show, since val inflates identically. Capping
-at one pair per passage leaves 982 pairs; at 2, 1,660; at 3, 2,212. **No run has
-been re-cut or re-weighted.** D43.
+The multiplicity is the **budget sweep**, not generator replicates (653 of 678
+multi-pair passages span ≥2 budgets), and it re-weights the scarce side — real
+pairs are **3.09% of train pairs but 12.2% of train passages** — which the by-post
+val split cannot show, since val inflates identically. Capping at one pair per
+passage leaves 982 pairs; at 2, 1,660; at 3, 2,212. **No run has been re-cut.** D43.
 
 ## Inference and serving
 
@@ -618,25 +617,21 @@ chunked at training scale moved whole-body P(slop) **0.589 → 0.281** — so th
 inference budget is pinned to the training chunk scale (D15).
 
 **Inline anchors would reject a fifth of good rewrites** (2026-08-11, all 4,624
-pairs, in the guard's inference direction) — share of pairs where a genuine Dan
-rewrite would be disqualified: today (links, fences, headings) **6.4%**; + inline
-code 11.9%; + inline math 13.5%; **+ both 19.0%**. Tripling the rejection rate is
-a bad trade for `run`, so inline anchors default **off** there and are **always
-on** in `rewrite_candidates` (D27, D20). **MLX local-serving parity** (2026-07-22,
-run 2, 20 val pairs @ temp 0.3): detector output means **tinker 0.4627 vs local
-4-bit 0.4529**, Δ **−0.0098**, inside the 0.03 gate; drift within the 0.05 gate,
-zero template artifacts. D8, and D48 — the only parity evidence a Protocol
-cannot give.
+pairs, inference direction) — share of pairs where a genuine Dan rewrite would be
+disqualified: today (links, fences, headings) **6.4%**; + inline code 11.9%; +
+inline math 13.5%; **+ both 19.0%**. So they default **off** in `run` and are
+**always on** in `rewrite_candidates` (D27, D20). **MLX local-serving parity**
+(2026-07-22, run 2, 20 val pairs @ temp 0.3): detector output means **tinker
+0.4627 vs local 4-bit 0.4529**, Δ **−0.0098**, inside the 0.03 gate; drift within
+the 0.05 gate, zero template artifacts. D8, D48.
 
 ## Cost: forecast vs actual — v1, through 2026-08-17
 
-The original plan budgeted **$180–290** for synthetic pair generation, inside a
-~$200–330 upfront envelope. Actual v1 generation came in at **$15.27** in billed
-credits for 4,169 synthetic pairs — **~$0.0037 a pair**, an order of magnitude
-under forecast, and that unit rate is what to size any re-synthesis against.
-Training was likewise cheap: run 1 $1.97, run 2 $1.49 against a $6–15 estimate.
-The v2 curriculum is sized at ~8.9M target chars, ≈ **$39**. Decided: D66 (the
-scale at which a 5% BYOK fee is not payable).
+The plan budgeted **$180–290** for synthetic generation inside a ~$200–330
+envelope. Actual v1: **$15.27** billed for 4,169 pairs — **~$0.0037 a pair**, an
+order of magnitude under forecast, and the unit rate to size any re-synthesis
+against. Training likewise: run 1 $1.97, run 2 $1.49 against a $6–15 estimate.
+The v2 curriculum is ~8.9M target chars, ≈ **$39**. Decided: D66.
 
 ## Anchors and placeholders: v2 post-gate distributions — 2026-08-17
 
@@ -686,8 +681,8 @@ systematic near-miss is pandoc citation locators, kept deliberately. D32.
 ### Anchor provenance by stratum — 2026-08-12
 
 From `prune_anchor_inventing_pairs`'s own dry-run `kinds` breakdown, run twice —
-default, then `--include-real` — to split the strata. The modern equivalent is
-`ai-style data prune-invented-anchors`.
+default, then `--include-real` — to split the strata. Both tools are now deleted
+(D73); `infer.invented_anchors` is the surviving predicate.
 
 | stratum | external URL | internal cross-reference | citation key |
 |---|---:|---:|---:|
@@ -716,13 +711,12 @@ redrawing does not help: 106 cells redrawn, 212 extra draws, **2 recovered**.
 | v2 cross-heading @4500 | 2,207 | 2,388 | 8 | 70.9% |
 
 ~~This corrects the "rejection plateaus" reading above.~~ A chunk passes only if
-*every* anchor survives, so P(pass) ≈ s^k; cross-heading packing moves median k
-from 2 to 8 to 11, making the requirement **exponential in k, not asymptotic**
-(the earlier plateau was measured on v1's short chunks). **The residue
-self-selects for difficulty**: at 3000, written cells carry median 8 anchors
-while the 101 still missing carry median **10**. The slop prompts already instruct
-verbatim link preservation, so this is instruction-following collapsing under
-length and density. D33.
+*every* anchor survives, so P(pass) ≈ s^k, and cross-heading packing moves median
+k from 2 to 8 to 11: **exponential in k, not asymptotic** (the earlier plateau was
+measured on v1's short chunks). **The residue self-selects for difficulty** — at
+3000, written cells carry median 8 anchors, the 101 still missing median **10**.
+The slop prompts already instruct verbatim link preservation, so this is
+instruction-following collapsing under length and density. D33.
 
 ### Chunk budgets overlap, so the scale arms are nested — 2026-08-12
 
@@ -751,12 +745,10 @@ for a copy-edit task, would have called 70% of real rewrites truncated. D27.
 
 ### Placeholder retention across models — 2026-08-11
 
-Measured in **livingthing**, during a model-roster bench for `ai-preen`; full
-write-up in [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md).
-Different task and different code, so **not** stylebot measurements — but
-placeholder *shape* is a free parameter of the deferred symmetric-masking
-experiment. 12 link-bearing chunks, ~122 placeholders each; retention = returned
-verbatim.
+Measured in **livingthing** during an `ai-preen` roster bench, so **not** a
+stylebot measurement: different task, different code. Full write-up in
+[`placeholder-design-2026-08.md`](placeholder-design-2026-08.md). 12 link-bearing
+chunks, ~122 placeholders each; retention = returned verbatim.
 
 | scheme | gemini-3.1-flash-lite | qwen3.6-35b-a3b | glm-4.7-flash |
 |---|---|---|---|
@@ -764,18 +756,15 @@ verbatim.
 | `https://example.com/u/<sha1>` URL-shaped | 100% | **68.9%** | 6.0% |
 | `[[URL_0000]]` plain ASCII | 100% | 37.3% | 12.9% |
 
-**The mechanism is not character exoticism** — the ASCII "fix" came last; what
-predicts survival is whether the token looks like the kind of thing that belongs
-in that slot. **And retention is a model property, in the band we ship**: the
-spread is 100% / 37–69% / 0–13%, so scheme choice only moves the middle band,
-where open weights sit. D27, D33, D64 (settle the shape before any masked corpus
-— the prompt cannot move again).
+**Not character exoticism** — the ASCII "fix" came last; what predicts survival
+is whether the token looks like what belongs in that slot. **Retention is a model
+property**: 100% / 37–69% / 0–13%, so the scheme only moves the middle band,
+where open weights sit. D27, D33, D64.
 
-**Sentinel exposure in the corpus** (2026-08-12, 8,264 pairs): `〈MASKED_*〉`
-appears on the slop side of **21** pairs and on the target side of **zero**. The
-styler has never been asked to *emit* a sentinel `STYLE_SYSTEM` has always
-promised it would preserve — the gap that makes inference-side masking
-out-of-distribution today. Decided: D33.
+**Sentinel exposure in the corpus** (2026-08-12, 8,264 pairs): `〈MASKED_*〉` is on
+the slop side of **21** pairs and the target side of **zero** — the styler has
+never been asked to *emit* the sentinel `STYLE_SYSTEM` promises to preserve,
+which is what makes inference-side masking out-of-distribution. D33.
 
 ## The fence closer — measured 2026-09-04 (F15)
 
@@ -802,16 +791,9 @@ retirement candidates; retiring the `gpt`/`local` preset path left **50**.
 [`synth-flag-audit.md`](synth-flag-audit.md). Decided: D21.
 
 **Segmenter implementations: 7 → 3** (2026-08-11), then **3 → 1** (2026-09-03).
-Five copies inside stylebot merged into `stylebot.markdown`; the two survivors
-were each held to a golden fixture and each claimed undeletable, and both claims
-turned out to be about packaging and process boundaries rather than segmentation.
+Five copies inside stylebot merged into `stylebot.markdown`; each survivor was
+claimed undeletable on grounds that turned out to be packaging, not segmentation.
 Measured before each deletion: the blog copy was **byte-identical on all 1,758
 `.qmd`**; the TypeScript port matched on **1,728 of 1,757**, all 29 differences
 corrections — plus **385 callout paragraphs, 96,796 chars across 148 files** it
 could not see, `div_is_prose` being a blog-side callable. D26, D28/D30, D44.
-
-**The scores report's controls had never worked** (2026-08-11). The page emits
-`<table class=headline>` *before* the data table, so the script's bare
-`querySelector('tbody')` bound every sort/filter/facet handler to the two-row
-summary; fixed by giving the data table `id=rows`. Recorded because nothing
-failed loudly — a dead control looks like one you did not click hard enough.
