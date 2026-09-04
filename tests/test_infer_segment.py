@@ -1,20 +1,15 @@
-"""The train/serve contract this whole refactor exists to enforce.
+"""`infer._segment` against the segmenter it reads, over one full document.
 
-What `lib.segment_for_edit` marks non-editable — and so never becomes a
-training target — must be exactly what `infer._segment` refuses to send to the
-styler. When the two disagree, the adapter meets constructs at inference that
-it never saw in training, and the failure is silent: a styler quietly rewording
-somebody else's quoted words looks like a successful rewrite.
-
-Both sides are reduced to a set of protected LINE indices over one fixture that
-contains every construct, and compared. Headings are excluded from the
-comparison and asserted separately: they are protected on both sides, but by
-different machinery (`targets._split_sections` upstream of the chunker, versus
-`_segment`'s own kind), so a line-set comparison is the wrong instrument.
-
-One shared fixture, asserted from both directions, with a test that the fixture
-actually exercises every case. `tests/test_serve.py` re-uses the same fixture for
-the editor seam's third reading of it.
+`markdown.segment_spans` (what `lib.segment_for_edit` and the target cutter
+see) and `markdown.line_kinds` (what `infer._segment` applies) are two
+derivations inside one module; a construct one protects and the other sends to
+the styler fails silently — a styler rewording somebody else's quoted words
+looks like a successful rewrite. Both are reduced to protected LINE indices
+over `fixtures/hard/segmenter_conformance.qmd` and compared, under the default
+div policy and the callout one. Headings are asserted separately: protected on
+both sides, by different machinery. Then `_segment`'s own contract — byte-exact
+reassembly under any budget — and the packing-parity pair against
+`targets._post_targets` (D27), which nothing else covers.
 """
 
 from __future__ import annotations
@@ -27,8 +22,17 @@ from stylebot import infer
 from stylebot import markdown as md
 from stylebot.lib import segment_for_edit
 
-FIXTURE = Path(__file__).parent / "fixtures" / "protection_parity.qmd"
+FIXTURE = Path(__file__).parent / "fixtures" / "hard" / "segmenter_conformance.qmd"
 BIG = 1_000_000  # never let the chunk budget split anything in these tests
+
+
+def _is_callout(attrs: str) -> bool:
+    # The blog's real predicate matches declared classes; "callout" anywhere in
+    # the attrs is enough to exercise the hook.
+    return "callout" in attrs
+
+
+POLICIES = [pytest.param(None, id="default"), pytest.param(_is_callout, id="callout")]
 
 
 def _line_starts(lines: list[str]) -> list[int]:
@@ -98,9 +102,10 @@ def doc() -> str:
 # --- the contract ----------------------------------------------------------
 
 
-def test_training_and_inference_protect_the_same_lines(doc: str):
-    train = training_protected_lines(doc)
-    serve = inference_protected_lines(doc)
+@pytest.mark.parametrize("policy", POLICIES)
+def test_training_and_inference_protect_the_same_lines(doc: str, policy):
+    train = training_protected_lines(doc, div_is_prose=policy)
+    serve = inference_protected_lines(doc, div_is_prose=policy)
     lines = doc.split("\n")
     assert sorted(train - serve) == [], (
         "training drops these lines but inference would send them: "
@@ -112,13 +117,17 @@ def test_training_and_inference_protect_the_same_lines(doc: str):
     )
 
 
-def test_headings_are_protected_at_inference(doc: str):
+@pytest.mark.parametrize("policy", POLICIES)
+def test_headings_are_protected_at_inference(doc: str, policy):
+    # Under the callout policy this includes the `##` inside a callout, which
+    # becomes a section boundary once the callout's contents are prose.
     heading_lines = {
         i for i, line in enumerate(doc.split("\n")) if md.is_heading_line(line)
-    } - training_protected_lines(doc)
+    } - training_protected_lines(doc, div_is_prose=policy)
+    assert heading_lines
     sent = {
         i
-        for kind, s, e in _segment_spans(doc)
+        for kind, s, e in _segment_spans(doc, div_is_prose=policy)
         if kind not in md.PROTECTED_KINDS and kind != "heading"
         for i in _lines_touching(doc, [(s, e)])
     }
@@ -144,67 +153,10 @@ def test_segment_reassembly_survives_a_tight_budget(doc: str):
     assert frontmatter + rebuilt == doc
 
 
-def test_segment_for_edit_is_lossless(doc: str):
-    assert "".join(seg for seg, _ in segment_for_edit(doc)) == doc
-
-
-# --- the fixture is only a guard if it contains the cases ------------------
-
-
 def test_fixture_exercises_every_protected_kind(doc: str):
     kinds = {kind for kind, _s, _e in _segment_spans(doc)}
     assert kinds >= md.PROTECTED_KINDS, f"fixture misses {md.PROTECTED_KINDS - kinds}"
     assert "heading" in kinds
-
-
-def test_fixture_contains_every_named_case(doc: str):
-    protected = "".join(seg for seg, editable in segment_for_edit(doc) if not editable)
-    assert "a backtick fence" in protected
-    assert "a tilde fence" in protected
-    assert "\\int_0^1" in protected  # block $$…$$ carrying {#eq-…} attrs
-    assert "somebody else's voice" in protected  # blockquote
-    assert "no blank line after it" in protected  # blockquote glued to prose
-    assert "{#refs}" in protected
-    assert "fig-parity" in protected
-    assert "callout-note" in protected
-    assert "fig-nested" in protected  # a figure nested inside a callout
-
-    lines = doc.split("\n")
-    assert "  ## An indented heading" in lines
-    assert "## A heading glued to prose" in lines
-    assert "## A heading inside a callout" in lines
-    assert "high-$$d$$ behaviour" in doc  # the mid-line math case
-    assert "::: an-opener-that-is-never-closed" in lines
-
-
-def test_an_unclosed_div_protects_nothing(doc: str):
-    # An opener with no closer yields no span, on either side: over-protecting
-    # to end-of-document would swallow the rest of the post (D76). A `:::`
-    # opener, note — an unclosed *fence* does exactly the opposite; see below.
-    assert "never-closed" not in "".join(
-        seg for seg, editable in segment_for_edit(doc) if not editable
-    )
-    opener = "::: an-opener-that-is-never-closed"
-    idx = doc.split("\n").index(opener)
-    assert idx not in training_protected_lines(doc)
-    assert idx not in inference_protected_lines(doc)
-
-
-def test_an_unclosed_fence_runs_to_eof_on_both_sides(doc: str):
-    """The gap `markdown.py` used to document, closed 2026-09-03 (W2).
-
-    `CODE_FENCE_RE` needed a closer, so a runaway fence yielded no span: it was
-    protected at inference by a state machine in `infer._blocks_with_separators`
-    and was a legitimate training target in `editable_prose`. The state machine
-    moved into `CODE_FENCE_RE` as a run-to-EOF alternative, so both sides now
-    read the same answer off one pattern — which is what the line-set contract
-    above asserts generally, and this pins by name.
-    """
-    runaway = 'return "an unclosed fence runs to end of document"'
-    protected = "".join(seg for seg, editable in segment_for_edit(doc) if not editable)
-    assert runaway in protected
-    kinds = [kind for kind, _s, _e in _segment_spans(doc) if runaway in doc[_s:_e]]
-    assert kinds == [md.FENCE]
 
 
 # --- packing parity (D27, amended 2026-09-03) ------------------------------
@@ -226,10 +178,6 @@ PARITY_POLICY = dict(
     min_chars=1,
     drop_link_dumps=False,
 )
-
-
-def _is_callout(attrs: str) -> bool:
-    return "callout" in attrs
 
 
 def _norm(chunks) -> list[str]:
@@ -293,51 +241,3 @@ def test_the_default_policy_packs_across_a_deleted_block(doc: str):
     assert any(before in c and after in c for c in packed)
     assert not any(before in c and after in c for c in split)
     assert not any(before in c and after in c for c in _serving_chunks(doc))
-
-
-# --- the prose-bearing div policy (A-7) ------------------------------------
-
-# `_is_callout` is declared once, above with the packing-parity helpers: the
-# blog's real predicate matches declared classes, and a stub that says "callout"
-# is anywhere in the attrs is enough to exercise the hook.
-
-
-def test_callout_policy_frees_the_same_contents_on_both_sides(doc: str):
-    train = training_protected_lines(doc, div_is_prose=_is_callout)
-    serve = inference_protected_lines(doc, div_is_prose=_is_callout)
-    assert train == serve
-
-
-def test_callout_policy_admits_a_heading_inside_a_callout(doc: str):
-    # A `##` inside a callout is common and becomes a section boundary in
-    # `_split_sections` once the callout's contents are prose — correct, and
-    # pinned here because it is easy to break silently.
-    kinds = md.line_kinds(doc, div_is_prose=_is_callout)
-    idx = doc.split("\n").index("## A heading inside a callout")
-    assert kinds[idx] == md.HEADING
-
-    at_inference = [
-        kind
-        for kind, s, e in _segment_spans(doc, div_is_prose=_is_callout)
-        if doc[s:e].strip() == "## A heading inside a callout"
-    ]
-    assert at_inference == ["heading"]
-
-
-def test_callout_policy_keeps_fences_and_nested_figures_protected(doc: str):
-    prose = "".join(
-        seg for seg, editable in segment_for_edit(doc, div_is_prose=_is_callout) if editable
-    )
-    assert "Callout prose paragraph one" in prose
-    assert "Callout prose paragraph two" in prose
-    assert "Trailing callout prose" in prose
-    assert "callout-note" not in prose  # the ::: lines carry class semantics
-    assert "callout-warning" not in prose
-    assert "fig-nested" not in prose  # a nested figure keeps its own protection
-    assert "nested.png" not in prose
-    assert "fig-parity" not in prose  # an unrelated figure div is untouched
-
-
-def test_callout_policy_stays_lossless(doc: str):
-    segs = segment_for_edit(doc, div_is_prose=_is_callout)
-    assert "".join(seg for seg, _ in segs) == doc

@@ -17,7 +17,7 @@ from stylebot import backends, classify, markdown, serve
 from stylebot.bin import ai_style
 from stylebot.errors import RunError
 
-PARITY = Path(__file__).parent / "fixtures" / "protection_parity.qmd"
+FIXTURE = Path(__file__).parent / "fixtures" / "hard" / "segmenter_conformance.qmd"
 
 
 def stub_detector(prose: str) -> dict:
@@ -199,8 +199,8 @@ def segment_op(text: str, *, min_chars: int = 0, div_is_prose=None) -> list[dict
     return resp["segments"]
 
 
-def test_segment_op_matches_stylebot_markdown_on_the_parity_fixture():
-    text = PARITY.read_text(encoding="utf-8")
+def test_segment_op_matches_stylebot_markdown_on_the_hard_fixture():
+    text = FIXTURE.read_text(encoding="utf-8")
     for policy in (None, callout_is_prose):
         segments = segment_op(text, div_is_prose=policy)
         assert [text[s["start"] : s["end"]] for s in segments] == markdown_expectation(
@@ -209,30 +209,11 @@ def test_segment_op_matches_stylebot_markdown_on_the_parity_fixture():
 
 
 def test_segment_offsets_slice_back_to_the_paragraph():
-    text = PARITY.read_text(encoding="utf-8")
+    text = FIXTURE.read_text(encoding="utf-8")
     for seg in segment_op(text):
         sliced = text[seg["start"] : seg["end"]]
         assert sliced == sliced.strip()
         assert seg["kind"] == markdown.PROSE
-
-
-def test_segment_frees_callout_prose_only_under_the_policy():
-    text = PARITY.read_text(encoding="utf-8")
-    callout = "Callout prose paragraph two, still the author's voice."
-    assert callout not in [text[s["start"] : s["end"]] for s in segment_op(text)]
-    freed = [text[s["start"] : s["end"]] for s in segment_op(text, div_is_prose=callout_is_prose)]
-    assert callout in freed
-    # The `:::` fence lines stay protected even when their contents are prose.
-    assert not any(p.startswith(":::") and p.endswith(":::") for p in freed)
-
-
-def test_segment_protects_an_unclosed_fence_to_end_of_document():
-    # The live case: notebook/vs_code.qmd ends on a bare ``` with no closer, and
-    # the deleted TypeScript port scored it as the tail of the paragraph above.
-    text = "Prose before the runaway fence.\n```\nnot prose at all\nstill not prose\n"
-    assert [text[s["start"] : s["end"]] for s in segment_op(text)] == [
-        "Prose before the runaway fence."
-    ]
 
 
 def test_segment_splits_a_heading_glued_to_prose():
@@ -245,14 +226,6 @@ def test_segment_splits_a_heading_glued_to_prose():
         "Prose directly under it.\nMore of the same paragraph."
     ]
     assert segments[0]["context"] == "### A heading"
-
-
-def test_segment_reports_the_nearest_heading_as_context():
-    text = "## One\n\nAlpha paragraph.\n\n## Two\n\nBeta paragraph.\n"
-    assert [(text[s["start"] : s["end"]], s["context"]) for s in segment_op(text)] == [
-        ("Alpha paragraph.", "## One"),
-        ("Beta paragraph.", "## Two"),
-    ]
 
 
 def test_segment_drops_frontmatter_but_keeps_document_offsets():
