@@ -228,6 +228,42 @@ def test_collect_says_when_a_promoted_run_predates_the_splits_pin(tmp_path):
     assert not [w for w in report.warnings if "splits_sha256" in w]
 
 
+def test_collect_over_a_draws_dir_reports_the_view_it_would_build(tmp_path):
+    """W4 step 4: `status` reads the draws and says what the view would be."""
+    from stylebot import draws
+
+    pairs = tmp_path / "pairs"
+    pairs.mkdir()
+    write_jsonl_atomic(pairs / "captures.jsonl", [_rec(body="a"), _rec(body="b")])
+    write_jsonl_atomic(pairs / "synth-2026-07.jsonl", [_rec(synthetic=True, body="c")])
+    draws_dir = tmp_path / "draws"
+    lifted = list(draws.draws_from_pairs(pairs))
+    lifted[1].superseded_by = lifted[0].draw_id
+    for draw in lifted:
+        draws.append(draws_dir, draw)
+    draws.append(draws_dir, draws.Draw(draw_id="lost", outcome="gate:length"))
+
+    policy = draws.ViewPolicy(system_sha="s")
+    report = st.collect(draws_dir=draws_dir, policy=policy)
+    view = report.view
+    assert view is not None and view.exists and view.path == draws_dir
+    assert view.policy_sha == draws.policy_sha(policy)
+    assert view.draws_sha256 == draws.content_sha256(draws_dir)
+    assert view.records == 2 and view.by_outcome == {"accepted": 3, "gate:length": 1}
+    assert view.excluded == {"outcome": 1, "superseded": 1}
+    preview = draws.build_view(draws.iter_draws(draws_dir), policy)
+    assert view.content_sha256 == preview.content_sha256
+    assert not any(tmp_path.glob("views/**/*")), "status builds nothing"
+    text = st.format_status(report)
+    assert f"view       {draws_dir}" in text and "superseded" in text
+    assert view.policy_sha in text and view.content_sha256 in text
+    assert "corpus     " not in text, "the view block stands in for the corpus block"
+
+    absent = st.collect(draws_dir=tmp_path / "nope")
+    assert absent.view is not None and not absent.view.exists
+    assert st.collect().view is None
+
+
 # --- the CLI ----------------------------------------------------------------
 
 
@@ -247,6 +283,27 @@ def test_ai_style_status_prints_the_promoted_run_id_and_lists_the_rest(tmp_path)
     # Nixed, not hidden: it is listed, and it is not the one that serves.
     assert "20260102-nixed" in result.output
     assert "serving:  20260102-nixed" not in result.output
+
+
+def test_ai_style_status_draws_reports_the_view(tmp_path):
+    from stylebot import draws
+
+    draws_dir = tmp_path / "data" / "draws"
+    for draw in draws.draws_from_pairs(_write_flat(tmp_path)):
+        draws.append(draws_dir, draw)
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps({"system_sha": "s"}), encoding="utf-8")
+    args = ["status", "--draws", str(draws_dir), "--policy", str(policy_file)]
+    result = CliRunner().invoke(ai_style, args + ["--data-dir", str(tmp_path / "data")])
+    assert result.exit_code == 0, result.output
+    assert draws.policy_sha(draws.ViewPolicy(system_sha="s")) in result.output
+    assert "view       " in result.output and "1 record" in result.output
+
+
+def _write_flat(tmp_path):
+    flat = tmp_path / "pairs.jsonl"
+    write_jsonl_atomic(flat, [_rec(body="a")])
+    return flat
 
 
 def test_ai_style_status_json_round_trips(tmp_path):

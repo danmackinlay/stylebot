@@ -5,7 +5,9 @@ and points here (D52). `collect` is a read-only sweep over the five artifacts
 that answer "where is this pipeline?":
 
 1. the **corpus** — how many records, how they split real/synthetic, how they
-   are sharded (`stylebot.corpus`);
+   are sharded (`stylebot.corpus`) — or, given a draws dir, the **view** it
+   would build under the policy: counts by outcome and the content hash,
+   without building it (`draws.build_view` with no `out`, W4 step 4);
 2. the **splits contract** — eval stratum version and `splits_sha256`, whether
    every pinned eval post is still on disk, the per-role table and the danger
    report (`stylebot.splits`);
@@ -139,6 +141,20 @@ class CorpusStatus:
 
 
 @dataclass(frozen=True)
+class ViewStatus:
+    """What `draws.ensure_view` would build from `path` under a policy, unbuilt."""
+
+    path: Path
+    exists: bool
+    policy_sha: str | None = None
+    draws_sha256: str | None = None
+    records: int = 0
+    by_outcome: dict[str, int] = field(default_factory=dict)
+    excluded: dict[str, int] = field(default_factory=dict)
+    content_sha256: str | None = None
+
+
+@dataclass(frozen=True)
 class SplitsStatus:
     path: Path
     exists: bool
@@ -186,6 +202,30 @@ class Status:
     runs: RunsStatus
     detector: DetectorStatus
     warnings: list[str] = field(default_factory=list)
+    view: ViewStatus | None = None
+
+
+def _view_status(path: Path | None, policy) -> ViewStatus | None:
+    """The view `path`'s draws would render under `policy` (a `draws.ViewPolicy`,
+    identity when None); None when no draws dir was named, absent when missing."""
+    if path is None:
+        return None
+    if not path.is_dir():
+        return ViewStatus(path=path, exists=False)
+    from stylebot import draws as draws_mod
+
+    policy = policy or draws_mod.ViewPolicy()
+    report = draws_mod.build_view(draws_mod.iter_draws(path), policy)
+    return ViewStatus(
+        path=path,
+        exists=True,
+        policy_sha=report.policy_sha,
+        draws_sha256=draws_mod.content_sha256(path),
+        records=report.records,
+        by_outcome=dict(report.by_outcome),
+        excluded=dict(report.excluded),
+        content_sha256=report.content_sha256,
+    )
 
 
 def _corpus_status(path: Path | None) -> CorpusStatus:
@@ -381,13 +421,16 @@ def collect(
     runs_dir: str | Path | None = None,
     detector: str | Path | None = None,
     blog_root: str | Path | None = None,
+    draws_dir: str | Path | None = None,
+    policy=None,
 ) -> Status:
     """Sweep whichever of the five artifacts the caller names. Read-only, keyless.
 
     Every argument is optional and none is discovered: what is not passed is
     reported as "not given", never guessed at. A path that does not exist is
     reported as absent rather than raised on — status is most useful on a
-    pipeline that is half built.
+    pipeline that is half built. `draws_dir` (+ `policy`) adds the view block,
+    which stands in for the corpus block when the draws are there.
     """
     from stylebot.provenance import now_iso, stylebot_sha
 
@@ -407,6 +450,7 @@ def collect(
         runs=runs_status,
         detector=detector_status,
         warnings=_cross_checks(splits_status, runs_status, detector_status),
+        view=_view_status(Path(draws_dir) if draws_dir is not None else None, policy),
     )
 
 
@@ -450,26 +494,47 @@ def _format_runs(r: RunsStatus) -> list[str]:
     return lines
 
 
+def _format_corpus(c: CorpusStatus) -> list[str]:
+    if not c.exists:
+        return [f"corpus     {c.path or '(not given)'} — absent"]
+    shape = "shard directory" if c.sharded else "single file"
+    lines = [
+        f"corpus     {c.path} ({shape})",
+        f"           {_fmt_int(c.n_records)} records — {_fmt_int(c.n_real)} real / "
+        f"{_fmt_int(c.n_synthetic)} synthetic, over {_fmt_int(c.n_posts)} source posts",
+    ]
+    for name, count in c.shards:
+        lines.append(f"             {name:<24} {_fmt_int(count):>8}")
+    lines.append(f"           content_sha256={c.content_sha256}")
+    return lines
+
+
+def _format_view(v: ViewStatus) -> list[str]:
+    """The view block: what the draws would render under the policy, unbuilt."""
+    if not v.exists:
+        return [f"view       {v.path} — absent (no draws directory)"]
+    outcomes = ", ".join(f"{k} {_fmt_int(n)}" for k, n in sorted(v.by_outcome.items()))
+    excluded = ", ".join(f"{k} {_fmt_int(n)}" for k, n in sorted(v.excluded.items()))
+    return [
+        f"view       {v.path} -> pairs-{v.policy_sha} (unbuilt)",
+        f"           {_fmt_int(v.records)} record(s) would render; draws by outcome: {outcomes}",
+        f"           excluded: {excluded or 'none'}",
+        f"           policy_sha={v.policy_sha}  draws_sha256={v.draws_sha256}",
+        f"           content_sha256={v.content_sha256}",
+    ]
+
+
 def format_status(status: Status) -> str:
     """Render a `Status` as the plain-text block both CLIs print."""
     lines: list[str] = []
     sha = status.stylebot_sha or "unknown"
     lines.append(f"stylebot {sha} · {status.generated_at}")
 
-    c = status.corpus
     lines.append("")
-    if not c.exists:
-        lines.append(f"corpus     {c.path or '(not given)'} — absent")
-    else:
-        shape = "shard directory" if c.sharded else "single file"
-        lines.append(f"corpus     {c.path} ({shape})")
-        lines.append(
-            f"           {_fmt_int(c.n_records)} records — {_fmt_int(c.n_real)} real / "
-            f"{_fmt_int(c.n_synthetic)} synthetic, over {_fmt_int(c.n_posts)} source posts"
-        )
-        for name, count in c.shards:
-            lines.append(f"             {name:<24} {_fmt_int(count):>8}")
-        lines.append(f"           content_sha256={c.content_sha256}")
+    if status.view is not None:
+        lines.extend(_format_view(status.view))
+    if status.view is None or not status.view.exists:
+        lines.extend(_format_corpus(status.corpus))
 
     s = status.splits
     lines.append("")

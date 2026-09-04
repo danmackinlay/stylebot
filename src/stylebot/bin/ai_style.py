@@ -25,7 +25,7 @@ detector), which are `click.UsageError` at the point of parsing.
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from functools import partial
 from pathlib import Path
 
@@ -62,11 +62,9 @@ def main() -> None:
     """stylebot tooling — capture, synthetic pairs, training, eval (subcommands)."""
 
 
-# Phase 1 capture — the group defined in bin/ai_style_log.py, mounted here as
-# its only entry point.
+# Phase 1 capture (bin/ai_style_log.py) and the hidden one-off migrations
+# group (CLAUDE.md's carve-out paragraph), mounted here as their entry points.
 main.add_command(_log, name="log")
-
-# One-off data migrations — hidden; see CLAUDE.md's carve-out paragraph.
 main.add_command(_data, name="data")
 
 
@@ -912,6 +910,7 @@ def run_cmd(file: Path | None, **kw) -> None:
     "post presence is not checked.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit the raw Status as JSON.")
+@draws.view_options()
 def status_cmd(
     data_dir: Path | None,
     pairs_path: Path | None,
@@ -920,25 +919,25 @@ def status_cmd(
     detector_dir: Path | None,
     blog_root: Path | None,
     as_json: bool,
+    draws_dir: Path | None,
+    policy_path: Path | None,
 ) -> None:
-    """Where this pipeline stands: corpus, splits, promoted run, detector.
+    """Where this pipeline stands: corpus (or view), splits, promoted run, detector.
 
     The command the documentation points at instead of carrying numbers it
     cannot keep true. Read-only, keyless, and free.
 
     Nothing is discovered: stylebot does not know where your blog, runs or
-    detector artifact are, so `--runs` / `--detector-model` / `--blog-root` have
-    no defaults and unnamed artifacts are reported as "not given" rather than
-    guessed at. `--pairs`/`--splits` fall back to the usual `--data-dir` >
-    `$STYLEBOT_DATA_DIR` > `./_training_pairs` precedence. A policy mirror like
-    `dan-style status` is this command with all five filled in.
+    detector artifact are, so `--runs` / `--detector-model` / `--blog-root` /
+    `--draws` have no defaults and unnamed artifacts are reported as "not given"
+    rather than guessed at. `--pairs`/`--splits` fall back to the usual
+    `--data-dir` > `$STYLEBOT_DATA_DIR` > `./_training_pairs` precedence. A
+    policy mirror like `dan-style status` is this command with all six filled in.
 
     The last block is the cross-check: a detector fit under a different
     `splits_sha256` than `splits.json` now carries, a promoted run that trained
     on a different partition, plus the `check-splits` danger report.
     """
-    from dataclasses import asdict
-
     from stylebot import status as st
 
     resolved = config.resolve_data_dir(data_dir)
@@ -955,6 +954,8 @@ def status_cmd(
         runs_dir=runs_dir,
         detector=detector_dir,
         blog_root=blog_root,
+        draws_dir=draws_dir,
+        policy=draws.load_policy(policy_path),
     )
     if as_json:
         click.echo(json.dumps(asdict(report), indent=2, default=str))

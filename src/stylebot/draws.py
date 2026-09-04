@@ -275,18 +275,23 @@ def _bump(counts: dict[str, int], key: str) -> None:
     counts[key] = counts.get(key, 0) + 1
 
 
-def build_view(draws: Iterable[Draw], policy: ViewPolicy, *, out: str | Path) -> ViewReport:
+def build_view(
+    draws: Iterable[Draw], policy: ViewPolicy, *, out: str | Path | None = None
+) -> ViewReport:
     """Materialise the view of `draws` under `policy` as a `pairs/`-shaped dir.
 
     Records route by `corpus.shard_of` and keep their read order within a
     shard, so an identity policy over `draws_from_pairs(p)` reproduces `p`'s
     `content_sha256`. `out` must not already hold `*.jsonl`: a view is
-    rebuilt into a fresh directory, never edited (D84).
+    rebuilt into a fresh directory, never edited (D84). Without `out` nothing
+    is written and the report says what would be: the counts, and the
+    `content_sha256` the view would have (`status` prints it, W4 step 4).
     """
-    out = Path(out)
-    if out.is_dir() and any(out.glob("*.jsonl")):
-        raise ConfigError(f"{out} already holds a view; build into a fresh directory")
-    out.mkdir(parents=True, exist_ok=True)
+    if out is not None:
+        out = Path(out)
+        if out.is_dir() and any(out.glob("*.jsonl")):
+            raise ConfigError(f"{out} already holds a view; build into a fresh directory")
+        out.mkdir(parents=True, exist_ok=True)
     report = ViewReport(policy_sha=policy_sha(policy))
     clauses = _clauses(policy)
     buckets: dict[str, list[str]] = {}
@@ -299,11 +304,14 @@ def build_view(draws: Iterable[Draw], policy: ViewPolicy, *, out: str | Path) ->
         assert draw.record is not None
         buckets.setdefault(corpus.shard_of(draw.record), []).append(corpus.line_of(draw.record))
         report.records += 1
+    digests: list[tuple[str, str]] = []
     for name, lines in sorted(buckets.items()):
-        shard = out / name
-        shard.write_text("".join(lines), encoding="utf-8")
-        report.shards.append(shard)
-    report.content_sha256 = corpus.content_sha256(out)
+        blob = "".join(lines).encode("utf-8")
+        digests.append((name, hashlib.sha256(blob).hexdigest()[:16]))
+        if out is not None:
+            (out / name).write_bytes(blob)
+            report.shards.append(out / name)
+    report.content_sha256 = corpus.shards_sha256(digests)
     return report
 
 

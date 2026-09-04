@@ -270,6 +270,14 @@ def test_ensure_view_builds_once_and_reuses_until_draws_or_policy_move(draws_dir
     assert other != view and other.parent == view.parent
 
 
+def test_build_view_without_out_reports_the_sha_the_view_would_have(draws_dir, pairs_dir):
+    policy = draws.ViewPolicy()
+    report = draws.build_view(draws.iter_draws(draws_dir), policy)
+    assert report.content_sha256 == corpus.content_sha256(pairs_dir)
+    assert report.records == 8 and report.shards == []
+    assert not any(draws_dir.parent.glob("views/**/*.jsonl")), "a preview writes nothing"
+
+
 def test_ensure_view_refuses_a_missing_draws_dir(tmp_path):
     with pytest.raises(ConfigError, match="no draws"):
         draws.ensure_view(tmp_path / "nope", draws.ViewPolicy(), views_root=tmp_path / "views")

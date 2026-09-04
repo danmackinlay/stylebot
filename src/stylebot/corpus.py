@@ -201,11 +201,17 @@ def content_sha256(corpus: str | Path) -> str | None:
     path = Path(corpus)
     if not path.is_dir():
         return file_sha256(path)
+    return shards_sha256((shard.name, file_sha256(shard)) for shard in shard_paths(path))
+
+
+def shards_sha256(named: Iterable[tuple[str, str | None]]) -> str:
+    """16 hex over `(shard name, shard digest)` in order: the directory half of
+    `content_sha256`, so `draws.build_view` can hash an unwritten view alike."""
     digest = hashlib.sha256()
-    for shard in shard_paths(path):
-        digest.update(shard.name.encode("utf-8"))
+    for name, sha in named:
+        digest.update(name.encode("utf-8"))
         digest.update(b"\0")
-        digest.update((file_sha256(shard) or "").encode("utf-8"))
+        digest.update((sha or "").encode("utf-8"))
         digest.update(b"\n")
     return digest.hexdigest()[:16]
 
