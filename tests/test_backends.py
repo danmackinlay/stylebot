@@ -167,17 +167,6 @@ def test_opts_from_manifest_logs_the_mismatch_it_did_not_override(caplog):
     assert any("renderer mismatch" in r.getMessage() for r in caplog.records)
 
 
-# --- the CLI is only translation -------------------------------------------
-
-
-# The CLI's own exit-code translation (usage -> 2, environment -> 1) is pinned
-# by `test_smoke.test_run_backend_errors_keep_their_exit_codes`; what is tested
-# here is that the library raises the two kinds it distinguishes them by.
-
-
-# --- the Styler seam: what the Protocol types, and what it cannot -----------
-
-
 def test_an_openai_backend_warns_that_the_renderer_pin_is_uncheckable():
     """Serving a manifest-pinned adapter through an OpenAI-compatible endpoint
     used to look exactly like serving it correctly: both silent. The renderer

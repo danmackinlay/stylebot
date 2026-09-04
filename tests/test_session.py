@@ -1,11 +1,12 @@
-"""Library-level twins for the `ai-style log` behaviours (W11.b).
+"""The session rules, at the library seam (W11.b).
 
-`tests/test_ai_style_log.py` drives the same rules through click's `CliRunner`;
-those stay, as the check that the shell is thin and the exit codes are right.
-These call `stylebot.session` directly, which is where the rules now live:
+These call `stylebot.session` directly, which is where the rules live:
 snapshot persistence, symlink canonicalisation, `save`'s disposition rule and
-`tidy`'s latest-wins rule. A behaviour that can only be asserted by parsing CLI
-output is a behaviour with no library seam.
+`tidy`'s latest-wins rule. `tests/test_ai_style_log.py` keeps only what the
+shell adds — the corpus it resolves and its two exit-code classes — since a
+thin shell is proven by those, not by a CliRunner copy of every rule (X4). A
+behaviour that can only be asserted by parsing CLI output is a behaviour with
+no library seam.
 """
 
 from __future__ import annotations
