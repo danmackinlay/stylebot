@@ -23,11 +23,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
-from stylebot import corpus, pairs
+from stylebot import config, corpus, pairs
 from stylebot.errors import ConfigError
 from stylebot.generators import Generator
 from stylebot.jsonl import append_jsonl, iter_jsonl
@@ -36,6 +37,8 @@ from stylebot.targets import Target
 
 #: The one outcome a view may render. Anything else is a kept, paid-for reject.
 ACCEPTED = "accepted"
+#: A built view's sidecar: which policy and which draws it was built from.
+VIEW_SIDECAR = "VIEW.json"
 
 _MONTH_RE = re.compile(r"^(\d{4}-\d{2})")
 
@@ -188,6 +191,12 @@ def draws_from_pairs(pairs_path: str | Path) -> Iterator[Draw]:
         yield draw_from_pair(record)
 
 
+def content_sha256(draws_dir: str | Path) -> str | None:
+    """16 hex over the draw shards, in `corpus.content_sha256`'s shape, so a
+    manifest's `draws_sha256` reads like its `pairs_sha256` (W4 step 4)."""
+    return corpus.content_sha256(draws_dir)
+
+
 # --- views -------------------------------------------------------------------
 
 
@@ -284,3 +293,43 @@ def build_view(draws: Iterable[Draw], policy: ViewPolicy, *, out: str | Path) ->
         report.shards.append(shard)
     report.content_sha256 = corpus.content_sha256(out)
     return report
+
+
+def read_sidecar(view_dir: str | Path) -> dict | None:
+    """The `VIEW.json` a built view carries, or None for no view or a broken one."""
+    try:
+        doc = json.loads((Path(view_dir) / VIEW_SIDECAR).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def ensure_view(draws_dir: str | Path, policy: ViewPolicy, *, views_root: str | Path) -> Path:
+    """The view of `draws_dir` under `policy`, at `views_root/pairs-<policy_sha>`.
+
+    Built when absent; rebuilt when its sidecar names another policy or other
+    draws (`content_sha256`), since a view is derived and never edited (D84).
+    A rebuild removes the directory first, so `build_view` gets the fresh one
+    it requires. Returns the path a `pairs/` reader can be pointed at.
+    """
+    draws_dir = Path(draws_dir)
+    if not draws_dir.is_dir():
+        raise ConfigError(f"no draws under {draws_dir}")
+    sha = policy_sha(policy)
+    draws_sha = content_sha256(draws_dir)
+    out = Path(views_root) / config.view_name(sha)
+    side = read_sidecar(out)
+    if side and side.get("policy_sha") == sha and side.get("draws_sha256") == draws_sha:
+        return out
+    if out.exists():
+        shutil.rmtree(out)
+    report = build_view(iter_draws(draws_dir), policy, out=out)
+    side = {
+        "policy_sha": sha,
+        "draws_sha256": draws_sha,
+        "records": report.records,
+        "content_sha256": report.content_sha256,
+        "built_at": now_iso(),
+    }
+    (out / VIEW_SIDECAR).write_text(json.dumps(side, indent=2) + "\n", encoding="utf-8")
+    return out

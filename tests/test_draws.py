@@ -9,13 +9,14 @@ prints the `content_sha256` `dan-style status` reports.
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 from pathlib import Path
 
 import conftest
 import pytest
 
-from stylebot import corpus, draws, migrations, pairs
+from stylebot import config, corpus, draws, migrations, pairs
 from stylebot.errors import ConfigError
 
 SWEEP_ENV = conftest.SWEEP_ENV
@@ -191,6 +192,64 @@ def test_policy_sha_ignores_order_and_notices_every_field():
     shas = {name: draws.policy_sha(draws.ViewPolicy(**{name: v})) for name, v in changed.items()}
     assert identity not in shas.values()
     assert len(set(shas.values())) == len(shas)
+
+
+# --- views as a path (W4 step 4) ---------------------------------------------
+
+
+@pytest.fixture
+def draws_dir(pairs_dir, tmp_path) -> Path:
+    """`pairs_dir` lifted into a `draws/` beside a `views/` root."""
+    out = tmp_path / "draws"
+    for draw in draws.draws_from_pairs(pairs_dir):
+        draws.append(out, draw)
+    return out
+
+
+def test_ensure_view_builds_once_and_reuses_until_draws_or_policy_move(draws_dir, pairs_dir):
+    data_dir = draws_dir.parent
+    policy = draws.ViewPolicy()
+    sha = draws.policy_sha(policy)
+    assert config.draws_path(data_dir) == draws_dir
+    assert config.view_path(data_dir, sha) == data_dir / "views" / f"pairs-{sha}"
+
+    view = draws.ensure_view(draws_dir, policy, views_root=data_dir / "views")
+    assert view == config.view_path(data_dir, sha)
+    assert corpus.content_sha256(view) == corpus.content_sha256(pairs_dir)
+    side = json.loads((view / draws.VIEW_SIDECAR).read_text(encoding="utf-8"))
+    assert side["policy_sha"] == sha and side["records"] == 8 and side["built_at"]
+    assert side["draws_sha256"] == draws.content_sha256(draws_dir)
+    assert draws.content_sha256(draws_dir) == corpus.content_sha256(draws_dir)
+
+    marker = view / "reused"
+    marker.touch()
+    assert draws.ensure_view(draws_dir, policy, views_root=data_dir / "views") == view
+    assert marker.exists(), "an up-to-date view is reused, not rebuilt"
+
+    # The draws grow: same name, rebuilt (the reject changes nothing the view renders).
+    first = next(draws.draws_from_pairs(pairs_dir))
+    draws.append(draws_dir, dataclasses.replace(first, draw_id="x", outcome="gate:x", record=None))
+    assert draws.ensure_view(draws_dir, policy, views_root=data_dir / "views") == view
+    assert not marker.exists()
+    rebuilt = json.loads((view / draws.VIEW_SIDECAR).read_text(encoding="utf-8"))
+    assert rebuilt["draws_sha256"] != side["draws_sha256"]
+    assert corpus.content_sha256(view) == corpus.content_sha256(pairs_dir)
+
+    # A sidecar that does not name this policy is stale, whatever the shards hold.
+    (view / draws.VIEW_SIDECAR).write_text(json.dumps(rebuilt | {"policy_sha": "stale"}))
+    marker.touch()
+    draws.ensure_view(draws_dir, policy, views_root=data_dir / "views")
+    assert not marker.exists()
+
+    other = draws.ensure_view(
+        draws_dir, draws.ViewPolicy(keep_superseded=True), views_root=data_dir / "views"
+    )
+    assert other != view and other.parent == view.parent
+
+
+def test_ensure_view_refuses_a_missing_draws_dir(tmp_path):
+    with pytest.raises(ConfigError, match="no draws"):
+        draws.ensure_view(tmp_path / "nope", draws.ViewPolicy(), views_root=tmp_path / "views")
 
 
 # --- the opt-in sweep over the blog corpus ------------------------------------

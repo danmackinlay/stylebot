@@ -81,6 +81,32 @@ def splits_path(data_dir: str | os.PathLike | None = None) -> Path:
     return resolve_data_dir(data_dir) / DEFAULT_SPLITS_NAME
 
 
+DRAWS_DIR_NAME = "draws"
+VIEWS_DIR_NAME = "views"
+
+
+def draws_path(data_dir: str | os.PathLike | None = None) -> Path:
+    """`<data-dir>/draws`, the append-only layer (D84), under `resolve_data_dir`'s
+    precedence; returned whether or not it exists, like `pairs_path`."""
+    return resolve_data_dir(data_dir) / DRAWS_DIR_NAME
+
+
+def views_root(data_dir: str | os.PathLike | None = None) -> Path:
+    """`<data-dir>/views`, where `draws.ensure_view` builds; never committed (D84)."""
+    return resolve_data_dir(data_dir) / VIEWS_DIR_NAME
+
+
+def view_name(policy_sha: str) -> str:
+    """The one spelling of a view directory's name: `pairs-<policy_sha>`."""
+    return f"pairs-{policy_sha}"
+
+
+def view_path(data_dir: str | os.PathLike | None, policy_sha: str) -> Path:
+    """`<data-dir>/views/pairs-<policy_sha>`: the view of `draws_path(data_dir)`
+    under the policy `policy_sha` names (`draws.policy_sha`)."""
+    return views_root(data_dir) / view_name(policy_sha)
+
+
 def get_key(name: str) -> str | None:
     """Return an API key from the environment, or None if unset/blank."""
     val = os.environ.get(name)
