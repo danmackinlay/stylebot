@@ -7,6 +7,7 @@ hygiene rules (divs, stub markers, link dumps, size caps, cut headers).
 from __future__ import annotations
 
 from stylebot import synth
+from stylebot.targets import iter_targets
 
 
 def test_selector_keeps_only_human_authored(make_blog):
@@ -26,24 +27,73 @@ def test_pre_selected_files_skip_selector(tmp_path, make_blog):
     assert {t.source for t in targets} == {str(root / "post" / "ai.qmd")}
 
 
-# --- chunk hygiene -------------------------------------------------------
+# --- the prose-bearing-div hook, end to end ------------------------------
+#
+# Mechanism here, policy in the caller: stylebot must not know that
+# `.callout-note` is a Quarto convention (blog/generic boundary), so
+# `iter_targets` takes a predicate and the blog supplies it. The default --
+# every `:::` protected wholesale -- is what shipped before, so turning the hook
+# on is a deliberate, measurable corpus change rather than a silent one.
 
-
-POST_WITH_DIV = """---
-title: Has a figure div
+POST_WITH_DIVS = """---
+title: Divs
 automation: 0
 ---
 
-A genuine paragraph of prose that is comfortably longer than the minimum and
-carries actual voice worth learning to reproduce in the styler.
+An opening paragraph of ordinary prose, long enough to survive the floor and
+be selected as a target in its own right.
 
-:::{#fig-x .figure .illustration}
-![](/images/x.png)
+::: {.callout-note}
+A callout paragraph that is the author's own voice, merely sitting inside a
+container whose fence lines carry class semantics.
+
+::: {#fig-inner}
+![](inner.png)
 :::
 
-A second genuine paragraph, also well past the minimum length, with real
-sentences that a human plausibly wrote and edited by hand.
+More callout prose after the nested figure, still the author's voice and still
+long enough to clear the minimum.
+:::
+
+::: {#fig-outer}
+![](outer.png)
+
+An ordinary figure caption that is markup, not a passage of prose to restyle.
+:::
 """
+
+DIV_POLICY = dict(min_chars=60, drop_link_dumps=False)
+
+
+def _is_callout(attrs: str) -> bool:
+    return "callout" in attrs
+
+
+def test_default_protects_every_div(tmp_path):
+    post = _write(tmp_path, "divs.qmd", POST_WITH_DIVS)
+    texts = [t.text for t in iter_targets(files=[post], **DIV_POLICY)]
+    assert len(texts) == 1
+    assert "opening paragraph" in texts[0]
+
+
+def test_policy_admits_callout_prose_only(tmp_path):
+    post = _write(tmp_path, "divs.qmd", POST_WITH_DIVS)
+    texts = [t.text for t in iter_targets(files=[post], div_is_prose=_is_callout, **DIV_POLICY)]
+    joined = "\n---\n".join(texts)
+    assert "opening paragraph" in joined
+    assert "the author's own voice" in joined
+    assert "after the nested figure" in joined
+    # The container's own lines, the nested figure, and an unrelated figure div
+    # are all still excluded.
+    assert "callout-note" not in joined
+    assert "fig-inner" not in joined
+    assert "inner.png" not in joined
+    assert "fig-outer" not in joined
+    assert "figure caption that is markup" not in joined
+
+
+# --- chunk hygiene -------------------------------------------------------
+
 
 POST_WITH_STUB = """---
 title: Has a stub
@@ -63,14 +113,6 @@ def _write(root, rel, text):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
     return p
-
-
-def test_prose_only_drops_divs(tmp_path):
-    root = tmp_path / "blog"
-    _write(root, "post/div.qmd", POST_WITH_DIV)
-    targets = synth.iter_targets(blog_root=root)
-    assert len(targets) == 2  # two prose paragraphs, the :::div excluded
-    assert all("fig-x" not in t.text and "images/x.png" not in t.text for t in targets)
 
 
 def test_ignore_markers_drops_stub_paragraphs(tmp_path):
@@ -111,12 +153,6 @@ def test_max_chars_caps_giant_chunk(tmp_path):
     assert synth.iter_targets(blog_root=root) == []
     # Raising the cap keeps it.
     assert len(synth.iter_targets(blog_root=root, max_chars=None)) == 1
-
-
-def test_backward_compat_defaults_unchanged(tmp_path, make_blog):
-    # The original two-paragraph human post still yields exactly two targets.
-    root = make_blog()
-    assert len(synth.iter_targets(blog_root=root)) == 2
 
 
 POST_WITH_INCOMING = """---
