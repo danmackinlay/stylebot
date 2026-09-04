@@ -277,39 +277,40 @@ def load_corpus_splits(data_dir: str | Path | None = None) -> dict | None:
     return load_splits(path) if path.exists() else None
 
 
-def eval_post_spellings(splits: dict) -> dict[str, list[str]]:
-    """The pinned eval stratum as `{identity: every path that names it}`.
+def source_spellings(splits: dict, sources) -> dict[str, list[str]]:
+    """`{identity: every path that names it}` for a set of post paths.
 
-    Pinning is by *identity*, not by string: a renamed eval post may legitimately
-    appear in `eval_posts` under both spellings (add-only, so pairs keyed to the
-    old one keep their role) and must still count once. Aliases of a pinned post
-    join its group even when only one spelling is listed.
+    By identity, not by string: a post listed under both spellings counts once,
+    and an alias of a listed post joins its group even when unlisted.
     """
-    aliases = splits.get("aliases") or {}
     groups: dict[str, set[str]] = {}
-    for post in splits["eval_posts"]:
+    for post in sources:
         groups.setdefault(canonical_source(post, splits), set()).add(post)
-    for alias, target in aliases.items():
+    for alias, target in (splits.get("aliases") or {}).items():
         canonical = canonical_source(target, splits)
         if canonical in groups:
             groups[canonical].add(alias)
     return {canonical: sorted(paths) for canonical, paths in sorted(groups.items())}
 
 
-def missing_eval_posts(splits: dict, blog_root: str | Path) -> list[str]:
-    """Pinned eval identities with no spelling present under `blog_root`.
+def eval_post_spellings(splits: dict) -> dict[str, list[str]]:
+    """The pinned eval stratum as `{identity: every path that names it}`."""
+    return source_spellings(splits, splits["eval_posts"])
 
-    This is the check that would have caught the 2026-09 leak: two eval posts
-    were renamed, the pinned paths kept their pairs (so the STALE warning never
-    fired), and the new paths hashed into `styler`/`detector`. A pinned post
-    that is not on disk under *any* of its known names is a broken contract.
-    """
+
+def missing_sources(splits: dict, sources, blog_root: str | Path) -> dict[str, list[str]]:
+    """Identities among `sources` on disk under none of their spellings (D34)."""
     root = Path(blog_root)
-    return [
-        canonical
-        for canonical, paths in eval_post_spellings(splits).items()
+    return {
+        canonical: paths
+        for canonical, paths in source_spellings(splits, sources).items()
         if not any((root / path).exists() for path in paths)
-    ]
+    }
+
+
+def missing_eval_posts(splits: dict, blog_root: str | Path) -> list[str]:
+    """Pinned eval identities with no spelling present under `blog_root`."""
+    return list(missing_sources(splits, splits["eval_posts"], blog_root))
 
 
 def require_pinned_posts(splits: dict, blog_root: str | Path) -> None:
@@ -394,19 +395,14 @@ def check_splits(splits: dict, ds, *, blog_root: str | Path | None = None) -> li
     a metric computed on a dangerously small stratum should never travel without
     its caveat.
 
-    With `blog_root`, also verifies that every pinned eval post still exists on
-    disk. Those lines carry `ERROR_PREFIX` and are **errors**: a caller should
-    fail on `is_error(line)` rather than print it and continue.
+    With `blog_root`, also verifies that every pinned eval post, and every post
+    the corpus holds pairs for, still exists on disk. Those lines carry
+    `ERROR_PREFIX` and are **errors**: a caller should fail on `is_error(line)`
+    rather than print it and continue.
     """
     warnings: list[str] = []
     if blog_root is not None:
-        for canonical in missing_eval_posts(splits, blog_root):
-            paths = ", ".join(eval_post_spellings(splits)[canonical])
-            warnings.append(
-                f"{ERROR_PREFIX} pinned eval post {canonical!r} is not on disk under "
-                f"{blog_root} (tried: {paths}) — it was renamed or deleted, and its role "
-                f"has silently moved; add the new path to 'aliases' in splits.json"
-            )
+        warnings.extend(_missing_on_disk_lines(splits, ds, blog_root))
     roles = summarize_roles(splits, ds)
 
     for role in ROLES:
@@ -459,6 +455,33 @@ def check_splits(splits: dict, ds, *, blog_root: str | Path | None = None) -> li
             f"C-selection will be high-variance"
         )
     return warnings
+
+
+def _missing_on_disk_lines(splits: dict, ds, blog_root: str | Path) -> list[str]:
+    """`check_splits`'s on-disk section: pinned eval posts, then corpus sources."""
+    lines: list[str] = []
+    for canonical, paths in missing_sources(splits, splits["eval_posts"], blog_root).items():
+        lines.append(
+            f"{ERROR_PREFIX} pinned eval post {canonical!r} is not on disk under "
+            f"{blog_root} (tried: {', '.join(paths)}) — it was renamed or deleted, and its "
+            f"role has silently moved; add the new path to 'aliases' in splits.json"
+        )
+    pinned = set(eval_post_spellings(splits))
+    gone = {
+        canonical: paths
+        for canonical, paths in missing_sources(splits, set(ds.groups), blog_root).items()
+        if canonical not in pinned
+    }
+    for canonical, paths in gone.items():
+        lines.append(
+            f"{ERROR_PREFIX} corpus source {canonical!r} is not on disk under {blog_root} "
+            f"(tried: {', '.join(paths)}) — it was renamed or deleted, and pairs captured "
+            f"under its new path hash into a role of their own; add the new path to "
+            f"'aliases' in splits.json"
+        )
+    if gone:
+        lines.append(f"{len(gone)} corpus source(s) missing from disk under {blog_root}")
+    return lines
 
 
 # ---------------------------------------------------------------------------

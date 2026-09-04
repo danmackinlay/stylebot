@@ -222,22 +222,74 @@ def test_role_of_survives_a_rename_of_a_pinned_eval_post():
     assert sp.role_of("notebook/new.qmd", unaliased) != "eval"
 
 
-def test_aliases_need_no_migration_of_existing_pairs():
-    """An alias may never move a post that already has pairs into another role.
+def test_aliases_need_no_migration_of_existing_pairs(tmp_path):
+    """An alias moves no pair that already has a role — and a rename without one
+    is not silent.
 
-    This is the constraint that picked the alias direction (new -> old). Every
+    The constraint that picked the alias direction (new -> old): every
     hash-assigned post keeps exactly the role it had, because the path the
-    corpus recorded IS the canonical one.
+    corpus recorded IS the canonical one. The other half of the contract (C12,
+    D34): a hash-pool post renamed on disk with no alias is reported by
+    `check_splits(blog_root=…)` like a pinned one, never left to re-hash.
     """
     base = {
         "schema_version": 1,
         "eval_posts": [],
         "rest_rule": {"kind": "hash", "detector_frac": 0.4, "salt": "0"},
     }
-    before = {p: sp.role_of(p, base) for p in (f"notebook/p{i}.qmd" for i in range(50))}
+    posts = [f"notebook/p{i}.qmd" for i in range(50)]
+    before = {p: sp.role_of(p, base) for p in posts}
     aliased = {**base, "aliases": {"notebook/renamed.qmd": "notebook/p7.qmd"}}
     assert {p: sp.role_of(p, aliased) for p in before} == before
     assert sp.role_of("notebook/renamed.qmd", aliased) == before["notebook/p7.qmd"]
+
+    # On disk, p7 has become renamed.qmd; the corpus still keys its pairs on p7.
+    (tmp_path / "notebook").mkdir()
+    for p in posts:
+        if p != "notebook/p7.qmd":
+            (tmp_path / p).write_text("x")
+    (tmp_path / "notebook" / "renamed.qmd").write_text("x")
+    ds = _dataset({p: 1 for p in posts})
+    report = sp.check_splits(base, ds, blog_root=tmp_path)
+    named = [line for line in report if "notebook/p7.qmd" in line]
+    assert len(named) == 1 and sp.is_error(named[0]) and "aliases" in named[0]
+    assert "1 corpus source(s) missing from disk" in "\n".join(report)
+    # The alias is the fix: the same corpus and disk are then clean.
+    assert not any(
+        "p7" in line or "missing from disk" in line
+        for line in sp.check_splits(aliased, ds, blog_root=tmp_path)
+    )
+
+
+def test_check_splits_names_every_corpus_source_missing_from_disk(tmp_path):
+    """Every corpus source absent under `blog_root` is reported, once, with the
+    spellings tried; a pinned eval post is the eval check's line, not a second
+    one here (C12, D34)."""
+    splits = _renamed_splits()  # pins notebook/old.qmd, aliased from new.qmd
+    splits["aliases"]["post/moved.qmd"] = "post/b.qmd"
+    ds = _dataset({"notebook/old.qmd": 2, "post/a.qmd": 2, "post/b.qmd": 2, "post/c.qmd": 2})
+    (tmp_path / "notebook").mkdir()
+    (tmp_path / "post").mkdir()
+    (tmp_path / "post" / "a.qmd").write_text("x")  # present: never reported
+
+    report = sp.check_splits(splits, ds, blog_root=tmp_path)
+    corpus_lines = [line for line in report if "corpus source" in line]
+    assert all(sp.is_error(line) for line in corpus_lines[:-1])
+    assert not any("post/a.qmd" in line for line in report)
+    on_disk = [line for line in report if "is not on disk" in line]
+    assert sum("notebook/old.qmd" in line for line in on_disk) == 1  # the eval line only
+    (b_line,) = [line for line in corpus_lines if "'post/b.qmd'" in line]
+    assert "post/moved.qmd" in b_line and "aliases" in b_line  # the spellings tried, the hint
+    assert any("'post/c.qmd'" in line for line in corpus_lines)
+    assert corpus_lines[-1] == f"2 corpus source(s) missing from disk under {tmp_path}"
+
+    # Put them on disk under their known spellings and the report is clean.
+    (tmp_path / "post" / "moved.qmd").write_text("x")
+    (tmp_path / "post" / "c.qmd").write_text("x")
+    (tmp_path / "notebook" / "new.qmd").write_text("x")
+    assert not any(
+        "corpus source" in line for line in sp.check_splits(splits, ds, blog_root=tmp_path)
+    )
 
 
 def test_alias_chains_resolve_and_cycles_raise():
