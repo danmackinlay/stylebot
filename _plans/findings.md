@@ -100,7 +100,49 @@ Decisions: D56 (the rule), D59 (one mechanism); D55 and D57 superseded.
 
 ---
 
+## Document-scale eval on the serving diet — run 2026-09-04 (F4): the levels move, the deltas do not
+
+`div_is_prose` now crosses the document-scale seam, so both halves — the
+rewrite through `infer.rewrite_text` and the scoring through
+`eval.chunked_detector` — use the diet `dan-style run`/`serve` use. Fresh
+run-id, so all 34 documents were re-sampled (~$0.30).
+`direnv exec . uv run dan-style eval --documents --run-id docscale-20260904`,
+against `_training_pairs/runs/docscale-20260904/scores.jsonl` (pins:
+`runs/docscale-20260904.json`).
+
+| | 2026-09-03 (`div_is_prose` absent) | **2026-09-04 (serving diet)** |
+|---|---|---|
+| chunks scored, slop / target / output | 563 / 564 / 563 | **608 / 609 / 607** |
+| chunks rewritten (kept verbatim) | 563 (7) | 608 (10) |
+| mean P(slop), slop | 0.3844 | **0.3620** |
+| mean P(slop), target | 0.3622 | **0.3381** |
+| mean P(slop), output | 0.3658 | **0.3457** |
+| target − slop | −0.0222 [−0.0452, −0.0139] | **−0.0239 [−0.0429, −0.0150]** |
+| output − slop | −0.0186 [−0.0234, −0.0118] | **−0.0162 [−0.0220, −0.0057]** |
+| output − target | +0.0036 [−0.0055, +0.0288] | +0.0077 [−0.0053, +0.0333] |
+| documents where Dan < draft | 25 / 34 | 25 / 34 |
+| documents where styler < draft | 25 / 34 | 24 / 34 |
+| mean within-document sd (slop) | 0.2642 | 0.2781 |
+
+Same 34 documents over the same 7 posts, same detector (`c0e2ac85be`), 95% CIs
+bootstrapped over the 7 post clusters. **The correction is real and its effect
+on the verdict is a null.** All three levels drop 0.020–0.024: freeing callout
+prose adds ~45 chunks of Dan's own writing to every field, including the AI
+draft's, since a capture's three variants share it. The paired deltas move by
+0.0017 and 0.0024, well inside their own interval widths (0.028 and 0.016),
+and every conclusion is unchanged: both CIs still exclude zero, output − target
+still spans it, and the styler still cannot be told from Dan's edit at 7
+clusters. The one visible move, styler-below-draft 25/34 → 24/34, is one
+document.
+
+Decisions: D54 (the chunk-wise scale). Supersedes the entry below.
+
+---
+
 ## Document-scale eval, chunk-wise — run 2026-09-03 (later the same day): it separates
+
+**Superseded 2026-09-04** by `docscale-20260904`, which re-ran it with the
+serving `div_is_prose` on both halves (the section above).
 
 The fix for the entry below. Same 34 rewritten documents, same detector
 (`c0e2ac85be`), same command — **only the scoring changed**: each field is now

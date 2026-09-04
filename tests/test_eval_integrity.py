@@ -735,3 +735,93 @@ def test_chunk_wise_document_scores_keep_the_ordinary_scores_jsonl_shape(tmp_pat
     assert summary["fields"]["slop"]["mean_detector_score"] == pytest.approx(0.6)
     assert any("slop" in line for line in ev.format_summary(summary))
     assert summary["detectors"][0]["name"] == "stub/chunked:40"
+
+
+CALLOUT_DOC = (
+    "---\ntitle: T\n---\n"
+    "Alpha paragraph, ordinary prose outside any div.\n"
+    "\n"
+    "::: {.callout-note}\n"
+    "Bravo paragraph, callout prose in Dan's own voice.\n"
+    ":::\n"
+    "\n"
+    "::: {#fig-one}\n"
+    "Charlie caption, markup rather than prose.\n"
+    ":::\n"
+)
+
+
+def _blog_div_is_prose(attrs: str) -> bool:
+    """The blog's policy in miniature: `callout-*` wraps prose, a figure does not."""
+    return "callout-" in attrs
+
+
+def test_the_callout_policy_crosses_the_document_scale_seam(tmp_path):
+    """A `.callout-note` paragraph is BOTH rewritten and scored (F4).
+
+    `run`, `style` and `serve` pass the blog's `div_is_prose`; the
+    document-scale eval did not, so the verdict committed on 2026-09-03 was
+    computed on a diet its own serving path does not use. Both halves take the
+    hook here — the real `infer.rewrite_text` under a stub styler, and a real
+    `chunked_detector` — and the no-hook run beside it is the control.
+    """
+    data_dir = tmp_path / "c"
+    pairs = _make_pairs(data_dir, [("A paragraph long enough to score.", "post/a.qmd")])
+    _archive(data_dir, "cap-eval", "post/eval.qmd", CALLOUT_DOC, CALLOUT_DOC)
+    splits = {
+        "schema_version": 1,
+        "eval_posts": ["post/eval.qmd"],
+        "rest_rule": {"kind": "hash", "detector_frac": 0.4, "salt": "0"},
+    }
+
+    def run(out_name, div_is_prose):
+        sent = []
+
+        def styler(messages, num_samples=1):
+            sent.append(messages[-1]["content"])
+            return [messages[-1]["content"] + " Styled."] * num_samples
+
+        docs = tmp_path / out_name
+        rewritten = ev.rewrite_documents_file(
+            pairs, docs, styler, splits=splits,
+            max_chunk_chars=200, div_is_prose=div_is_prose,
+        )
+        detector, seen = _recording_detector({})
+        scores = tmp_path / f"scores-{out_name}"
+        ev.score_pairs_file(
+            docs, scores, fields=("slop", "output"), prune_orphans=False,
+            detector=ev.chunked_detector(
+                detector, max_chunk_chars=200, div_is_prose=div_is_prose
+            ),
+        )
+        rec = json.loads(scores.read_text().splitlines()[0])
+        return rewritten, sent, seen, json.loads(docs.read_text().splitlines()[0]), rec
+
+    without, sent_w, seen_w, _, rec_w = run("plain.jsonl", None)
+    with_hook, sent_h, seen_h, doc_h, rec_h = run("callout.jsonl", _blog_div_is_prose)
+
+    # The rewrite half: the callout paragraph is only ever sent to the styler
+    # when the hook is passed, and the figure caption never is.
+    assert not any("Bravo paragraph" in c for c in sent_w)
+    assert any("Bravo paragraph" in c for c in sent_h)
+    assert not any("Charlie caption" in c for c in sent_h)
+    assert with_hook.n_chunks > without.n_chunks
+
+    # The `:::` marker lines carry class semantics and stay verbatim; what they
+    # delimit is what got rewritten.
+    styled_callout = (
+        "::: {.callout-note}\nBravo paragraph, callout prose in Dan's own voice. Styled.\n:::"
+    )
+    assert styled_callout in doc_h["output"]
+    assert "Charlie caption, markup rather than prose." in doc_h["output"]
+    assert "Charlie caption, markup rather than prose. Styled." not in doc_h["output"]
+
+    # The scoring half: the same chunk reaches the detector, so the verdict is
+    # computed on the diet that was served.
+    assert not any("Bravo paragraph" in t for t in seen_w)
+    assert any("Bravo paragraph" in t for t in seen_h)
+    for field in ("slop", "output"):
+        assert (
+            rec_h["scores"][field]["detector"]["n_chunks"]
+            > rec_w["scores"][field]["detector"]["n_chunks"]
+        )
