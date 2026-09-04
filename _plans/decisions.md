@@ -278,6 +278,7 @@ instruments — worse than a cross-file comparison, because nothing downstream c
 see it happened. *Alternatives*: a header line records only the first writer,
 precisely the writer a refit run is not; probing the head with a canary string
 costs an embed per guard call, on a path meant to be free.
+Chunk scale and div policy ride on `name` too: two policies are two instruments (D54, F12d).
 
 **Deciding constraint**: an unconfigured (`null`) detector must never trip the
 guard — a keyless re-run adds no detector scores, so it cannot blend anything.
@@ -843,8 +844,8 @@ signature. `detect_many` moves to `classify`, so `serve` stops importing `eval`.
 - **Keep the child for loud failures**: rejected. Its diagnosis was disproved
   (D55), the segfault it made legible was the pool's, and no pipe launders an
   exit status any more.
-- **Run a sync judge under `asyncio.to_thread`**: rejected — the pool again in
-  an async hat; a sync judge is documented as serial instead.
+- **Run a sync judge under `asyncio.to_thread`**: rejected — the pool in an
+  async hat; >1 worker now refuses one, and the async client is per pass (F19c).
 
 **Deciding constraint**: D56's bar is a measured win in performance *or*
 complexity, and the pool cleared neither once the detector left it
@@ -871,19 +872,19 @@ non-re-entrant and stays at one file per corpus.
   a synth run is minutes to hours long and would block `log save` for all of it,
   which is the daily write on the irreplaceable captures shard.
 - **Make the lock re-entrant** so the six read-filter-write callers could wrap
-  read *and* rewrite. Deferred: a new mechanism (P8) for callers none of which
-  nest today.
+  read *and* rewrite. Rejected: re-entrancy was never the blocker — a transform
+  passed *into* the critical section wraps both without one (F19d).
 
 **Deciding constraint**: the corpus holds human captures that cannot be
 regenerated and the failure was silent — no exception, no short count, a `True`
 return. Cheap detection beats a bigger lock: inode identity is one `stat` per
 shard per write, and it makes the loss impossible rather than unlikely.
 
-**Residual**: a caller that reads, filters and then rewrites holds nothing
-across that gap, so an append arriving in it is still overwritten — narrower
-than before (it was the whole rewrite), not closed. **Re-evaluate if** synth and
-`log save` are run concurrently in anger, or a second appender appears: the six
-callers then take the lock across read and rewrite, and it becomes re-entrant.
+**Closed (2026-09-04, F19d)**: `corpus.rewrite_with(corpus, transform)` reads,
+transforms and writes in one critical section, so nothing is held across a gap;
+all six callers use it and `rewrite` is now only for a caller that already holds
+the records. **Re-evaluate if** a transform ever needs to write to the corpus it
+was handed, which the non-re-entrant lock still forbids.
 
 ## D61: the executables package holds no libraries — `synth_cli` left `bin/`
 
@@ -1144,7 +1145,10 @@ records).** `livingthing.styler` holds the blog's *serving* policy: manifest
 resolution, endpoint probing and the local staleness warning, the backend
 option skin, `arm_styler`, the scorer and preference sink, the chunk diet, the
 corpus rewrite and `serve_blog`. `bin/style_file.py` keeps option declarations,
-the three commands, echoes and exit codes. Anything that is a thin call into
+the three commands, `click_emitter()` and `translate_errors()`; it speaks no
+`click` outside `blog_backend_options`, every reporting function taking an
+`emit: Emitter` and every `click.*` raise becoming a `stylebot.errors` class
+(D47, F19b). Anything that is a thin call into
 `stylebot.backends` is imported rather than wrapped.
 
 **Alternatives.** Leave it in `bin/` — rejected: the seam tests already reached
@@ -1158,7 +1162,7 @@ answers what a *training target* is, is imported by synth and the classifier,
 and must not drag the backend surface in behind them.
 
 **Deciding constraint.** D35: a library reachable only through a CLI module
-gets copied, and the copy drifts. At 505 lines with no function over 80 it is
+gets copied, and the copy drifts. At 510 lines with no function over 80 it is
 inside P2's budgets, so no allowlist entry is needed for it.
 
 **Re-evaluate if** it passes 800 lines, or `serve_blog` grows a second
@@ -1166,11 +1170,13 @@ protocol — the editor sidecar is the natural first split.
 
 ## D72: the blog's classifier commands are a shell over `voice_classifier`
 
-**Decision (2026-09-04, F12c).** `train_pass` and `eval_pass` — the
-orchestration behind `dan-style train-clf` and `dan-style eval` — move from
-`bin/train_voice_clf.py` into `livingthing.voice_classifier`, reporting through
-stylebot's `Emitter` with `click_emitter()` supplied at the CLI boundary. The
-bin module keeps flags, the four commands and exit codes: 414 → 188 lines, no
+**Decision (2026-09-04, F12c; completed F19b).** `train_pass`, `eval_pass` and
+`document_pass` — the orchestration behind `dan-style train-clf` and
+`dan-style eval` — move from `bin/train_voice_clf.py` into
+`livingthing.voice_classifier`, all three reporting through stylebot's `Emitter`
+and failing with `stylebot.errors`, with `click_emitter()` and
+`translate_errors()` supplied at the CLI boundary (D47). The
+bin module keeps flags, the four commands and exit codes: 414 → 191 lines, no
 plain top-level def, and all four of its `test_budget.py` allowlist entries
 deleted.
 
@@ -1184,7 +1190,7 @@ import each other.
 
 **Deciding constraint.** The blog's 250-line `bin/` budget (F11, on D58's
 allowlist rule) and D61's rule that the executables package holds no libraries.
-`voice_classifier` goes 175 → 445 lines, inside P2's 800 with no function over
+`voice_classifier` goes 175 → 440 lines, inside P2's 800 with no function over
 80 and no docstring over 15; package prose does not grow (`PROSE_CEILING`
 8580 → 8579).
 

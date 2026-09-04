@@ -283,6 +283,8 @@ is that Dan chooses, so `rewrite` returns all candidates with none auto-selected
 and anchor violations **flag** (`anchors_lost`) rather than disqualify — sometimes
 the deletion is the edit you wanted, and the flag says which. Escape aborts
 without logging a preference: an abort is not a judgement.
+A selection carrying any `:::` line is refused outright rather than resolved as
+spans, so half a div cannot reach the styler as prose (D76, F19a).
 
 Rejected for the sidecar protocol: LSP, which has no decoration concept at all.
 NDJSON over stdin/stdout is ~30 lines a side with no framing dependency.
