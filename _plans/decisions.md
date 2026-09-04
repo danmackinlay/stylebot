@@ -11,15 +11,13 @@ re-evaluate-if, ≤ 30 lines. A number is a **citation into**
 three lines. A `P…` entry is a *proposal* in the same shape, followed by its
 verdict. This file and `findings.md` are the two that keep dated numbers;
 everywhere else a count is a claim about the present that git cannot keep true
-(D52). **D1–D33 live in [`decisions-archive.md`](decisions-archive.md)** and
+(D52). **D1–D35 live in [`decisions-archive.md`](decisions-archive.md)** and
 keep their numbers — the second index below is how you find them.
 
 ## Index — this file
 
 | # | title | status |
 |---|---|---|
-| D34 | a post's role is keyed on an alias-resolved identity | amended 2026-09-04 |
-| D35 | the styler backend is a library, and the manifest configures it | live |
 | D36 | a pair record carries its own provenance; uniqueness is a file property | live |
 | D37 | the corpus-stability guard belongs to whoever owns the corpus | live |
 | D38 | no `scripts/` carve-out — migrations are a hidden `ai-style data` group | live |
@@ -53,7 +51,7 @@ keep their numbers — the second index below is how you find them.
 | D65 | `--include-real` defaults off — the two strata invent different things | live |
 | D66 | the `anthropic/` arms bill through OpenRouter BYOK | live |
 | D67 | the blog's Linux/CI machinery for `stylebot` is deleted | live |
-| D68 | segmenter tests run thirteen hard posts; the sweep is opt-in | live; amended 2026-09-04 (eleven) |
+| D68 | segmenter tests run eleven hard-post excerpts; the sweep is opt-in | live; amended 2026-09-04 (F15) |
 | D69 | a closing code fence back-references its opener's length | live |
 | D70 | *(never written — reserved during concurrent work; the cull it was for is D73)* | — |
 | D71 | the blog's serving policy is a module, not a `bin/` script | live |
@@ -64,7 +62,7 @@ keep their numbers — the second index below is how you find them.
 | D76 | an unclosed `:::` opener yields no span; the source is where it is fixed | live |
 | D77 | `index_blog` is a package of stages under a click shell | live |
 
-## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D33)
+## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D35)
 
 | # | title | status |
 |---|---|---|
@@ -102,69 +100,10 @@ keep their numbers — the second index below is how you find them.
 | D31 | stylebot merges the adapter; it does not quantize or bake templates | live |
 | D32 | the anchor guard is symmetric, but its halves use different rules | amended 2026-08-17 |
 | D33 | masking goes in everywhere, with a dropout fraction | live |
+| D34 | a post's role is keyed on an alias-resolved identity | amended 2026-09-04 |
+| D35 | the styler backend is a library, and the manifest configures it | live |
 
 ---
-
-## D34: a post's role is keyed on an alias-resolved identity, and synth refuses the eval stratum unasked
-
-**Decision** (2026-09-03; amended 2026-09-04, F3). `splits.json` carries an
-optional `aliases` map, `{path the post has now: path its pairs are already keyed
-under}` — new → old, the opposite of what the name suggests — and every path
-passes `splits.canonical_source` before anything reads a role. Both sides of the
-pinned test resolve: `role_of` compares a canonical query against
-`{canonical(p) for p in eval_posts}`, and `extend_eval` stores the canonical
-spelling, so a post added under its new path is pinned by identity. `synth`
-refuses a target resolving to `eval` — reading the corpus's own `splits.json`
-when `--splits` is absent, `--role eval` the only way past — while `log save`
-notices without refusing, a capture being legitimate data. A pinned post on disk
-under no known spelling is an error, not a warning: `check_splits(blog_root=…)`
-marks it `ERROR_PREFIX`, `check-splits` exits non-zero, and
-`require_pinned_posts` raises it from `train`/`train-clf --blog-root`, since
-nothing forces `check-splits` first. Numbers: `findings.md` "The alias seam".
-
-**Why the direction is inverted.** Roles come from `meta.source` as recorded at
-capture time, so the corpus is keyed on the OLD path; aliasing old → new re-hashes
-every existing pair into whatever the new path draws, silently for the roles
-nothing pins. New → old moves nothing:
-`test_aliases_need_no_migration_of_existing_pairs` asserts it over 50 posts.
-
-**Rejected**: a frontmatter `id:` (mint it across ~1,700 posts, and `role_of`, a
-per-pair string function, becomes a disk read); `make-splits --force` (un-freezes
-eval to repair a symptom); bumping `schema_version` (`aliases` is additive, and a
-bump makes every older checkout refuse the file); requiring `--blog-root`.
-
-**Re-evaluate if**: the blog gains real post ids (the map becomes the migration
-record and `role_of` keys on it), or `aliases` outgrows hand-editing.
-
-## D35: the styler backend is a library (`stylebot.backends`), and the manifest is what configures it
-
-**Decision (2026-09-03, W1)**: `BackendOpts`, `build_styler`, the token-scaling
-rule and the serving-diet rule live in `stylebot/backends.py`, a plain library
-raising builtins; `bin/ai_style.py` keeps only the translation to exit codes, and
-`dan-style run/style/serve` import the same module. Both front-ends take a
-`--manifest`, and `opts_from_manifest` fills checkpoint, base model, renderer and
-chunk diet from it, explicit flags winning.
-
-**The defect it repairs.** The surface sat inside `bin/ai_style.py`, unimportable
-and raising `click` exceptions, so the blog wrote its own `build_styler`. The
-copy passed no `max_tokens`, so every blog rewrite of a full-length chunk was cut
-off at the 2000-token floor while the promoted run served a 4500-char diet — and
-the blog's summary omitted `n_truncated`, so nothing said so. A copy is
-duplication that loses the argument the original was making (D61).
-
-**Alternatives.** *Grow `infer`* — the backend surface is needed at
-flag-declaration time and `infer` is the expensive import deferred on purpose.
-*Re-export from `bin/`* — an alias leaves the old path in use. *Keep the blog's
-copy and merely pass `max_tokens`* — fixes the bug, keeps the mechanism; the
-flag-superset assertion in `test_dan_style_cli.py` is the durable half. *Take
-`--detector-model` from the shared bundle* — click converts defaults through
-`click.Path(exists=True)`, failing every invocation without the artifact.
-
-**Deciding constraint**: `inline_headings` is tri-state because a manifest can
-only supply a default an explicit flag beats, and `bool` cannot tell
-`--no-inline-headings` from silence. **Re-evaluate if** a third front-end
-appears, or manifests grow a serving section — `opts_from_manifest` should read
-it rather than infer the diet from training-time histograms.
 
 ## D36: a pair record carries its own provenance, and uniqueness is a property of the file
 
@@ -1069,47 +1008,35 @@ no interpreter either way, and a job elsewhere never shared its filesystem.
 **Re-evaluate if:** a second environment actually resolves this project — a
 container, an HPC box — or CI is wanted as a merge gate. The pin then returns
 with a RUNBOOK step that refreshes it, not without one.
-## D68: segmenter tests run thirteen hard posts; the whole-blog sweep is opt-in
+## D68: segmenter tests run eleven hard-post excerpts; the whole-blog sweep is opt-in
 
-**Decision.** `tests/test_segment_hard.py` runs thirteen real blog posts copied
-into `tests/fixtures/hard/`, pinned span-by-span in `spans.json`, on every
-`pytest` run: **0.09 s**, against **3.0 s** for the same invariants over all
-1,757 blog `.qmd` behind `STYLEBOT_SWEEP_BLOG_ROOT`, which is the pre-release
-check. Both paths call one `violations()`, and a test asserts the sweep pointed
-at the fixtures equals the fast path, so the fast one is a proxy rather than a
+**Decision** (2026-09-03; amended 2026-09-04, F15 — thirteen posts became
+eleven). `tests/test_segment_hard.py` runs excerpts of real blog posts from
+`tests/fixtures/hard/`, pinned span-by-span in `spans.json`, on every `pytest`
+run; the same invariants over the whole blog are the pre-release check, behind
+`STYLEBOT_SWEEP_BLOG_ROOT`. Both call one `violations()`, and a test asserts the
+sweep over the fixtures equals the fast path, so the fast one is a proxy, not a
 second opinion. `KNOWN_DEFECTS` is a shrinking allowlist in `test_budget.py`'s
-idiom (D58): two live corpus defects, one in the fixtures.
+idiom (D58). Costs, sizes, set cover: `findings.md` "The hard-post fixture set".
 
 **Alternatives.** Keep sweeping every change — rejected: four agents did it in
-one week, minutes a run, so it happened once at the end instead of every commit.
-Extend the synthetic `segmenter_conformance.qmd` instead of copying posts —
-rejected: it was written from the constructs already known, and the defects W2
-found were interactions a fixture author does not think to combine. Pick the
-dozen by eye — rejected: the ranking (in `fixtures/hard/manifest.json`) put the
-sole instance of three constructs outside any plausible hand-picked set.
+one week, minutes a run, so it happened at the end instead of every commit.
+Extend the synthetic `segmenter_conformance.qmd` instead — rejected: it was
+written from the constructs already known, while the defects W2 found were
+interactions a fixture author does not think to combine. Pick the dozen by eye —
+rejected: the ranking (`fixtures/hard/manifest.json`) put the sole instance of
+three constructs outside any plausible hand-picked set.
 
-**Deciding constraint.** The first sweep this file ran found the selection
-wrong: two posts break the fence-closer rule that neither the twelve nor the
-synthetic fixture carried — an outer fence longer than the inner one it quotes,
-so the inner closer closes the outer and the outer's own closer line re-opens,
-into 1,525 and 744 chars of prose. `blogdown.qmd` was added for it. The one
-uncoverable construct is an unclosed fence at EOF: zero corpus-wide since the
-blog fixed `vs_code.qmd`, so `segmenter_conformance.qmd` keeps it.
+**Deciding constraint.** The first sweep found the selection wrong: two posts
+break a fence-closer rule neither the twelve nor the synthetic fixture carried,
+so `blogdown.qmd` was added (`findings.md` "The fence closer"). A construct that
+is zero corpus-wide stays in `segmenter_conformance.qmd` rather than cost a
+fixture — the unclosed fence at EOF, and, after blog `25cf42e5c5` and D69, the
+unclosed `:::` opener, which took two fixtures with it.
 
 **Re-evaluate if** the fast path stops failing on a break the sweep catches —
 the answer is another fixture, never a loosened assertion — or if the fixtures
-outgrow ~140 KB, at which point excerpting beats copying whole posts.
-
-### D68 amendment (2026-09-04, F15): eleven posts, and `KNOWN_DEFECTS` is empty
-
-D69 emptied the allowlist, and two fixtures left with it.
-`statistical_learning_theory_dependent_data.qmd` and
-`minimum_description_length.qmd` were selected only for an unclosed `:::`
-opener; blog `25cf42e5c5` fixed the five asymmetric div fences that produced it,
-so the construct was a source typo rather than markdown and is now zero
-corpus-wide. It joins the unclosed fence in `segmenter_conformance.qmd`, on this
-entry's own rule. Neither post carried a landmark or a protected kind the
-remaining eleven miss, so the set cover holds.
+outgrow the budget `findings.md` records.
 
 ## D69: a closing code fence back-references its opener's character and length
 

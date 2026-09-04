@@ -1,14 +1,15 @@
-# Design decisions — archive: D1–D33
+# Design decisions — archive: D1–D35
 
-Entries D1–D33, moved here 2026-09-04 when `decisions.md` passed 1,200 lines
-(P3). **They keep their numbers**; nothing was renumbered, and the index at the
-top of [`decisions.md`](decisions.md) carries a one-line summary of each with a
-pointer here. Text is verbatim as it stood at the move, including the
+Entries D1–D35, moved here 2026-09-04 in two passes as `decisions.md` passed
+1,200 lines (P3). **They keep their numbers**; nothing was renumbered, and the
+index at the top of [`decisions.md`](decisions.md) carries a one-line summary of
+each with a pointer here. Text is verbatim as it stood at the move, including the
 supersession notes several of them already carried.
 
 These are the *early* decisions: the platform and base-model choices (D1–D8),
-the per-phase plans compressed as they retired (D9–D25), and the 2026-08-11
-segmentation harmonisation (D26–D33). Anything still being argued about lives in
+the per-phase plans compressed as they retired (D9–D25), the 2026-08-11
+segmentation harmonisation (D26–D33), and the first two of the 2026-09-03
+seam-followup entries (D34–D35). Anything still being argued about lives in
 `decisions.md`.
 
 ## D1: Train on Tinker, serve on Fireworks (fallback: local MLX → Modal)
@@ -957,3 +958,63 @@ masking, or the fine-tuned styler turns out to handle sentinels worse than the
 general models `placeholder-design-2026-08.md` measured — its own warning, and
 the one number that changes after step 2 trains on them.
 
+## D34: a post's role is keyed on an alias-resolved identity, and synth refuses the eval stratum unasked
+
+**Decision** (2026-09-03; amended 2026-09-04, F3). `splits.json` carries an
+optional `aliases` map, `{path the post has now: path its pairs are already keyed
+under}` — new → old, the opposite of what the name suggests — and every path
+passes `splits.canonical_source` before anything reads a role. Both sides of the
+pinned test resolve: `role_of` compares a canonical query against
+`{canonical(p) for p in eval_posts}`, and `extend_eval` stores the canonical
+spelling, so a post added under its new path is pinned by identity. `synth`
+refuses a target resolving to `eval` — reading the corpus's own `splits.json`
+when `--splits` is absent, `--role eval` the only way past — while `log save`
+notices without refusing, a capture being legitimate data. A pinned post on disk
+under no known spelling is an error, not a warning: `check_splits(blog_root=…)`
+marks it `ERROR_PREFIX`, `check-splits` exits non-zero, and
+`require_pinned_posts` raises it from `train`/`train-clf --blog-root`, since
+nothing forces `check-splits` first. Numbers: `findings.md` "The alias seam".
+
+**Why the direction is inverted.** Roles come from `meta.source` as recorded at
+capture time, so the corpus is keyed on the OLD path; aliasing old → new re-hashes
+every existing pair into whatever the new path draws, silently for the roles
+nothing pins. New → old moves nothing:
+`test_aliases_need_no_migration_of_existing_pairs` asserts it over 50 posts.
+
+**Rejected**: a frontmatter `id:` (mint it across ~1,700 posts, and `role_of`, a
+per-pair string function, becomes a disk read); `make-splits --force` (un-freezes
+eval to repair a symptom); bumping `schema_version` (`aliases` is additive, and a
+bump makes every older checkout refuse the file); requiring `--blog-root`.
+
+**Re-evaluate if**: the blog gains real post ids (the map becomes the migration
+record and `role_of` keys on it), or `aliases` outgrows hand-editing.
+
+## D35: the styler backend is a library (`stylebot.backends`), and the manifest is what configures it
+
+**Decision (2026-09-03, W1)**: `BackendOpts`, `build_styler`, the token-scaling
+rule and the serving-diet rule live in `stylebot/backends.py`, a plain library
+raising builtins; `bin/ai_style.py` keeps only the translation to exit codes, and
+`dan-style run/style/serve` import the same module. Both front-ends take a
+`--manifest`, and `opts_from_manifest` fills checkpoint, base model, renderer and
+chunk diet from it, explicit flags winning.
+
+**The defect it repairs.** The surface sat inside `bin/ai_style.py`, unimportable
+and raising `click` exceptions, so the blog wrote its own `build_styler`. The
+copy passed no `max_tokens`, so every blog rewrite of a full-length chunk was cut
+off at the 2000-token floor while the promoted run served a 4500-char diet — and
+the blog's summary omitted `n_truncated`, so nothing said so. A copy is
+duplication that loses the argument the original was making (D61).
+
+**Alternatives.** *Grow `infer`* — the backend surface is needed at
+flag-declaration time and `infer` is the expensive import deferred on purpose.
+*Re-export from `bin/`* — an alias leaves the old path in use. *Keep the blog's
+copy and merely pass `max_tokens`* — fixes the bug, keeps the mechanism; the
+flag-superset assertion in `test_dan_style_cli.py` is the durable half. *Take
+`--detector-model` from the shared bundle* — click converts defaults through
+`click.Path(exists=True)`, failing every invocation without the artifact.
+
+**Deciding constraint**: `inline_headings` is tri-state because a manifest can
+only supply a default an explicit flag beats, and `bool` cannot tell
+`--no-inline-headings` from silence. **Re-evaluate if** a third front-end
+appears, or manifests grow a serving section — `opts_from_manifest` should read
+it rather than infer the diet from training-time histograms.

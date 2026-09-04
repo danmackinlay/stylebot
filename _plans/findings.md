@@ -783,6 +783,31 @@ Re-cutting these two under the blog's `chunk_policy()` moves 9 of their 28
 targets, so `prune-stale` would newly orphan pairs cut there — 79 of the corpus
 come from these two posts, and D53 does not prune. Decided: D69.
 
+## The hard-post fixture set — 2026-09-03 (D68), re-measured 2026-09-04 (F15)
+
+`uv run pytest tests/test_segment_hard.py` against the opt-in
+`STYLEBOT_SWEEP_BLOG_ROOT=~/Source/livingthing uv run pytest
+tests/test_segment_hard.py`, on Dan's laptop. The selection itself is recorded in
+`tests/fixtures/hard/manifest.json` at blog `25cf42e5c5`.
+
+| | value |
+|---|---|
+| fast path, fixtures only, every `pytest` run | **0.09 s** |
+| the same `violations()` invariants over the whole blog | **3.0 s** |
+| blog `.qmd` the sweep reads | 1,757 |
+| fixture posts: at selection → after F15 | 13 → **11** |
+| `tests/fixtures/hard/` on disk, against D68's re-evaluate-if | 64 KB vs ~140 KB |
+| `KNOWN_DEFECTS`: at selection → after D69 | 3 → **0** |
+| edge-case features the set greedily covers | 22 |
+
+The ranking is `3 × (distinct protected kinds) + Σ min(count, 10) per kind +
+10 × Σ log2(1757 / posts_with_feature)` over those 22 features, and the set is a
+greedy cover of them rather than the top N by score — which is why it holds three
+constructs whose sole corpus instance no hand-picked dozen would have caught.
+Two fixtures left on 2026-09-04 because their only construct, an unclosed `:::`
+opener, went to zero corpus-wide when the blog fixed its asymmetric div fences.
+Decided: D68.
+
 ## Surface size
 
 **`ai-style synth` flag audit** (2026-08-10): **54** click options against **19**
