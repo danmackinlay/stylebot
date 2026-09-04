@@ -48,6 +48,9 @@ keep their numbers — the second index below is how you find them.
 | D75 | a sampled message's content may be parts, not a string | live |
 | D76 | an unclosed `:::` opener yields no span; the source is where it is fixed | live |
 | D77 | `index_blog` is a package of stages under a click shell | live |
+| D78 | the four command bodies are stylebot passes over option bundles; `dan-style` calls them | live |
+| D79 | blog corpus defaults are callables that read `--blog-root` off the click context | live |
+| D80 | `iter_targets` takes `files=` with `blog_root=` — the root labels and selects, the list replaces the walk | live; supersedes D46 |
 | D81 | captures are gap-coalesced, not windowed — untouched prose is not endorsed | live |
 | D82 | the scale arms are nested — three honest analyses, and the stamp is not a facet | live |
 | D83 | the synth flag audit closed 2026-08-13 — four retired, four kept, one deferred | live |
@@ -102,7 +105,7 @@ keep their numbers — the second index below is how you find them.
 | D43 | a passage is a stretch of prose, not a string; weight is replication | live |
 | D44 | the editor asks the sidecar where the prose is | live |
 | D45 | one corpus location, resolved once | live |
-| D46 | the synth walker's blog exclusions stay pinned | live |
+| D46 | the synth walker's blog exclusions stay pinned | superseded by D80 |
 | D47 | two error classes for the whole package, translated once at the group | live |
 | D48 | `Styler` is a Protocol; it types the call, not the tokens | live |
 
@@ -889,6 +892,95 @@ and all 1,679 related JSONs — which a move gives and a rewrite does not.
 
 **Re-evaluate if** the exporter or the UMAP transform is next touched for its own
 reasons: that is when the 80-line function budget gets paid, not before.
+
+## D78: the four command bodies are stylebot passes over option bundles; `dan-style` calls them
+
+**Decision (2026-09-04, seam brief §1–§2; code in lanes A1–A3, B1–B4).** `eval`,
+`train-clf`, `run` and `serve` become library passes of one shape — bundle(s),
+policy hooks as keywords, `emit: Emitter = silent`, `stylebot.errors` only, data
+returned: `scoring.run_eval`, `docscale.document_pass` and `verdict.report_eval`
+over `EvalOpts`; `classify_cli.train_clf` over `TrainClfOpts`;
+`backends.rewrite_corpus`/`rewrite_document` over `RunOpts`;
+`serve.serve_sidecar`. Both CLIs render their flags from the bundles (`bundle_options` with
+`defaults=`/`exclude=`, never a retyped flag), every default is a named constant
+the library also uses, and the blog's mirror test compares each shared flag's
+default and type, not its name. `classify_cli.py` is the one new module —
+`classify_train.py` is allowlisted at 965 lines — capped at 300 lines.
+
+**Alternatives.** *Keep the blog's copies, pinned by the flag-name test* — the
+pin missed five drifts in one day: the D34 `pair_ok` gate skipped, the dry-run
+splits table lost, `[:5]` against `[:10]`, the anchor lost/invented breakdown
+dropped, `== 1`/`== 0` where the label constants belong. *Grow
+`classify_train.py`* — allowlisted, and P8 forbids growing it. *One `passes.py`
+for all four* — a grab-bag; each pass belongs beside the library it wraps.
+
+**Deciding constraint.** D35: a library reachable only through a CLI gets
+copied, and the copy drifts. What this clears: the `functions` of the
+`bin/ai_style.py` allowlist row (`eval_cmd` 139, `run_cmd` 105, `train_clf_cmd`
+88); the blog deletions the seam brief §3 lists; `classify_cli.py` ≤ 300 lines.
+
+**Re-evaluate if** a third front-end appears, or a bundle needs a per-field
+callback — `bundle_options` re-pins defaults and drops flags, nothing more.
+
+## D79: blog corpus defaults are callables that read `--blog-root` off the click context
+
+**Decision (2026-09-04, seam brief §5; code in lane B5).**
+`training_targets.context_default(resolve)` returns a zero-argument callable
+that reads `data_dir`/`blog_root` from `click.get_current_context().params` and
+returns `resolve(flag, blog_root)`; every blog `--blog-root`/`--data-dir` is
+`is_eager=True`, so both are processed before any default is computed.
+`train-clf` (`--pairs`, `--splits`), `eval` (`--pairs`; it gains `--blog-root`),
+`extend-eval` and `train` take it; `status`/`synth` already resolve in the body.
+The splits default keeps "used when it exists" by resolving to `None` when the
+file is absent, while an explicit missing `--splits` stays loud via `exists=True`.
+Amends D45: a callable default was necessary, not sufficient — `DEFAULT_PAIRS =
+tt.pairs_path` is called by click with no arguments, so `train-clf --blog-root
+/x --dry-run` read the cwd's corpus while `status --blog-root /x` read `/x`'s.
+
+**Alternatives.** *Resolve in each command body* — a line per path per command,
+and impossible for a default pinned inside a bundle instance
+(`ExtendEvalOpts(pairs_path=…)`). *A `callback=` on `bundle_options`* — new
+mechanism (P8) for the one repo that needs it. *Resolve from cwd and drop
+`--blog-root`* — D45's precedence exists so a scratch run can be redirected.
+
+**Deciding constraint.** `bundle_options` re-pins defaults and nothing else, so
+the only hook a bundle-pinned default has is being a callable, and the context
+is the one thing a zero-argument callable can see; click computes defaults
+inside `make_context`, where that context is current.
+
+**Re-evaluate if** click changes when defaults are computed relative to eager
+parameters, or a second project needs the same resolution — then it belongs in
+`stylebot.config`, not the blog.
+
+## D80: `iter_targets` takes `files=` with `blog_root=` — the root labels and selects, the list replaces the walk
+
+**Decision (2026-09-04, seam brief §6; code in lanes C1–C2). Supersedes D46.**
+`iter_targets` drops its files/blog_root refusal. The rule: `blog_root` supplies
+the label root *and* the selector; `files` replaces only the walk. With both,
+each file is loaded, kept iff `selector(meta)`, and labelled by
+`_source_label(path, root)`; `files` alone stays pre-selected and unlabelled;
+neither stays an error, and `ai-style synth` keeps its one-of UsageError. The
+blog hands `iter_targets` its own walk, `gather_qmd_files([], base=blog_root)`,
+so `LOCAL_SKIP_DIRS` applies without stylebot knowing it; the blog's
+`is_valid_qmd_file` re-composes over stylebot's predicate for its three other
+callers rather than being deleted. D46's re-evaluate clause named exactly this:
+"a label-only `blog_root` companion to `files=`".
+
+**Alternatives.** *Keep the divergence pin* — D46 refused the merge because the
+gap was empty (`findings.md` "The synth walker's gap is empty") and asserted it
+instead; X5 (blog `0550ad99ef`) has already cut that double walk to
+`test_no_qmd_hides_under_a_local_skip_dir`, a three-line rglob assert kept
+until lane C deletes it: an empty gap asserted forever. *Teach stylebot
+`LOCAL_SKIP_DIRS`* — project exclusions in generic tooling (D45); the comment
+over `QUARTO_SKIP_DIRS` saying the blog reads them from `_quarto.yml` is false,
+and C1 rewords it. *`files=` alone (W11.f)* — no selector, `str(path)` labels.
+
+**Deciding constraint.** `Target.source` must stay blog-relative, or
+`splits.role_of` answers `styler` for a frozen-eval post — D34's leak, reopened
+by the walker instead of by a rename.
+
+**Re-evaluate if** a second project needs the walk itself parameterised (a
+predicate, not a list), or a `.qmd` must live under a blog-excluded directory.
 
 ## D81: captures are gap-coalesced, not windowed — untouched prose is not endorsed
 
