@@ -56,7 +56,6 @@ DEFAULT_EMBED_MODEL = "StyleDistance/styledistance"
 NORMALIZE = True
 SCHEMA_VERSION = 1
 
-# Label encoding: slop = positive class (1) so predict_proba[:, 1] = P(slop).
 LABEL_SLOP = 1
 LABEL_DAN = 0  # the author class ("Dan" for historical reasons; generic in use)
 
@@ -64,17 +63,18 @@ LABEL_DAN = 0  # the author class ("Dan" for historical reasons; generic in use)
 DEFAULT_TEST_SIZE = 0.25
 DEFAULT_N_SPLITS = 8
 DEFAULT_RANDOM_STATE = 0
+DEFAULT_HOLDOUT_FRAC = 0.0  # no ad-hoc by-POST holdout: CV metric, fit on all
+DEFAULT_HOLDOUT_SEED = 0
 
 # Regularization. C=None everywhere means "select by inner group-CV over C_GRID"
 # (nested: selection happens strictly inside each training side, so the reported
 # metric covers the tuning step). DEFAULT_C is only the fallback when the fit
 # pool has too few posts for an inner split.
 DEFAULT_C = 1.0
-# Extended past 10.0 on 2026-08-17: the blog's refit on the 7,006-pair corpus
-# selected 10.0 — the old top of the grid — in all eight folds, which is the
-# signature of an optimum sitting off the end rather than inside it. A grid
-# whose boundary is chosen unanimously has not been searched, it has been
-# clipped.
+# Extended past 10.0 on 2026-08-17: the blog's refit on the 7,006-pair corpus selected 10.0
+# — the old top of the grid — in all eight folds, which is the signature of an optimum
+# sitting off the end rather than inside it. A grid whose boundary is chosen unanimously
+# has not been searched, it has been clipped.
 C_GRID = (0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0)
 MIN_POSTS_FOR_C_SELECTION = 4
 
@@ -538,8 +538,8 @@ def evaluate(
 def partition_posts(
     sources,
     *,
-    holdout_frac: float = 0.0,
-    holdout_seed: int = 0,
+    holdout_frac: float = DEFAULT_HOLDOUT_FRAC,
+    holdout_seed: int = DEFAULT_HOLDOUT_SEED,
     holdout_posts=None,
 ) -> tuple[set, set]:
     """Split the distinct POSTs into `(train, holdout)` for the shared by-POST split.
@@ -892,8 +892,8 @@ def train(
     normalize: bool = NORMALIZE,
     batch_size: int = 32,
     git_repo: str | Path | None = None,
-    holdout_frac: float = 0.0,
-    holdout_seed: int = 0,
+    holdout_frac: float = DEFAULT_HOLDOUT_FRAC,
+    holdout_seed: int = DEFAULT_HOLDOUT_SEED,
     holdout_posts=None,
     splits_path: str | Path | None = None,
     blog_root: str | Path | None = None,

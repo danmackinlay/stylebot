@@ -55,7 +55,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     "bin/ai_style_data.py": {"functions": {"prune_stale_cmd": 113}},
     "capture.py": {"functions": {"recut_archives": 99, "capture_pairs": 93}},
     "classify_train.py": {
-        "lines": 965,
+        "lines": 964,
         "functions": {"train": 82},
         "docstrings": (22, 17),
         "module_docstring": 31,
