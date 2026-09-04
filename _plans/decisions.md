@@ -2333,54 +2333,10 @@ these 34 documents — stops being the binding constraint on the interval.
 
 ## D55: the scoring pass runs in a child — and the crash it was built for was a different bug
 
-**Decision (2026-09-03).** `--documents` samples the adapter in the command's
-own process and runs the scoring pass in a **child** (`python -m stylebot.eval
---job … --result …`, driven by `eval.run_score_job_isolated`), so a scoring pass
-has to cross the boundary as data: `eval.ScoreJob` describes the detector as a
-path and the judge as a model id. Separately and independently,
-`classify.sentence_transformers_batch_embed_fn` now holds a **lock** around
-`model.encode`.
-
-**The two are not the same fix, and the order they were found in is the
-finding.** `dan-style eval --documents` exited 139 after the rewrite and before
-scoring, reproducibly, and the diagnosis on the day was the libomp double-load
-the blog's `index-blog-pipeline` skill documents — two OpenMP runtimes (Tinker
-SDK, sentence-transformers) in one process. The isolation was built to that
-diagnosis and **disproved it**: the child crashed too, alone, with no sampling
-SDK in the process. The real cause is concurrent forward passes through one
-`SentenceTransformer` — `score_pairs_file` fans the detector over eight worker
-threads, which survived three embeds per record at whole-document scale and does
-not survive ~17 per field chunk-wise. `--max-workers 1` completes; the lock
-makes eight workers complete; and with the lock a single process holding **both**
-the SDK and the embedder scores fine, measured.
-
-*Alternatives.* **Force `--max-workers 1` for document scoring**: rejected — it
-serialises the judge and Vale too, and it hides a latent crash behind a setting
-that any caller can raise. **Drop the isolation now that it is not the fix**:
-rejected, and this is the live tension. It costs one extra model load on a pass
-that already runs for minutes, and it buys the property that made today's run
-readable at all: in-process the failure was exit 139 into a half-written file
-with nothing said, laundered to 0 by the RUNBOOK's `| tail`; from a child it is
-a `RunError` naming the status. Keeping torch out of the sampling process is
-then defence-in-depth against a mechanism this repo has still never reproduced —
-the same posture that skill takes about its own guards. **Fix the pipe instead**
-(`set -o pipefail` in the RUNBOOK): rejected outright. The segfault is real
-whether or not its exit code is visible, and a documented caveat is not a
-working command.
-
-*The deciding constraint.* A crash that a stub cannot produce needs a live run
-to find and a loud failure to identify. Three paths shipped "built and tested"
-on 2026-09-03 and all three failed on first contact — a 404 endpoint, this
-segfault, and an instrument with no resolution. The cheap structural answer is
-to make the failure name itself, which is what a child process and a propagated
-exit status do.
-
-**Re-evaluate if** the embedder gains a documented thread-safe forward pass, or
-the detector moves behind a service boundary (then the lock is the service's
-problem and the isolation is the only remaining reason for `ScoreJob`); or if
-the double process ever costs more than the loudness is worth — at which point
-the honest move is to delete the isolation and keep the lock, not to keep both
-out of caution.
+**Superseded by D59 (2026-09-04).** The child, its `ScoreJob` marshalling and
+the `classify` lock it shipped beside are deleted: with the thread pool gone,
+one task drives the embedder, so the crash the isolation made legible cannot
+happen and the process boundary buys only a second model load.
 
 ---
 
@@ -2438,84 +2394,103 @@ and the native-object corollary becomes *more* important rather than less.
 
 ## D57: the detector is batched out of the pool; the pool is kept for the judge alone
 
-**Decision (2026-09-03, the D56 audit).** `score_pairs_file` now runs **two**
-batched pre-passes per slice on the calling thread — Vale, as before, and now
-the detector (`eval._detector_prepass` -> `eval.detect_many`) — and submits
-only the judge to the thread pool. `classify.embedding_classifier_detector`
-grows a `.batch_detect(texts) -> list[dict]` attribute wherever it was built
-over a batch encoder, `eval.chunked_detector` grows the matching one over all
-the chunks of all the passages in a call, and `score_candidate` grows a
-`detector_result=` injection slot exactly like its existing `vale=`.
-`serve.handle_request`'s `score` op takes the same path: the marker sends a
-document's paragraphs as one request, and they now cross the backbone as one
-encode.
+**Superseded by D59 (2026-09-04).** The batched detector pre-pass stands and is
+unchanged; the pool it was kept beside does not — the judge moved to an
+`asyncio.Semaphore` at parity, which is the rewrite this entry rejected as
+buying nothing (it buys 1.15x, and three mechanisms).
 
-**The finding that forced it.** `classify.sentence_transformers_batch_embed_fn`
-has always returned a *batch* encoder — `encode(texts, batch_size=32) -> [N,
-D]` — and every caller in the harness was handing it one text at a time through
-`sentence_transformers_embed_fn`. **Every embed in the project was a batch of
-one**, and since D55 a batch of one behind a lock. Numbers in
-[`findings.md`](findings.md), "Threading audit"; the two that decide it:
+---
 
-- **The pool bought nothing for the detector.** Scoring the 34 document-scale
-  records with no judge: `max_workers=8` 24.25 s / 24.71 s against
-  `max_workers=1` 23.96 s / 23.69 s. Eight threads were, if anything, slightly
-  slower than one. Embedding is CPU-bound, so the GIL was never released, and
-  after D55 the lock made that explicit.
-- **Batching bought 1.7x.** The same scoring pass is 12.6–15.5 s batched. At
-  passage scale over 512 live corpus records, 12.6–15.7 s becomes 6.9–8.3 s.
-  The bare encode microbenchmark over the 1,690 serving-scale chunks is 22.2 s
-  against 14.2 s, 1.56x — the rest is per-call Python overhead the pre-pass
-  also removes.
+## D58: size budgets are a test with a shrinking allowlist, and each "why" has one layer
 
-So the detector cleared neither D56 bar in the pool and clears the performance
-bar out of it. **The judge stays in the pool** and clears the bar on its own:
-the same 34 records with a 1 s-per-call judge take 103.3 s at one worker and
-16.1 s at eight, 6.4x. That is a network wait, which is the one thing a thread
-pool here is actually for.
+**Decision (2026-09-04)**: adopt P1–P8 of the blog's
+`_plans/stylebot-seam-followup-2026-09.md` — one layer per "why" (decisions →
+findings → code → commit), size budgets on modules, functions and docstrings,
+and dispatch rules for agents. `tests/test_budget.py` enforces the sizes against
+an allowlist of everything over budget today; the blog runs a copy over
+`src/livingthing`. The allowlist is the record of the sizes as measured.
 
-*Alternatives.* **Move the judge to `asyncio` too, and delete the pool**, which
-is what D56 points at: rejected for now, and this is the live tension. It would
-buy nothing measurable — 102 blocking calls overlapped by threads and 102
-awaited calls overlap identically — and it would cost `openai.AsyncOpenAI`, an
-`async def` all the way up through `score_candidate` / `_score_record` /
-`score_pairs_file`, and an `asyncio.run` at a boundary that is currently a
-plain function called from a CLI, from `run_score_job`, and from the isolated
-child. D56's bar is *either* complexity *or* performance; this clears neither.
-It becomes right the moment anything else in the scoring path needs to await.
-**Keep the detector in the pool and just raise `batch_size`**: rejected — the
-batch never had more than one text in it, so there was nothing for a batch size
-to act on. **Drop the D55 lock now that the hot path does not need it**:
-rejected. `detect_many` still falls back to per-text for any detector without a
-batch path, `infer`'s best-of-N reranking still scores candidates one at a
-time, and the lock costs nothing measurable (the `max_workers` 8-vs-1 numbers
-above are its cost, and they are noise). D56's corollary says a lock means the
-threads were the wrong shape — that is now recorded as *why the detector left
-the pool*, not as a reason to remove the guard. **Batch across slices rather
-than within one**: rejected; `_SCORE_BATCH_RECORDS = 128` exists so a crash
-costs at most a slice, and one encode of 256 texts is already past the point
-where per-call overhead matters.
+**Alternatives considered**:
 
-*The deciding constraint.* A batch encoder called one text at a time is not a
-performance bug you can see in the code — it reads as an ordinary
-`detector(text)` — and it had been invisible for months precisely because the
-thread pool around it looked like the answer to "is this fast enough?".
-Removing the pool from that path is what makes the shape legible: the local
-CPU-bound signals batch, and the remote signal fans out.
+- **An unenforced guideline in `CLAUDE.md`** — already there in spirit, and
+  2026-09-03 added 12,277 lines under it.
+- **Hard budgets with no allowlist** — red on day one, so the first agent to
+  meet it deletes the test rather than the bloat.
+- **One budget module shared by both repos** — a test-only module in stylebot's
+  public API, and a blog suite that goes red on a stale git pin.
 
-**Known cost, measured:** batching changes the arithmetic. Re-scoring the 34
-document-scale records reproduces the committed `scores-chunkwise.jsonl` to a
-maximum absolute difference of **1.86e-07** in `detector.score`, not bit for
-bit — a transformer's forward pass pads to the batch, and float32 addition is
-not associative. That is four orders of magnitude below the effects this
-instrument is used to measure (the target−slop delta is 0.022) and below its
-own reporting precision, but it does mean a re-score is not byte-identical to a
-pre-2026-09-03 one. The D39 mixing guard is unaffected: it compares identity,
-not scores, and batching does not change the head.
+**Deciding constraint**: the bloat was a good instinct (say why) applied at four
+layers at once, so the same paragraph exists three or four times and every later
+reader pays for all of them. Review does not see that; a line count does. The
+allowlist is what makes a number safe to adopt mid-flight — a ratchet, not a
+cliff — and a deleted entry is the only evidence of progress the process keeps.
 
-**Re-evaluate if** the judge stops being the only network signal in the pass —
-a second remote signal, or a detector behind a service boundary, and the
-asyncio rewrite rejected above becomes the cheap option rather than the
-expensive one. Or if `infer`'s best-of-N reranking ever dominates a run: it
-scores N candidates for one chunk one at a time, which is the same
-batch-of-one shape, left alone here because it was never measured to matter.
+**Re-evaluate if** an allowlist entry has to *grow* for a change that is plainly
+right: the budget is then wrong, and what gets written is the new budget, not
+the exception. The enforced package-wide number is the prose line count rather
+than P2's ratio, because deleting mechanism raises the ratio and F2/F8 exist to
+delete mechanism; a ratio enforced literally would reward keeping it.
+
+---
+
+## D59: one mechanism in the scoring path — the judge awaits, everything else batches
+
+**Decision (2026-09-04).** `eval.score_pairs_file` has exactly one concurrency
+mechanism: an `asyncio.Semaphore` over the judge. A slice runs one pre-pass per
+signal — Vale batched, the detector batched, then the judge gathered
+`max_workers` calls at a time — and assembling records is bookkeeping.
+Deleted: the `ThreadPoolExecutor`, the `threading.Lock` in `classify`, the
+fallback-into-the-pool in `_detector_prepass`, and the `ScoreJob` child with the
+`-m stylebot.eval` entry point it spawned. Added: `openrouter_judge_async`, the
+judge a corpus pass takes, and `score_pairs_file_async` under the unchanged sync
+signature. `detect_many` moves to `classify`, so `serve` stops importing `eval`.
+
+**Alternatives.**
+
+- **Keep the pool for the judge alone** (D57's position, reversed here):
+  rejected on the measurement — parity, in fact 1.15x better, because the
+  semaphore gates calls where the pool gated records.
+- **Keep the child for loud failures**: rejected. Its diagnosis was disproved
+  (D55), the segfault it made legible was the pool's, and no pipe launders an
+  exit status any more.
+- **Run a sync judge under `asyncio.to_thread`**: rejected — the pool again in
+  an async hat; a sync judge is documented as serial (103.4 s) instead.
+
+**Deciding constraint**: D56's bar is a measured win in performance *or*
+complexity, and the pool cleared neither once the detector left it
+([`findings.md`](findings.md) "Threading audit", table 6). Four mechanisms had
+been stacked on one path in a day, each containing the previous one's failure.
+
+**Re-evaluate if** a second remote signal joins the judge (the gate then belongs
+per signal), or if anything drives the embedder from more than one thread again.
+
+## D60: a rewrite is a writer — it takes the corpus lock, and appenders re-check the inode
+
+**Decision (2026-09-04)**: `corpus.rewrite` runs under `corpus_lock`, and
+`PairsWriter` compares its open handle's `fstat` (and its remembered byte
+offset) against the shard's current inode before trusting either. The lock stays
+non-re-entrant and stays at one file per corpus.
+
+**Alternatives considered**:
+
+- **Lock only the appender** (the shipped state). Rejected: `rewrite` replaces
+  each shard by rename, so an append landing inside one is lost, and the
+  writer's `ab+` handle is left on an unlinked inode — every later append in
+  that run then vanished with `write()` still returning `True`.
+- **Hold the lock for `PairsWriter`'s lifetime** instead of per write. Rejected:
+  a synth run is minutes to hours long and would block `log save` for all of it,
+  which is the daily write on the irreplaceable captures shard.
+- **Make the lock re-entrant** so the six read-filter-write callers could wrap
+  read *and* rewrite. Deferred: a new mechanism (P8) for callers none of which
+  nest today.
+
+**Deciding constraint**: the corpus holds 398 human captures that cannot be
+regenerated and the failure was silent — no exception, no short count, a `True`
+return. Cheap detection beats a bigger lock: inode identity is one `stat` per
+shard per write, and it makes the loss impossible rather than unlikely.
+
+**Residual**: a caller that reads, filters and then rewrites holds nothing
+across that gap, so an append arriving in it is still overwritten — narrower
+than before (it was the whole rewrite), not closed. **Re-evaluate if** synth and
+`log save` are run concurrently in anger, or a second appender appears: the six
+callers then take the lock across read and rewrite, and it becomes re-entrant.

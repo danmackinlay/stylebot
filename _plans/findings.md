@@ -80,7 +80,23 @@ is not associative. Four orders of magnitude below the target−slop delta of
 0.022 this instrument is used to measure, and below its reporting precision —
 but a re-score of a pre-2026-09-03 file will not diff clean.
 
-Decisions: D56 (the rule), D57 (what changed).
+**6. Threads against `asyncio`, 2026-09-04.** The same 102 calls at 1 s, cap 8
+(`score_pairs_file` over `documents.jsonl`, fields slop/target/output):
+
+| | judge only | + chunked detector |
+|---|---|---|
+| `ThreadPoolExecutor(8)` (`dba257b`) | 16.04 s, 16.03 s | 28.17 s, 28.07 s |
+| `asyncio.Semaphore(8)` | **13.98 s, 13.96 s** | 25.91 s, 26.83 s |
+| a *sync* judge on the loop | 103.37 s, 103.35 s | — |
+
+Parity, and 1.15x better: the pool gated *records* (3 serial calls each, 34/8 =
+5 waves x 3 s), the semaphore gates *calls* (102/8 = 13 waves x 1 s). The sync
+row is the documented cost of passing a blocking judge — one call at a time,
+and it lands on D57's `max_workers=1` figure of 103.33 s. No number moved: a
+chunk-wise re-score of 5 documents matches `scores-chunkwise.jsonl` to 1.18e-07,
+inside #5's float32 batching noise, at identical `n_chunks`.
+
+Decisions: D56 (the rule), D59 (one mechanism); D55 and D57 superseded.
 
 ---
 
