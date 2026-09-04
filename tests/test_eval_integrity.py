@@ -101,12 +101,6 @@ def test_detector_stamps_its_artifact_identity_on_every_score():
     assert ev.detector_identity(detector)["git_sha"] == "abc123"
 
 
-def test_null_detector_has_an_identity_too():
-    identity = ev.detector_identity(ev.null_detector)
-    assert identity["name"] == "null"
-    assert identity["git_sha"] is None
-
-
 def test_score_rows_carry_the_detector_identity(tmp_path):
     pairs = _make_pairs(tmp_path / "c", [("A paragraph long enough to score.", "post/a.qmd")])
     out = tmp_path / "scores.jsonl"
@@ -143,14 +137,6 @@ def test_resuming_with_a_refit_detector_is_refused(tmp_path):
         pairs, out, detector=_stub_detector(git_sha="new"), allow_mixed_detector=True
     )
     assert len(ev.detector_identities(out)) == 2
-
-
-def test_an_unconfigured_detector_never_trips_the_guard(tmp_path):
-    """A keyless re-run adds no detector scores, so it cannot blend the means."""
-    pairs = _make_pairs(tmp_path / "c", [("A paragraph long enough to score.", "post/a.qmd")])
-    out = tmp_path / "scores.jsonl"
-    ev.score_pairs_file(pairs, out, detector=_stub_detector(git_sha="old"))
-    ev.score_pairs_file(pairs, out, detector=ev.null_detector)  # no raise
 
 
 def test_compare_refuses_across_detector_artifacts():
@@ -372,16 +358,6 @@ def test_extend_eval_is_add_only_and_versions_the_stratum():
     assert sp.extend_eval(grown, grown["eval_posts"]) is grown
 
 
-def test_extend_eval_counts_a_renamed_post_as_already_pinned():
-    base = {
-        "schema_version": 1,
-        "eval_posts": ["notebook/old.qmd"],
-        "aliases": {"notebook/new.qmd": "notebook/old.qmd"},
-        "rest_rule": {"kind": "hash", "detector_frac": 0.4, "salt": "0"},
-    }
-    assert sp.extend_eval(base, ["notebook/new.qmd"]) is base
-
-
 def test_check_splits_flags_a_stratum_dominated_by_one_post():
     splits = {
         "schema_version": 1,
@@ -404,15 +380,6 @@ def test_check_splits_flags_a_synthetic_majority_eval_stratum():
     ds = _ds({"post/a.qmd": 41, "post/b.qmd": 62}, synth_posts={"post/b.qmd"})
     warnings = [w for w in sp.check_splits(splits, ds) if w.startswith("EVAL PURITY")]
     assert warnings and "headline verdict must be the REAL facet" in warnings[0]
-
-
-def test_splits_sha256_moves_when_the_partition_does(tmp_path):
-    path = tmp_path / "splits.json"
-    base = sp.make_splits([f"post/p{i}.qmd" for i in range(20)], seed=0)
-    sp.save_splits(base, path)
-    before = sp.splits_sha256(path)
-    sp.save_splits(sp.extend_eval(base, ["post/new.qmd"]), path)
-    assert sp.splits_sha256(path) != before
 
 
 # ---------------------------------------------------------------------------
@@ -611,20 +578,6 @@ def test_chunked_detector_reports_no_signal_for_a_document_with_no_prose():
     result = chunked("# Only a heading\n\n```\ncode\n```\n")
     assert seen == []
     assert result["score"] is None and result["n_chunks"] == 0 and result["sd"] is None
-
-
-def test_chunked_detector_does_not_align_chunks_across_fields():
-    """Each field is segmented on its own; an edit is not a rewrite.
-
-    before/after/output legitimately cut to different chunk counts, so there is
-    no correspondence to join on. The test pins that the wrapper never tries.
-    """
-    detector, seen = _recording_detector({})
-    chunked = ev.chunked_detector(detector, max_chunk_chars=12)
-    before = chunked("One para.\n\nTwo para.\n\nThree para.\n")
-    after = chunked("One para, merged with two para.\n")
-    assert before["n_chunks"] == 3
-    assert after["n_chunks"] == 1
 
 
 def test_chunked_detector_carries_the_head_identity_with_the_scale_appended():

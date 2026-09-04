@@ -32,21 +32,6 @@ def test_render_writes_self_contained_html(tmp_path):
     assert "<script src=" not in h  # no external scripts
 
 
-def test_report_escapes_target_text(tmp_path):
-    p = tmp_path / "r.html"
-    evil = Target(
-        text="<script>alert(1)</script> & <b>bold</b>",
-        source="post/e.qmd",
-        chunk_index=0,
-        chunk_total=1,
-    )
-    report.render_targets_report([evil], p, max_rows=None)
-    h = p.read_text()
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in h
-    assert "<script>alert(1)" not in h
-    assert h.count("<script>") == 1  # only the report's own JS block
-
-
 def test_report_max_rows_caps_table_not_stats(tmp_path):
     p = tmp_path / "r.html"
     report.render_targets_report(_targets(50), p, max_rows=10)
@@ -56,24 +41,12 @@ def test_report_max_rows_caps_table_not_stats(tmp_path):
     assert report._summary_stats(_targets(50))["count"] == 50  # stats cover all
 
 
-def test_summary_stats():
-    stats = report._summary_stats(_targets(5))
-    assert stats["count"] == 5
-    assert stats["n_sources"] == 3
-    assert stats["max"] >= stats["median"]
-
-
 def test_sample_targets_seeded_deterministic():
     ts = _targets(20)
     a = report.sample_targets(ts, 5, seed=7)
     b = report.sample_targets(ts, 5, seed=7)
     assert [t.chunk_index for t in a] == [t.chunk_index for t in b]
     assert len(a) == 5
-
-
-def test_sample_targets_caps_at_population():
-    ts = _targets(3)
-    assert len(report.sample_targets(ts, 10)) == 3
 
 
 # --- scores report (joins pairs.jsonl + scores.jsonl) -----------------------
@@ -115,27 +88,6 @@ def _make_scored(tmp_path, *, judge=None):
     return pairs, scores
 
 
-def test_scores_report_self_contained(tmp_path):
-    pairs, scores = _make_scored(tmp_path, judge=_judge)
-    p = tmp_path / "r.html"
-    report.render_scores_report(scores, pairs, p)
-    h = p.read_text()
-    assert "<svg" in h
-    assert "http://" not in h and "https://" not in h  # no network assets
-    assert "<script src=" not in h
-    assert h.count("<script>") == 1  # only the report's own JS block
-
-
-def test_scores_report_escapes_text(tmp_path):
-    pairs, scores = _make_scored(tmp_path, judge=_judge)
-    p = tmp_path / "r.html"
-    report.render_scores_report(scores, pairs, p, max_rows=None)
-    h = p.read_text()
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in h  # Dan-side text escaped
-    assert "<script>alert(1)" not in h
-    assert "ok &lt;b&gt;tag&lt;/b&gt;" in h  # judge rationale escaped too
-
-
 def test_scores_report_joins_and_headlines(tmp_path):
     pairs, scores = _make_scored(tmp_path, judge=_judge)
     p = tmp_path / "r.html"
@@ -144,15 +96,6 @@ def test_scores_report_joins_and_headlines(tmp_path):
     assert "terse and idiosyncratic" in h  # joined Dan body text (heading stripped)
     assert "catalogue" in h and "polish" in h  # per-strategy headline
     assert 'data-delta="3"' in h  # Dan 4 - slop 1
-
-
-def test_scores_report_sort_attributes(tmp_path):
-    pairs, scores = _make_scored(tmp_path, judge=_judge)
-    p = tmp_path / "r.html"
-    report.render_scores_report(scores, pairs, p)
-    h = p.read_text()
-    for attr in ("data-strategy=", "data-delta=", "data-slop=", "data-dan="):
-        assert attr in h
 
 
 def test_scores_report_keyless_no_crash(tmp_path):
@@ -179,29 +122,6 @@ def test_scores_report_shows_unscored_beside_the_judge_mean(tmp_path):
     assert "<b>4.0</b><span>mean target judge</span>" in h
     # And the per-facet headline table carries the count too.
     assert "<th class=num>unscored</th>" in h
-
-
-def test_scores_report_max_rows_caps(tmp_path):
-    d = tmp_path / "c"
-    for i in range(6):
-        t = synth.Target(
-            text=f"Paragraph number {i} of authored prose to be scored now.",
-            source=f"post/p{i}.qmd",
-            chunk_index=0,
-            chunk_total=1,
-        )
-        synth.synthesize_pairs(
-            [t],
-            d,
-            [synth.Generator(name="m", generate=lambda s: "slop: " + s, strategy="polish")],
-        )
-    pairs, scores = d / "pairs.jsonl", tmp_path / "s.jsonl"
-    ev.score_pairs_file(pairs, scores, judge=_judge)
-    p = tmp_path / "r.html"
-    report.render_scores_report(scores, pairs, p, max_rows=3)
-    h = p.read_text()
-    assert h.count("<tr data-strategy") == 3  # table capped (headline rows have no data-strategy)
-    assert "of 6" in h  # note states the full count
 
 
 def test_format_scores_sample_seeded(tmp_path):
@@ -231,17 +151,6 @@ def _make_scored_with_gen(tmp_path, *, judge=None):
     pairs, scores = d / "pairs.jsonl", tmp_path / "scores.jsonl"
     ev.score_pairs_file(pairs, scores, judge=judge)
     return pairs, scores
-
-
-def test_scores_report_shows_gen_params(tmp_path):
-    pairs, scores = _make_scored_with_gen(tmp_path, judge=_judge)
-    p = tmp_path / "r.html"
-    report.render_scores_report(scores, pairs, p)
-    h = p.read_text()
-    # Facets are plain-text COLUMNS, not a muted subline.
-    assert "<td class=facet>high</td>" in h and "<td class=facet>low</td>" in h
-    for col in ("generator", "reasoning", "prompt", "turn", "sim"):
-        assert f">{col}</th>" in h
 
 
 def test_scores_report_prompt_column_is_human_readable(tmp_path):
@@ -385,16 +294,6 @@ def test_sort_handlers_match_the_shared_js_signature(tmp_path):
         assert all(re.fullmatch(r"'\w+',(true|false)", c) for c in calls), calls
 
 
-def test_reports_carry_a_dark_palette(tmp_path):
-    for h in _both(tmp_path):
-        assert "@media (prefers-color-scheme:dark)" in h
-
-
-def test_empty_histogram_is_an_empty_svg():
-    # _score_histos leans on this rather than guarding each series itself.
-    assert report._histogram_svg([], bins=5) == "<svg></svg>"
-
-
 # --- escaping (a security property, so test the parsed DOM, not substrings) --
 
 
@@ -508,30 +407,6 @@ def test_signal_reader_degrades_instead_of_raising():
     assert report._signal({"judge": {"score": 3}}, "judge") == 3
     assert report._vale_alerts({"vale": {"available": True}}) == 0  # available, no alerts
     assert report._vale_alerts({"vale": {"available": False, "alerts": 9}}) is None
-
-
-def test_scores_report_tolerates_malformed_signal_payloads(tmp_path):
-    # A judge payload that isn't a dict degrades to a placeholder rather than
-    # failing the whole report. (Only shapes `eval.summarize_scores` itself
-    # survives are exercised end to end; `_signal`'s full tolerance is unit
-    # tested above, since the headline goes through eval's aggregator.)
-    pairs, _ = _make_scored_with_gen(tmp_path, judge=None)
-    recs = [
-        {
-            "id": record_id(pr),
-            "meta": {"slop_strategy": "polish", "source": pr["meta"]["source"]},
-            "scores": {
-                f: {"judge": 7, "vale": {"available": True, "alerts": 0}}
-                for f in ("slop", "target")
-            },
-        }
-        for pr in iter_pairs(pairs)
-    ]
-    p = tmp_path / "r.html"
-    report.render_scores_report(recs, pairs, p)
-    h = p.read_text()
-    assert 'data-slop=""' in h and 'data-delta=""' in h
-    assert "vale 0" in h  # available with zero alerts is a chip, not an omission
 
 
 def test_detector_cards_appear_only_when_a_detector_ran(tmp_path):

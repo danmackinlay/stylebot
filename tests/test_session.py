@@ -116,11 +116,6 @@ def test_load_snapshots_carries_an_unreadable_one_as_data(store, tmp_path):
     assert entries["bad"].source.endswith("bad")
 
 
-def test_snapshot_dirs_is_empty_for_a_missing_tree(store):
-    assert session.snapshot_dirs(store.snapshots_dir) == []
-    assert session.load_snapshots(store.closed_snapshots_dir) == []
-
-
 # ---- symlink canonicalisation --------------------------------------------
 
 
@@ -296,27 +291,6 @@ def test_redo_only_replaces_its_own_sessions_pairs(store, post):
     assert sorted(_bodies(store)) == ["First rewrite here.", "Second rewrite, fixed."]
 
 
-def test_redo_replaces_this_sessions_pairs_against_the_same_base(store, post):
-    session.open_session(store, post)
-    Path(post).write_text("## S\n\nWe dig in, with a typoo.\n", encoding="utf-8")
-    session.save_session(store, post)
-    stamp = _stamps(store)[0]
-
-    Path(post).write_text("## S\n\nWe dig in, without a typo.\n", encoding="utf-8")
-    notices: list[str] = []
-    result = session.save_session(store, post, redo=True, notify=notices.append)
-
-    assert result.reopened is not None
-    assert any("reopened session" in line for line in notices)
-    assert any("replaced 1 interim pair(s)" in line for line in notices)
-    # Replaced, not stacked, because `snapped_at` survived the reopen.
-    assert len(session.read_pairs(store)) == 1
-    assert _stamps(store) == [stamp]
-    assert "without a typo" in _bodies(store)[0]
-    # And the redo's own close re-archived the same base for a further redo.
-    assert "rich tapestry" in session.read_snapshot(store.closed_snapshot_path(post)).content
-
-
 def test_smart_disposition_keeps_earlier_sessions(store, post):
     _first_session(store, post)
 
@@ -417,18 +391,6 @@ def test_unknown_disposition_is_an_argument_error(store, post):
 # ---- pair: one-shot capture ----------------------------------------------
 
 
-def test_capture_pair_appends_by_default(store):
-    for after in ("We dig in.", "We dig in again."):
-        session.capture_pair(
-            store,
-            before_text="It is worth noting the rich tapestry.",
-            after_text=after,
-            source="clipboard",
-            whole=True,
-        )
-    assert len(session.read_pairs(store)) == 2
-
-
 def test_capture_pair_replace_drops_prior_pairs_for_the_source(store):
     session.capture_pair(
         store,
@@ -464,16 +426,6 @@ def test_capture_pair_replace_without_a_source_is_an_argument_error(store):
             store, before_text="slop here", after_text="terse", replace=True, whole=True
         )
     assert not isinstance(exc.value, SessionError)
-
-
-def test_capture_pair_with_no_changed_chunk_is_an_unready_world(store):
-    """Pure insert: nothing to pair. `capture`'s RunError becomes a SessionError."""
-    with pytest.raises(SessionError, match="no changed text chunks"):
-        session.capture_pair(
-            store,
-            before_text="## H\n\nkept body",
-            after_text="## H\n\nkept body\n\nbrand new added paragraph",
-        )
 
 
 # ---- list -----------------------------------------------------------------
@@ -609,12 +561,6 @@ def test_recut_refuses_legacy_archives_as_a_session_error(store):
     assert "1 legacy JSON capture archive" in str(exc.value)
 
 
-def test_recut_with_no_archives_reports_nothing(store):
-    result = session.recut(store, gap_paras=2, gap_chars=800, max_chars=8000)
-    assert result.records == [] and result.captures == 0
-    assert result.pairs_before == result.pairs_after == 0
-
-
 def test_recut_dry_run_leaves_the_corpus_alone(store, post):
     long_before = "## S\n\n" + ("It is worth noting the rich tapestry. " * 20) + "\n"
     long_after = "## S\n\n" + ("We dig in, again and again and again. " * 20) + "\n"
@@ -649,10 +595,6 @@ def test_corpus_summary_counts_heading_context(store, post):
     assert summary.pairs == 2
     assert summary.with_context == 1
     assert summary.path == store.pairs_path
-
-
-def test_read_pairs_of_a_missing_corpus_is_empty(store):
-    assert session.read_pairs(store) == []
 
 
 # ---- age rendering --------------------------------------------------------

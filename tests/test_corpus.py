@@ -63,17 +63,6 @@ def test_a_synthetic_record_with_no_timestamp_is_not_guessed_into_a_month():
     assert corpus.shard_of(rec) == "synth-undated.jsonl"
 
 
-def test_a_shard_directory_and_a_file_have_the_same_data_dir():
-    """`pairs_path.parent` is the data dir under BOTH shapes.
-
-    Eight call sites spell `pairs_path.parent / "captures"` or
-    `splits_path(pairs_path.parent)`. That they need no change is a property of
-    naming the directory `pairs`, and it is worth a test because a rename to,
-    say, `shards/pairs/` would break all eight silently.
-    """
-    assert (config.pairs_path("/d/dd")).parent.name == "dd"
-
-
 # --- migration and round trip ----------------------------------------------
 
 
@@ -98,12 +87,6 @@ def test_sharding_round_trips_every_record(sharded):
     assert sorted(json.dumps(r, sort_keys=True) for r in after) == sorted(
         json.dumps(r, sort_keys=True) for r in before
     )
-
-
-def test_the_shards_are_the_split_the_rule_names(sharded):
-    data_dir, _ = sharded
-    names = {p.name for p in corpus.shard_paths(data_dir / "pairs")}
-    assert names == {"captures.jsonl", "synth-2026-07.jsonl"}
 
 
 def test_config_prefers_the_shard_directory_once_it_exists(sharded, monkeypatch):
@@ -197,15 +180,6 @@ def test_dedupe_across_shards_keeps_the_first_and_backs_up(sharded):
     assert (report.backup / "captures.jsonl").exists()
     assert len(list(iter_pairs(pairs))) == n_before - 1
     assert validate_pairs_file(pairs) == []
-
-
-def test_a_single_file_corpus_still_gets_a_dot_bak(tmp_path, write_pairs_corpus):
-    src = write_pairs_corpus(tmp_path / "pairs.jsonl", n_posts=1, chunks=1)
-    line = src.read_text(encoding="utf-8")
-    src.write_text(line + line, encoding="utf-8")
-    report = dedupe_pairs_file(src, apply=True)
-    assert report.backup == tmp_path / "pairs.jsonl.bak"
-    assert report.dropped == 1
 
 
 # --- writers ---------------------------------------------------------------

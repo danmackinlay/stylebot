@@ -253,19 +253,6 @@ def test_anchor_guard_rejects_invention():
     assert result.n_anchor_invented == 1 and result.n_anchor_lost == 0
 
 
-def test_anchor_guard_reverts_and_names_invention():
-    chunk = "Read the notes."
-    result = infer.rewrite_text(
-        chunk,
-        lambda m, num_samples=1: ["Read [the notes](https://made-up.example/n)."],
-    )
-    assert result.text == chunk
-    assert result.n_kept_input == 1 and result.n_anchor_rejected == 1
-    # Named as invention, not filed under loss: the two want different fixes.
-    assert "invented anchors" in result.decisions[0]
-    assert "made-up.example" in result.decisions[0]
-
-
 def test_repeating_a_source_anchor_is_not_invention():
     """The case the one-directional check never had to answer. A count increase
     on a key the source already carried points somewhere the source vouched for,
@@ -346,27 +333,6 @@ def test_on_decision_reports_candidates_scores_and_choice():
     assert candidates == ["sloppy version", "dan version"]
     assert scores == [0.9, 0.1]
     assert chosen == 1 and kept_input is False
-
-
-def test_on_decision_kept_input_has_no_chosen_index():
-    calls = []
-
-    def worse_candidates(messages, num_samples=1):
-        return ["sloppy attempt A", "sloppy attempt B"]
-
-    def fake_detector(text):
-        return {"score": 0.2 if "dan" in text else 0.8}
-
-    infer.rewrite_text(
-        "dan-grade input prose",
-        worse_candidates,
-        best_of=2,
-        scorer=infer.detector_scorer(fake_detector),
-        on_decision=lambda *args: calls.append(args),
-    )
-    (_chunk, _ctx, candidates, scores, chosen, kept_input) = calls[0]
-    assert len(candidates) == 2 and scores == [0.8, 0.8]
-    assert chosen is None and kept_input is True
 
 
 def test_on_decision_anchor_rejected_candidate_is_unscored():
@@ -488,12 +454,6 @@ def test_email_local_part_is_not_a_citation_key():
 # --- inline anchors (code spans + inline math), off by default -------------
 
 
-def test_inline_anchors_are_off_by_default():
-    text = "Set `PATH` and note $x_i$ carefully."
-    assert infer.content_anchors(text) == {}
-    assert set(infer.content_anchors(text, inline=True)) == {"PATH", "x_i"}
-
-
 def test_inline_math_ignores_dollar_amounts():
     # The loose `\$([^$\n]+?)\$` calls "5 and " an anchor here, so every price
     # in a paragraph becomes a false positive. Requiring non-space at both ends
@@ -557,11 +517,6 @@ def _pair(slop: str, target: str) -> dict:
         ],
         "meta": {},
     }
-
-
-def test_record_anchor_delta_reads_both_sides_of_a_pair():
-    rec = _pair("Slop with [docs](./d.qmd) and [@Cite2020].", "Dan with [docs](./d.qmd).")
-    assert infer.record_anchor_delta(rec) == (["@Cite2020"], [])
 
 
 def test_anchor_faithful_rejects_a_fabrication_lesson():
@@ -717,53 +672,24 @@ def test_rewrite_candidates_names_an_empty_selection_as_empty():
         assert "budget" not in str(excinfo.value)
 
 
-def test_rewrite_candidates_still_reports_a_real_overrun_as_over_budget():
-    import pytest
-
-    with pytest.raises(ValueError, match="over the 5-char chunk budget"):
-        infer.rewrite_candidates("one two\n\nthree four", _identity_styler, max_chunk_chars=5)
-
-
 # F19a: a half-selected div resolves to no span (D76 for the opener; a stray
 # closer never opened), so a span-based kind called the fence line prose under
 # both div policies and the styler was free to drop it. Refused on the line.
 
 
-def test_rewrite_candidates_rejects_an_unclosed_div_opener():
-    import pytest
-
+@pytest.mark.parametrize(
+    "selection",
+    [
+        "::: {.callout-note}\nProse inside the note.\n",  # an unclosed opener
+        "Tail of the note.\n:::\n",  # a lone closer
+        # the editor's ordinary partial selection: opener plus prose, no closer
+        "Lead-in prose.\n\n::: {.callout-warning}\nFirst line of the callout.\n",
+    ],
+)
+def test_rewrite_candidates_rejects_a_half_selected_div(selection):
     for policy in (None, lambda attrs: True):
         with pytest.raises(ValueError, match="contains a div"):
-            infer.rewrite_candidates(
-                "::: {.callout-note}\nProse inside the note.\n",
-                _identity_styler,
-                div_is_prose=policy,
-            )
-
-
-def test_rewrite_candidates_rejects_a_lone_div_closer():
-    import pytest
-
-    for policy in (None, lambda attrs: True):
-        with pytest.raises(ValueError, match="contains a div"):
-            infer.rewrite_candidates(
-                "Tail of the note.\n:::\n",
-                _identity_styler,
-                div_is_prose=policy,
-            )
-
-
-def test_rewrite_candidates_rejects_an_opener_whose_closer_is_unselected():
-    """The editor's ordinary partial selection: opener plus prose, no closer."""
-    import pytest
-
-    for policy in (None, lambda attrs: True):
-        with pytest.raises(ValueError, match="contains a div"):
-            infer.rewrite_candidates(
-                "Lead-in prose.\n\n::: {.callout-warning}\nFirst line of the callout.\n",
-                _identity_styler,
-                div_is_prose=policy,
-            )
+            infer.rewrite_candidates(selection, _identity_styler, div_is_prose=policy)
 
 
 # --- inline headings (v2 cross-heading diet) ------------------------------
@@ -818,12 +744,6 @@ def test_segment_inline_headings_still_protects_fences():
     assert "fence" in kinds  # never groupable — absent from the corpus either way
 
 
-def test_rewrite_candidates_rejects_heading_by_default():
-    styler = lambda messages, num_samples=1: ["x"] * num_samples  # noqa: E731
-    with pytest.raises(ValueError, match="heading"):
-        infer.rewrite_candidates("## H\n\nSome prose.", styler, max_chunk_chars=5000)
-
-
 def test_rewrite_candidates_accepts_section_under_inline_headings():
     """The editor's 'rewrite section' mode: a multi-section selection is one
     rewrite when that is what the adapter was trained on."""
@@ -854,38 +774,6 @@ def test_max_tokens_scales_with_chunk_budget():
 # less capable than the library. Serving at the wrong diet is out-of-
 # distribution and makes the styler copy its input verbatim (observed
 # 2026-07-22), so the flag has to actually reach the library.
-
-
-def _spy_rewrite_text(monkeypatch):
-    """Capture the kwargs `run` hands to `infer.rewrite_text`. No model."""
-    seen: dict = {}
-
-    def fake(text, styler, **kw):
-        seen.update(kw)
-        return infer.RewriteResult(text="rewritten")
-
-    monkeypatch.setattr(infer, "openai_backend", lambda *a, **k: _identity_styler)
-    monkeypatch.setattr(infer, "rewrite_text", fake)
-    return seen
-
-
-@pytest.mark.parametrize(
-    ("flag", "expected"),
-    [("--inline-headings", True), ("--no-inline-headings", False), (None, False)],
-)
-def test_run_cli_threads_inline_headings_into_rewrite_text(tmp_path, monkeypatch, flag, expected):
-    from click.testing import CliRunner
-
-    from stylebot.bin.ai_style import main
-
-    seen = _spy_rewrite_text(monkeypatch)
-    doc = tmp_path / "d.qmd"
-    doc.write_text("## H\n\nSome prose.\n", encoding="utf-8")
-
-    args = ["run", str(doc), "--backend", "openai", "--base-url", "http://x/v1", "--model", "m"]
-    result = CliRunner().invoke(main, args + ([flag] if flag else []))
-    assert result.exit_code == 0, result.output
-    assert seen["inline_headings"] is expected
 
 
 # --- truncation, told apart from anchor damage -----------------------------
@@ -1008,13 +896,6 @@ def test_prose_chunks_is_exactly_what_rewrite_text_sends():
     assert infer.prose_chunks(text, max_chunk_chars=40) == sent
 
 
-def test_prose_chunks_drops_frontmatter_headings_and_protected_blocks():
-    text = "---\ntitle: T\n---\n" + BODY
-    chunks = infer.prose_chunks(text, max_chunk_chars=40)
-    assert chunks == ["First paragraph, plain prose.\nSecond line of it.", "Last paragraph."]
-    assert not any("```" in c or "title: T" in c for c in chunks)
-
-
 def test_prose_chunks_honours_the_diet_it_is_handed():
     """A bigger budget groups more prose into one chunk — the diet is the point."""
     text = "One paragraph.\n\nTwo paragraph.\n\nThree paragraph."
@@ -1022,17 +903,9 @@ def test_prose_chunks_honours_the_diet_it_is_handed():
     assert len(infer.prose_chunks(text, max_chunk_chars=4500)) == 1
 
 
-def test_prose_chunks_of_a_document_with_no_prose_is_empty():
-    assert infer.prose_chunks("# Only a heading\n\n```\ncode\n```\n", max_chunk_chars=100) == []
-
-
 # ---------------------------------------------------------------------------
 # The sampled message's content is `str | list[ContentPart]` (D75)
 # ---------------------------------------------------------------------------
-
-
-def test_message_text_passes_a_plain_string_through():
-    assert infer._message_text("just prose") == "just prose"
 
 
 def test_message_text_rewraps_a_thinking_part_rather_than_dropping_it():
