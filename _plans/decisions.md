@@ -52,6 +52,7 @@ keep their numbers — the second index below is how you find them.
 | D64 | `STYLE_SYSTEM` was amended once, 2026-08-04, and the corpus re-stamped | live |
 | D65 | `--include-real` defaults off — the two strata invent different things | live |
 | D66 | the `anthropic/` arms bill through OpenRouter BYOK | live |
+| D67 | the blog's Linux/CI machinery for `stylebot` is deleted | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D33)
 
