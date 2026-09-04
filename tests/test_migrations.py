@@ -12,9 +12,10 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
-from stylebot import migrations
+from stylebot import migrations, pairs
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.bin.ai_style_data import main as data_cli
 
@@ -290,3 +291,155 @@ def test_prune_stale_apply_writes_exactly_what_the_dry_run_reported(tmp_path):
     backup = [json.loads(x) for x in path.with_suffix(".jsonl.bak").read_text().splitlines()]
     assert len(backup) == 3
     assert "pruned 1 pair(s)" in res.output
+
+
+# ---------------------------------------------------------------------------
+# backfill-draws (W4 step 3, D84): pairs and side files -> draws
+# ---------------------------------------------------------------------------
+
+from stylebot import corpus, draws  # noqa: E402
+
+GATE_ROW = {
+    "at": "2026-08-12T15:31:47+00:00",
+    "synth_key": "50d17b5bf22843e2",
+    "source": "post/x.qmd",
+    "generator": "openrouter/qwen/qwen3.5-9b",
+    "slop_strategy": "linkedin",
+    "reasoning_effort": "off",
+    "kind": "gate",
+    "gate": "skipped_invented_anchors",
+    "reason": "generator deleted 6 anchor(s) the target keeps",
+    "attempt": 0,
+    "cost": 7.7e-05,
+}
+ERROR_ROW = {
+    **GATE_ROW,
+    "at": "2026-07-16T16:38:00+00:00",
+    "kind": "error",
+    "gate": None,
+    "reason": "RuntimeError: provider returned no choices",
+    "attempt": 2,
+    "cost": None,
+}
+
+
+@pytest.fixture
+def sharded(tmp_path, write_pairs_corpus) -> Path:
+    """A `pairs/` of 8 records — two real posts, two synthetic — plus one side file."""
+    flat = write_pairs_corpus(tmp_path / "flat.jsonl", n_posts=4, chunks=2, n_synth_posts=2)
+    out = tmp_path / "pairs"
+    out.mkdir()
+    corpus.rewrite(out, corpus.read_records(flat))
+    side = tmp_path / "lost_draws.jsonl"
+    side.write_text(json.dumps(GATE_ROW) + "\n" + json.dumps(ERROR_ROW) + "\n", encoding="utf-8")
+    return out
+
+
+def _view_sha(draws_dir: Path, out: Path, **policy) -> str:
+    report = draws.build_view(
+        draws.iter_draws(draws_dir), draws.ViewPolicy(keep_superseded=True, **policy), out=out
+    )
+    return report.content_sha256
+
+
+def test_backfill_dry_run_writes_nothing_and_reports(sharded, tmp_path):
+    lines: list[str] = []
+    before = corpus.content_sha256(sharded)
+    report = migrations.backfill_draws(
+        sharded,
+        tmp_path / "draws",
+        side_files=[tmp_path / "lost_draws.jsonl"],
+        apply=False,
+        log=lines.append,
+    )
+    assert not (tmp_path / "draws").exists()
+    assert corpus.content_sha256(sharded) == before
+    assert (report.records, report.resolved, report.unresolved) == (8, 0, 8)
+    assert report.tombstones == {"gate:skipped_invented_anchors": 1, "error:RuntimeError": 1}
+    assert report.shards == [] and not report.applied
+    assert any("dry run" in x for x in lines) and "pair records            : 8" in lines
+
+
+def test_backfill_apply_writes_month_shards_the_view_reproduces(sharded, tmp_path):
+    report = migrations.backfill_draws(
+        sharded,
+        tmp_path / "draws",
+        side_files=[tmp_path / "lost_draws.jsonl"],
+        apply=True,
+        log=lambda _: None,
+    )
+    assert [p.name for p in report.shards] == ["synth-2026-07.jsonl", "synth-2026-08.jsonl"]
+    assert corpus.content_sha256(sharded) == corpus.content_sha256(sharded)  # untouched
+    assert _view_sha(tmp_path / "draws", tmp_path / "view") == corpus.content_sha256(sharded)
+    stones = [d for d in draws.iter_draws(tmp_path / "draws") if d.outcome != draws.ACCEPTED]
+    assert [d.outcome for d in stones] == ["error:RuntimeError", "gate:skipped_invented_anchors"]
+    assert all(d.record is None and d.raw_output is None and d.target_text is None for d in stones)
+    assert stones[1].gen["reason"] == GATE_ROW["reason"] and stones[1].source == "post/x.qmd"
+    assert len({d.draw_id for d in stones}) == 2 and stones[0].drawn_at == ERROR_ROW["at"]
+
+
+def test_backfill_resolve_hook_fills_provenance_and_rekeys(sharded, tmp_path):
+    def resolve(record: dict) -> tuple[str | None, bool, tuple[int, int] | None]:
+        meta = record["meta"]
+        if meta["source"] == "post/p0.qmd":
+            return None, False, None  # an unreachable cell keeps null provenance
+        return "abc123", False, (meta["chunk_index"] * 100, meta["chunk_index"] * 100 + 50)
+
+    report = migrations.backfill_draws(
+        sharded, tmp_path / "draws", resolve=resolve, apply=True, log=lambda _: None
+    )
+    assert (report.resolved, report.unresolved, report.duplicate_ids) == (6, 2, 0)
+    got = list(draws.iter_draws(tmp_path / "draws"))
+    records = corpus.read_records(sharded)
+    assert [d.record for d in got] == records
+    assert [d.draw_id for d in got[:2]] == [pairs.record_id(r) for r in records[:2]]
+    assert got[2].blog_sha == "abc123" and got[2].span == (0, 50) and got[3].span == (100, 150)
+    assert got[2].draw_id == draws.draw_id("post/p1.qmd", "abc123", (0, 50), None, None, None, None)
+    assert got[2].draw_id != pairs.record_id(records[2])
+    assert _view_sha(tmp_path / "draws", tmp_path / "view") == corpus.content_sha256(sharded)
+
+
+def test_backfill_superseded_marks_the_session_and_the_default_policy_drops_it(sharded, tmp_path):
+    report = migrations.backfill_draws(
+        sharded,
+        tmp_path / "draws",
+        superseded={"cap0000": "cap0001"},
+        apply=True,
+        log=lambda _: None,
+    )
+    assert report.superseded == 2  # both chunks of the interim save
+    got = list(draws.iter_draws(tmp_path / "draws"))
+    assert [d.superseded_by for d in got] == ["cap0001", "cap0001"] + [None] * 6
+    assert _view_sha(tmp_path / "draws", tmp_path / "kept") == corpus.content_sha256(sharded)
+    dropped = draws.build_view(
+        draws.iter_draws(tmp_path / "draws"), draws.ViewPolicy(), out=tmp_path / "v"
+    )
+    assert dropped.records == 6 and dropped.excluded == {"superseded": 2}
+
+
+def test_backfill_apply_refuses_a_directory_with_anything_in_it(sharded, tmp_path):
+    (tmp_path / "draws").mkdir()
+    (tmp_path / "draws" / "notes.txt").write_text("x")
+    with pytest.raises(migrations.MigrationError, match="not empty"):
+        migrations.backfill_draws(sharded, tmp_path / "draws", apply=True, log=lambda _: None)
+    assert (tmp_path / "draws" / "notes.txt").exists() and not list(
+        (tmp_path / "draws").glob("*.jsonl")
+    )
+
+
+def test_backfill_draws_command_is_in_the_hidden_group_and_dry_runs(sharded, tmp_path):
+    from stylebot.bin.ai_style import main as ai_style
+
+    assert data_cli.hidden and "backfill-draws" in data_cli.commands
+    assert "data" not in CliRunner().invoke(ai_style, ["--help"]).output
+    res = CliRunner().invoke(data_cli, ["backfill-draws", str(tmp_path)])
+    assert res.exit_code == 0, res.output
+    assert "tombstones              : 2" in res.output and "dry run" in res.output
+    assert not (tmp_path / "draws").exists()
+
+    res = CliRunner().invoke(data_cli, ["backfill-draws", str(tmp_path), "--apply"])
+    assert res.exit_code == 0, res.output
+    assert "wrote 2 shard(s)" in res.output
+    assert _view_sha(tmp_path / "draws", tmp_path / "view") == corpus.content_sha256(sharded)
+    res = CliRunner().invoke(data_cli, ["backfill-draws", str(tmp_path), "--apply"])
+    assert res.exit_code != 0 and "not empty" in res.output

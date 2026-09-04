@@ -10,22 +10,28 @@ went that way in 0.3, the archive and shard conversions in X1); users migrate
 on version increment rather than carrying dead code. Delete the function, its
 command and its test together (D38).
 
-One live migration:
+Two live migrations:
 
 `plan_stale_prune`
     The corpus consequence of a policy change (D53): synthetic cells no current
     cut reproduces, and synthetic cells sitting on frozen-eval prose.
+`backfill_draws`
+    The one-off lift of today's pairs and reject side files into draws (D84).
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from stylebot import corpus
+from stylebot import corpus, draws
+from stylebot.draws import Draw
 from stylebot.errors import RunError
+from stylebot.jsonl import iter_jsonl
 from stylebot.pairs import backup_corpus, extract_target, iter_pairs
 from stylebot.splits import canonical_source, role_of
 from stylebot.targets import ChunkPolicy, iter_targets
@@ -383,3 +389,135 @@ def styler_passage_scale(
         "real_pair_share": round(100 * real_pairs / len(kept), 2) if kept else 0.0,
         "real_passage_share": round(100 * real_passages / len(groups), 2) if groups else 0.0,
     }
+
+
+# --- Backfill: pairs and the reject side files -> draws (W4 step 3, D84) ---
+
+#: `record -> (blog_sha, blog_dirty, span)`; the blog's git search, supplied (D45).
+Resolve = Callable[[dict], tuple[str | None, bool, tuple[int, int] | None]]
+
+#: The reject logs a synth run kept beside `pairs/` before draws existed.
+SIDE_FILE_NAMES = ("lost_draws.jsonl", "gate_drops.jsonl")
+
+#: Row keys a tombstone lifts into `Draw` fields; the rest stay in `gen`.
+_ROW_FIELDS = frozenset({"at", "source", "kind", "gate"})
+
+
+@dataclass
+class BackfillReport:
+    """What a backfill read, and would write or wrote."""
+
+    records: int = 0
+    resolved: int = 0
+    unresolved: int = 0
+    superseded: int = 0
+    tombstones: Counter = field(default_factory=Counter)  # by outcome
+    #: Draws re-keyed by `resolve` onto a cell an earlier draw already holds.
+    duplicate_ids: int = 0
+    shards: list[Path] = field(default_factory=list)
+    applied: bool = False
+
+
+def tombstone_from_row(row: dict) -> Draw:
+    """A side-file row as a rejected draw, text absent (D84).
+
+    A row has no prompt id and no span, so `draw_id` hashes the whole row.
+    """
+    if row.get("kind") == "error":
+        cls = str(row.get("reason") or "").split(":", 1)[0].strip()
+        outcome = f"error:{cls or 'Exception'}"
+    else:
+        outcome = f"gate:{row.get('gate') or 'unknown'}"
+    blob = json.dumps(row, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return Draw(
+        draw_id=hashlib.sha256(blob).hexdigest()[:16],
+        source=row.get("source"),
+        gen={k: v for k, v in row.items() if k not in _ROW_FIELDS} or None,
+        outcome=outcome,
+        drawn_at=row.get("at"),
+    )
+
+
+def _lift_pair(record: dict, resolve: Resolve | None, superseded: Mapping[str, str]) -> Draw:
+    """`draw_from_pair`, re-keyed on its cell once `resolve` finds a sha or span."""
+    draw = draws.draw_from_pair(record)
+    meta = record.get("meta") or {}
+    if resolve is not None:
+        draw.blog_sha, draw.blog_dirty, draw.span = resolve(record)
+        if draw.blog_sha is not None or draw.span is not None:
+            gen = meta.get("gen") or {}
+            draw.draw_id = draws.draw_id(
+                draw.source,
+                draw.blog_sha,
+                draw.span,
+                meta.get("generator"),
+                meta.get("slop_strategy"),
+                gen.get("prompt_id"),
+                gen.get("reasoning_effort"),
+                int(gen.get("replicate") or 0),
+            )
+    capture_id = meta.get("capture_id")
+    if not meta.get("synthetic") and capture_id in superseded:
+        draw.superseded_by = superseded[capture_id]
+    return draw
+
+
+def _report_lines(report: BackfillReport, draws_dir: Path) -> Iterable[str]:
+    yield f"pair records            : {report.records}"
+    yield f"  with a blog sha       : {report.resolved}"
+    yield f"  unresolved            : {report.unresolved}"
+    yield f"  superseded            : {report.superseded}"
+    yield f"tombstones              : {sum(report.tombstones.values())}"
+    for outcome, n in sorted(report.tombstones.items()):
+        yield f"  {outcome:<22}: {n}"
+    yield f"duplicate draw ids      : {report.duplicate_ids}"
+    if report.applied:
+        yield f"wrote {len(report.shards)} shard(s) -> {draws_dir}"
+    else:
+        yield "dry run — nothing written. Re-run with --apply to write draws."
+
+
+def backfill_draws(
+    corpus_path: str | Path,
+    draws_dir: str | Path,
+    *,
+    side_files: Sequence[Path] = (),
+    resolve: Resolve | None = None,
+    superseded: Mapping[str, str] | None = None,
+    apply: bool,
+    log: Callable[[str], object] = print,
+) -> BackfillReport:
+    """Every pair record and side-file row of `corpus_path`, as draws; never writes it.
+
+    `superseded` is `{capture_id: successor capture_id}`. `apply` appends month
+    shards under an empty `draws_dir`; a dry run only counts.
+    """
+    draws_dir = Path(draws_dir)
+    if apply and draws_dir.is_dir() and any(draws_dir.iterdir()):
+        raise MigrationError(f"{draws_dir} is not empty; a backfill writes a fresh directory")
+    report = BackfillReport(applied=apply)
+    seen: Counter = Counter()
+    shards: dict[Path, None] = {}
+
+    def emit(draw: Draw) -> None:
+        seen[draw.draw_id] += 1
+        if apply:
+            shards[draws.append(draws_dir, draw)] = None
+
+    for record in corpus.iter_records(corpus_path):
+        draw = _lift_pair(record, resolve, superseded or {})
+        report.records += 1
+        report.resolved += draw.blog_sha is not None
+        report.unresolved += draw.blog_sha is None
+        report.superseded += draw.superseded_by is not None
+        emit(draw)
+    for path in side_files:
+        for row in iter_jsonl(path):
+            draw = tombstone_from_row(row)
+            report.tombstones[draw.outcome] += 1
+            emit(draw)
+    report.duplicate_ids = sum(n - 1 for n in seen.values() if n > 1)
+    report.shards = list(shards)
+    for line in _report_lines(report, draws_dir):
+        log(line)
+    return report

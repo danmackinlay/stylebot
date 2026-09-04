@@ -19,13 +19,15 @@ So: absent from `ai-style --help`, fully documented under `ai-style data
 
 Every command **dry-runs by default** and needs `--apply` to write, because
 each is destructive in the one direction that matters — the prune deletes corpus
-records, and keeps a `.bak`. A migration is deleted once the only corpus that
+records, and keeps a `.bak`; the backfill writes a fresh `draws/` and refuses
+one with anything in it. A migration is deleted once the only corpus that
 exists has been through it (D38); see the module docstring in
 `stylebot.migrations`.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import click
@@ -229,3 +231,74 @@ def prune_stale_cmd(
     click.echo(f"\npruned {plan.n_dropped} pair(s) -> {pairs} (backup at {backup})")
     click.echo("next: `ai-style eval --prune-orphans` if you keep scores.jsonl, and a")
     click.echo("      `synth` run to refill the cells whose diet is still live policy.")
+
+
+@main.command("backfill-draws")
+@click.argument("data_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "--draws",
+    "draws_dir",
+    type=click.Path(path_type=Path),
+    help="Draws directory to write month shards into; must be empty. [default: DATA_DIR/draws]",
+)
+@click.option(
+    "--side-file",
+    "side_files",
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="A reject log whose rows become tombstones. [default: the reject logs beside "
+    "DATA_DIR's corpus, where present]",
+)
+@click.option(
+    "--resolve",
+    "resolve_spec",
+    metavar="MODULE:CALLABLE",
+    help="Hook `record -> (blog_sha, blog_dirty, span)`; the blog's git search (D45). "
+    "Without it every draw keeps span and sha unset and its record_id as draw_id.",
+)
+@click.option(
+    "--superseded",
+    "superseded_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="JSON object {capture_id: successor capture_id} naming interim saves.",
+)
+@click.option("--apply", is_flag=True, help="Write the draws (default: dry run).")
+def backfill_draws_cmd(
+    data_dir: Path,
+    draws_dir: Path | None,
+    side_files: tuple[Path, ...],
+    resolve_spec: str | None,
+    superseded_path: Path | None,
+    apply: bool,
+) -> None:
+    """Lift today's pairs and reject logs into draws (W4 step 3, D84).
+
+    Reads DATA_DIR's corpus and never writes to it. Every pair becomes an
+    accepted draw; every side-file row a tombstone named for its gate or error.
+    """
+    from stylebot import config, migrations
+
+    corpus_path = config.pairs_path(data_dir)
+    if not side_files:
+        side_files = tuple(
+            p for p in (data_dir / n for n in migrations.SIDE_FILE_NAMES) if p.is_file()
+        )
+    resolve = _import_attr(resolve_spec, "--resolve") if resolve_spec else None
+    superseded = (
+        json.loads(superseded_path.read_text(encoding="utf-8")) if superseded_path else None
+    )
+    click.echo(f"corpus                  : {corpus_path}")
+    for path in side_files:
+        click.echo(f"side file               : {path}")
+    try:
+        migrations.backfill_draws(
+            corpus_path,
+            draws_dir or data_dir / "draws",
+            side_files=side_files,
+            resolve=resolve,
+            superseded=superseded,
+            apply=apply,
+            log=click.echo,
+        )
+    except migrations.MigrationError as exc:
+        raise click.ClickException(str(exc)) from exc
