@@ -87,7 +87,7 @@ def promoted_manifest(runs_dir: str | Path) -> dict | None:
     unless it says `"promoted": false`; the default-serving run is the newest
     that is both. The rule lives here rather than in either CLI so `status` and
     serving cannot disagree about which adapter is live — the blog's
-    `style_file.latest_manifest` is this function plus a click error.
+    `styler.latest_manifest` is this function plus an error.
 
     `"promoted": false` skips a run without hiding it — a nixed run, an ablation
     arm and a verdict manifest stay on record with their `promotion_note` and
