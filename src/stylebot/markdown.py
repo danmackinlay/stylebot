@@ -139,6 +139,11 @@ def heading_title(line: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def is_div_fence_line(line: str) -> bool:
+    """True if `line` opens or closes a ``:::`` div (any indent, trailing newline fine)."""
+    return line.strip().startswith(":::")
+
+
 def _div_attrs(line: str) -> str:
     """The attribute text of a ``:::`` opener — everything past the colons."""
     return line.strip().lstrip(":").strip()
@@ -164,12 +169,12 @@ def _div_spans(
     spans: list[Span] = []
     i = lo
     while i < hi:
-        if lines[i].strip().startswith(":::"):
+        if is_div_fence_line(lines[i]):
             depth = 1
             j = i + 1
             while j < hi and depth > 0:
                 inner = lines[j].strip()
-                if inner.startswith(":::"):
+                if is_div_fence_line(inner):
                     if inner == ":::":
                         depth -= 1
                     else:

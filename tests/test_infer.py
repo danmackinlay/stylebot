@@ -692,6 +692,48 @@ def test_rewrite_candidates_still_reports_a_real_overrun_as_over_budget():
         infer.rewrite_candidates("one two\n\nthree four", _identity_styler, max_chunk_chars=5)
 
 
+# F19a: a half-selected div resolves to no span (D76 for the opener; a stray
+# closer never opened), so a span-based kind called the fence line prose under
+# both div policies and the styler was free to drop it. Refused on the line.
+
+
+def test_rewrite_candidates_rejects_an_unclosed_div_opener():
+    import pytest
+
+    for policy in (None, lambda attrs: True):
+        with pytest.raises(ValueError, match="contains a div"):
+            infer.rewrite_candidates(
+                "::: {.callout-note}\nProse inside the note.\n",
+                _identity_styler,
+                div_is_prose=policy,
+            )
+
+
+def test_rewrite_candidates_rejects_a_lone_div_closer():
+    import pytest
+
+    for policy in (None, lambda attrs: True):
+        with pytest.raises(ValueError, match="contains a div"):
+            infer.rewrite_candidates(
+                "Tail of the note.\n:::\n",
+                _identity_styler,
+                div_is_prose=policy,
+            )
+
+
+def test_rewrite_candidates_rejects_an_opener_whose_closer_is_unselected():
+    """The editor's ordinary partial selection: opener plus prose, no closer."""
+    import pytest
+
+    for policy in (None, lambda attrs: True):
+        with pytest.raises(ValueError, match="contains a div"):
+            infer.rewrite_candidates(
+                "Lead-in prose.\n\n::: {.callout-warning}\nFirst line of the callout.\n",
+                _identity_styler,
+                div_is_prose=policy,
+            )
+
+
 # --- inline headings (v2 cross-heading diet) ------------------------------
 
 _DOC = (

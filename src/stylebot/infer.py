@@ -452,8 +452,8 @@ def rewrite_candidates(
     own score rides along (D20). Serves `stylebot.serve`'s `rewrite` op.
 
     Single-chunk contract: `text` must be prose at training chunk scale, so
-    frontmatter, a heading, a protected block (D27) or prose over
-    `max_chunk_chars` raises ValueError with a message fit for an editor. Under
+    frontmatter, a heading, a protected block or a `:::` line (D27, D76), or prose
+    over `max_chunk_chars`, raises ValueError with a message fit for an editor. Under
     `inline_headings` a selection MAY span headings and any `context` is ignored.
 
     Returns `{"input_score", "n_sampled", "candidates": [{"text", "score",
@@ -472,11 +472,11 @@ def rewrite_candidates(
     frontmatter, body = split_frontmatter(text)
     if frontmatter:
         raise ConfigError("selection includes YAML frontmatter — select prose only")
+    # Half a div resolves to no span (D76), so its fence line would reach the styler.
+    if any(markdown.is_div_fence_line(line) for line in body.splitlines()):
+        raise ConfigError("selection contains a div — select prose only")
     items, _seps = _segment(
-        body,
-        max_chars=max_chunk_chars,
-        inline_headings=inline_headings,
-        div_is_prose=div_is_prose,
+        body, max_chars=max_chunk_chars, inline_headings=inline_headings, div_is_prose=div_is_prose
     )
     kinds = [kind for kind, chunk in items if chunk.strip()]
     # Nothing selected is its own failure: it is not an over-budget selection,
