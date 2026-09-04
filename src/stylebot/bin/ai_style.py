@@ -42,7 +42,6 @@ from stylebot import eval as ev
 from stylebot import splits as sp
 from stylebot import train as tr
 from stylebot.backends import BACKEND_PARAMS, BackendOpts, backend_options
-from stylebot.bin.ai_style_data import main as _data
 from stylebot.bin.ai_style_log import main as _log
 from stylebot.cli_options import (
     ErrorTranslatingGroup,
@@ -62,10 +61,9 @@ def main() -> None:
     """stylebot tooling — capture, synthetic pairs, training, eval (subcommands)."""
 
 
-# Phase 1 capture (bin/ai_style_log.py) and the hidden one-off migrations
-# group (CLAUDE.md's carve-out paragraph), mounted here as their entry points.
+# Phase 1 capture (bin/ai_style_log.py), mounted here as its entry point. The
+# hidden `data` group of one-off migrations emptied on 2026-09-05 (D38).
 main.add_command(_log, name="log")
-main.add_command(_data, name="data")
 
 
 # The styler backend (`run`, `serve`) is one surface, `stylebot.backends`, a

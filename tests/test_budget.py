@@ -47,8 +47,7 @@ RATIO_PIN: float | None = None
 # largest first. "docstrings" lists every over-budget span, largest first.
 # A failure names the exact number to lower an entry to, or the entry to delete.
 ALLOWLIST: dict[str, dict[str, object]] = {
-    "bin/ai_style.py": {"lines": 1023, "docstrings": (16,)},
-    "bin/ai_style_data.py": {"functions": {"prune_stale_cmd": 113}},
+    "bin/ai_style.py": {"lines": 1019, "docstrings": (16,)},
     "capture.py": {"functions": {"recut_archives": 98}},
     "classify_train.py": {
         "lines": 964,

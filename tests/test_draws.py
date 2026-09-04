@@ -16,7 +16,7 @@ from pathlib import Path
 import conftest
 import pytest
 
-from stylebot import config, corpus, draws, migrations, pairs
+from stylebot import config, corpus, draws, pairs
 from stylebot.errors import ConfigError
 
 SWEEP_ENV = conftest.SWEEP_ENV
@@ -303,19 +303,3 @@ def test_the_view_reproduces_the_blog_corpus(tmp_path):
     assert _ids(tmp_path / "view") == _ids(src)
     assert len(_ids(src)) == report.records
 
-
-@pytest.mark.sweep  # conftest deselects it unless SWEEP_ENV is set
-def test_the_backfilled_draws_reproduce_the_blog_corpus(tmp_path):
-    root = Path(os.environ[SWEEP_ENV]).expanduser()
-    src = root / "_training_pairs" / "pairs"
-    assert src.is_dir(), f"{SWEEP_ENV}={root} has no _training_pairs/pairs"
-
-    migrations.backfill_draws(src, tmp_path / "draws", apply=True, log=lambda _: None)
-    report = draws.build_view(
-        draws.iter_draws(tmp_path / "draws"),
-        draws.ViewPolicy(keep_superseded=True),
-        out=tmp_path / "view",
-    )
-    print(f"\ncontent_sha256={report.content_sha256} records={report.records}")
-    assert report.content_sha256 == corpus.content_sha256(src)
-    assert [p.name for p in report.shards] == [p.name for p in corpus.shard_paths(src)]

@@ -19,7 +19,6 @@ from click.testing import CliRunner
 from stylebot import config, corpus
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.bin.ai_style import main as ai_style
-from stylebot.bin.ai_style_data import main as data_cli
 from stylebot.jsonl import iter_jsonl, read_jsonl
 from stylebot.pairs import dedupe_pairs_file, iter_pairs, record_id, validate_pairs_file
 
@@ -505,24 +504,3 @@ def test_run_pairs_mode_rewrites_every_shards_records(sharded, tmp_path):
         record_id(r) for r in before
     }
 
-
-def test_prune_stale_accepts_a_directory(sharded, tmp_path):
-    """`ai-style data prune-stale`, W12's migration, over the sharded shape."""
-    data_dir, before = sharded
-    out = tmp_path / "splits.json"
-    CliRunner().invoke(
-        ai_style,
-        ["make-splits", "--pairs", str(data_dir / "pairs"), "--out", str(out), "--seed", "1"],
-    )
-    res = CliRunner().invoke(
-        data_cli,
-        [
-            "prune-stale",
-            str(data_dir / "pairs"),
-            "--no-orphans",
-            "--splits",
-            str(out),
-        ],
-    )
-    assert res.exit_code == 0, res.output
-    assert f"{len(before)} total" in res.output
