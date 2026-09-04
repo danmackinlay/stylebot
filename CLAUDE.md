@@ -27,9 +27,8 @@ and cannot import the package. To read or parse source prefer `rg`/`grep`, else
 
 ## Budgets and layers
 
-Adopted 2026-09-04, after one day added 12,277 lines to `src/` and `tests/`. Why
-and what was rejected: D58; measurement and repairs, the blog's
-`_plans/stylebot-seam-followup-2026-09.md`.
+Adopted 2026-09-04, after one day's seam pass. Why and what was rejected: D58;
+measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
 
 - **P1. Every "why" lives in exactly one layer; the others point at it.**
   Durable to ephemeral: `decisions.md` (why, alternatives, re-evaluate-if) →
@@ -47,8 +46,8 @@ and what was rejected: D58; measurement and repairs, the blog's
   alternatives one line each, deciding constraint, re-evaluate-if. Numbers are a
   citation into `findings.md`, never a copy. A superseded entry collapses to
   three lines: title, "superseded by Dn on <date>", one sentence of what
-  changed. Past 1,200 lines, D1–D33 move to `decisions-archive.md` and the index
-  at the top keeps their one-line summaries.
+  changed. Past 1,300 lines, the oldest entries move to `decisions-archive.md`
+  and the index at the top keeps their one-line summaries.
 - **P4. A `findings.md` entry is one table plus ≤ 12 lines of reading** — date,
   the command, the artifact it read, the table, the D-number it decided. How a
   measurement went wrong before it went right is a decision's "alternatives", or
@@ -107,9 +106,9 @@ and what was rejected: D58; measurement and repairs, the blog's
   shard dir against the Phase 1 schema: roles, frozen system prompt, required
   `meta`, **`record_id` uniqueness across all shards**. Pre-`schema_version`
   records stay valid; why uniqueness is file-level, not per-record: D36, D50.
-- **`STYLE_SYSTEM` (`stylebot.ai_core`) is frozen.** It is baked into every
-  logged pair, so changing the string invalidates the corpus. Phase 2 emits it
-  verbatim as `messages[0]`.
+- **`STYLE_SYSTEM` (`stylebot.ai_core`) is frozen**: it is baked into every
+  logged pair, so a change means re-stamping every record, done once (D64).
+  Phase 2 emits it verbatim as `messages[0]`.
 - **Blog/generic boundary.** Generic frontmatter+markdown tooling is reusable; the
   only blog-specific code allowed is the bundled selector example. Don't
   reintroduce the blog-build cruft removed 2026-06-29 — OVERVIEW draws the line.

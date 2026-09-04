@@ -372,8 +372,8 @@ runs a copy over `src/livingthing`. The allowlist records the sizes as measured.
 
 **Alternatives considered**:
 
-- **An unenforced guideline in `CLAUDE.md`** — already there in spirit, and
-  2026-09-03 added 12,277 lines under it.
+- **An unenforced guideline in `CLAUDE.md`** — already there in spirit, and one
+  day's seam pass (2026-09-03) showed what it held.
 - **Hard budgets with no allowlist** — red on day one, so the first agent to meet
   it deletes the test rather than the bloat.
 - **One budget module shared by both repos** — a test-only module in stylebot's
@@ -757,8 +757,8 @@ natural split, and it takes `document_pass` with it.
 **Decision (2026-09-04, F12j).** `migrations.find_inventing`, `anchor_kind`,
 `ai-style data prune-invented-anchors` and their tests are deleted. D38 says a
 migration goes once the only corpus that exists has been through it, and this one
-has: the dry run drops **0 of 8,156** records (`findings.md`, "Two constructs the
-corpus no longer holds"). `write_pruned` stays — `prune-stale` also calls it.
+has: the dry run drops nothing (`findings.md`, "Two constructs the corpus no
+longer holds"). `write_pruned` stays — `prune-stale` also calls it.
 
 **Alternatives.** *Keep it as a report* — rejected: `infer.invented_anchors` and
 `is_anchor_faithful` are the predicate, reachable without a command, and a
@@ -774,9 +774,6 @@ rise; a migration pinned at zero is dead code with an `--apply` flag on it.
 
 **Re-evaluate if** a corpus predating 0.3 is ever restored from a backup; git
 holds the function, and the predicate it wrapped is still in `infer`.
-
-**Follow-up outside this repo:** the blog's `_training_pairs/RUNBOOK.md` §6a
-still names the command. It needs deleting there.
 
 ## D74: `status` lists every run manifest, ordered by the manifest's own clock
 

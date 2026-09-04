@@ -14,15 +14,16 @@ once their work shipped and the code became the better description):
 | this file | goal, process contract, interfaces, data contract, status, open slices |
 | [`decisions.md`](decisions.md) | why each non-obvious choice landed, what we got wrong, what we rejected |
 | [`findings.md`](findings.md) | every measured result — not re-derivable from git |
-| [`eval-harness.md`](eval-harness.md) | the four signals, the detector decision, the split contract |
-| [`v2-longer-rewrites.md`](v2-longer-rewrites.md) | the scale curriculum — mechanism shipped, generation run 2026-08, trained as the blog's run 4 |
-| [`synth-flag-audit.md`](synth-flag-audit.md) | the `synth` option surface, as-audited evidence + open retirement proposals |
-| [`vscode-marker.md`](vscode-marker.md) | the editor marker design, thresholds, honesty caveats |
-| [`anchor-integrity.md`](anchor-integrity.md) | the anchor guard/gate/audit — shipped (D32); the as-audited case is kept as the argument for it |
+| [`decisions-archive.md`](decisions-archive.md) | D1–D48, moved under P3; `decisions.md` keeps their index rows |
+| [`eval-harness.md`](eval-harness.md) | retired 2026-09-04 (P7); the four-signal harness — what shipped (D7, D17, D39–D42), what it refuted, the unbuilt fifth signal |
+| [`v2-longer-rewrites.md`](v2-longer-rewrites.md) | retired 2026-09-04 (P7); the scale curriculum — generated 2026-08, trained as the blog's run 4; step 5 and the weighting policy stayed open |
+| [`synth-flag-audit.md`](synth-flag-audit.md) | retired 2026-09-04 (P7); the `synth` option audit — 54 → 49 options (D21, D83), nothing open |
+| [`vscode-marker.md`](vscode-marker.md) | retired 2026-09-04 (P7); the editor marker — `ai-style serve` + extension shipped, alternative B parked (D44) |
+| [`anchor-integrity.md`](anchor-integrity.md) | retired 2026-09-04 (P7); the anchor guard/gate/audit (D32) — its open step 3 is `masking-placement.md` |
 | [`masking-placement.md`](masking-placement.md) | *where* masking goes (D33) — decided, not yet built |
 | [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md) | the mask *encoding* — the open half of the masking work |
 | [`argued-slop-arm.md`](argued-slop-arm.md) | a slop strategy for concessive/justificatory structure — the first prompt-ablation arm, specified 2026-09-03, not built |
-| [`transcript-mining.md`](transcript-mining.md) | real pairs replayed from Claude Code session transcripts (+~70% on the real stratum, with the objections Claude was answering) — specified 2026-09-03, not built |
+| [`transcript-mining.md`](transcript-mining.md) | real pairs replayed from Claude Code session transcripts (with the objections Claude was answering) — specified 2026-09-03, not built |
 
 Narrative rationale (the "why") lives in the blog post
 [*Fine-tuning danbot*](https://danmackinlay.name/notebook/fine_tuning_danbot.html). This file is
@@ -222,9 +223,10 @@ record of what was measured then, not a claim about now.
 **Open slices** (each self-contained):
 
 - ~~**v2 scale curriculum**~~ — **generated 2026-08, trained as the blog's run
-  4** (`_plans/styler-run4-preflight-2026-08.md` there; the arm split and the
-  per-budget counts are in [`v2-longer-rewrites.md`](v2-longer-rewrites.md) and
-  the run's own manifest, not here). What is *still* open is reading it:
+  4** (`_plans/styler-run4-preflight-2026-08.md` there; the per-budget counts
+  are [`findings.md`](findings.md) "v2 post-gate distributions" and the live
+  composition is `dan-style status` (D52), not here). What is *still* open is
+  reading it:
   **`merge_max_chars` records which batch first produced a target's text, not
   its design cell**, so a clean scale contrast needs the budget-unique targets
   or a length-stratified eval of the adapter itself. D43's finding is the same
@@ -236,8 +238,10 @@ record of what was measured then, not a claim about now.
   gate promptly answered the question it was built to gate on — at v2 chunk
   scale, unmasked anchor survival is 0–22% by arm and redraws recover 2%
   (`findings.md`). **Masking is now justified, and the placement decision is
-  made**: mask at synthesis, store mostly-masked with a `CONTEXT_DROPOUT`-style
-  unmasked fraction, mask at inference —
+  made**: mask at synthesis, keep the corpus canonical and unmasked on disk,
+  and mask as a deterministic transform at each consumer — training assembly
+  for a `1 − p` fraction (the `CONTEXT_DROPOUT` idiom), inference, and the
+  classifier independently —
   [`masking-placement.md`](masking-placement.md), D33; the *encoding* stays
   [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md). One free
   prerequisite before building: re-fit the voice classifier on masked text
@@ -255,10 +259,11 @@ record of what was measured then, not a claim about now.
 - **v3 data**: deliberate moderate-compression pairs (Dan compresses 1.5–2× in
   real edits) now that generator-accident inflation is gated at 3×.
 - **Synthetic↔real distribution match**: the fifth eval capability — a
-  feature/mannerism extractor over the synthetic vs real-slop strata. Spec in
-  [`eval-harness.md`](eval-harness.md) §"Planned". Its minimal first cut
-  (`stylebot.features`, syntactic proxies + a separability AUC) is stage 0 of
-  the `argued` arm below.
+  feature/mannerism extractor over the synthetic vs real-slop strata. Spec:
+  [`argued-slop-arm.md`](argued-slop-arm.md) §"Stage 0" (moved there when
+  the eval-harness plan retired). Its minimal first cut (`stylebot.features`,
+  syntactic proxies + a separability AUC) is that stage of the `argued` arm
+  below.
 - **`argued` slop arm** ([`argued-slop-arm.md`](argued-slop-arm.md)): real
   captures carry more subordinate and justificatory structure than any synth
   strategy on the same posts, and reasoning effort does not move it. A
@@ -270,8 +275,8 @@ record of what was measured then, not a claim about now.
   Claude Code transcripts record every `.qmd` edit as an explicit diff, so
   the real stratum can grow by replaying each session onto its base file and
   diffing against Dan's next commit through the existing `capture_pairs` —
-  no paragraph matching, layering resolved by construction. ~290 clean pairs
-  against HEAD today, more with time-bounding. The sessions' user turns go to
+  no paragraph matching, layering resolved by construction; time-bounding
+  grows the yield beyond a HEAD-only replay. The sessions' user turns go to
   a gitignored sidecar and become the `argued` arm's real objection source.
 - ~~**`synth` option-surface retirements**~~ — **closed 2026-08-13.** `--sort`,
   `--report-max-rows`, `--all` and `--tag` retired (49 options); the substrate
@@ -292,7 +297,8 @@ record of what was measured then, not a claim about now.
   Re-evaluate on a PyPI release, a second consumer, or a non-OpenAI generator
   backend.
 - **Phase 7 preference/DPO** on the same Tinker platform (decisions #D5), with
-  the eval-harness Goodhart guards. Preference data already accrues from
+  D7's Goodhart guards (signals with independent failure modes). Preference
+  data already accrues from
   ordinary `--best-of` use.
 
 ## Subagent-friendliness checklist
@@ -312,27 +318,28 @@ Before farming out an open slice, confirm it has:
   false definiteness).
 - Synthetic↔real slop **distribution match** — does synthetic slop resemble the
   real output Dan cleans up? Eyeballing says it misses some mannerisms; no
-  distributional comparison exists yet. See `eval-harness.md` §"Planned".
+  distributional comparison exists yet. See
+  [`argued-slop-arm.md`](argued-slop-arm.md) §"Stage 0".
 - Single-source vs multi-source slop ablation — worth publishing? (post §"Whose
   slop?"; measurable now via `meta.generator`/`meta.gen`.)
 - Weighting real against synthetic pairs — **the mechanism shipped 2026-09-03
   (D43); the diet is still nobody's choice.** `pair_weight` stamps `meta.weight`
   and `_write_conversations` honours it as integer replication of the train row
   (val is never replicated). What made it urgent is that the corpus was already
-  weighted, by accident: reproducing run 4a's selection gives **3,981 train
-  pairs over 982 passages — 4.05 cuts of the same prose each**, because the
-  budget sweep cut every passage at up to four `merge_max_chars`. Real captures
-  went through once, so they are **3.09% of train pairs but 12.2% of train
-  passages**: the scarce human side is diluted 4× by an artifact of generation,
-  and the by-post val split cannot see it (val inflates identically, mean 4.13).
-  Choosing the correction costs a paid retrain and is Dan's call.
+  weighted, by accident: the budget sweep cut every passage at up to four
+  `merge_max_chars`, so run 4a walked each stretch of prose several times under
+  a manifest claiming one epoch, while real captures went through once — the
+  scarce human side diluted by an artifact of generation, and the by-post val
+  split cannot see it because val inflates identically. The counts:
+  [`findings.md`](findings.md) "Effective passage weight". Choosing the
+  correction costs a paid retrain and is Dan's call.
 - Per-passage multiplicity — **the cap shipped as `per_passage` (D43)**; what to
   set it to has not. Grouping is by source post + character-span containment,
-  not exact body: exact-body grouping saw 1.13 pairs per target against
-  containment's 4.05, which is why every manifest ever written records
-  `per_target: null`. Capping leaves **982 pairs at 1, ~1,660 at 2, ~2,212 at
-  3** — the last of which would lift the real share from 3.1% toward 12%.
-  `dan-style train --dry-run` prints the histogram before you spend.
+  not exact body: exact-body grouping sees almost none of the multiplicity
+  containment sees, which is why every manifest ever written records
+  `per_target: null`. What each cap leaves, and what it does to the real
+  share, is the same `findings.md` table; `dan-style train --dry-run` prints
+  the histogram before you spend.
 - Base-model headroom — `Qwen/Qwen3.5-9B` today; step-up candidates are
   Qwen3.6-27B (dense) or Qwen3.6-35B-A3B (MoE, the Mac-friendliest shape).
 - Detector — **settled (2026-06-30):** the trained Dan-voice classifier

@@ -154,8 +154,9 @@ trained on. **Which div classes bear prose is the sidecar's policy**
 a client-side port could not know: the TypeScript port that used to live here
 never scored a callout paragraph, and never offered to rewrite one. It was
 deleted 2026-09-03 (`_plans/decisions.md` D44) after measuring its boundaries
-against this one over all 1,757 blog `.qmd` files — 1,728 identical, 29
-corrections. The remaining cross-implementation fixture, pinning
+against this one over every blog `.qmd` — each difference a correction
+(`_plans/findings.md`, "Segmenter implementations"). The remaining
+cross-implementation fixture, pinning
 `livingthing.qmd_core`, is `tests/fixtures/segmenter_conformance.*`.
 
 ### Install & configure
@@ -190,8 +191,8 @@ scores cluster in a narrow band (≈[0.32, 0.68] on Dan's corpus), so naive
 0.2/0.4/0.6/0.8 edges would leave every bucket empty or full. Score your
 corpus with `ai-style eval --detector-model`, take quantiles of the two
 sides' detector scores, and set the edges at roughly human-p75 (floor of the
-first mark), slop-p50, slop-p75, slop-p95. Worked recipe + current numbers:
-[`_plans/vscode-marker.md`](_plans/vscode-marker.md) §"Threshold calibration".
+first mark), slop-p50, slop-p75, slop-p95. The quantiles the current edges
+were cut from: [`_plans/findings.md`](_plans/findings.md) "The voice classifier".
 
 ### Updating after retraining the classifier
 
