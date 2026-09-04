@@ -901,11 +901,12 @@ policy hooks as keywords, `emit: Emitter = silent`, `stylebot.errors` only, data
 returned: `scoring.run_eval`, `docscale.document_pass` and `verdict.report_eval`
 over `EvalOpts`; `classify_cli.train_clf` over `TrainClfOpts`;
 `backends.rewrite_corpus`/`rewrite_document` over `RunOpts`;
-`serve.serve_sidecar`. Both CLIs render their flags from the bundles (`bundle_options` with
-`defaults=`/`exclude=`, never a retyped flag), every default is a named constant
-the library also uses, and the blog's mirror test compares each shared flag's
-default and type, not its name. `classify_cli.py` is the one new module —
-`classify_train.py` is allowlisted at 965 lines — capped at 300 lines.
+`serve.serve_sidecar`. Both CLIs render their flags from the bundles
+(`bundle_options` with `defaults=`/`exclude=`, never a retyped flag), every
+default is a named constant the library also uses, and the blog's mirror test
+compares each shared flag's default and type, not its name. `classify_cli.py`
+is the one new module — `classify_train.py` is allowlisted at 965 lines — and
+is capped at 300 lines.
 
 **Alternatives.** *Keep the blog's copies, pinned by the flag-name test* — the
 pin missed five drifts in one day: the D34 `pair_ok` gate skipped, the dry-run
