@@ -2494,3 +2494,28 @@ across that gap, so an append arriving in it is still overwritten — narrower
 than before (it was the whole rewrite), not closed. **Re-evaluate if** synth and
 `log save` are run concurrently in anger, or a second appender appears: the six
 callers then take the lock across read and rewrite, and it becomes re-entrant.
+
+## D61: the executables package holds no libraries — `synth_cli` left `bin/`
+
+**Decision (2026-08-11, recorded 2026-09-04).** 1000+ lines of synth
+orchestration moved from `bin/` to `stylebot.synth_cli`, raising its own
+`SynthConfigError` / `SynthRunError` / `SynthGenerationError`; `bin/ai_style.py`
+translates them to exit codes at the boundary (now `cli_options.translate_errors`,
+D47).
+
+**Alternatives.** Leave it and re-export from a library module — rejected:
+`bin/` is not an importable contract, and a re-export advertises one that the
+package layout denies. Split it across `synth` / `targets` — rejected: it is one
+orchestration, and cutting it along module lines would put the run loop in two
+files.
+
+**Deciding constraint.** A library reachable only through `CliRunner` gets
+copied rather than imported. D35 is the case that proved it: the blog
+reimplemented `build_styler` because it lived in `bin/`, and the copy lost
+`max_tokens`, truncating every blog rewrite at the 2000-token floor while the
+promoted run served a 4500-char diet.
+
+**Re-evaluate if:** never, in this shape — `bin/` is the click shell. Recorded
+late because the CLAUDE.md diet (F7a) found this was the one rationale in that
+file with no home in any other layer; the rule survived the cut, the why did
+not.
