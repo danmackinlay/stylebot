@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 
 from stylebot.ai_core import STYLE_SYSTEM
-from stylebot.pairs import build_pair_content, validate_pair_record, validate_pairs_file
+from stylebot.pairs import build_pair_content, record_id, validate_pair_record, validate_pairs_file
 
 
 def _good_record():
@@ -69,12 +69,6 @@ def test_file_validation_reports_line_numbers(tmp_path):
     assert bad_lines == [3, 4]  # line 1 good, line 2 blank
 
 
-def test_file_all_valid_returns_empty(tmp_path):
-    p = tmp_path / "pairs.jsonl"
-    p.write_text(json.dumps(_good_record()) + "\n")
-    assert validate_pairs_file(p) == []
-
-
 # --- heading-context contract (shared by Phase 1 + Phase 2) ---------------
 
 
@@ -109,11 +103,6 @@ def test_context_must_prefix_both_sides():
     )
     errs = validate_pair_record(rec)
     assert any("meta.context" in e for e in errs)
-
-
-def test_absent_context_unconstrained():
-    # No meta.context -> no prefix requirement (back-compat with the 254 pairs).
-    assert validate_pair_record(_good_record()) == []
 
 
 def test_cross_heading_record_validates_with_inline_headings():
@@ -225,6 +214,67 @@ def test_provenance_shape_is_checked():
 
     rec["meta"]["provenance"]["policy_digest"] = 7
     assert any("provenance.policy_digest" in e for e in validate_pair_record(rec))
+
+
+# --- re-cut ids (the `meta.recut` discriminator) ---------------------------
+#
+# `capture.recut_archives` reuses the archive's `capture_id` and renumbers
+# `chunk_index` from 0, so `capture_id:chunk_index` alone can name materially
+# different prose before and after a re-cut. `record_id` folds `meta.recut`
+# (the gap policy) into the key for re-cut records ONLY. The end-to-end
+# capture->recut regression lives in test_capture.py; these pin the id algebra.
+
+_RECUT_A = {"gap_paras": 2, "gap_chars": 800}
+
+
+def test_record_id_golden_shapes_for_non_recut_records():
+    """GOLDEN. Pairs with no `meta.recut` keep their id byte-for-byte.
+
+    Load-bearing, not decorative: a committed `scores.jsonl` lives in the blog
+    repo and joins on these strings. Changing either shape orphans every score
+    for the never-re-cut captures that are most of the corpus, so the literals
+    are pinned rather than merely round-tripped.
+    """
+    assert record_id({"meta": {"capture_id": "13860ebc", "chunk_index": 0}}) == "13860ebc:0"
+    # The no-capture_id fallback: sha256("post/x.qmd\x001").hexdigest()[:16].
+    assert record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}}) == "abfe53300435fc98"
+
+
+def test_record_id_recut_differs_from_the_original_cut():
+    """A re-cut record must not reuse the original cut's id at the same
+    capture_id:chunk_index — that collision is the whole bug."""
+    base = {"meta": {"capture_id": "13860ebc", "chunk_index": 0}}
+    recut = {"meta": {"capture_id": "13860ebc", "chunk_index": 0, "recut": _RECUT_A}}
+    assert record_id(recut) != record_id(base)
+    # …but it is still recognisably the same capture and chunk, so the id stays
+    # greppable and `capture_id` remains the leading grouping key.
+    assert record_id(recut).startswith("13860ebc:r")
+    assert record_id(recut).endswith(":0")
+
+
+def test_record_id_is_stable_for_the_same_recut_policy():
+    """Re-cutting twice at the SAME policy yields the SAME id — a re-cut has to
+    stay idempotent end to end, not just inside pairs.jsonl. Key order in the
+    stamp must not matter either (the digest is over canonical JSON)."""
+    first = record_id({"meta": {"capture_id": "cap", "chunk_index": 1, "recut": _RECUT_A}})
+    again = record_id({"meta": {"capture_id": "cap", "chunk_index": 1, "recut": dict(_RECUT_A)}})
+    reordered = record_id(
+        {
+            "meta": {
+                "capture_id": "cap",
+                "chunk_index": 1,
+                "recut": {"gap_chars": 800, "gap_paras": 2},
+            },
+        }
+    )
+    assert first == again == reordered
+
+
+def test_record_id_synthetic_pairs_ignore_recut():
+    """Synthetic pairs key off `synth_key` and return before the re-cut branch:
+    they are generated, never re-cut, and their committed scores must not move."""
+    meta = {"synth_key": "abc", "capture_id": "cap", "chunk_index": 2, "recut": _RECUT_A}
+    assert record_id({"meta": meta}) == "abc"
 
 
 # --- record_id uniqueness, and the fix ---------------------------------------

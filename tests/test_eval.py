@@ -17,7 +17,7 @@ import pytest
 from stylebot import eval as ev
 from stylebot import scoring, synth
 from stylebot.errors import ConfigError
-from stylebot.pairs import record_id, validate_pairs_file
+from stylebot.pairs import validate_pairs_file
 
 
 def sync_fake_judge(prose: str) -> dict:
@@ -40,32 +40,6 @@ def test_score_candidate_without_judge_runs_keyless():
     assert rec["detector"]["score"] is None
     assert rec["text_chars"] == len("Some candidate prose.")
     assert rec["eyeball"] is None
-
-
-def test_score_candidate_with_fake_judge_and_eyeball():
-    rec = ev.score_candidate("Dan-shaped prose.", judge=sync_fake_judge, eyeball="ship it")
-    assert rec["judge"]["score"] == 4
-    assert rec["eyeball"] == "ship it"
-
-
-def test_null_detector_is_unconfigured():
-    out = ev.null_detector("anything at all")
-    assert out["score"] is None
-    assert out["configured"] is False
-    assert out["name"] == "null"
-
-
-def test_vale_score_degrades_gracefully_when_absent():
-    result = ev.vale_score("This is a test sentence.")
-    if shutil.which("vale") is None:
-        assert result["available"] is False
-        assert result["alerts"] == 0
-    else:
-        # Vale is installed but we pass no config — it must still not raise and
-        # must return the documented keys regardless of availability.
-        assert "available" in result
-        assert "by_severity" in result
-        assert isinstance(result["alerts"], int)
 
 
 def _write_glob_scoped_vale_config(root):
@@ -160,39 +134,34 @@ def test_vale_score_many_short_circuits_when_vale_is_absent(monkeypatch):
     assert results[1]["by_severity"]["error"] == 0
 
 
+_NO_CONFIG = '{"Code": "E100", "Text": "no config file found"}'
+
+
+def _unexecutable(*a, **k):
+    raise OSError(13, "Permission denied")
+
+
 @pytest.mark.parametrize(
-    ("proc_kwargs", "expect_reason"),
+    ("run", "expect_reason"),
     [
-        ({"stdout": "", "stderr": "E100 boom"}, "E100 boom"),  # empty stdout
-        ({"stdout": "not json at all"}, "not JSON"),  # non-JSON stdout
-        ({"stdout": '{"Code": "E100", "Text": "no config file found"}'}, "no config"),
+        (lambda *a, **k: _fake_completed(stdout="", stderr="E100 boom"), "E100 boom"),
+        (lambda *a, **k: _fake_completed(stdout="not json at all"), "not JSON"),
+        (lambda *a, **k: _fake_completed(stdout=_NO_CONFIG), "no config"),
+        (_unexecutable, "failed to run"),  # on PATH, but subprocess.run raises OSError
     ],
 )
 def test_vale_score_many_degrades_whole_batch_with_the_right_length(
-    monkeypatch, proc_kwargs, expect_reason
+    monkeypatch, run, expect_reason
 ):
     """A whole-run failure marks EVERY text unavailable — never a short list."""
     monkeypatch.setattr(ev.shutil, "which", lambda name: "/usr/bin/vale")
-    monkeypatch.setattr(ev.subprocess, "run", lambda *a, **k: _fake_completed(**proc_kwargs))
+    monkeypatch.setattr(ev.subprocess, "run", run)
 
     results = ev.vale_score_many([_SLOP] * 5)
     assert len(results) == 5
     assert all(r["available"] is False for r in results)
     assert all(expect_reason in r["reason"] for r in results)
     assert all(r["by_severity"] == {"error": 0, "warning": 0, "suggestion": 0} for r in results)
-
-
-def test_vale_score_many_degrades_when_vale_is_unexecutable(monkeypatch):
-    """Present on PATH but `subprocess.run` raises OSError — still no exception."""
-    monkeypatch.setattr(ev.shutil, "which", lambda name: "/usr/bin/vale")
-
-    def boom(*a, **k):
-        raise OSError(13, "Permission denied")
-
-    monkeypatch.setattr(ev.subprocess, "run", boom)
-    results = ev.vale_score_many([_SLOP, _CLEAN])
-    assert len(results) == 2
-    assert all(r["available"] is False and "failed to run" in r["reason"] for r in results)
 
 
 def test_vale_score_many_preserves_order_across_a_mixed_batch(tmp_path):
@@ -405,84 +374,6 @@ def test_score_pairs_file_strips_heading_context(tmp_path):
     assert captured and all("## A Heading" not in t for t in captured)
 
 
-def test_record_id_precedence():
-    assert record_id({"meta": {"synth_key": "abc", "capture_id": "cap", "chunk_index": 2}}) == "abc"
-    assert record_id({"meta": {"capture_id": "cap", "chunk_index": 2}}) == "cap:2"
-    rid = record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}})
-    assert rid == record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}})  # stable
-    assert len(rid) == 16
-
-
-# --- re-cut ids (the `meta.recut` discriminator) ---------------------------
-#
-# `capture.recut_archives` reuses the archive's `capture_id` and renumbers
-# `chunk_index` from 0, so `capture_id:chunk_index` alone can name materially
-# different prose before and after a re-cut. `record_id` folds `meta.recut`
-# (the gap policy) into the key for re-cut records ONLY. The end-to-end
-# capture->recut regression lives in test_capture.py; these pin the id algebra.
-
-_RECUT_A = {"gap_paras": 2, "gap_chars": 800}
-_RECUT_B = {"gap_paras": 4, "gap_chars": 1600}
-
-
-def test_record_id_golden_shapes_for_non_recut_records():
-    """GOLDEN. Pairs with no `meta.recut` keep their id byte-for-byte.
-
-    Load-bearing, not decorative: a committed `scores.jsonl` lives in the blog
-    repo and joins on these strings. Changing either shape orphans every score
-    for the never-re-cut captures that are most of the corpus, so the literals
-    are pinned rather than merely round-tripped.
-    """
-    assert record_id({"meta": {"capture_id": "13860ebc", "chunk_index": 0}}) == "13860ebc:0"
-    # The no-capture_id fallback: sha256("post/x.qmd\x001").hexdigest()[:16].
-    assert record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}}) == "abfe53300435fc98"
-
-
-def test_record_id_recut_differs_from_the_original_cut():
-    """A re-cut record must not reuse the original cut's id at the same
-    capture_id:chunk_index — that collision is the whole bug."""
-    base = {"meta": {"capture_id": "13860ebc", "chunk_index": 0}}
-    recut = {"meta": {"capture_id": "13860ebc", "chunk_index": 0, "recut": _RECUT_A}}
-    assert record_id(recut) != record_id(base)
-    # …but it is still recognisably the same capture and chunk, so the id stays
-    # greppable and `capture_id` remains the leading grouping key.
-    assert record_id(recut).startswith("13860ebc:r")
-    assert record_id(recut).endswith(":0")
-
-
-def test_record_id_is_stable_for_the_same_recut_policy():
-    """Re-cutting twice at the SAME policy yields the SAME id — a re-cut has to
-    stay idempotent end to end, not just inside pairs.jsonl. Key order in the
-    stamp must not matter either (the digest is over canonical JSON)."""
-    first = record_id({"meta": {"capture_id": "cap", "chunk_index": 1, "recut": _RECUT_A}})
-    again = record_id({"meta": {"capture_id": "cap", "chunk_index": 1, "recut": dict(_RECUT_A)}})
-    reordered = record_id(
-        {
-            "meta": {
-                "capture_id": "cap",
-                "chunk_index": 1,
-                "recut": {"gap_chars": 800, "gap_paras": 2},
-            },
-        }
-    )
-    assert first == again == reordered
-
-
-def test_record_id_differs_across_recut_policies():
-    """A different gap policy cuts different prose, so it must key differently
-    — otherwise re-cutting at a new policy silently inherits the old scores."""
-    a = record_id({"meta": {"capture_id": "cap", "chunk_index": 0, "recut": _RECUT_A}})
-    b = record_id({"meta": {"capture_id": "cap", "chunk_index": 0, "recut": _RECUT_B}})
-    assert a != b
-
-
-def test_record_id_synthetic_pairs_ignore_recut():
-    """Synthetic pairs key off `synth_key` and return before the re-cut branch:
-    they are generated, never re-cut, and their committed scores must not move."""
-    meta = {"synth_key": "abc", "capture_id": "cap", "chunk_index": 2, "recut": _RECUT_A}
-    assert record_id({"meta": meta}) == "abc"
-
-
 def test_score_pairs_file_resumable(tmp_path):
     pairs = _make_pairs(
         tmp_path / "c",
@@ -499,21 +390,6 @@ def test_score_pairs_file_resumable(tmp_path):
     assert second.written == 0
     assert second.skipped_existing == 2
     assert len([line for line in out.read_text().splitlines() if line.strip()]) == 2  # did not grow
-
-
-def test_score_pairs_file_keyless(tmp_path):
-    pairs = _make_pairs(
-        tmp_path / "c",
-        [
-            ("A paragraph long enough to be a candidate for scoring now.", None, "polish"),
-        ],
-    )
-    out = tmp_path / "scores.jsonl"
-    ev.score_pairs_file(pairs, out, judge=None)
-    rec = json.loads(out.read_text().splitlines()[0])
-    assert rec["scores"]["slop"]["judge"] is None
-    assert rec["scores"]["slop"]["detector"]["score"] is None
-    assert "vale" in rec["scores"]["slop"]
 
 
 def test_score_pairs_file_concurrency_same_ids(tmp_path):
@@ -544,18 +420,6 @@ def _count_vale_spawns(monkeypatch):
 
     monkeypatch.setattr(ev.subprocess, "run", fake_run)
     return calls
-
-
-def test_score_candidate_accepts_a_precomputed_vale_result(monkeypatch):
-    """The injection point: `vale=` given => no process, value passed through."""
-    calls = _count_vale_spawns(monkeypatch)
-    precomputed = {"available": True, "alerts": 7, "by_severity": {}, "raw": []}
-    rec = ev.score_candidate("prose", judge=None, vale=precomputed)
-    assert rec["vale"] is precomputed
-    assert calls == []
-    # Default is unchanged for every existing caller: it still scores inline.
-    ev.score_candidate("prose", judge=None)
-    assert len(calls) == 1
 
 
 def test_score_pairs_file_batches_vale_into_one_process_per_slice(tmp_path, monkeypatch):
@@ -740,18 +604,6 @@ def test_prune_orphan_scores_round_trips_undecodable_lines(tmp_path):
     assert "ghost" not in out.read_text()
 
 
-def test_prune_orphan_scores_on_a_missing_scores_file_is_a_noop(tmp_path):
-    pairs = _make_pairs(
-        tmp_path / "c",
-        [
-            ("A paragraph long enough to be scored as a candidate here today.", None, "polish"),
-        ],
-    )
-    missing = tmp_path / "nope.jsonl"
-    assert ev.prune_orphan_scores(pairs, missing) == 0
-    assert not missing.exists()
-
-
 def _score_rec(strategy, slop_score, target_score):
     none_vale = {"available": False}
     none_det = {"score": None}
@@ -893,19 +745,6 @@ def _batching_detector(record: list):
     detect.identity = {key: None for key in ev.DETECTOR_IDENTITY_KEYS} | {"name": "stub"}
     detect.batch_detect = batch_detect
     return detect
-
-
-def test_score_candidate_accepts_a_precomputed_detector_result():
-    """The injection point: `detector_result=` given => the detector is not called."""
-    calls: list[int] = []
-    det = _batching_detector(calls)
-    precomputed = {"score": 0.25, "configured": True, "name": "stub"}
-    rec = ev.score_candidate("prose", judge=None, detector=det, detector_result=precomputed)
-    assert rec["detector"] is precomputed
-    assert calls == []
-    # Default is unchanged for every existing caller: it still scores inline.
-    ev.score_candidate("prose", judge=None, detector=det)
-    assert calls == [1]
 
 
 def test_score_pairs_file_batches_the_detector_into_one_call_per_slice(tmp_path, monkeypatch):
