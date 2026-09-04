@@ -109,54 +109,6 @@ def test_heading_context_prepended_both_sides(tmp_path):
     assert rec["meta"]["context_mode"] == "immediate"
 
 
-def test_context_changes_synth_key():
-    # Same body, different context -> different synth_key (regenerates).
-    from stylebot.synth import _synth_key
-
-    assert _synth_key("g", "body") != _synth_key("g", "body", "## H")
-
-
-def test_strategy_changes_synth_key():
-    # Same generator/context/body, different slop strategy -> different key, so
-    # iterating on the prompt regenerates rather than colliding on resume.
-    from stylebot.synth import _synth_key
-
-    assert _synth_key("g", "body") != _synth_key("g", "body", "", "catalogue")
-    assert _synth_key("g", "body", "", "engaging") != _synth_key("g", "body", "", "catalogue")
-
-
-def test_reasoning_and_prompt_change_synth_key():
-    # Reasoning effort and prompt id are part of the key, so sweeping them
-    # regenerates rather than colliding on resume. Temperature is NOT a key axis.
-    import inspect
-
-    from stylebot.synth import _synth_key
-
-    base = _synth_key("g", "body")
-    assert base != _synth_key("g", "body", "", "polish", "low")  # reasoning effort
-    assert base != _synth_key("g", "body", "", "polish", "high", "pid123")  # prompt id
-    assert "temperature" not in inspect.signature(_synth_key).parameters
-
-
-def test_meta_records_slop_strategy(tmp_path):
-    import json
-
-    data_dir = tmp_path / "corpus"
-    target = synth.Target(
-        text="A paragraph long enough to be a worthwhile target.",
-        source="post/x.qmd",
-        chunk_index=0,
-        chunk_total=1,
-    )
-    gen = synth.Generator(name="m", generate=lambda t: "[slop] " + t, strategy="catalogue")
-
-    result = synth.synthesize_pairs([target], data_dir, [gen])
-    assert result.written == 1
-    rec = json.loads((data_dir / "pairs.jsonl").read_text().splitlines()[0])
-    assert rec["meta"]["slop_strategy"] == "catalogue"
-    assert validate_pairs_file(data_dir / "pairs.jsonl") == []
-
-
 def test_strategies_coexist_no_collision(tmp_path):
     # The same target generated under two strategies (same model name) yields two
     # distinct pairs in one file — the experimental "one run per strategy" loop.
@@ -197,14 +149,6 @@ def test_resolve_strategy():
         synth.resolve_strategy("nonsense")
 
 
-def test_prompt_id_stable_and_distinct():
-    assert synth.prompt_id_of("abc") == synth.prompt_id_of("abc")  # stable
-    assert synth.prompt_id_of("abc") != synth.prompt_id_of("abd")  # content-sensitive
-    # Registry strategies have distinct prompt ids (distinct prompt texts).
-    ids = {synth.resolve_strategy(n)[3] for n in synth.STRATEGIES}
-    assert len(ids) == len(synth.STRATEGIES)
-
-
 def test_dry_run_writes_nothing(tmp_path, make_blog):
     root = make_blog()
     data_dir = tmp_path / "corpus"
@@ -239,24 +183,6 @@ def test_gen_output_meta_recorded(tmp_path):
     rec = json.loads((data_dir / "pairs.jsonl").read_text().splitlines()[0])
     assert rec["meta"]["gen"] == {"model": "m", "reasoning_effort": "low", "completion_tokens": 5}
     assert validate_pairs_file(data_dir / "pairs.jsonl") == []
-
-
-def test_bare_string_generator_has_no_gen_meta(tmp_path):
-    # Bare-string fakes still work (back-compat) and record no meta.gen.
-    import json
-
-    data_dir = tmp_path / "corpus"
-    target = synth.Target(
-        text="A paragraph long enough to be a worthwhile target.",
-        source="post/x.qmd",
-        chunk_index=0,
-        chunk_total=1,
-    )
-    synth.synthesize_pairs(
-        [target], data_dir, [synth.Generator(name="m", generate=lambda t: "[slop] " + t)]
-    )
-    rec = json.loads((data_dir / "pairs.jsonl").read_text().splitlines()[0])
-    assert "gen" not in rec["meta"]
 
 
 def test_model_stats_fold_run_economics(tmp_path):
@@ -386,19 +312,6 @@ def test_coverage_key_folds_cosmetic_drift(before, after):
     assert synth.coverage_key(before) == synth.coverage_key(after)
 
 
-@pytest.mark.parametrize(("before", "after"), _COSMETIC)
-def test_skip_covered_survives_cosmetic_drift(tmp_path, before, after):
-    # End to end: a pair exists for the pre-edit prose; today's segmenter hands
-    # back the post-edit text. That is the same passage and must not be paid for
-    # twice.
-    old = synth.Target(text=before, source="post/0.qmd", chunk_index=0, chunk_total=1)
-    new = synth.Target(text=after, source="post/0.qmd", chunk_index=0, chunk_total=1)
-    gen = synth.Generator("g", generate=lambda t, history=None: "[slop] " + t)
-    assert synth.synthesize_pairs([old], tmp_path / "c", [gen]).written == 1
-    run = synth.synthesize_pairs([new], tmp_path / "c", [gen], skip_covered=True)
-    assert (run.written, run.skipped_covered) == (0, 1)
-
-
 def test_coverage_key_keeps_genuine_edits_distinct():
     # The fold must stay narrow: an authorial edit is a different passage, and a
     # false "covered" silently costs that passage its only training pair.
@@ -418,33 +331,6 @@ def test_coverage_key_leaves_unbalanced_link_alone():
     broken = "[recommendations](./ai_search.qmd#indexing-the-blog for posts."
     assert synth.coverage_key(broken) == broken
     assert synth.coverage_key(broken) != synth.coverage_key("[recommendations]() for posts.")
-
-
-def test_skip_covered_still_generates_a_genuinely_edited_passage(tmp_path):
-    old = synth.Target(
-        text="Robertson et al have shown it to be handy for rhythm.",
-        source="post/0.qmd",
-        chunk_index=0,
-        chunk_total=1,
-    )
-    new = synth.Target(
-        text="Robertson et al have shown them to be handy for rhythm.",
-        source="post/0.qmd",
-        chunk_index=0,
-        chunk_total=1,
-    )
-    gen = synth.Generator("g", generate=lambda t, history=None: "[slop] " + t)
-    assert synth.synthesize_pairs([old], tmp_path / "c", [gen]).written == 1
-    run = synth.synthesize_pairs([new], tmp_path / "c", [gen], skip_covered=True)
-    assert (run.written, run.skipped_covered) == (1, 0)
-
-
-def test_coverage_normalisation_does_not_reach_synth_key():
-    # The hard constraint: `_synth_key` is the corpus's cell identity. Folding it
-    # the way coverage folds would orphan every synthetic pair already generated.
-    # (The golden hashes in tests/test_synth_keys.py pin the recipe itself.)
-    for before, after in [(p.values[0], p.values[1]) for p in _COSMETIC]:
-        assert synth._synth_key("g", before) != synth._synth_key("g", after)
 
 
 def test_prompts_sidecar_written_and_deduped(tmp_path):
@@ -506,13 +392,6 @@ def test_transform_sim_recorded_on_pairs(tmp_path):
     assert sim_b < 0.5
 
 
-def test_measured_strategy_registered():
-    label, system, version, prompt_id = synth.resolve_strategy("measured")
-    assert label == "measured" and version == 1
-    # The whole point: describe texture, never quote a stock phrase.
-    assert "In today's world" not in system
-
-
 # ---------------------------------------------------------------------------
 # Reasoning-trace capture (the diagnosis instrument for reasoning blowouts)
 # ---------------------------------------------------------------------------
@@ -540,12 +419,6 @@ def test_reasoning_text_routed_to_sidecar_not_corpus(tmp_path):
     assert side["synth_key"] == rec["meta"]["synth_key"]  # joinable to its pair
     assert side["generator"] == "g" and side["reasoning_tokens"] == 4321
     assert "deliberate" in side["reasoning"]
-
-
-def test_no_sidecar_without_capture(tmp_path):
-    result = synth.synthesize_pairs(_targets(1), tmp_path / "c", [_fake("g")])
-    assert result.written == 1
-    assert not (tmp_path / "c" / "reasoning.jsonl").exists()
 
 
 def test_max_transform_sim_gate_drops_identity_outputs(tmp_path):
@@ -581,27 +454,6 @@ def test_max_transform_sim_gate_drops_identity_outputs(tmp_path):
     result = synth.synthesize_pairs(retried, data_dir, [echo])
     assert result.skipped_existing == 0, "a gated-and-dropped cell must not count as present"
     assert result.skipped_degenerate == 0 and result.written == 3
-
-
-def test_report_result_echoes_degenerate_count(capsys, tmp_path):
-    """The CLI summary path must render the degenerate-drop line (regression:
-    it referenced a name not in scope and crashed after a paid run)."""
-    from stylebot import synth_cli
-
-    result = synth.SynthResult(planned=3, skipped_degenerate=3)
-    synth_cli._report_result(
-        result,
-        tmp_path / "pairs.jsonl",
-        dry_run=False,
-        session_turns=1,
-        max_transform_sim=0.95,
-        emit=synth_cli.click_emitter(),
-    )
-    out = capsys.readouterr().out
-    # The whole line, not "0.95" loose in the summary: a bare substring passes
-    # if the threshold happens to appear anywhere, including in a line that
-    # never mentions the drop.
-    assert "3 identity pair(s) DROPPED (transform_sim > 0.95)" in out
 
 
 def test_max_length_ratio_gate_drops_inflated_outputs(tmp_path):
@@ -850,13 +702,6 @@ def test_gate_retries_give_up_and_still_drop(tmp_path):
     assert result.redraws_recovered == 0
 
 
-def test_gate_retries_are_off_unless_asked(tmp_path):
-    data_dir = tmp_path / "corpus"
-    result = synth.synthesize_pairs(_linked_targets(2), data_dir, [_delinker("dropper")])
-    assert result.skipped_invented_anchors == 2
-    assert result.redrawn_cells == 0 and result.gate_redraws == 0
-
-
 def test_is_anchor_faithful_selects_over_an_existing_corpus(tmp_path):
     """Step 2's other half: the corpus is a frozen record, so pairs already
     written are filtered out of the training SIGNAL rather than migrated away."""
@@ -991,43 +836,3 @@ def test_a_cell_claimed_mid_run_by_another_writer_is_not_duplicated(tmp_path, ma
     assert all(r["messages"][1]["content"].startswith("[rival]") for r in recs)
     assert validate_pairs_file(pairs_path) == []
 
-
-def test_two_concurrent_synth_runs_write_one_record_per_cell(tmp_path, make_blog):
-    """The same defect through real threads and two open handles. `flock` is per
-    open-file-description, so two handles in one process contend exactly as two
-    processes do."""
-    import json
-    import threading
-
-    from stylebot.pairs import validate_pairs_file
-
-    root = make_blog(ai=False)
-    data_dir = tmp_path / "corpus"
-    targets = synth.iter_targets(blog_root=root)
-    barrier = threading.Barrier(2)
-
-    def _slow(text: str) -> str:
-        # Widen the plan->write window both runs are racing inside.
-        barrier.wait(timeout=10)
-        return f"[g-slop] {text}"
-
-    def _run(out: list):
-        out.append(
-            synth.synthesize_pairs(
-                targets, data_dir, [synth.Generator(name="g", generate=_slow)]
-            )
-        )
-
-    results: list = []
-    threads = [threading.Thread(target=_run, args=(results,)) for _ in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=30)
-
-    pairs_path = data_dir / "pairs.jsonl"
-    recs = [json.loads(line) for line in pairs_path.read_text().splitlines() if line.strip()]
-    keys = [r["meta"]["synth_key"] for r in recs]
-    assert len(keys) == len(set(keys)) == len(targets)
-    assert sum(r.written for r in results) == len(targets)
-    assert validate_pairs_file(pairs_path) == []

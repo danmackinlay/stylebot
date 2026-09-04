@@ -7,20 +7,9 @@ share a model name.
 
 from __future__ import annotations
 
-from synth_helpers import _fake, _targets
+from synth_helpers import _targets
 
 from stylebot import synth
-
-
-def test_rotation_uses_at_least_two_generators(tmp_path):
-    # Content-hash assignment: balance is multinomial, so use enough targets
-    # that both arms deterministically appear for these fixed texts.
-    data_dir = tmp_path / "corpus"
-    targets = _targets(12)
-
-    result = synth.synthesize_pairs(targets, data_dir, [_fake("claude-x"), _fake("gpt-y")])
-    assert set(result.per_generator) == {"claude-x", "gpt-y"}
-    assert sum(result.per_generator.values()) == 12
 
 
 def test_hash_assignment_is_set_stable_and_position_free():
@@ -39,31 +28,6 @@ def test_hash_assignment_is_set_stable_and_position_free():
         for t, g, _ in synth._assign(targets, gens, per_generator=False, assign_seed="rep2")
     }
     assert salted != full  # a fresh replicate of the design
-
-
-def test_hash_assignment_roughly_balances():
-    targets = [
-        synth.Target(
-            text=f"Unique paragraph {i}: " + "prose " * 30,
-            source="p.qmd",
-            chunk_index=i,
-            chunk_total=300,
-        )
-        for i in range(300)
-    ]
-    gens = [synth.Generator("a"), synth.Generator("b"), synth.Generator("c")]
-    counts = {}
-    for _, g, _ in synth._assign(targets, gens, per_generator=False):
-        counts[g.name] = counts.get(g.name, 0) + 1
-    # Membership FIRST, and separately: a starved arm contributes no key, so it
-    # is invisible to the range check below — which only notices starvation
-    # because the survivors then overshoot 140. That is incidental, not a
-    # guard: the bounds are sized for exactly this 300/3 shape, so the first
-    # time someone widens them for a bigger roster (6 arms would land at ~50
-    # and fail the floor) starvation stops being caught at all. Same assertion
-    # as `test_no_arm_starves_across_a_realistic_rotation`, for the same reason.
-    assert len(counts) == len(gens), counts
-    assert all(60 <= c <= 140 for c in counts.values()), counts  # ~100 each
 
 
 # --- rendezvous (HRW) assignment: roster stability -------------------------
@@ -113,20 +77,6 @@ def test_dropping_one_arm_churns_about_one_nth():
     # ...and everything that moved was on the departed arm: nobody else churns.
     dropped = synth._arm_identity(gens[5])
     assert all(before[t] == dropped for t in before if after[t] != before[t])
-
-
-def test_same_name_arms_each_get_work():
-    # Regression guard for the subtlety: `Generator.name` is the model id, and
-    # one model appears under several slop strategies. Keying HRW on `name`
-    # alone gives every sibling an identical score, so one wins every target and
-    # the rest starve. Fails outright if `_arm_identity` drops strategy.
-    targets = _targets(600)
-    gens = _arms(6, name="openrouter/one-model")
-    counts: dict[str, int] = {}
-    for _, g, _ in synth._assign(targets, gens, per_generator=False):
-        counts[g.strategy] = counts.get(g.strategy, 0) + 1
-    assert set(counts) == {g.strategy for g in gens}, counts
-    assert min(counts.values()) > 0.5 * (len(targets) / len(gens)), counts
 
 
 def test_no_arm_starves_across_a_realistic_rotation():

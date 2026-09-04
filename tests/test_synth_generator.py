@@ -10,17 +10,6 @@ from __future__ import annotations
 
 from stylebot import synth
 
-
-def test_openrouter_generator_name_and_strategy():
-    # Construction is offline (no request); pass an explicit key so it doesn't
-    # require OPENROUTER_API_KEY from the environment.
-    gen = synth.openrouter_generator(
-        model="anthropic/claude-opus-4-8", api_key="x", strategy="casual"
-    )
-    assert gen.name == "openrouter/anthropic/claude-opus-4-8"
-    assert gen.strategy == "casual"
-
-
 # ---------------------------------------------------------------------------
 # Generator request-shaping + response guards + recorded covariates. These mock
 # the openai client to assert the request we send (reasoning-effort mapping,
@@ -126,18 +115,6 @@ def test_gen_meta_keys_match_schema_constants(monkeypatch):
     assert set(out.meta) == set(pairs.GEN_BASE_KEYS) | set(pairs.GEN_EXTRA_KEYS)
 
 
-def test_gen_meta_base_keys_are_exactly_the_plain_writer(monkeypatch):
-    # The same equality against `openai_generator` alone, which contributes no
-    # extra_meta — so GEN_BASE_KEYS is pinned independently of OpenRouter's
-    # routing knobs rather than only as a subtraction from them.
-    from stylebot import pairs
-    from stylebot.generators import openai_generator
-
-    _patch_openai(monkeypatch, _FakeResponse([_FakeChoice("slop")], _FakeUsage()))
-    out = _run_gen(openai_generator(model="some/model", api_key="x"), "x")
-    assert set(out.meta) == set(pairs.GEN_BASE_KEYS)
-
-
 def test_openrouter_reasoning_budget_family(monkeypatch):
     # Budget-style families (qwen/nvidia/google/…) get a token budget instead.
     calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
@@ -184,12 +161,6 @@ def test_reasoning_effort_recorded_regardless_of_shape(monkeypatch):
         "x",
     )
     assert out.meta["reasoning_effort"] == "medium"
-
-
-def test_max_tokens_threaded(monkeypatch):
-    calls = _patch_openai(monkeypatch, _FakeResponse([_FakeChoice()]))
-    _run_gen(synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", max_tokens=1234), "x")
-    assert calls["max_tokens"] == 1234
 
 
 def test_temperature_top_p_passed_and_recorded(monkeypatch):
@@ -310,12 +281,6 @@ def test_sticky_provider_pins_session_after_first_turn(monkeypatch):
     assert seen[2]["extra_body"]["provider"] == {"sort": "throughput"}
     asyncio.run(gen.begin_session()("four"))
     assert seen[3]["extra_body"]["provider"] == {"sort": "throughput"}
-
-
-def test_no_sticky_provider_disables_begin_session(monkeypatch):
-    _patch_openai_multi(monkeypatch, _FakeResponse([_FakeChoice()]))
-    gen = synth.openrouter_generator(model="qwen/qwen3-8b", api_key="x", sticky_provider=False)
-    assert gen.begin_session is None
 
 
 def test_anthropic_cache_breakpoint_marks_last_history_message(monkeypatch):

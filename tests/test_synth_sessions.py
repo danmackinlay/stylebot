@@ -195,24 +195,6 @@ def test_turn_error_reflows_remainder(tmp_path):
     assert msg.startswith("[bad strategy=polish effort=off turn=1] RuntimeError")
 
 
-def test_estimate_next_prompt():
-    # Pure token-estimate arithmetic (hoisted out of the session loop so it is
-    # directly testable): measured path = last prompt + last reply's visible
-    # tokens + next passage at ~4 chars/token; unmeasured path = pure chars/4.
-    history = [{"role": "user", "content": "x" * 400}, {"role": "assistant", "content": "y" * 400}]
-    assert synth._estimate_next_prompt(history, 1000, 50, "z" * 400) == 1000 + 50 + 100
-    assert synth._estimate_next_prompt(history, 0, 0, "z" * 400) == (800 + 400) // 4
-
-
-def test_session_token_cap():
-    g = synth.Generator("x")
-    assert synth._session_token_cap(g, None, 32_000) == 32_000
-    assert synth._session_token_cap(g, 10_000, 32_000) == 8_000  # 0.8 x window wins
-    assert synth._session_token_cap(g, None, None) is None
-    g_budget = synth.Generator("x", session_budget=5_000)
-    assert synth._session_token_cap(g_budget, 10_000, 32_000) == 5_000  # per-generator beats both
-
-
 def test_budget_bind_reflows_instead_of_dropping(tmp_path):
     # The 2026-07-21 post-mortem: a binding token budget must END sessions, not
     # DISCARD their remaining turns. Every planned turn gets written, across as

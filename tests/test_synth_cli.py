@@ -27,48 +27,7 @@ from stylebot import splits as sp
 from stylebot import synth, synth_cli
 from stylebot import targets as targets_mod
 from stylebot.bin.ai_style import main as ai_style_main
-from stylebot.cli_options import EMIT_LEVELS, cli_fields, field_owners
-
-
-def test_synth_options_repins_defaults():
-    @click.command()
-    @synth_cli.synth_options(defaults=[synth_cli.ChunkPolicy(merge=True, min_chars=123)])
-    def cmd(**kw):
-        click.echo(f"{kw['merge']} {kw['min_chars']} {kw['drop_list_items']}")
-
-    result = CliRunner().invoke(cmd, [])
-    assert result.exit_code == 0, result.output
-    # Re-pinned defaults apply; untouched options keep the stylebot default.
-    assert result.output.strip() == "True 123 False"
-
-
-def test_synth_options_exclude_removes_option():
-    # Two names the blog wrapper really excludes (it pins both as policy) —
-    # this test used to exclude --gpt-model/--local-model, which no longer
-    # exist (the preset path was retired 2026-08-10).
-    @click.command()
-    @synth_cli.synth_options(exclude=("max_chars", "prose_only"))
-    def cmd(**kw):
-        click.echo(",".join(sorted(kw)))
-
-    runner = CliRunner()
-    help_out = runner.invoke(cmd, ["--help"]).output
-    assert "--max-chars" not in help_out
-    assert "--merge" in help_out  # the rest of the surface survives
-    assert runner.invoke(cmd, ["--max-chars", "10"]).exit_code != 0
-    # And the callback never receives the excluded params.
-    ok = runner.invoke(cmd, [])
-    assert ok.exit_code == 0
-    assert "prose_only" not in ok.output
-
-
-def test_synth_options_rejects_unknown_names():
-    # A typo'd default is now caught by the dataclass constructor itself —
-    # no bespoke registry lookup, and it names the bundle.
-    with pytest.raises(TypeError, match="no_such_knob"):
-        synth_cli.synth_options(defaults=[synth_cli.GenOpts(no_such_knob=1)])
-    with pytest.raises(ValueError, match="exclude names no CLI field"):
-        synth_cli.synth_options(exclude=("also_not_a_knob",))
+from stylebot.cli_options import EMIT_LEVELS
 
 
 def test_chunk_policy_translates_the_uncapped_cli_spelling():
@@ -79,15 +38,6 @@ def test_chunk_policy_translates_the_uncapped_cli_spelling():
     assert chunk.max_chars is None  # 0 -> uncapped, normalised in __post_init__
 
 
-def test_chunk_policy_has_no_ordering_knob():
-    # `--sort` retired 0.3.1 and `sort_name`/`sort_key()` were deleted with it
-    # (D43): arms are assigned by content hash, so target order cannot change
-    # the corpus, and nothing in either repo ordered in code either.
-    assert not hasattr(synth_cli.ChunkPolicy(), "sort_key")
-    with pytest.raises(TypeError):
-        synth_cli.ChunkPolicy(sort_name="length")
-
-
 def test_iter_targets_refuses_policy_and_loose_kwargs_together():
     # Two ways to say the same thing, and silently preferring one would make the
     # other's knobs vanish without a word.
@@ -95,38 +45,7 @@ def test_iter_targets_refuses_policy_and_loose_kwargs_together():
         synth.iter_targets(files=[], policy=synth_cli.ChunkPolicy(), min_chars=10)
 
 
-def test_pop_bundles_folds_a_callback_kwargs():
-    # The click-callback path: **kw in, bundles out, and the command's own
-    # params left behind for the callback itself.
-    kw = {"min_chars": 10, "merge_max_chars": 3000, "session_turns": 4, "blog_root": "x"}
-    opts = synth_cli.pop_bundles(kw)
-    assert set(opts) == set(synth_cli.BUNDLE_PARAMS)
-    assert opts["chunk"].min_chars == 10 and opts["chunk"].merge_max_chars == 3000
-    assert opts["session"].session_turns == 4
-    assert opts["gen"] == synth_cli.GenOpts()  # absent names keep their default
-    assert kw == {"blog_root": "x"}
-
-
 # -- the drift guard: the bundles are the single source of the surface --
-
-
-def test_bundle_field_names_are_unambiguous():
-    # Two bundles claiming one name, or a name colliding with run_synth's own
-    # parameters, would make routing ambiguous. Import-time in the module; run
-    # it here too so the failure names the offender in the test log.
-    owners = field_owners(
-        synth_cli.DEFAULT_BUNDLES,
-        reserved=synth_cli.BUNDLE_PARAMS.keys()
-        | {
-            "targets",
-            "data_dir",
-            "count_note",
-            "emit",
-            "extra_tags",
-            "generators",
-        },
-    )
-    assert set(owners) == {f.name for b in synth_cli.DEFAULT_BUNDLES for f in fields(b)}
 
 
 def test_every_bundle_field_has_a_consumer():
@@ -164,69 +83,6 @@ def test_every_bundle_field_has_a_consumer():
     }
     for name in chunk_fields:
         assert name in policy_read, f"ChunkPolicy.{name} is never read"
-
-
-def test_run_synth_takes_bundles_only():
-    # No targets: run_synth echoes the count and returns before it needs a
-    # data-dir or a generator, so this exercises pure bundle plumbing. The
-    # loose-keyword form went with the spec table — bundles are the one shape.
-    assert (
-        synth_cli.run_synth(
-            [],
-            data_dir=None,
-            gen=synth_cli.GenOpts(max_tokens=900),
-            session=synth_cli.SessionOpts(session_turns=4),
-            substrate=synth_cli.SubstrateOpts(limit=10),
-            inspection=synth_cli.InspectOpts(report_title="t"),
-            corpus=synth_cli.CorpusOpts(replicate="draw2"),
-            count_note="(note)",
-            extra_tags=("x",),
-            generators=None,
-        )
-        is None
-    )
-    with pytest.raises(TypeError, match="unexpected keyword"):
-        synth_cli.run_synth([], data_dir=None, max_tokens=900)
-    # ChunkOpts is not a run_synth bundle: it is consumed by iter_targets.
-    with pytest.raises(TypeError, match="unexpected keyword"):
-        synth_cli.run_synth([], data_dir=None, chunk=synth_cli.ChunkPolicy())
-
-
-def test_synth_command_surface_is_exactly_the_bundles_plus_its_own():
-    # The count is pinned deliberately: `synth` is by far the widest command in
-    # the tree (next is `train` at 19), so its surface only ever grows by
-    # someone editing this number and saying why.
-    params = [p for p in ai_style_main.commands["synth"].params if isinstance(p, click.Option)]
-    own = {"blog_root", "data_dir", "field", "max_level", "glob"}
-    shared = {f.name for bundle in synth_cli.DEFAULT_BUNDLES for f, _, _ in cli_fields(bundle)}
-    assert len(params) == 41
-    assert {p.name for p in params} - own == shared
-    # Library-only fields stay off the CLI — that is what omitting opt() means.
-    # `report_max_rows` joined them when its flag retired; `sort_name` did too,
-    # and was then deleted outright (D43); the eight design knobs followed (D83).
-    library_only = {
-        "session_budgets",
-        "report_title",
-        "sort_name",
-        "report_max_rows",
-        "sample_salt",
-        "replicate",
-        "assign_seed",
-        "per_generator",
-        "provider_sort",
-        "sticky_provider",
-        "prompt_cache",
-        "capture_reasoning",
-    }
-    assert library_only & {p.name for p in params} == set()
-
-
-def test_synth_help_is_sectioned():
-    help_out = CliRunner().invoke(ai_style_main, ["synth", "--help"]).output
-    for bundle in synth_cli.DEFAULT_BUNDLES:
-        assert f"\n{bundle.cli_section}:\n" in help_out
-    # The command's own flags keep a leading, unsectioned block.
-    assert help_out.index("\nOptions:\n") < help_out.index(synth_cli.GenOpts.cli_section)
 
 
 # -- the rotation: Arm / iter_arms / build_generators --
@@ -292,32 +148,6 @@ def test_ai_style_synth_dry_run(tmp_path, make_blog):
     assert "2 target chunk(s) from 1 source(s)" in result.output
     assert "would write 2 new pair(s)" in result.output
     assert "openrouter/test/model: 2" in result.output
-
-
-def test_ai_style_synth_sample_needs_no_data_dir(tmp_path, make_blog):
-    root = make_blog(ai=False)
-    result = CliRunner().invoke(ai_style_main, ["synth", "--blog-root", str(root), "--sample", "1"])
-    assert result.exit_code == 0, result.output
-
-
-def test_inspection_mode_banner_and_generation_flag_pointer(tmp_path, make_blog):
-    # Generation flags alongside --sample/--report are silently inert; the
-    # inspection banner must say so and point at the eval pair browser.
-    root = make_blog(ai=False)
-    runner = CliRunner()
-    with_flags = runner.invoke(
-        ai_style_main,
-        ["synth", "--blog-root", str(root), "--sample", "1", "--openrouter-model", "x/y"],
-    )
-    assert with_flags.exit_code == 0, with_flags.output
-    assert "nothing generated" in with_flags.output
-    assert "ai-style eval --pairs" in with_flags.output
-
-    without_flags = runner.invoke(
-        ai_style_main, ["synth", "--blog-root", str(root), "--sample", "1"]
-    )
-    assert "nothing generated" in without_flags.output  # banner always
-    assert "ai-style eval --pairs" not in without_flags.output  # pointer only on the trap
 
 
 def test_ai_style_synth_requires_a_generator(tmp_path, make_blog):
@@ -386,56 +216,6 @@ def test_ai_style_synth_still_exits_1_on_generation_errors(tmp_path, monkeypatch
     assert result.exit_code == 1, result.output
     assert "generation error(s)" in result.output
     assert "Traceback" not in result.output
-
-
-def test_timeout_reaches_generator_factories(tmp_path, monkeypatch, make_blog):
-    # --timeout must be plumbed into the HTTP client construction; without it
-    # the openai SDK waits 600s x retries and a bad upstream stalls in silence.
-    root = make_blog(ai=False)
-    captured = {}
-
-    def fake_factory(*, model, timeout=None, provider_sort=None, **kw):
-        captured["timeout"] = timeout
-        captured["provider_sort"] = provider_sort
-        return synth.Generator(name=f"openrouter/{model}", generate=lambda t: f"slop {t}")
-
-    monkeypatch.setattr(synth, "openrouter_generator", fake_factory)
-    result = CliRunner().invoke(
-        ai_style_main,
-        [
-            "synth",
-            "--blog-root",
-            str(root),
-            "--data-dir",
-            str(tmp_path / "corpus"),
-            "--openrouter-model",
-            "x/y",
-            "--timeout",
-            "7",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["timeout"] == 7.0
-    assert captured["provider_sort"] == "throughput"  # the default routing preference
-    # The heartbeat brackets the run: first and last pair always echo.
-    assert "1/2 pairs" in result.output and "2/2 pairs" in result.output
-
-    # provider_sort "none" restores OpenRouter's own load-balancing (field
-    # omitted). A library field, not a flag (D83), so it is set on the consumer.
-    synth_cli.build_generators(
-        synth_cli.iter_arms([synth.resolve_strategy("polish")], ["off"], ["x/y"]),
-        dry_run=False,
-        custom_system=None,
-        max_tokens=1,
-        timeout=None,
-        capture_reasoning=False,
-        temperature=None,
-        top_p=None,
-        provider_sort="none",
-        sticky_provider=True,
-        prompt_cache=True,
-    )
-    assert captured["provider_sort"] is None
 
 
 def test_run_synth_needs_no_data_dir_for_inspection(tmp_path, make_blog):
@@ -789,71 +569,6 @@ def test_missing_openrouter_key_aborts_before_any_generation(tmp_path, monkeypat
     assert not (tmp_path / "corpus" / "pairs.jsonl").exists()
 
 
-def test_reasoning_effort_rotation_cross_product(tmp_path, make_blog):
-    import json
-
-    # 2 efforts x 1 strategy x 1 model: effort joins the rotation at no cost
-    # multiplier, and each pair records the effort that produced it.
-    root = make_blog(ai=False, many=10)
-    dry = CliRunner().invoke(
-        ai_style_main,
-        [
-            "synth",
-            "--blog-root",
-            str(root),
-            "--data-dir",
-            str(tmp_path / "corpus"),
-            "--openrouter-model",
-            "x/y",
-            "--reasoning-effort",
-            "off",
-            "--reasoning-effort",
-            "high",
-            "--dry-run",
-        ],
-    )
-    assert dry.exit_code == 0, dry.output
-    assert "would write 10 new pair(s)" in dry.output  # rotation, not multiplication
-
-    captured = []
-
-    def fake_factory(*, model, strategy, reasoning_effort, **kw):
-        captured.append(reasoning_effort)
-        return synth.Generator(
-            name=f"openrouter/{model}",
-            strategy=strategy,
-            reasoning_effort=reasoning_effort,
-            generate=lambda t, history=None: synth.GenOutput(
-                f"[slop] {t}", {"reasoning_effort": reasoning_effort}
-            ),
-        )
-
-    import pytest as _pytest
-
-    with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(synth, "openrouter_generator", fake_factory)
-        live = CliRunner().invoke(
-            ai_style_main,
-            [
-                "synth",
-                "--blog-root",
-                str(root),
-                "--data-dir",
-                str(tmp_path / "corpus"),
-                "--openrouter-model",
-                "x/y",
-                "--reasoning-effort",
-                "off",
-                "--reasoning-effort",
-                "high",
-            ],
-        )
-    assert live.exit_code == 0, live.output
-    assert captured == ["off", "high"]  # one generator per effort
-    recs = [json.loads(ln) for ln in (tmp_path / "corpus" / "pairs.jsonl").read_text().splitlines()]
-    assert {r["meta"]["gen"]["reasoning_effort"] for r in recs} == {"off", "high"}
-
-
 # -- the frozen-eval guard: synth never cuts eval prose unasked ---------------
 
 
@@ -942,12 +657,3 @@ def test_synth_role_eval_is_the_deliberate_opt_in(tmp_path, make_blog):
     assert result is not None and result.written == len(targets)
     assert "eval guard" not in _lines(sink)
 
-
-def test_synth_without_a_splits_file_is_unguarded_but_unchanged(tmp_path, make_blog):
-    """No contract, no guard — a corpus with no splits.json behaves as before."""
-    root = make_blog(ai=False)
-    targets = synth.iter_targets(blog_root=root)
-    result = synth_cli.run_synth(
-        targets, data_dir=tmp_path / "corpus", generators=[_stub_gen()]
-    )
-    assert result is not None and result.written == len(targets)

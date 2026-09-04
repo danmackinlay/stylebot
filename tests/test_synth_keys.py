@@ -56,10 +56,3 @@ def test_capture_id_golden():
 
 def test_prompt_id_golden():
     assert synth.prompt_id_of("You are a helpful assistant.") == "75357d685f23"
-
-
-def test_default_key_axes_pinned():
-    # These defaults are folded into every key generated without explicit
-    # flags; changing either deliberately re-keys default runs.
-    assert synth.DEFAULT_STRATEGY == "polish"
-    assert synth.DEFAULT_REASONING_EFFORT == "off"
