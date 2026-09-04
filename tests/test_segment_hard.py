@@ -35,6 +35,7 @@ import os
 import re
 from pathlib import Path
 
+import conftest
 import pytest
 
 from stylebot import markdown as md
@@ -42,7 +43,7 @@ from stylebot.lib import gather_qmd_files
 
 HARD = Path(__file__).parent / "fixtures" / "hard"
 SPANS = HARD / "spans.json"
-SWEEP_ENV = "STYLEBOT_SWEEP_BLOG_ROOT"
+SWEEP_ENV = conftest.SWEEP_ENV
 CONFORMANCE = HARD / "segmenter_conformance.qmd"
 CONFORMANCE_EXPECTED = HARD.parent / "segmenter_conformance.json"
 
@@ -425,7 +426,7 @@ def test_every_named_case_occurs_exactly_once(conformance: str):
 # --- the opt-in sweep ------------------------------------------------------
 
 
-@pytest.mark.skipif(not os.environ.get(SWEEP_ENV), reason=f"set {SWEEP_ENV} to sweep a blog")
+@pytest.mark.sweep  # conftest deselects it unless SWEEP_ENV is set
 def test_the_whole_blog_corpus_breaks_only_where_it_is_known_to():
     root = Path(os.environ[SWEEP_ENV]).expanduser()
     assert root.is_dir(), f"{SWEEP_ENV}={root} is not a directory"

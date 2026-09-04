@@ -3,11 +3,30 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from stylebot.ai_core import STYLE_SYSTEM
+
+SWEEP_ENV = "STYLEBOT_SWEEP_BLOG_ROOT"
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", f"sweep: a whole-blog pass; needs {SWEEP_ENV}")
+
+
+def pytest_collection_modifyitems(config, items):
+    """A `sweep` test is deselected, not skipped: the suite's `0 skipped` is a
+    real number, and the opt-in path is a selection the run reports as such."""
+    if os.environ.get(SWEEP_ENV):
+        return
+    sweeps = [it for it in items if it.get_closest_marker("sweep")]
+    if sweeps:
+        config.hook.pytest_deselected(items=sweeps)
+        items[:] = [it for it in items if it not in sweeps]
+
 
 HUMAN_POST = """---
 title: A Human Post
