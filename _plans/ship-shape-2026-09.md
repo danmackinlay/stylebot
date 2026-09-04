@@ -289,6 +289,47 @@ now under rules that already exist:
   ("Pangram cross-check deleted 2026-09-xx: endpoint dead, no caller"). Done:
   `rg -n "render_comparison_report|pangram|invents_anchors" src tests` empty;
   `report.py` comes under 800 and its allowlist entry goes.
+- **X4 · stylebot test cull** from [`test-audit-2026-09.md`](test-audit-2026-09.md),
+  which classifies all 836 tests: 643 keep, 123 low-signal duplicates, 33
+  decorative, 20 tautological, 17 performative; ≈ 2,185 of 15,600 lines
+  deletable (14%). The signal problem is larger than the volume problem:
+  **0 of 14 defects the QA found would have failed a test, and five tests
+  pin the defect as the specification** (`test_eval:
+  test_judge_reply_parser_clamps_and_falls_back` asserts the bare-digit
+  fallback C4 removes; `test_synth:test_gate_redraw_failure_does_not_cost_the_session`
+  asserts `errors == []` on the path C14 fixes; `test_splits:
+  test_aliases_need_no_migration_of_existing_pairs` asserts the hash pool's
+  silence C12 ends; `test_status:test_promoted_manifest_takes_the_newest_completed_non_nixed_run`
+  asserts absent-key-means-promoted, which wave 4 §2 reverses; `test_pairs:
+  test_pre_provenance_record_still_validates` pins a half-stamped
+  `system_sha` as valid). Those five are *rewritten by the slice that fixes
+  the defect*, never deleted here. X4 itself: delete the D/T/P rows and the
+  L rows' named twins; merge the six segmenter files to three as the audit's
+  table says (`test_markdown.py` canonical, `test_segment_hard.py` the
+  invariant runner over `fixtures/hard/`, conformance keeps its four
+  policy-row tests, parity becomes `test_infer_segment.py`, `test_segment.py`
+  and `test_div_policy.py` go); move the `record_id` tests to `test_pairs.py`
+  and the `diff_chunks` tests to `test_capture.py`; drop the seven
+  `importorskip("torch")` tests in `test_export.py` that are green by
+  skipping, or put torch in a test extra and run them. Done: test count falls
+  by the audit's D+T+P+L total ± 10 with every deletion citing its audit row
+  in the commit body; `uv run pytest -q` green with 0 skipped; the audit file
+  deleted in the same commit.
+- **X5 · blog test cull** from the blog's `_plans/test-audit-2026-09.md`
+  (137 stylebot-facing tests: 84 keep, 22 duplicates, 19 decorative, 6
+  unreachable, 4 performative, 2 tautological; ≈ 800 of 3,700 lines, 22%).
+  `test_styler_optional.py` goes with C1, and its
+  `test_is_missing_stylebot_ignores_other_modules` (which asserts a missing
+  `tinker` is not a problem) is replaced by C1's missing-extra test; the
+  four `test_serve_refuses_*` twins of stylebot's `test_infer` go; the D46
+  double-walk pin becomes a three-line `rglob` assert until wave 3 lane C
+  deletes it; the five identical 16-line `_run()` harnesses premised on "no
+  pytest installed" go (one sits mid-file in `test_workflow_style.py` and
+  would hide eight tests); C6 fixes `test_corpus_stability.py`. Add the one
+  test the audit says would have caught three defects at once: keyless
+  `dan-style train-clf --dry-run --blog-root <tmp>` asserting the splits
+  summary, the D34 pin error, and the resolved data dir. Done: as X4, with
+  the blog suite at 0 skipped except the two documented ones.
 - **X3 · the option surface** is the owner decision in §6 (`synth` 50 → ≤ 20
   flags); it deletes `opt()` fields and their `test_synth_cli.py` cases, not
   library code, and is the one cull that needs Dan's list first.
@@ -394,6 +435,11 @@ reviewer signs that off against the step-1 byte-identity test.
 - Nothing pushed (`git status -sb` shows `ahead` in both repos until Dan
   pushes); `git status` never shows `.env`, `.envrc`, `pairs.jsonl`, `pairs/`.
 - Each slice's own done-line, run by the reviewer, not read from the report.
+- Tests: every deleted test cites its audit row in the commit body; a test
+  the audit marks "pins the defect" is rewritten in the fixing slice's
+  commit, with the new assertion stated; no slice that fixes a QA defect
+  merges without a test that fails on the pre-fix code (the reviewer checks
+  by reverting the source hunk under the new test).
 
 ## 8. Not in this runbook, and out-of-scope reports
 
