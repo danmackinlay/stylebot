@@ -6,7 +6,8 @@ interval on bare sequences. `VerdictOpts` / `DocumentOpts` declare the flags
 both CLIs offer, and `format_summary` / `format_verdict` render for both.
 
 Why posts and not chunks, and why the real facet is the headline: D40. Why a
-cross-detector comparison is refused: D39.
+cross-detector comparison is refused, and a detector verdict on rows that
+detector reranked (`meta.reranker`): D39.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from statistics import mean
 
 import click
 
+from stylebot.classify import DETECTOR_IDENTITY_KEYS
 from stylebot.cli_options import opt
 from stylebot.errors import ConfigError
 from stylebot.eval import SCHEMA_VERSION
@@ -291,6 +293,22 @@ def _verdict_label(delta: dict | None, *, lower_is_better: bool) -> str:
     return "indistinguishable"
 
 
+def _refuse_circular_verdict(rows: Iterable[dict], identities: list[dict], side: str) -> None:
+    """A detector verdict on rows the same head chose is self-agreement (D39)."""
+    for row in rows:
+        reranker = (row.get("meta") or {}).get("reranker")
+        if not reranker:
+            continue
+        picked_by = {key: reranker.get(key) for key in DETECTOR_IDENTITY_KEYS}
+        if picked_by in identities:
+            raise ConfigError(
+                f"refusing a detector verdict on {side}: its outputs were picked by the same "
+                f"head that scores them, {_identity_label(picked_by)} (best-of reranking), so "
+                f"P(slop) can only agree with itself. Compare another instrument, "
+                f"--compare-signal judge, or rewrite with --best-of 1"
+            )
+
+
 def compare_scores(
     scores_a: str | Path | Iterable[dict],
     scores_b: str | Path | Iterable[dict],
@@ -313,7 +331,8 @@ def compare_scores(
 
     **Refuses a cross-detector comparison** (D39): both files must have been
     written by the same detector artifact. `allow_cross_detector=True` says you
-    mean it, and the returned dict records that you did.
+    mean it, and the returned dict records that you did. A detector verdict on
+    rows whose `meta.reranker` is that detector is refused too: `signal="judge"`.
     """
     if signal not in SIGNAL_EXTRACTORS:
         raise ConfigError(f"unknown signal {signal!r}; known: {sorted(SIGNAL_EXTRACTORS)}")
@@ -330,6 +349,9 @@ def compare_scores(
             f"head, or pass allow_cross_detector=True / --allow-cross-detector"
         )
 
+    if signal == "detector":
+        _refuse_circular_verdict(rows_a.values(), ids_a, "scores_a")
+        _refuse_circular_verdict(rows_b.values(), ids_b, "scores_b")
     extract = SIGNAL_EXTRACTORS[signal]
     shared = sorted(set(rows_a) & set(rows_b))
     a_vals: list[float | None] = []

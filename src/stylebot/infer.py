@@ -36,6 +36,7 @@ from typing import Protocol, runtime_checkable
 from stylebot import markdown
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.errors import ConfigError, MissingExtra
+from stylebot.eval import detector_identity
 from stylebot.jsonl import dumps_line
 
 logger = logging.getLogger(__name__)
@@ -53,8 +54,7 @@ DEFAULT_TEMPERATURE = 0.3
 # construction, so the CLI (`ai-style run` / `serve`) scales it off
 # --max-chunk-chars through `max_tokens_for` unless --max-tokens is explicit.
 DEFAULT_MAX_TOKENS = 2_000
-# Tokens allowed per character of input chunk (chars/4 for the rewrite, plus
-# generous headroom since the styler may legitimately expand a terse passage).
+# Output tokens per input char: chars/4 for the rewrite, plus headroom to expand.
 _TOKENS_PER_CHAR = 0.75
 
 
@@ -88,9 +88,7 @@ class Styler(Protocol):
 _FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
 
 
-# ---------------------------------------------------------------------------
-# Chunking — match training granularity, never slice a protected block
-# ---------------------------------------------------------------------------
+# --- Chunking — match training granularity, never slice a protected block ---
 
 
 def split_frontmatter(text: str) -> tuple[str, str]:
@@ -248,9 +246,7 @@ def prose_chunks(
     ]
 
 
-# ---------------------------------------------------------------------------
-# Rewrite
-# ---------------------------------------------------------------------------
+# --- Rewrite ---
 
 
 @dataclass
@@ -415,14 +411,21 @@ def write_anchor_audit(
 
 
 def detector_scorer(detector: Callable[[str], dict]) -> Callable[[str], float]:
-    """Best-of-N scorer from the voice classifier: lower = more Dan
-    (`P(slop)`; blank text scores worst). `detector` is the
-    `stylebot.classify` seam."""
+    """Best-of-N scorer from the voice classifier: lower = more Dan (`P(slop)`;
+    blank text scores worst). `detector` is the `stylebot.classify` seam, and
+    its D39 identity rides along as `.identity` so an output row can name it."""
 
     def score(text: str) -> float:
         return detector(text)["score"] if text.strip() else 1.0
 
+    score.identity = detector_identity(detector)
     return score
+
+
+def reranker_identity(scorer: object, best_of: int) -> dict | None:
+    """`meta.reranker` for an output row: the instrument that chose the output
+    among `best_of` samples (D39), None when nothing chose (`best_of == 1`)."""
+    return detector_identity(scorer) if best_of > 1 and scorer is not None else None
 
 
 def rewrite_candidates(
@@ -564,12 +567,9 @@ def rewrite_text(
     context: str | None = None
     for kind, chunk in items:
         if kind == "heading":
-            # Under the cross-heading diet a heading is chunk CONTENT, and those
-            # pairs record no `meta.context` at all — so setting `context` here
-            # would prepend a prefix to every following chunk that training
-            # never saw. Defect A4: prospective today (the corpus has zero
-            # cross-heading pairs) and live the moment the blog's
-            # CROSS_HEADING policy produces its first batch.
+            # Under the cross-heading diet a heading is chunk CONTENT and those
+            # pairs record no `meta.context`, so setting `context` here would
+            # prepend a prefix training never saw to every following chunk.
             if not inline_headings:
                 context = chunk.split("\n")[-1]
             out_chunks.append(chunk)
@@ -715,8 +715,8 @@ def rewrite_pairs_file(
 
     Each output line is the pair record plus a top-level `"output"` field (the
     styler's rewrite of `messages[1]` as stored, heading context included —
-    the eval extractor strips it like every other field). Resumable: records
-    whose id is already in `out_path` are skipped. Returns the number written.
+    the eval extractor strips it like every other field) and `meta.reranker`
+    (`reranker_identity`). Resumable by id. Returns the number written.
     """
     from stylebot.pairs import iter_pairs, record_id
 
@@ -733,6 +733,7 @@ def rewrite_pairs_file(
             break
 
     written = 0
+    reranker = reranker_identity(scorer, best_of)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("a", encoding="utf-8") as fp:
         for i, rec in enumerate(todo):
@@ -742,7 +743,8 @@ def rewrite_pairs_file(
                 logger.warning("styler returned nothing for %s; skipped", record_id(rec))
                 continue
             output = keep[0] if len(keep) == 1 or scorer is None else min(keep, key=scorer)
-            fp.write(dumps_line({**rec, "output": output}) + "\n")
+            meta = {**(rec.get("meta") or {}), "reranker": reranker}
+            fp.write(dumps_line({**rec, "output": output, "meta": meta}) + "\n")
             fp.flush()
             written += 1
             if on_progress is not None:
@@ -750,9 +752,7 @@ def rewrite_pairs_file(
     return written
 
 
-# ---------------------------------------------------------------------------
-# Backends
-# ---------------------------------------------------------------------------
+# --- Backends ---
 
 
 def _message_text(content: object) -> str:

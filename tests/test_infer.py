@@ -1061,3 +1061,71 @@ def test_a_literal_think_block_round_trips_through_the_renderer_parser():
     parts, tool_calls = parse(sampled)
     assert not isinstance(parts, str) and not tool_calls
     assert infer._message_text(parts) == sampled
+
+
+# ---------------------------------------------------------------------------
+# the reranker rides on the output row (C5, D39)
+# ---------------------------------------------------------------------------
+
+
+def _identified_detector(text):
+    return {"score": len(text) / 100.0, "configured": True}
+
+
+_identified_detector.identity = {
+    "name": "stub",
+    "embed_model": "e",
+    "git_sha": "abc",
+    "trained_at": "2026-01-01",
+    "n_pairs": 10,
+}
+
+
+def _three_pairs(tmp_path):
+    pairs = tmp_path / "pairs.jsonl"
+    recs = [
+        {
+            "messages": [
+                {"role": "system", "content": STYLE_SYSTEM},
+                {"role": "user", "content": f"slop {i}"},
+                {"role": "assistant", "content": f"dan {i}"},
+            ],
+            "meta": {"source": f"p{i}", "capture_id": f"c{i}", "chunk_index": 0},
+        }
+        for i in range(3)
+    ]
+    pairs.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+    return pairs
+
+
+def _shrinking_styler(messages, num_samples=1):
+    text = messages[1]["content"].upper()
+    return [text + " " + "x" * (num_samples - i) for i in range(num_samples)]
+
+
+def test_detector_scorer_carries_the_reranker_identity():
+    scorer = infer.detector_scorer(_identified_detector)
+    assert scorer.identity == _identified_detector.identity
+    assert infer.reranker_identity(scorer, best_of=1) is None
+    assert infer.reranker_identity(None, best_of=3) is None
+    assert infer.reranker_identity(scorer, best_of=3) == _identified_detector.identity
+
+
+def test_rewrite_pairs_file_stamps_reranker_null_at_best_of_1(tmp_path):
+    out = tmp_path / "outputs.jsonl"
+    infer.rewrite_pairs_file(_three_pairs(tmp_path), out, _upper_styler)
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert all("reranker" in r["meta"] for r in rows)
+    assert all(r["meta"]["reranker"] is None for r in rows)
+    assert rows[0]["meta"]["source"] == "p0"  # the rest of meta is untouched
+
+
+def test_rewrite_pairs_file_stamps_the_reranker_identity_at_best_of_3(tmp_path):
+    out = tmp_path / "outputs.jsonl"
+    scorer = infer.detector_scorer(_identified_detector)
+    infer.rewrite_pairs_file(
+        _three_pairs(tmp_path), out, _shrinking_styler, best_of=3, scorer=scorer
+    )
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert rows[0]["output"] == "SLOP 0 x"  # the shortest, i.e. lowest-scored, candidate
+    assert all(r["meta"]["reranker"] == _identified_detector.identity for r in rows)

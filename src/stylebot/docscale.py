@@ -55,8 +55,9 @@ def iter_document_pairs(pairs_path: str | Path, *, splits: dict | None = None, r
         }
 
 
-def _document_record(doc: dict, output: str, system: str) -> dict:
-    """One whole-document row in `pairs.jsonl` shape, `doc:`-prefixed."""
+def _document_record(doc: dict, output: str, system: str, reranker: dict | None) -> dict:
+    """One whole-document row in `pairs.jsonl` shape, `doc:`-prefixed; `reranker`
+    is `infer.reranker_identity`'s answer for the pass (D39)."""
     return {
         "messages": [
             {"role": "system", "content": system},
@@ -70,6 +71,7 @@ def _document_record(doc: dict, output: str, system: str) -> dict:
             "chunk_index": 0,
             "synthetic": False,
             "scale": "document",
+            "reranker": reranker,
         },
     }
 
@@ -102,9 +104,11 @@ def rewrite_documents_file(
     Resumable by record id; score the output with `prune_orphans=False`.
     """
     from stylebot.ai_core import STYLE_SYSTEM
+    from stylebot.infer import reranker_identity
 
     if rewrite is None:
         from stylebot.infer import rewrite_text as rewrite
+    reranker = reranker_identity(rewrite_kwargs.get("scorer"), rewrite_kwargs.get("best_of", 1))
 
     out_path = Path(out_path)
     done = {record_id(rec) for rec in iter_pairs(out_path) if rec.get("messages")}
@@ -131,7 +135,7 @@ def rewrite_documents_file(
             text = getattr(rewritten, "text", rewritten)
             result.n_chunks += int(getattr(rewritten, "n_chunks", 0) or 0)
             result.n_kept_input += int(getattr(rewritten, "n_kept_input", 0) or 0)
-            fp.write(dumps_line(_document_record(doc, text, STYLE_SYSTEM)) + "\n")
+            fp.write(dumps_line(_document_record(doc, text, STYLE_SYSTEM, reranker)) + "\n")
             fp.flush()
             result.written += 1
             if on_progress is not None:

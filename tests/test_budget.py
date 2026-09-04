@@ -69,7 +69,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     },
     "infer.py": {
         "lines": 854,
-        "functions": {"rewrite_text": 177, "rewrite_candidates": 94},
+        "functions": {"rewrite_text": 174, "rewrite_candidates": 94},
         "docstrings": (17, 16),
     },
     "session.py": {"lines": 845, "functions": {"save_session": 110}},
