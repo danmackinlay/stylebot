@@ -487,7 +487,7 @@ def test_shard_pairs_refuses_a_corpus_that_is_already_sharded(sharded):
 
 def test_eval_sees_every_shards_record_ids(sharded):
     """`eval`'s resume and orphan-prune both key on this id set."""
-    from stylebot.eval import live_record_ids
+    from stylebot.scoring import live_record_ids
 
     data_dir, before = sharded
     assert live_record_ids(data_dir / "pairs") == {record_id(r) for r in before}

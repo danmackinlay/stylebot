@@ -2481,3 +2481,44 @@ promoted run served a 4500-char diet.
 late because the CLAUDE.md diet (F7a) found this was the one rationale in that
 file with no home in any other layer; the rule survived the cut, the why did
 not.
+
+## D62: `stylebot.eval` keeps a lazy re-export map after the split
+
+**Decision (2026-09-04, F8).** `eval.py` split into `eval` (the four signals),
+`scoring`, `verdict`, `docscale` and `covariates`. `eval` keeps a module-level
+`__getattr__` that resolves the 28 names that moved, so every existing
+`from stylebot.eval import X` and `ev.X` lookup still works.
+
+**Alternatives.** Update the callers — rejected for the blog's, which stylebot
+cannot edit and which import `verdict_options` at module scope plus ten `ev.*`
+lookups; a public API that breaks on a refactor the caller cannot see is the
+D35 defect from the other direction. Re-export eagerly at the top of `eval`
+— rejected: `scoring` imports `eval`, so a top-level import back is a cycle.
+Leave `eval.py` at 1,965 lines — rejected: it was the largest module in the
+package and the thing F8 exists to fix.
+
+**Deciding constraint.** The blog pins stylebot by git source, so a name that
+disappears breaks a repo on a different commit clock. 25 lines of `__getattr__`
+buys a split the callers never see.
+
+**Re-evaluate if:** the blog imports from the owning modules directly, at which
+point the map is dead weight and should be deleted rather than maintained.
+
+## D63: orphan score rows are pruned where they are read
+
+**Decision.** `scoring.prune_orphan_scores` drops score rows whose pair is no
+longer in the corpus, at read time, rather than leaving them for a caller to
+filter.
+
+**Alternatives.** Leave them and filter per consumer — rejected: a stranded row
+inflates every `summarize_scores` mean silently, and puts a phantom row in a
+committed `covariate_table`, which is a number someone acts on. Refuse to score
+against a corpus whose ids have moved — rejected: a prune is the ordinary
+consequence of `data prune-stale` and should not be an error.
+
+**Deciding constraint.** A score file outlives the corpus it scored; the join is
+by `record_id` and nothing else re-checks it. This is distinct from D53, which
+prunes the **corpus**, not its scores.
+
+**Re-evaluate if:** score rows ever carry the corpus hash they were computed
+against, which would let a mismatch be detected rather than silently repaired.

@@ -34,8 +34,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from stylebot.errors import ConfigError
-from stylebot.eval import load_scores, summarize_scores
 from stylebot.pairs import FIELD_EXTRACTORS, build_pair_content, iter_pairs, record_id
+from stylebot.scoring import load_scores, summarize_scores
 from stylebot.targets import Target
 
 # ---------------------------------------------------------------------------
@@ -95,18 +95,11 @@ th{cursor:pointer;user-select:none;position:sticky;top:0;background:var(--bg)}
 }
 """
 
-# One behaviour script for both reports (the scores one was always a superset).
-# It reads only `data-*` attributes and writes only `style.display` /
-# `dataset.hit` — never markup. Whatever a given report doesn't wire up is
-# inert: with no `select.facet` the facet predicate is vacuously true, with no
-# `#n` input `sampleN` is never called, and the load-time sort happens only for
-# a page that asks for one via `<body data-sort=…>`.
-#
-# `#rows` is load-bearing, not decoration: the scores page also contains the
-# headline `<table class=headline>`, and it comes FIRST. A bare
-# `querySelector('tbody')` would bind every control to the headline instead,
-# silently: sort buttons that do nothing, and a filter that throws on the
-# headline's `.txt`-less rows.
+# One behaviour script for both reports. It reads only `data-*` attributes and
+# writes only `style.display` / `dataset.hit`, never markup, so whatever a given
+# report does not wire up is inert. `#rows` is load-bearing, not decoration: the
+# scores page's headline table comes FIRST, so a bare `querySelector('tbody')`
+# would silently bind every control to it.
 _JS = """
 const tbody=document.querySelector('#rows tbody');
 const rows=()=>Array.from(tbody.querySelectorAll('tr'));
@@ -351,9 +344,8 @@ def render_targets_report(
 # Scores report — join pairs.jsonl + scores.jsonl, compare slop ↔ Dan by eye
 # ---------------------------------------------------------------------------
 #
-# The eval sibling of the targets report: read-only, no spend, self-contained
-# HTML, the same scaffolding and escaping discipline. Joins scores to the corpus
-# by `record_id`, and is generic over score *fields*.
+# The eval sibling of the targets report: read-only, self-contained HTML, joined
+# to the corpus by `record_id` and generic over score *fields*.
 
 
 def _signal(field_scores: object, signal: str, key: str = "score"):
@@ -776,20 +768,11 @@ def render_comparison_report(
     the same corpus; a chunk missing from any arm is dropped rather than
     rendered ragged.
 
-    This exists because the per-arm report cannot answer the question anyone
-    actually has, which is *is this rewrite better than that one* — that meant
-    two browser tabs, scrolled in sync, with no shared row anchor. Design notes,
-    all from a real read-through going badly:
-
-    - **No covariate columns.** `strategy`/`generator`/`reasoning`/`prompt` are
-      the widest columns in the per-arm report and are empty for every real
-      captured pair, so they ate the screen to say "—". Source and the scores
-      are the only non-text columns here.
-    - **Text is not truncated**, only visually clipped, with a per-row expander
-      and an expand-all. A 400-character clip hides exactly the long rewrites
-      whose coherence is the thing under review.
-    - **The source column is sticky**, so the row identity survives horizontal
-      scrolling; clicking it highlights the row across the width of the table.
+    Three design rules, each from a read-through going badly: **no covariate
+    columns** (they are empty for every captured pair and ate the screen to say
+    "—"); **text is clipped, never truncated**, with a per-row expander, since a
+    400-character clip hides exactly the long rewrites under review; and **the
+    source column is sticky**, so row identity survives horizontal scrolling.
     """
     out_path = Path(out_path)
     if len(arms) < 2:

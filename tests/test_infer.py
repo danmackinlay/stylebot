@@ -103,7 +103,7 @@ def test_do_no_harm_guard_keeps_better_input():
 
 
 def test_rewrite_pairs_file_writes_output_and_resumes(tmp_path):
-    from stylebot.eval import FIELD_EXTRACTORS
+    from stylebot.pairs import FIELD_EXTRACTORS
 
     pairs = tmp_path / "pairs.jsonl"
     recs = []

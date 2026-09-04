@@ -9,7 +9,7 @@ import pytest
 
 from stylebot import eval as ev
 from stylebot import report, synth
-from stylebot.pairs import iter_pairs
+from stylebot.pairs import iter_pairs, record_id
 from stylebot.synth import Target
 
 
@@ -286,7 +286,7 @@ def test_scores_report_vale_chip_keyless(tmp_path):
 
     recs = [
         {
-            "id": ev.record_id(pr),
+            "id": record_id(pr),
             "meta": {"slop_strategy": "polish", "source": pr["meta"]["source"], "generator": "m"},
             "scores": {
                 f: {
@@ -418,7 +418,7 @@ def test_scores_report_escapes_hostile_facet_values(tmp_path):
     def render(strategy):
         recs = [
             {
-                "id": ev.record_id(pr),
+                "id": record_id(pr),
                 "meta": {"slop_strategy": strategy, "source": pr["meta"]["source"]},
                 "scores": {
                     f: {"judge": {"score": 2, "rationale": "<i>r</i>"}} for f in ("slop", "target")
@@ -502,7 +502,7 @@ def test_scores_report_tolerates_malformed_signal_payloads(tmp_path):
     pairs, _ = _make_scored_with_gen(tmp_path, judge=None)
     recs = [
         {
-            "id": ev.record_id(pr),
+            "id": record_id(pr),
             "meta": {"slop_strategy": "polish", "source": pr["meta"]["source"]},
             "scores": {
                 f: {"judge": 7, "vale": {"available": True, "alerts": 0}}
@@ -521,7 +521,7 @@ def test_scores_report_tolerates_malformed_signal_payloads(tmp_path):
 def test_detector_cards_appear_only_when_a_detector_ran(tmp_path):
     pairs, _ = _make_scored_with_gen(tmp_path, judge=None)
     base = [
-        {"id": ev.record_id(pr), "meta": {"slop_strategy": "polish"}, "scores": {}}
+        {"id": record_id(pr), "meta": {"slop_strategy": "polish"}, "scores": {}}
         for pr in iter_pairs(pairs)
     ]
     off = [

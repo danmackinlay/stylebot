@@ -14,8 +14,8 @@ import subprocess
 import pytest
 
 from stylebot import eval as ev
-from stylebot import synth
-from stylebot.pairs import validate_pairs_file
+from stylebot import scoring, synth
+from stylebot.pairs import record_id, validate_pairs_file
 
 
 def fake_judge(prose: str) -> dict:
@@ -388,11 +388,11 @@ def test_score_pairs_file_strips_heading_context(tmp_path):
 
 def test_record_id_precedence():
     assert (
-        ev.record_id({"meta": {"synth_key": "abc", "capture_id": "cap", "chunk_index": 2}}) == "abc"
+        record_id({"meta": {"synth_key": "abc", "capture_id": "cap", "chunk_index": 2}}) == "abc"
     )
-    assert ev.record_id({"meta": {"capture_id": "cap", "chunk_index": 2}}) == "cap:2"
-    rid = ev.record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}})
-    assert rid == ev.record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}})  # stable
+    assert record_id({"meta": {"capture_id": "cap", "chunk_index": 2}}) == "cap:2"
+    rid = record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}})
+    assert rid == record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}})  # stable
     assert len(rid) == 16
 
 
@@ -416,9 +416,9 @@ def test_record_id_golden_shapes_for_non_recut_records():
     for the never-re-cut captures that are most of the corpus, so the literals
     are pinned rather than merely round-tripped.
     """
-    assert ev.record_id({"meta": {"capture_id": "13860ebc", "chunk_index": 0}}) == "13860ebc:0"
+    assert record_id({"meta": {"capture_id": "13860ebc", "chunk_index": 0}}) == "13860ebc:0"
     # The no-capture_id fallback: sha256("post/x.qmd\x001").hexdigest()[:16].
-    assert ev.record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}}) == "abfe53300435fc98"
+    assert record_id({"meta": {"source": "post/x.qmd", "chunk_index": 1}}) == "abfe53300435fc98"
 
 
 def test_record_id_recut_differs_from_the_original_cut():
@@ -426,20 +426,20 @@ def test_record_id_recut_differs_from_the_original_cut():
     capture_id:chunk_index — that collision is the whole bug."""
     base = {"meta": {"capture_id": "13860ebc", "chunk_index": 0}}
     recut = {"meta": {"capture_id": "13860ebc", "chunk_index": 0, "recut": _RECUT_A}}
-    assert ev.record_id(recut) != ev.record_id(base)
+    assert record_id(recut) != record_id(base)
     # …but it is still recognisably the same capture and chunk, so the id stays
     # greppable and `capture_id` remains the leading grouping key.
-    assert ev.record_id(recut).startswith("13860ebc:r")
-    assert ev.record_id(recut).endswith(":0")
+    assert record_id(recut).startswith("13860ebc:r")
+    assert record_id(recut).endswith(":0")
 
 
 def test_record_id_is_stable_for_the_same_recut_policy():
     """Re-cutting twice at the SAME policy yields the SAME id — a re-cut has to
     stay idempotent end to end, not just inside pairs.jsonl. Key order in the
     stamp must not matter either (the digest is over canonical JSON)."""
-    first = ev.record_id({"meta": {"capture_id": "cap", "chunk_index": 1, "recut": _RECUT_A}})
-    again = ev.record_id({"meta": {"capture_id": "cap", "chunk_index": 1, "recut": dict(_RECUT_A)}})
-    reordered = ev.record_id(
+    first = record_id({"meta": {"capture_id": "cap", "chunk_index": 1, "recut": _RECUT_A}})
+    again = record_id({"meta": {"capture_id": "cap", "chunk_index": 1, "recut": dict(_RECUT_A)}})
+    reordered = record_id(
         {
             "meta": {
                 "capture_id": "cap",
@@ -454,8 +454,8 @@ def test_record_id_is_stable_for_the_same_recut_policy():
 def test_record_id_differs_across_recut_policies():
     """A different gap policy cuts different prose, so it must key differently
     — otherwise re-cutting at a new policy silently inherits the old scores."""
-    a = ev.record_id({"meta": {"capture_id": "cap", "chunk_index": 0, "recut": _RECUT_A}})
-    b = ev.record_id({"meta": {"capture_id": "cap", "chunk_index": 0, "recut": _RECUT_B}})
+    a = record_id({"meta": {"capture_id": "cap", "chunk_index": 0, "recut": _RECUT_A}})
+    b = record_id({"meta": {"capture_id": "cap", "chunk_index": 0, "recut": _RECUT_B}})
     assert a != b
 
 
@@ -463,7 +463,7 @@ def test_record_id_synthetic_pairs_ignore_recut():
     """Synthetic pairs key off `synth_key` and return before the re-cut branch:
     they are generated, never re-cut, and their committed scores must not move."""
     meta = {"synth_key": "abc", "capture_id": "cap", "chunk_index": 2, "recut": _RECUT_A}
-    assert ev.record_id({"meta": meta}) == "abc"
+    assert record_id({"meta": meta}) == "abc"
 
 
 def test_score_pairs_file_resumable(tmp_path):
@@ -569,7 +569,7 @@ def test_score_pairs_file_still_streams_across_batches(tmp_path, monkeypatch):
         for i in range(5)
     ]
     pairs = _make_pairs(tmp_path / "c", specs)
-    monkeypatch.setattr(ev, "_SCORE_BATCH_RECORDS", 2)
+    monkeypatch.setattr(scoring, "_SCORE_BATCH_RECORDS", 2)
     calls = _count_vale_spawns(monkeypatch)
 
     out = tmp_path / "scores.jsonl"
@@ -601,7 +601,7 @@ def test_score_pairs_file_survives_a_vale_batch_failure(tmp_path, monkeypatch):
     def exploding(*a, **k):
         raise RuntimeError("vale batch exploded")
 
-    monkeypatch.setattr(ev, "vale_score_many", exploding)
+    monkeypatch.setattr(scoring, "vale_score_many", exploding)
 
     out = tmp_path / "scores.jsonl"
     res = ev.score_pairs_file(pairs, out, judge=fake_judge)
@@ -672,7 +672,7 @@ def test_score_pairs_file_leaves_an_orphan_free_file_alone(tmp_path, monkeypatch
     ev.score_pairs_file(pairs, out, judge=fake_judge)
 
     rewrites: list[object] = []
-    monkeypatch.setattr(ev, "write_jsonl_atomic", lambda p, r: rewrites.append(p))
+    monkeypatch.setattr(scoring, "write_jsonl_atomic", lambda p, r: rewrites.append(p))
     res = ev.score_pairs_file(pairs, out, judge=fake_judge)
     assert res.pruned_orphans == 0
     assert rewrites == []

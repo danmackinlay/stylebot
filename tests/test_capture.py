@@ -339,7 +339,7 @@ def test_hand_edited_archive_changes_what_recut_emits(tmp_path):
 
 def _ids_to_text(pairs_path) -> dict[str, str]:
     """`{record_id: target text}` for the corpus as it stands on disk."""
-    from stylebot.eval import record_id
+    from stylebot.pairs import record_id
 
     return {record_id(r): r["messages"][2]["content"] for r in corpus.read_records(pairs_path)}
 
