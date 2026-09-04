@@ -80,7 +80,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "module_docstring": 32,
     },
     "synth.py": {
-        "lines": 1264,
+        "lines": 1219,
         "functions": {"synthesize_pairs": 128, "_run_session": 128},
         "docstrings": (26,),
     },

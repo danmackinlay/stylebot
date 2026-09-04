@@ -903,6 +903,8 @@ async def _draw_past_gates(
 
     Returns `(slop, gen_meta, verdict, redraws, call)`: `verdict` is None once a
     sample cleared, else the last rejection when the redraw budget ran out.
+    Raises when `_draw` gives up, on a redraw as on the first draw: the caller's
+    error path is the one place a lost draw is recorded (C14).
     """
     slop, gen_meta, call = await _draw(call, gen, turn, history, st)
     verdict = _gate_verdict(slop, turn.target.text, st)
@@ -919,7 +921,6 @@ async def _draw_past_gates(
             redrawn=True,
         )
         redraws += 1
-        st.result.gate_redraws += 1
         logger.info(
             "gate redraw %d/%d: %s %s (%s)",
             redraws,
@@ -928,23 +929,8 @@ async def _draw_past_gates(
             verdict[1],
             turn.key,
         )
-        try:
-            slop, gen_meta, call = await _draw(call, gen, turn, history, st)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            # A provider failing DURING a redraw must not cost the session. We
-            # already hold a gated draw, so the honest outcome is the one we
-            # would have had without retries: drop this cell, keep going.
-            # Abandoning the remaining turns instead would turn one transient
-            # 502 into a session-wide loss.
-            logger.warning(
-                "gate redraw %d failed (%s); dropping the cell and continuing: %s",
-                redraws,
-                type(exc).__name__,
-                turn.key,
-            )
-            break
+        slop, gen_meta, call = await _draw(call, gen, turn, history, st)
+        st.result.gate_redraws += 1  # a paid redraw: counted once it was drawn
         verdict = _gate_verdict(slop, turn.target.text, st)
     if redraws:
         st.result.redrawn_cells += 1

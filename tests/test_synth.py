@@ -783,33 +783,50 @@ def test_error_lands_in_the_lost_draws_sidecar(tmp_path):
 
 
 def test_gate_redraw_failure_does_not_cost_the_session(tmp_path):
-    """Regression, 2026-08-12: a provider error DURING a gate redraw used to
-    abandon every remaining turn, turning one failure into a session-wide loss.
-    It must drop only the cell it was redrawing.
+    """A provider error DURING a gate redraw is one lost draw, once (C14): the
+    gated first draw is recorded and charged once, the failed redraw is one
+    `kind="error"` row and one attributed error, and the session's gate
+    accounting does not run for a redraw that never happened. The remaining
+    turns reflow rather than being abandoned (the 2026-08-12 regression) —
+    until C14 this path recorded the gated draw twice and the error nowhere.
 
     The redraw raises a PERMANENT error on purpose — a transient one would be
     retried by `_draw` and never reach the give-up path this pins."""
+    import json
+
+    data_dir = tmp_path / "c"
     seen = {"n": 0}
 
-    def gen(text: str, history=None) -> str:
+    def gen(text: str, history=None):
         seen["n"] += 1
         if seen["n"] == 1:  # first cell: a gated draw, so a redraw is attempted
-            return "[slop] " + text.replace("[docs](./d.qmd)", "docs")
+            return synth.GenOutput(
+                text="[slop] " + text.replace("[docs](./d.qmd)", "docs"), meta={"cost": 0.004}
+            )
         if seen["n"] == 2:  # ... and the redraw dies unrecoverably
             raise _Boom(400)
         return "[slop] " + text  # every later cell is fine
 
     result = synth.synthesize_pairs(
         _linked_targets(3),
-        tmp_path / "c",
+        data_dir,
         [synth.Generator(name="flaky", generate=gen)],
         gate_retries=1,
         session_turns=8,
     )
-    # The first cell is lost to the gate; the other two still get written.
-    assert result.written == 2
-    assert result.skipped_invented_anchors == 1
-    assert result.errors == []  # the session was not abandoned
+    # The other two cells still get written: the session's leftover turns reflow.
+    assert result.written == 2 and result.reflowed_turns == 2
+    # The failed redraw is one error, attributed to its generator...
+    assert len(result.errors) == 1 and "400" in result.errors[0][1]
+    assert result.errors_by_generator == {"flaky": 1}
+    # ... and not a gate drop: a redraw that was never drawn is not a paid redraw.
+    assert result.skipped_invented_anchors == 0
+    assert result.gate_redraws == 0 and result.redrawn_cells == 0
+    # The gated draw is recorded once (it was paid for), the failed redraw once.
+    rows = [json.loads(x) for x in (data_dir / "lost_draws.jsonl").read_text().splitlines()]
+    assert [(r["kind"], r["redrawn"]) for r in rows] == [("gate", True), ("error", False)]
+    assert result.drops_by_generator == {"flaky": 1}
+    assert result.model_stats["flaky"]["cost"] == pytest.approx(0.004)  # charged once
 
 
 def asyncio_noop():
