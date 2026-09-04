@@ -1,50 +1,19 @@
-"""A corpus is one JSONL file, or a directory of JSONL shards.
+"""A corpus is one JSONL file, or a directory of JSONL shards (D50).
 
-Both shapes are first-class and neither is going away:
+Both shapes are first-class. **One file** (`<data-dir>/pairs.jsonl`) is the
+simplest thing that works and what every README example shows. **A directory**
+(`<data-dir>/pairs/`) is what a corpus grows into once it is committed to git
+and rewritten by machines: sharding does not make the corpus smaller, it makes
+*the file a write touches* smaller, which is the quantity git multiplies by the
+number of commits.
 
-- **One file** (`<data-dir>/pairs.jsonl`) is what `ai-style` does for anyone who
-  is not Dan. It is the simplest thing that works, it is what every example in
-  the README shows, and a corpus of a few hundred captures never needs more.
-- **A directory** (`<data-dir>/pairs/`) is what a corpus grows into once it is
-  committed to git and rewritten by machines. Measured on the blog on
-  2026-09-03: 122 versions of a 38 MB `pairs.jsonl` accounted for 1.54 GB of a
-  1.8 GB `.git`, because every append rewrote the file whole and git stored each
-  version at roughly its compressed size. Sharding does not make the corpus
-  smaller; it makes *the file a write touches* smaller, which is the quantity
-  git multiplies by the number of commits.
-
-**The routing rule (`shard_of`) is by producer, then by month.** The producer
-split is the load-bearing one — the two writers have different rewrite
-disciplines. `ai-style log save` read-modify-writes the corpus on every save (to
-apply its replace rule), so keeping captures in their own shard means a save
-rewrites ~1 MB instead of ~38 MB, and it is the write that happens daily. Synth
-only ever appends.
-
-Within synth the split is by calendar month rather than by generator, which the
-plan offered as the alternative. Three reasons:
-
-1. **A month shard is sealed when the month ends.** History stops accruing
-   versions of data nobody will append to again, so the growing blob is bounded
-   by one month of synthesis rather than by the whole corpus. A generator shard
-   grows forever: the largest one is already 1911 records, and every future run
-   would rewrite a bigger blob than the last.
-2. **Generator identity is a facet, not a location.** It is already recorded in
-   `meta.gen.model`, where it can be selected on. Encoding it in a filename
-   makes a second, weaker copy of that fact: retiring an arm strands a file, a
-   model rename forks one group across two shards, and the roster turns over
-   several times a year while the calendar does not.
-3. **Generator ids are not filenames.** `openrouter/qwen/qwen3.6-35b-a3b` needs
-   a lossy sanitiser and a collision rule; `2026-08` needs neither.
-
-The cost, recorded honestly: two synth processes running concurrently either
-side of a month boundary append to different shards. `PairsWriter` closes that
-by locking one file per corpus and catching up on *every* shard before it
-decides, so the W8 no-duplicate-cell guarantee holds across shards too.
-
-Routing is by record content, not by which shard a record was read from, so a
-rewrite is idempotent and self-healing: a record filed in the wrong shard moves
-to the right one on the next rewrite, and the migration from a single file is
-the same function every rewrite already calls.
+`shard_of` routes **by producer, then by calendar month** — the producer split
+being the load-bearing one, since the two writers have different rewrite
+disciplines. Routing is by record content, not by the shard a record was read
+from, so a rewrite is idempotent and self-healing and the migration from a
+single file is the same function every rewrite already calls. The lock is one
+file per *corpus*, not per shard, so D36's no-duplicate-cell guarantee survives
+two runs either side of a month boundary.
 """
 
 from __future__ import annotations
@@ -224,13 +193,11 @@ def content_sha256(corpus: str | Path) -> str | None:
     """A 16-hex content hash of a corpus, for pinning in a run manifest.
 
     For a single file this is exactly `provenance.file_sha256`, so hashes
-    recorded before sharding stay comparable with hashes recorded after it for
-    the same unsharded corpus. For a directory it hashes each shard's name and
-    digest in `shard_paths` order, which makes it insensitive to how the same
-    records are distributed only in the sense that it is *not*: two different
-    shardings of the same records hash differently, and that is correct — the
-    manifest's job is to identify the bytes that were trained on.
-    `record_ids_sha256` is the hash that answers "the same records?".
+    recorded before sharding stay comparable. For a directory it hashes each
+    shard's name and digest in `shard_paths` order, so two different shardings of
+    the same records hash differently — correct, since the manifest identifies
+    the bytes that were trained on. `record_ids_sha256` answers "the same
+    records?".
     """
     from stylebot.provenance import file_sha256
 
@@ -251,16 +218,11 @@ def corpus_lock(corpus: str | Path):
     """Exclusive advisory lock over a whole corpus, whatever its shape.
 
     One lock per corpus rather than one per shard, so two writers targeting
-    *different* shards still serialise: without that the W8 duplicate-cell
-    defect returns in the window sharding introduces — two synth processes
-    either side of a month boundary, each appending cells the other had planned.
-    Both writers take it: `PairsWriter.write` for an append and `rewrite` for a
-    replace.
-
-    It does **not** cover a caller that reads the corpus, filters, and then
-    calls `rewrite`; an append arriving in that gap is still overwritten, and
-    the lock is not re-entrant, so such a caller cannot simply wrap both. D60
-    has the residual window and why it was left. A no-op without `fcntl`.
+    *different* shards still serialise (D36, D50). Both writers take it:
+    `PairsWriter.write` for an append, `rewrite` for a replace. It does **not**
+    cover a caller that reads, filters, then calls `rewrite`, and it is not
+    re-entrant — D60 has the residual window and why it was left. A no-op
+    without `fcntl`.
     """
     path = Path(corpus)
     data_dir = path.parent

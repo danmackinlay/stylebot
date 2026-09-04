@@ -1,31 +1,22 @@
-"""Rewrite-session state for `ai-style log`, as a library.
+"""Rewrite-session state for `ai-style log`, as a library (D35).
 
 `stylebot.capture` owns the capture *mechanism* — paragraph diffing, the pair
-record, the archive. This module owns everything that used to sit in
-`bin/ai_style_log.py` around it and was reachable only through click:
+record, the archive. This module owns everything around it:
 
-* **where session state lives** (`SessionStore`: the snapshots, closed-snapshots
-  and `pairs.jsonl` paths under one data dir);
+* **where session state lives** (`SessionStore`);
 * **snapshot persistence** — a snapshot is a directory holding the base text as
   an ordinary file plus a `meta.json` sidecar, and closing a session *archives*
-  that directory rather than deleting it, which is what makes `reopen` /
-  `save --redo` possible;
+  it rather than deleting it, which is what makes `reopen` / `save --redo`
+  possible;
 * **symlink canonicalisation** (`canonical_source`), so the blog's `_focus/`
   render harness cannot key a session under a scratch tree that gets wiped;
-* **`save`'s disposition rule** — same-session interim pairs are replaced,
-  earlier sessions' pairs are kept, both overridable;
-* **`tidy`'s latest-wins rule** — one save per source, newest `captured_at`.
+* **`save`'s disposition rule** and **`tidy`'s latest-wins rule**.
 
-Everything takes explicit paths and parameters, so a second caller (a test, an
-editor sidecar, a batch script) can drive a session without going through the
-CLI. `bin/ai_style_log.py` is the click shell over this: it resolves the data
-dir, translates exceptions into exit codes, and does the printing.
-
-Errors keep the two classes `ai-style` distinguishes. A `SessionError` means the
-arguments were fine but the world is not ready (no open session, nothing
-changed) — the CLI turns it into `click.ClickException`, exit 1. A `ValueError`
-means the arguments themselves contradict — the CLI turns it into
-`click.UsageError`, exit 2. Nothing here prints or exits.
+Everything takes explicit paths, so a second caller can drive a session without
+the CLI; `bin/ai_style_log.py` is the click shell that resolves the data dir,
+translates exceptions and prints. `SessionError` (a `RunError`) means the world
+is not ready, a `ValueError` that the arguments contradict (D47). Nothing here
+prints or exits.
 """
 
 from __future__ import annotations
@@ -84,16 +75,13 @@ __all__ = [
 Disposition = Literal["smart", "replace-all", "append"]
 
 
-# A snapshot is a DIRECTORY mirroring the source path, holding the base text as
-# an ordinary file plus a small sidecar:
+# A snapshot is a DIRECTORY mirroring the source path:
 #
-#     snapshots/post/foo.qmd/content.md
-#     snapshots/post/foo.qmd/meta.json   {source, snapped_at}
+#     snapshots/post/foo.qmd/{content.md, meta.json}
 #
-# Same reasoning as the capture archive (see stylebot.capture): the document is
-# readable and editable on disk instead of being a JSON-escaped string, and it
-# is `.md` so the blog's `*.qmd` tooling — the reformatting pre-commit hook, qmd
-# search, the synthesis target walk — cannot see it.
+# Same reasoning as the capture archive (`stylebot.capture`): readable on disk
+# rather than JSON-escaped, and `.md` so the blog's `*.qmd` tooling cannot see
+# it.
 SNAPSHOT_CONTENT = "content.md"
 SNAPSHOT_META = "meta.json"
 
@@ -286,18 +274,15 @@ def humanize_age(iso_ts: str) -> str:
 def canonical_source(value: Path | None, *, cwd: Path | None = None) -> Path | None:
     """Normalize a symlinked FILE to the path it points at.
 
-    A session key *is* the source path as given (`SessionStore.snapshot_path`),
-    so any second path to the same file opens a second, parallel session. The
-    blog's `_focus/` render harness creates exactly that: it symlinks a post into
-    a scratch project, and that scratch project is wiped and rebuilt on every
-    invocation -- so a session keyed there loses its file the next time a
-    different post is focused, and a `save` would write a transient, gitignored
-    path into the committed `pairs.jsonl`.
+    A session key *is* the source path as given, so a second path to the same
+    file opens a second, parallel session. The blog's `_focus/` harness creates
+    exactly that: it symlinks a post into a scratch project that is wiped on
+    every invocation, so a session keyed there loses its file and a `save` writes
+    a transient path into the committed corpus.
 
-    Only symlinks are rewritten. An ordinary path is returned untouched, so no
-    existing session key can move. `cwd` defaults to the process's, and is the
-    tree the returned path is made relative to; a target outside it comes back
-    absolute, which is still better than a key under a directory that gets wiped.
+    Only symlinks are rewritten, so no existing session key can move. `cwd` is
+    the tree the result is made relative to; a target outside it comes back
+    absolute.
     """
     if value is None or not value.is_symlink():
         return value
@@ -512,20 +497,16 @@ def save_session(
     """Diff `source` against its session snapshot and write the pair(s).
 
     Disposition of prior pairs for this source is **smart by default**: pairs
-    from the *same* session (matching `meta.snapped_at`) are replaced — these are
-    interim saves from `keep_open` that should not stack — while pairs from
-    *earlier sessions* are kept, because they represent legitimate prior rewrites
-    of the same file that both belong in the corpus. `"replace-all"` drops
-    cross-session pairs too; `"append"` keeps everything, even interim pairs.
+    from the *same* session (matching `meta.snapped_at`) are replaced, being
+    interim `keep_open` saves that should not stack, while earlier sessions'
+    pairs are kept as legitimate prior rewrites. `"replace-all"` drops
+    cross-session pairs too; `"append"` keeps everything.
 
-    `redo` reopens the last closed session first (a no-op if one is already
-    open), so a corrected rewrite is re-diffed against the SAME base and lands in
-    the same session, replacing rather than stacking.
-
-    `notify` receives the lines describing work done *before* the capture — the
-    reopen, and the disposition of prior pairs. They are emitted through a
-    callback rather than returned because that work is already committed to disk
-    when the capture raises, and the CLI must report it in order either way.
+    `redo` reopens the last closed session first, so a corrected rewrite is
+    re-diffed against the SAME base and lands in the same session. `notify`
+    receives the lines describing work done *before* the capture — a callback
+    rather than a return value, because that work is committed to disk by the
+    time the capture can raise.
     """
     say = notify or (lambda _line: None)
     snap = store.snapshot_path(source)
@@ -647,14 +628,10 @@ def capture_pair(
 ) -> PairResult:
     """One-shot pair capture from two texts, with no session dance.
 
-    Unlike `save_session`, this APPENDS by default: the typical use is logging
-    one-off pairs from a clipboard or a script, where you usually want to add to
-    the corpus rather than overwrite. `replace` drops prior pairs for `source`
-    first, and requires one.
-
-    `notify` is the same pre-capture progress channel as `save_session`'s: the
-    removal is already committed to disk when the capture raises, so it has to
-    be reportable either way.
+    Unlike `save_session`, this APPENDS by default: the typical use is a one-off
+    pair from a clipboard or a script. `replace` drops prior pairs for `source`
+    first, and requires one. `notify` is `save_session`'s pre-capture progress
+    channel — the removal is committed to disk before the capture can raise.
     """
     say = notify or (lambda _line: None)
     if before_text == after_text:
@@ -750,13 +727,10 @@ def tidy_pairs(
 ) -> TidyResult:
     """Keep only the latest save per source in `pairs.jsonl`.
 
-    Saves are grouped by source path; the most recent `captured_at` wins, and
-    older saves of the same source are removed. With `source` given, only that
-    source is tidied. Records with no source (and undecodable lines) are always
-    kept — there is nothing to compare them against.
-
-    Normally unnecessary because `save_session` replaces by default; this is the
-    retroactive cleanup after a run of `disposition="append"`.
+    Saves are grouped by source path; the most recent `captured_at` wins. With
+    `source` given, only that source is tidied. Records with no source (and
+    undecodable lines) are always kept. Normally unnecessary, since
+    `save_session` replaces by default; this is the cleanup after `"append"`.
     """
     records = read_pairs(store)
     if not records:

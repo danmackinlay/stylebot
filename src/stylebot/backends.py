@@ -1,29 +1,16 @@
 """The styler backend surface: one description, one build site, one diet rule.
 
-`BackendOpts` is *how to reach the styler* — the twelve flags `ai-style run`
-and `ai-style serve` share (the sidecar's rewrite op is `run` held open), plus
-`build_styler` which turns them into a `stylebot.infer.Styler`. This lived in
-`bin/ai_style.py` until 2026-09-03, which made it unimportable as a library and
-raising `click` exceptions; livingthing's `dan-style` had reimplemented the
-construction, and the copy passed no `max_tokens`, so serving the 4500-char
-cross-heading diet silently truncated every rewrite at the 2000-token floor.
-Hence: mechanism here, click translation in `bin/`.
-
-Three error kinds, and the CLI maps them to exit codes:
-
-* `ValueError` — a flag combination the user must fix (click `UsageError`, 2).
-* `RuntimeError` — a fine invocation against an unready environment (a missing
-  key; click `ClickException`, 1).
-* `ImportError` — an optional extra is not installed (also 1).
+`BackendOpts` is *how to reach the styler* — the twelve flags `ai-style run` and
+`ai-style serve` share — plus `build_styler`, which turns them into a
+`stylebot.infer.Styler`. Mechanism here, click translation in `bin/`: this lived
+in the CLI module until livingthing had reimplemented the construction, and the
+copy passed no `max_tokens` (D35). Errors follow the package vocabulary (D47).
 
 `serving_diet` is the other half: which chunk budget and heading mode the
-*served adapter* was trained on, read off a training manifest. Serving at the
-wrong diet is out-of-distribution and the styler falls back to copying its
-input (observed 2026-07-22), so this follows the manifest rather than the
-corpus's current policy — the two diverge the moment training policy moves
-ahead of the promoted run. It came from livingthing's `chunk_diet`, which read
-stylebot's own manifest schema from the wrong repo; the blog keeps only the
-fallback constant it supplies as policy.
+*served adapter* was trained on, read off a training manifest rather than off
+the corpus's current policy. Serving at the wrong diet is out-of-distribution
+and the styler falls back to copying its input, and the two diverge the moment
+training policy moves ahead of the promoted run.
 """
 
 from __future__ import annotations
@@ -225,13 +212,10 @@ def serving_diet(
     `default_chunk_chars` (the caller's corpus policy; `infer`'s default if
     omitted), section-bounded, which is what those runs were trained on.
 
-    Serve at the largest budget with REAL support in the diet. The asymmetry
-    decides the tie-break: under-chunking merely costs some coherence, while
-    over-chunking hits the identity fallback and returns the input verbatim. So
-    a thin experimental arm (a handful of 4500s in an otherwise 1500 corpus)
-    must not drag serving out to a length the adapter barely saw. The heading
-    mode follows the same logic: inline only if the diet was *predominantly*
-    cross-heading, so a stray v1 arm cannot flip the serving mode.
+    Serve at the largest budget with REAL support in the diet: under-chunking
+    costs some coherence, while over-chunking hits the identity fallback and
+    returns the input verbatim, so a thin experimental arm must not drag serving
+    out to a length the adapter barely saw. Heading mode follows the same logic.
     """
     from stylebot import infer
 
@@ -266,19 +250,13 @@ def manifest_mismatches(
     """Ways the styler about to be built disagrees with the manifest it claims.
 
     A manifest is a *pin*, and three of the things it pins are silent when
-    violated: serve a tinker adapter against the wrong base model or the wrong
-    chat renderer and it produces plausible-looking garbage rather than an
-    error, and serve it under a system prompt that is not the one its pairs were
-    built against and it is out of distribution in the one way nothing
-    downstream measures. So say so, loudly, at the moment the backend is built.
+    violated: the base model, the chat renderer, and the system prompt each
+    produce plausible garbage or an out-of-distribution adapter rather than an
+    error (D48). So say so at the moment the backend is built.
 
-    `style_system_sha` is the prompt pin (`pairs.system_sha`, W8's spelling —
-    the same digest every pair record carries as `meta.system_sha`). It is
-    checked when the manifest carries one and skipped when it does not, so a
-    manifest written before the pin existed reads as "cannot answer" rather than
-    as a mismatch. Warnings, never errors: STYLE_SYSTEM is frozen, so a
-    disagreement means somebody unfroze it deliberately and the corpus is
-    already the bigger problem.
+    `style_system_sha` is the prompt pin (`pairs.system_sha`), checked only when
+    the manifest carries one, so an older manifest reads as "cannot answer".
+    Warnings, never errors.
     """
     from stylebot.pairs import system_sha
 
@@ -301,13 +279,10 @@ def manifest_mismatches(
             f"{manifest.get('run_id') or '?'} trained with {trained_renderer!r}"
         )
     elif opts.backend == "openai" and trained_renderer:
-        # The renderer pin is UNCHECKABLE on this backend, which is a different
-        # thing from checked-and-fine, and the two used to look identical (both
-        # silent). `openai_backend` hands the message list to a server that
-        # applies its OWN chat template; stylebot never sees the tokens. Skew
-        # there does not error, it just puts the adapter out of distribution,
-        # where it returns its input. `infer.Styler` types the call and cannot
-        # reach this (D48), so the warning is the mechanism.
+        # The renderer pin is UNCHECKABLE here, which is not the same as
+        # checked-and-fine, and the two used to look identical (both silent).
+        # D48: the Protocol types the call, not the tokens, so this warning is
+        # the mechanism.
         notes.append(
             f"renderer unverifiable: run {manifest.get('run_id') or '?'} trained with "
             f"{trained_renderer!r}, but an OpenAI-compatible endpoint applies its own chat "

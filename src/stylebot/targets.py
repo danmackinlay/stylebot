@@ -43,10 +43,9 @@ MAX_CHUNK_CHARS = 8000  # drop chunks longer than this (truncating would corrupt
 MERGE_MAX_CHUNK_CHARS = 1500  # soft budget per packed passage in merge mode
 
 # Link-LIST detection by *prose residual*, not link-char density: strip the
-# `[text](url)` spans and measure the real prose left as a fraction of the
-# chunk. Density mis-fires on link-dense prose because URLs are long; the
-# residual fraction is URL- and size-immune — a pure link list leaves ~0%
-# whatever its length, while link-dense prose keeps most of its words.
+# `[text](url)` spans and measure the prose left as a fraction of the chunk.
+# Density mis-fires on link-dense prose because URLs are long; the residual is
+# URL- and size-immune.
 LINK_LIST_MIN_PROSE_FRACTION = 0.2
 
 _LINK_RE = re.compile(r"\[[^\]]*\]\([^)]*\)")
@@ -66,20 +65,17 @@ class Target:
     chunk_index: int
     chunk_total: int
     context: str = ""
-    # Chunk-scale facet, stamped into pair meta so a corpus mixing chunk diets
-    # stays ablatable by scale (`_plans/v2-longer-rewrites.md`): the merge budget
-    # (None = unmerged single paragraphs), and how the chunk was cut — None =
-    # within one section with the heading riding along as `context`,
-    # "cross-heading" = heading lines packed in as content, spanning sections.
+    # Chunk-scale facet, stamped into pair meta so a corpus mixing diets stays
+    # ablatable by scale: the merge budget (None = unmerged), and how the chunk
+    # was cut — None = within one section (heading carried as `context`),
+    # "cross-heading" = heading lines packed in as content.
     merge_max_chars: int | None = None
     chunk_mode: str | None = None
-    # Provenance carried from the cut, stamped into `meta.provenance` by
-    # `synth._build_record`. `automation` is the source post's frontmatter level
-    # AS READ AT CUT TIME — the corpus is a frozen record and the post is not, so
-    # nothing else can recover what the selector was looking at. (The key name is
-    # the one `lib.is_human_authored` defaults to; a caller selecting on another
-    # field gets None here rather than a wrong number.) `policy_digest` is
-    # `provenance.policy_digest` of the `ChunkPolicy` this target was cut under.
+    # Provenance carried from the cut, stamped into `meta.provenance` (D36).
+    # `automation` is the post's frontmatter level AS READ AT CUT TIME — the
+    # corpus is a frozen record and the post is not — under the key
+    # `lib.is_human_authored` defaults to; a caller selecting on another field
+    # gets None rather than a wrong number.
     automation: int | None = None
     policy_digest: str | None = None
 
@@ -88,15 +84,10 @@ class Target:
 class ChunkPolicy:
     """The chunk-hygiene knobs — WHAT counts as a target. One declaration.
 
-    This was three: this dataclass, `iter_targets`' flat keyword defaults
-    restating every field, and `synth_cli.ChunkOpts` restating them a third time
-    for the CLI. The defaults lived in two places inside this module alone, and
-    a test existed whose whole job was asserting the two copies still agreed.
-
-    Each field carries its own click flag via `cli_options.opt()`, so
-    `ai-style synth` and livingthing's `dan-style synth` declare the surface
-    once and re-pin what differs with `synth_options(defaults=[ChunkPolicy(…)])`.
-    A field WITHOUT `opt()` is library-only: no flag, set by a caller in code.
+    Each field carries its own click flag via `cli_options.opt()`, so `ai-style
+    synth` and the blog's mirror declare the surface once and re-pin what differs
+    with `synth_options(defaults=[ChunkPolicy(...)])`. A field WITHOUT `opt()` is
+    library-only: no flag, set by a caller in code.
     """
 
     cli_section = "Chunking / hygiene (selection)"
@@ -178,14 +169,11 @@ class ChunkPolicy:
         "overrides --heading-context). This, not --merge-max-chars, is what buys chunk length.",
     )
     # Library-only, and the one field here that is a *train/serve contract*
-    # rather than a hygiene knob. See `_prose_for_chunking` for what it does and
-    # `_plans/decisions.md` D27 (amended 2026-09-03) for why it defaults to the
-    # behaviour that does NOT match inference.
+    # rather than a hygiene knob: `_prose_for_chunking` for what it does, D27 for
+    # why it defaults to the behaviour that does NOT match inference.
     pack_across_protected: bool = True
     # Library-only for a different reason: a predicate is not expressible on a
-    # command line, and *which* `:::` classes wrap prose is blog policy set in
-    # code — see `stylebot.markdown` and livingthing's
-    # `training_targets.div_is_prose`.
+    # command line, and *which* `:::` classes wrap prose is caller policy (D29).
     div_is_prose: DivIsProse | None = None
 
     def __post_init__(self) -> None:
@@ -333,22 +321,17 @@ def _prose_for_chunking(body: str, policy: ChunkPolicy) -> str:
     """The text `_post_targets` chunks — protected blocks gone, one way or another.
 
     Two spellings of "gone", and the difference is the train/serve packing
-    contract (D27, amended 2026-09-03):
+    contract (D27):
 
-    - `pack_across_protected=True` (the default, and what the live corpus was
-      cut under): `editable_prose` — every protected span deleted and the
-      remnants **joined**. Paragraphs either side of a figure become adjacent,
-      so `_pack_paragraphs` packs them into one target. That target is a passage
-      the document does not contain, and `infer._segment` therefore cannot ever
-      present it: it breaks a run at every protected item.
-    - `pack_across_protected=False`: each span is replaced by `PROTECTED_MARK`,
-      which survives as its own paragraph and flushes the packer. Targets then
-      have the same boundaries inference does.
+    - `pack_across_protected=True` (the default, and what the live corpus was cut
+      under): `editable_prose` deletes every protected span and **joins** the
+      remnants, so paragraphs either side of a figure pack into one target — a
+      passage the document does not contain and `infer._segment` cannot present.
+    - `pack_across_protected=False`: each span becomes `PROTECTED_MARK`, its own
+      paragraph, which flushes the packer, giving inference's boundaries.
 
-    The mark rather than a list of runs, because `_split_sections` and
-    `Target.context` both need the heading structure of the *whole* body: a
-    protected block that interrupts a section must end a packed passage without
-    also losing the heading the rest of that section sits under.
+    A mark rather than a list of runs, because `_split_sections` and
+    `Target.context` need the heading structure of the *whole* body.
     """
     if not policy.prose_only:
         return body
@@ -521,60 +504,15 @@ def iter_targets(
     Two mutually exclusive input modes: **`files`** is a pre-selected list, and
     the `selector` is **not** applied to it (the caller owns selection);
     **`blog_root`** walks for `glob` and keeps posts where `selector(meta)` is
-    true. Chunk hygiene below is all generic — policy stays in `selector` and the
-    caller's marker choice.
+    true. Chunk hygiene is generic — policy stays in `selector`.
 
-    The chunk knobs arrive either as a ready `policy=ChunkPolicy(...)` (what the
-    CLI kit hands in, since the bundle IS the flag surface) or as loose keywords
-    forwarded to its constructor — `iter_targets(blog_root=r, merge=True)`. They
-    are `**chunk_kw` rather than a restated signature so `ChunkPolicy` owns every
-    default exactly once; an unknown or misspelled knob is a `TypeError` from the
-    dataclass constructor at the call, and each one is documented below.
-
-    - `prose_only` (default True): drop protected blocks — fenced code,
-      block ``$$math$$``, ``:::`` divs/callouts, blockquotes — before splitting,
-      so they never become targets (STYLE_SYSTEM preserves them verbatim anyway).
-    - `div_is_prose`: a predicate over a ``:::`` opener's attribute text saying
-      whether that div *wraps prose*. When true, only the div's fence lines are
-      protected (they carry class semantics) and its contents flow into the
-      normal prose path — a callout is the author's own voice, merely inside a
-      container. Nested divs keep their own protection, so a figure inside a
-      callout stays out. Default None protects every div wholesale; which
-      classes bear prose is the caller's policy, not stylebot's (blog/generic
-      boundary — ``.callout-note`` is a Quarto convention).
-    - `pack_across_protected` (default True): whether a packed passage may span
-      a *deleted* protected block. True reproduces the live corpus and produces
-      targets `infer._segment` can never present — it breaks a chunk at every
-      protected item. False gives train/serve packing parity at the price of
-      re-cutting the corpus. The measurement and the verdict: `_plans/decisions.md`
-      D27, amended 2026-09-03.
-    - `min_chars` / `max_chars`: oversized chunks are DROPPED, never truncated —
-      truncating corrupts the target.
-    - `ignore_markers`: drop chunks containing any of these literal strings.
-    - `drop_link_dumps`: drop chunks that are mostly markdown links, measured by
-      prose residual rather than link density.
-    - `drop_list_items`: drop chunks that are entirely markdown list items.
-    - `merge`: pack consecutive paragraphs *within a section* up to
-      `merge_max_chars`, never crossing a header. Rescues short paragraphs the
-      `min_chars` floor would discard, and `min_chars` then floors the *packed*
-      block. A single paragraph over budget is kept whole.
-    - `stop_at_headers`: truncate each body at the first matching section header
-      (level-agnostic, case-insensitive) — e.g. a trailing link dump.
-    - `heading_context` (``"none"`` | ``"immediate"``): populate
-      ``Target.context`` with the heading each chunk sits under.
-    - `cross_heading` (requires `merge`): pack across section boundaries with
-      heading lines as chunk **content**. This is the knob that actually buys
-      length: most sections are far shorter than `merge_max_chars`, so
-      section-bounded packing hits the section wall before the budget bites and
-      raising the budget alone barely moves the distribution. Forces
-      `heading_context` off — an inline heading is text the styler rewrites, not
-      fixed context. See `_plans/v2-longer-rewrites.md`.
+    The chunk knobs arrive as a ready `policy=ChunkPolicy(...)` or as loose
+    keywords forwarded to its constructor — `iter_targets(blog_root=r,
+    merge=True)`. **`ChunkPolicy` documents every knob and owns every default.**
 
     Returns a flat list of `Target`s in document order, post by post. There is
-    no ordering knob: `--sort` and its `ChunkPolicy.sort_name` twin were retired
-    0.3.1 (arms are assigned by content hash, so order cannot change the corpus)
-    and deleted 2026-09-03 with nothing left calling them (D43). A caller that
-    wants an order sorts the returned list.
+    no ordering knob — arms are assigned by content hash, so order cannot change
+    the corpus (D43); a caller that wants one sorts the returned list.
     """
     if files is not None and blog_root is not None:
         raise ValueError(
@@ -635,17 +573,12 @@ def select_targets(
     Two independent filters, both deliberately *not* random:
 
     - **`role`** keeps only chunks whose post carries that role under the by-post
-      splits contract. An experiment measured with the voice classifier must not
-      draw passages from the classifier's own training pool, or the detector
-      marks its own homework; `role="styler"` is the usual answer, being disjoint
-      from both the detector pool and the frozen eval stratum.
-
-    - **`sample_frac`** keeps a fraction by `hash_unit(source, text)`, NOT the
-      first N and not randomly. Membership is a property of the chunk's
-      *content*, so as the corpus grows a later run is a strict **superset** of
-      an earlier one: old measurements stay valid on their subset and two runs
-      are comparable on the intersection. `--limit` cannot do this — its first N
-      shifts the moment a new post sorts in ahead of an old one.
+      splits contract, so an experiment measured with the voice classifier does
+      not draw from the classifier's own training pool (D17, D34).
+    - **`sample_frac`** keeps a fraction by `hash_unit(source, text)`, so
+      membership is a property of the chunk's *content*: a later run is a strict
+      **superset** of an earlier one, and two runs are comparable on the
+      intersection. `--limit` cannot do this.
 
     `sample_salt` re-draws an independent subsample of the same size.
     """

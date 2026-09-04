@@ -6,32 +6,22 @@ below —
     styler(messages, num_samples=1) -> list[str]
 
 taking chat messages (`[{role, content}, ...]`) and returning candidate
-assistant texts. Two bundled backends:
-
-- `tinker_backend(...)` — samples the Tinker checkpoint pinned in a training
-  manifest, rendered with the SAME cookbook renderer training used (no
-  train/serve chat-template skew possible). Needs the ``trainer`` extra +
-  TINKER_API_KEY.
-- `openai_backend(...)` — any OpenAI-compatible endpoint (Fireworks,
-  `mlx_lm.server`, Osaurus, vLLM). NB the served model's chat template must
-  match training's `qwen3_5_disable_thinking` rendering — verify parity by
-  scoring the same inputs through both backends before trusting a new endpoint
-  (the MLX exit did exactly that: `_plans/findings.md` "MLX local-serving
-  parity" for the numbers and gates, `_plans/decisions.md` D8 for the caveats).
-  Conforming to `Styler` does not make that check unnecessary: see the
-  Protocol's docstring, and D48.
+assistant texts. The two bundled backends are `backends.tinker_backend` (the
+checkpoint a training manifest pins, rendered with training's own cookbook
+renderer) and `backends.openai_backend` (any OpenAI-compatible endpoint, whose
+chat template stylebot cannot check — D48).
 
 `rewrite_text` chunks at inference the way training saw data: blank-line
 paragraph regions, grouped to ~STYLE_CHARS_PER_CHUNK chars, with chunk
-boundaries never inside a code fence and the original inter-chunk whitespace
-reassembled verbatim. A leading YAML frontmatter block is never sent to the
-model. `STYLE_SYSTEM` travels verbatim (`stylebot.ai_core`) — the adapter was
-trained on it; a different system prompt is out-of-distribution.
+boundaries never inside a protected block and the original inter-chunk
+whitespace reassembled verbatim. A leading YAML frontmatter block is never sent
+to the model. `STYLE_SYSTEM` travels verbatim (`stylebot.ai_core`) — the adapter
+was trained on it; a different system prompt is out-of-distribution.
 
 Best-of-N: pass `best_of > 1` and a `scorer` (lower = better, e.g. the voice
 classifier via `detector_scorer`). The scorer also arms the do-no-harm guard:
 the input chunk competes, so a rewrite ships only if scored strictly better.
-Small N is Goodhart-gentle (KL ~ log N; see eval-harness.md "Eval vs reward").
+Small N is Goodhart-gentle (KL ~ log N; eval-harness.md "Eval vs reward").
 """
 
 from __future__ import annotations
@@ -75,32 +65,19 @@ def max_tokens_for(max_chunk_chars: int) -> int:
 
 @runtime_checkable
 class Styler(Protocol):
-    """The trained rewriter, as everything downstream of it sees one.
+    """The trained rewriter, as everything downstream of it sees one (D48).
 
     `rewrite_text`, `rewrite_candidates`, `rewrite_pairs_file` and the sidecar
-    all take a `Styler`; `tinker_backend` / `openai_backend` return one, and a
-    test stub or a second repo's backend is a `Styler` by having this shape and
-    nothing else. It was a bare `Callable[..., list[str]]` until 2026-09-03,
-    which typed the return and neither argument — so passing a scorer, or a
-    styler that took `n=` instead of `num_samples=`, type-checked fine.
+    all take a `Styler`; a test stub or a second repo's backend is one by having
+    this shape and nothing else.
 
-    **What this does not promise.** A `Styler` says how it is *called*, not how
-    the prompt is *rendered*. `tinker_backend` renders with the cookbook
-    renderer that training used, so the token sequence is built by the same
-    code; `openai_backend` hands the message list to a server that applies its
-    own chat template, and a template that wraps the system turn differently,
-    injects a reasoning block, or prepends a default system prompt puts the
-    adapter out of distribution — where it stops transforming and returns its
-    input, silently, with no error anywhere. Both conform to this Protocol
-    while feeding the model different tokens. So the Protocol closes the
-    argument-shape hole and *documents* the parity one; the things that
-    actually bear on parity are `backends.manifest_mismatches` (which warns
-    that stylebot cannot check a server's template at all) and a measured
-    parity sample (`_plans/findings.md`, "MLX local-serving parity").
-
-    `@runtime_checkable` is worth little here and is not load-bearing:
-    `isinstance` on a call-only Protocol checks that `__call__` exists, which
-    every function has. `tests/test_backends.py` checks the signature instead.
+    **It types the call, not the tokens.** Two backends conform to this while
+    rendering the same messages to different token sequences, and an
+    out-of-distribution rendering makes the adapter return its input silently.
+    What actually bears on parity is `backends.manifest_mismatches` and a
+    measured parity sample (findings.md, "MLX local-serving parity").
+    `@runtime_checkable` is not load-bearing — `tests/test_backends.py` checks
+    the signature.
     """
 
     def __call__(self, messages: list[dict], num_samples: int = 1) -> list[str]:
@@ -138,13 +115,8 @@ def _blocks_with_separators(
     Leading/trailing blank runs stay attached to their neighbouring block, and
     `block_kinds[i]` is the per-line kind list of `blocks[i].split("\\n")`.
 
-    The mask is the WHOLE of the protection here. A line-wise fence state
-    machine used to run alongside it, because `markdown.CODE_FENCE_RE` needed a
-    closer and an unclosed fence therefore yielded no span: inference swallowed
-    a runaway fence and `editable_prose` — hence every training target — did
-    not. `CODE_FENCE_RE` now carries the run-to-EOF alternative itself, so both
-    sides read the same answer off `line_kinds` and the state machine is gone
-    (W2, 2026-09-03).
+    The mask is the WHOLE of the protection here: `markdown.line_kinds` is the
+    one segmenter, so inference and `editable_prose` cannot disagree (D26, D27).
     """
     if not body:
         return [], [], []
@@ -186,21 +158,16 @@ def _segment(
 
     Returns `(items, seps)` where each item is `(kind, text)`, kind in
     {"prose", "heading"} | `markdown.PROTECTED_KINDS`; concatenating item texts
-    interleaved with seps reproduces the body exactly. Everything the training
-    pipeline drops before chunking — fenced code, display math, `:::` divs,
-    blockquotes — is protected here too, per construct rather than under one
-    flat "protected" label, so `rewrite_candidates` can tell an editor *which*
-    thing it refused. Headings are protected as well (training pairs never
-    contain them as content — they ride along as `meta.context`); adjacent prose
-    blocks are grouped to <= max_chars.
+    interleaved with seps reproduces the body exactly. Everything training drops
+    before chunking — fenced code, display math, `:::` divs, blockquotes,
+    headings — is protected here too, labelled per construct rather than flatly,
+    so `rewrite_candidates` can tell an editor *which* thing it refused (D27).
+    Adjacent prose blocks are grouped to <= max_chars.
 
     `inline_headings` matches the cross-heading diet: headings become groupable
-    content, so a chunk spans sections exactly as the training pairs do. The
-    other protected kinds stay protected either way — they are excluded from the
-    corpus in both modes, so the styler has never been trained to reproduce one.
-    Grouped heading items are relabelled "prose" (they are chunk content now); a
-    heading that ends up alone keeps kind "heading", so callers can skip a bare
-    header.
+    content, so a chunk spans sections as the training pairs do. Grouped heading
+    items are relabelled "prose"; a heading left alone keeps kind "heading", so
+    callers can skip a bare header.
     """
     kinds = markdown.line_kinds(body, div_is_prose=div_is_prose)
     blocks, seps, block_kinds = _blocks_with_separators(body, kinds)
@@ -262,12 +229,10 @@ def prose_chunks(
     `max_chunk_chars` budget under the same diet. Whatever the styler is asked to
     rewrite is exactly what comes back here, and nothing else.
 
-    It exists because `stylebot.eval` needs to score a document at the scale the
-    detector was fit on (`eval.chunked_detector`), and a private `_segment`
-    reached across a module boundary is the seam that goes stale — the same
-    argument that collapsed five markdown segmenters into `stylebot.markdown`.
-    Callers wanting the protected items too (or the separators, to reassemble)
-    still want `_segment`; this is the read-only projection.
+    Public because `eval.chunked_detector` scores a document at the scale the
+    detector was fit on (D54), and a private `_segment` reached across a module
+    boundary is the seam that goes stale (D26). Callers wanting the protected
+    items or the separators still want `_segment`.
     """
     _, body = split_frontmatter(text)
     items, _ = _segment(
@@ -307,23 +272,11 @@ class RewriteResult:
 
 
 # A rewrite shorter than this fraction of its input did not compress — it
-# stopped. Checked BEFORE the anchor guard, because a truncated sample loses
-# whatever anchors sat past the cut and would otherwise be filed as anchor
-# damage, contaminating every "which constructs does this model break" number
-# with "this model ran out of budget" (`_plans/placeholder-design-2026-08.md`,
-# "Truncation, misattributed to the mask").
-#
-# 0.3, not the 0.9 that finding used: that was a copy-edit task, where output
-# length tracks input closely enough for a 10% drop to be suspicious. A style
-# rewrite is not that. Measured over the corpus, len(target)/len(slop) spans
-# 0.18 to 9.76 — it leans compressive only ON AVERAGE (mean 0.81, median 0.79),
-# and 13.6% of real rewrites EXPAND, 1.5% by more than half again. A 0.9 floor
-# would call 70% of genuine Dan rewrites truncated.
-#
-# That two-sidedness is also why this is a floor and not a band: length alone
-# cannot tell an expansive rewrite from a rambling one, so a ceiling here would
-# be guessing. Collapse is the only end where length is diagnostic on its own.
-# 0.3 sits below the 0.1th percentile — it flags 2 of 4,590 real rewrites.
+# stopped. A floor and not a band: length alone cannot tell an expansive rewrite
+# from a rambling one, and a style rewrite is not a copy-edit — real rewrites
+# span 0.18x to 9.76x and 13.6% of them EXPAND. 0.3 sits below the 0.1th
+# percentile (findings.md; `_plans/placeholder-design-2026-08.md` for why a 0.9
+# floor from a copy-edit task does not transfer).
 MIN_REWRITE_LENGTH_RATIO = 0.3
 
 
@@ -347,17 +300,12 @@ _ANCHOR_RES = (
     re.compile(r"@[A-Za-z][A-Za-z0-9_:-]*"),  # Quarto/pandoc citation key
 )
 
-# Inline markup the styler must carry through verbatim: a code span or a piece
-# of inline math is not prose and has no voice, but unlike a fenced block it
-# lives INSIDE a chunk, so segmentation cannot protect it and only the anchor
-# guard can. Both are single-line by construction: with DOTALL the code pattern
-# happily swallows a whole fenced block.
-#
-# The math pattern is deliberately tight. The obvious `\$([^$\n]+?)\$` matches
-# "it costs $5 and $10" and calls "5 and " an anchor, so every price in a
-# paragraph becomes a false positive; requiring non-space at both ends kills it.
-# Double-backtick spans are left unmatched on purpose — conservative, since a
-# missed anchor costs nothing while a false one rejects a good rewrite.
+# Inline markup the styler must carry through verbatim. Unlike a fenced block
+# it lives INSIDE a chunk, so segmentation cannot protect it and only the anchor
+# guard can (D27). Both patterns are single-line by construction, and the math
+# one is deliberately tight — the obvious `\$([^$\n]+?)\$` calls "5 and " an
+# anchor in "it costs $5 and $10". A missed anchor costs nothing while a false
+# one rejects a good rewrite, so under-matching is the safe direction.
 _INLINE_ANCHOR_RES = (
     re.compile(r"(?<!`)(`+)(?P<anchor>[^`\n]+?)\1(?!`)"),  # inline code span
     re.compile(r"(?<![\\$\w])\$(?![\s$])(?P<anchor>[^$\n]*?[^\s$])\$(?!\$)"),  # inline math
@@ -390,28 +338,11 @@ def anchor_delta(
 ) -> tuple[list[str], list[str]]:
     """`(lost, gained)` — anchors `candidate` dropped, and ones it conjured.
 
-    Both directions are checked because the corpus overwhelmingly teaches the
-    second: measured over the 4,595-pair corpus, 115 pairs (3.0% of the
-    anchor-bearing ones) hand the styler a target that dropped an anchor, while
-    876 (19.1% of the corpus) hand it a target carrying anchors its source never
-    had — half of those external URLs whose destination no model can know.
-    Reverse-edit synthesis produces that directly: a generator that drops a link
-    while "improving" a paragraph becomes, after the swap, an example reading
-    *given text without links, produce text with these links*
-    (`_plans/anchor-integrity.md`, stylebot#1).
+    The two halves use deliberately different rules (D32):
 
-    The two halves use deliberately different rules, because the harms are not
-    mirror images:
-
-    - LOST is a count DECREASE. Each occurrence anchors a separate claim, so
-      dropping one of two citations of the same key still leaves a sentence
-      standing on nothing.
-    - GAINED is key ABSENCE, not a count increase. What this guards against is a
-      destination the model invented and cannot have verified; repeating a URL
-      the source supplied invents nothing, because it points somewhere the
-      source already vouched for. A rewrite that splits one sentence in two and
-      re-cites the same link is a legitimate edit, and a count rule would reject
-      it.
+    - LOST is a count DECREASE. Each occurrence anchors a separate claim.
+    - GAINED is key ABSENCE, not a count increase. Repeating a URL the source
+      supplied invents nothing.
     """
     have = content_anchors(candidate, inline=inline)
     want = content_anchors(source, inline=inline)
@@ -449,34 +380,14 @@ def is_anchor_faithful(
     """Pair-level `selector` for `train.assemble_training_corpus`: keep pairs
     whose target neither invents nor drops an anchor.
 
-    Symmetric by default, matching the guard `rewrite_text` applies at inference
-    — a corpus that teaches what the guard then rejects buys nothing but wasted
-    draws. The two halves keep `anchor_delta`'s deliberately different rules
-    (loss is a count decrease, invention is key absence — D32); `lose` and
-    `gain` select which halves bind, since the two directions have different
-    provenance and different costs:
+    Symmetric by default, matching the guard `rewrite_text` applies at
+    inference; `lose` and `gain` select which halves bind, and each keeps
+    `anchor_delta`'s rule. Why the halves differ, and why a captured pair is
+    filtered here while a synthetic one is culled outright: D32.
 
-    - **gained** is fabrication. In synthesis it comes from the reverse-edit
-      swap (a generator that dropped a link becomes a target that conjured
-      one); in *captured* pairs it is Dan adding a cross-reference while
-      editing. Either way the styler cannot know a destination it was not
-      given.
-    - **lost** is deletion, and in synthesis it is the mirror artefact: the
-      generator conjured a link while "improving", so after the swap the pair
-      reads *given text with this URL, produce text without it* — the
-      compression-by-deletion habit, arriving through the direction
-      `synth._gate_verdict` does not check.
-
-    Which pairs a run excluded belongs in its manifest, and
-    `assemble_training_corpus` records only `selector.__name__` — so a caller
-    that varies these keywords should wrap this in a distinctly *named*
-    function rather than a `partial`, or two runs will claim identical filters.
-
-    Filtering here excludes a pair from the training SIGNAL without touching the
-    corpus. That is the whole treatment for captured pairs, whose only backup is
-    git; the synthetic stratum can also be culled outright, because a culled
-    cell leaves its `synth_key` missing and the next batch refills it under the
-    gate (`_plans/anchor-integrity.md` step 2, and the blog's RUNBOOK 6a).
+    `assemble_training_corpus` records only `selector.__name__`, so a caller
+    that varies these keywords should wrap this in a distinctly *named* function
+    rather than a `partial`, or two runs will claim identical filters.
     """
     lost, gained = record_anchor_delta(record, inline=inline)
     return not (lose and lost) and not (gain and gained)
@@ -494,18 +405,14 @@ def write_anchor_audit(
 ) -> int:
     """Append a run's per-chunk anchor accounting to a JSONL sidecar.
 
-    Step 0 of `_plans/anchor-integrity.md`, and the reason it comes first: the
-    anchor counters were computed, printed to stderr and then discarded on every
-    run, so the question the masking work is gated on — *how often does an
-    UNMASKED candidate lose or invent an anchor?* — could never be answered
-    without instrumenting a run specially. It is now answerable by joining these
-    lines: the denominator is every candidate not marked `truncated`, the
-    numerator is those with a non-empty `lost` or `gained`.
+    Step 0 of `_plans/anchor-integrity.md`: how often an UNMASKED candidate
+    loses or invents an anchor is what the masking work is gated on (D33), and
+    it is answerable by joining these lines — the denominator is every candidate
+    not marked `truncated`, the numerator those with a non-empty `lost` or
+    `gained`.
 
-    Append-only and in the idiom of the reasoning sidecar: one line per prose
-    chunk, carrying anchor KEYS and lengths but never candidate text, so the log
-    stays joinable without becoming a second copy of the draft. Returns the
-    number of lines written.
+    Append-only: one line per prose chunk, carrying anchor KEYS and lengths but
+    never candidate text. Returns the number of lines written.
     """
     from stylebot.jsonl import append_jsonl
     from stylebot.provenance import now_iso
@@ -540,46 +447,28 @@ def rewrite_candidates(
 ) -> dict:
     """All candidates for ONE prose chunk, none auto-chosen — the editor seam.
 
-    Where `rewrite_text` decides (do-no-harm guard, anchors disqualify), this
-    returns the full slate for a human to choose from: anchor violations FLAG
-    (`anchors_lost`, `anchors_gained`) rather than disqualify, and the input's
-    own score rides along so the caller can show the delta. Serves the `rewrite`
-    op of `stylebot.serve` (see `_plans/decisions.md` D20).
+    Where `rewrite_text` decides, this returns the full slate for a human to
+    choose from: anchor violations FLAG rather than disqualify, and the input's
+    own score rides along (D20). Serves `stylebot.serve`'s `rewrite` op.
 
-    Single-chunk contract: `text` must be prose at training chunk scale —
-    frontmatter, headings, or a protected block in the selection, or prose over
-    `max_chunk_chars` (which `_segment` would split), raise ValueError with a
-    message fit to surface in an editor, naming the construct
-    ("selection contains a blockquote — select prose only"). An empty or
-    whitespace-only selection gets its own message rather than the budget one:
-    nothing selected is not too much selected.
+    Single-chunk contract: `text` must be prose at training chunk scale, so
+    frontmatter, a heading, a protected block (D27) or prose over
+    `max_chunk_chars` raises ValueError with a message fit for an editor. Under
+    `inline_headings` a selection MAY span headings and **any `context` is
+    ignored**.
 
-    Under `inline_headings` (the cross-heading diet) a selection MAY span
-    headings, and **any `context` the caller passes is ignored** — those pairs
-    carry their headings as content and record no `meta.context`, so a heading
-    prefix is out of distribution. Protected blocks still raise: they are absent
-    from the corpus in both diets, so the styler has never learned to reproduce
-    one and would be free to mangle it — and a styler quietly rewording somebody
-    else's quoted words is the worst outcome this package has.
-
-    Returns `{"input_score": float|None, "n_sampled": int,
-              "candidates": [{"text", "score", "anchors_lost", "anchors_gained",
-                              "truncated", "identity"}, ...]}`
-    in sampled order (the caller owns presentation order — and should log it;
-    see the presentation-bias note in the plan). Duplicate sample texts are
-    collapsed, so `n_sampled` keeps the draw count honest, and a candidate
-    byte-equal to the input is flagged `identity: true`.
+    Returns `{"input_score", "n_sampled", "candidates": [{"text", "score",
+    "anchors_lost", "anchors_gained", "truncated", "identity"}, ...]}` in
+    sampled order; the caller owns presentation order and should log it.
+    Duplicate texts are collapsed, and a candidate byte-equal to the input is
+    flagged `identity: true`.
     """
     from stylebot.pairs import build_pair_content, pair_body
 
-    # Defect A4, the editor half. `rewrite_text` has gated `context` on
-    # `inline_headings` since the cross-heading diet landed — those pairs carry
-    # headings as CONTENT and record no `meta.context` at all, so prepending one
-    # is a prefix training never saw. This seam did not, and it is the one that
-    # is live: the VS Code extension sends `headingAbove` on every request and
-    # the promoted run is cross-heading, so every editor rewrite was getting the
-    # prefix. Dropped here rather than in the caller because the caller is an
-    # editor extension in another language, and the rule belongs to the diet.
+    # Cross-heading pairs carry headings as CONTENT and record no
+    # `meta.context`, so prepending one is a prefix training never saw (D27).
+    # Dropped here rather than in the caller: the caller is an editor extension
+    # in another language, and the rule belongs to the diet.
     if inline_headings:
         context = None
     frontmatter, body = split_frontmatter(text)
@@ -657,50 +546,31 @@ def rewrite_text(
 ) -> RewriteResult:
     """Rewrite prose chunk-by-chunk through the styler, mirroring training.
 
-    Frontmatter, headings, and every protected block — fenced code, display
-    math, `:::` divs, blockquotes — pass through verbatim, matching what
-    `lib.editable_prose` drops before a target is ever cut (training pairs
-    never contain them as content); each prose chunk is sent with the
-    nearest preceding heading prepended exactly as `build_pair_content` did
-    at capture time, and the heading prefix is stripped from the sample
-    (`pair_body`) before reassembly. Original whitespace is reassembled
-    verbatim; an empty/blank styler answer falls back to the input chunk
-    (never destroy prose on a bad sample).
+    Frontmatter, headings and every protected block pass through verbatim,
+    matching what `lib.editable_prose` drops before a target is cut (D27); each
+    prose chunk is sent with the nearest preceding heading prepended exactly as
+    `build_pair_content` did at capture time, and the prefix is stripped from
+    the sample (`pair_body`) before reassembly. Whitespace is reassembled
+    verbatim; a blank styler answer falls back to the input chunk.
 
-    `inline_headings` selects the cross-heading diet: headings become chunk
-    content (rewritable, and no longer emitted as `context`), so chunks span
-    sections. Set it to match the promoted adapter's training diet — the
-    manifest records that under `data.chunk_scale`.
+    `inline_headings` selects the cross-heading diet, in which headings are
+    chunk content rather than `context`. Set it to match the promoted adapter's
+    `data.chunk_scale`.
 
-    A sample that collapsed below `MIN_REWRITE_LENGTH_RATIO` of the input is
-    disqualified as TRUNCATED before anchors are consulted, and counted
-    separately (`n_truncated`). Truncation causes anchor loss, so checking it
-    second would file every cut-off sample as anchor damage; and it is the
-    failure anchors cannot see at all when a chunk carries no link to lose.
+    Candidates are disqualified in order — TRUNCATED first (truncation causes
+    anchor loss and would otherwise be filed as anchor damage), then anchor
+    damage in both directions (D32) — and counted in `n_truncated`,
+    `n_anchor_rejected`, `n_anchor_lost`, `n_anchor_invented`, with per-chunk
+    detail in `result.anchor_audit`. `inline_anchors` widens the guard to inline
+    code and math; default off (`_plans/anchor-integrity.md`).
 
-    The anchor guard runs in BOTH directions: a candidate is disqualified for
-    dropping a link/URL/citation the input had, and equally for inventing one
-    the input never named (`anchor_delta`). `n_anchor_rejected` counts the
-    disqualifications; `n_anchor_lost` / `n_anchor_invented` say which cause,
-    and can overlap when one sample does both. Per-chunk detail lands in
-    `result.anchor_audit` for `write_anchor_audit`.
-
-    `inline_anchors` widens the anchor-integrity guard to inline code spans and
-    inline math. Default off: measured across the 4624-pair corpus it triples
-    the share of pairs where a genuine Dan rewrite is disqualified (6.4% ->
-    19.1%), and a disqualified chunk is kept verbatim, so enabling it by default
-    would trade a rare corruption for a common no-op.
-
-    With a `scorer` (lower = better, e.g. `detector_scorer`), the INPUT chunk
-    competes with the candidates — the do-no-harm guard: a chunk is only
-    replaced by a rewrite the scorer rates strictly better. Each chunk's
-    decision lands in `result.decisions` for the CLI to surface.
-
+    With a `scorer` (lower = better) the INPUT chunk competes: the do-no-harm
+    guard replaces a chunk only with a strictly better rewrite, and each decision
+    lands in `result.decisions`.
     `on_decision(chunk, context, candidates, scores, chosen_index, kept_input)`
-    is called once per prose chunk after its decision — the preference-data
-    seam. `candidates` are the cleaned sample bodies as considered, `scores`
-    aligns with it (None for unscored/anchor-rejected samples), and
-    `chosen_index` indexes `candidates` (None when the input was kept).
+    fires once per prose chunk — the preference-data seam; `scores` aligns with
+    `candidates` (None when unscored or rejected) and `chosen_index` indexes it
+    (None when the input was kept).
     """
     from stylebot.pairs import build_pair_content, pair_body
 
@@ -743,21 +613,10 @@ def rewrite_text(
         result.n_candidates += len(candidates)
         raw = [pair_body(c, context).strip() for c in candidates if c and c.strip()]
         raw = [c for c in raw if c]
-        # Two disqualifications, in this order, both BEFORE any voice scoring.
-        #
-        # 1. TRUNCATION. A sample that collapsed in length did not compress, it
-        #    stopped. It is checked first because it *causes* the second: a cut
-        #    sample loses whatever anchors sat past the cut, so testing anchors
-        #    first would file every truncation as anchor damage and make the
-        #    anchor counts mean nothing. Truncation is also the case anchors
-        #    CANNOT catch on their own — a chunk carrying no link or citation
-        #    has no anchor to lose, so a 30%-length sample of it would sail
-        #    through the guard and ship.
-        # 2. ANCHOR INTEGRITY, in BOTH directions. A candidate that lost a
-        #    link/URL/citation the input had must not ship, however Dan it
-        #    sounds — and neither must one that invented a destination the input
-        #    never named, which is the failure the training corpus actively
-        #    teaches (see `anchor_delta`).
+        # Two disqualifications, in this order, both BEFORE any voice scoring:
+        # TRUNCATION first, because it *causes* anchor loss (and is the failure
+        # anchors cannot catch on a chunk carrying no link), then ANCHOR
+        # INTEGRITY in both directions (`anchor_delta`, D32).
         lost: list[str] = []
         invented: list[str] = []
         n_lost = n_invented = 0  # SAMPLES, not anchors, for this chunk's decision line

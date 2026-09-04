@@ -136,20 +136,17 @@ def diff_chunks(
 ) -> list[tuple[str, str, str]]:
     """Return (before_chunk, after_chunk, context) triples per changed region.
 
-    Split both texts on blank lines (the same chunk shape Phase 2 samples, so
-    real and synthetic pairs are mixable), run SequenceMatcher on the paragraph
-    lists, and emit a pair per contiguous changed region. `equal` opcodes are
-    skipped, and so are pure `insert` / `delete` ones — nothing to learn from.
+    Split both texts on blank lines (Phase 2's chunk shape, so real and
+    synthetic pairs are mixable), run SequenceMatcher on the paragraph lists,
+    and emit a pair per contiguous changed region; `equal`, `insert` and
+    `delete` opcodes are skipped, having nothing to learn from.
 
     `coalesce_gap_paras` / `coalesce_gap_chars` extend coalescing across *short
-    unchanged runs*, so an edit spanning several paragraphs with a left-alone
-    paragraph in the middle stays ONE pair; both default to 0. A merged region
-    exceeding `max_chars` falls back to its uncoalesced parts rather than being
-    dropped. Untouched text is never appended to a pair's *ends*, only bridged
-    between two changed regions (see `_coalesce_regions`).
-
-    With `heading_context`, each `context` is the nearest preceding heading among
-    the AFTER paragraphs; preamble regions get `""`.
+    unchanged runs*, so an edit with a left-alone paragraph in the middle stays
+    ONE pair; both default to 0, a merged region over `max_chars` falls back to
+    its parts, and untouched text is only bridged between two changed regions
+    (`_coalesce_regions`). With `heading_context`, each `context` is the nearest
+    preceding heading among the AFTER paragraphs; preamble regions get `""`.
     """
     before_paras = split_paragraphs(before)
     after_paras = split_paragraphs(after)
@@ -291,21 +288,14 @@ def capture_pairs(
     """Strip frontmatter, diff, and append one or more pair records.
 
     Returns the records written, one per chunk-pair. Raises ValueError if nothing
-    changed worth capturing. `whole` mode spans many headings, so it never
-    carries context regardless of `heading_context`; the gap/`max_chars` args
-    pass through to `diff_chunks`.
+    changed worth capturing. `whole` mode spans many headings, so it carries no
+    context; the gap/`max_chars` args pass through to `diff_chunks`.
 
-    The full before/after texts are also archived beside the corpus
-    (`<pairs_dir>/captures/<capture_id>/`). The chunk records are a lossy VIEW —
-    changed regions only, no document offsets — so the archive is what lets the
-    corpus be re-cut at other chunk scales later without re-capturing.
-
-    Every record carries `meta.provenance` (`blog_root` defaults to the git
-    work-tree holding the corpus). A capture's "policy" is its cut knobs — the
-    coalesce gaps and the size cap — a different shape from a synthetic pair's
-    `ChunkPolicy`, so the two producers' `policy_digest`s are comparable within
-    a producer and not across one. `source_automation` is read from the AFTER
-    frontmatter: what the file said at the moment it was captured.
+    The full before/after texts are archived beside the corpus
+    (`<pairs_dir>/captures/<capture_id>/`): the chunk records are a lossy VIEW,
+    so the archive is what lets the corpus be re-cut later. Every record carries
+    `meta.provenance` (D36); a capture's "policy" is its cut knobs, so
+    `policy_digest`s compare within a producer and not across one.
     """
     before_meta, before_body = split_frontmatter_meta(before_text)
     after_meta, after_body = split_frontmatter_meta(after_text)
@@ -377,21 +367,15 @@ def capture_pairs(
 
 # ---- The capture archive ----
 #
-# An archive is a DIRECTORY of ordinary files, not a JSON blob:
+#     captures/<capture_id>/{before.md, after.md, meta.json}
 #
-#     captures/<capture_id>/before.md
-#     captures/<capture_id>/after.md
-#     captures/<capture_id>/meta.json   {capture_id, source, snapped_at, whole}
-#
-# Plain files rather than JSON-escaped strings, so they can be read, `diff`ed and
-# hand-corrected when a capture comes out wrong (`recut` picks the correction up
-# next run). The before->after diff IS the training signal; it must stay legible.
-#
-# `.md` and not `.qmd` deliberately. Every tool in the blog repo keys on `*.qmd`
-# — the pre-commit hook would reformat these files (destroying the verbatim
-# record it is their whole job to keep), search would index the captured slop as
-# if the author wrote it, and `iter_targets` would sample it as a synthesis
-# target. `.md` is invisible to all of them.
+# A DIRECTORY of ordinary files, not a JSON blob, so a capture can be read,
+# `diff`ed and hand-corrected when it comes out wrong (`recut` picks the
+# correction up next run): the before->after diff IS the training signal and
+# must stay legible. `.md` and not `.qmd`, because every tool in the blog repo
+# keys on `*.qmd` — the pre-commit hook would reformat the verbatim record,
+# search would index captured slop as the author's, and `iter_targets` would
+# sample it as a target.
 
 ARCHIVE_BEFORE = "before.md"
 ARCHIVE_AFTER = "after.md"
@@ -512,18 +496,13 @@ def recut_archives(
 
     `min_chars` and `max_similarity` are the two no-op floors, and re-cutting is
     how a corpus already holding no-ops sheds them: the archives are the source
-    of truth, so a policy change plus a re-run *replaces* those pairs rather
-    than requiring anyone to hand-cull `pairs.jsonl`. Captures with no archive
-    keep their native cut and stay the exception (they must be filtered at
-    training assembly instead).
+    of truth, so a policy change plus a re-run *replaces* those pairs. Captures
+    with no archive keep their native cut and are filtered at assembly instead.
 
-    Emitted records carry `meta.recut` (the gap policy) and reuse the archive's
-    own `capture_id`, making a re-cut IDEMPOTENT: re-running with the same policy
-    replaces the previous re-cut rather than stacking duplicates. Pairs from the
-    original uncoalesced cut are dropped too, being a strictly lossier view of
-    the same edit; captures with no archive are left untouched.
-
-    Returns the records written (or that *would* be written, under `dry_run`).
+    Emitted records carry `meta.recut` and reuse the archive's `capture_id`,
+    making a re-cut IDEMPOTENT (D36); pairs from the original cut are dropped as
+    a lossier view of the same edit. Returns the records written (or that would
+    be, under `dry_run`).
     """
     policy = {"gap_paras": coalesce_gap_paras, "gap_chars": coalesce_gap_chars}
     if min_chars:

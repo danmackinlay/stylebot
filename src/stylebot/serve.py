@@ -1,13 +1,9 @@
 """NDJSON scoring sidecar — the editor-facing seam over a detector.
 
-`ai-style serve` keeps a detector (typically the trained voice classifier,
-`classify.sklearn_detector`) resident and scores batches of texts over
-stdin/stdout, one JSON object per line each way. The expensive part — the
-embedding model — loads once at startup (~5 s for StyleDistance); after that a
-whole document scores in tens of milliseconds, which is what makes a live
-editor marker (see `_plans/vscode-marker.md`) viable.
-
-The protocol is deliberately minimal (NDJSON, not LSP or JSON-RPC framing):
+`ai-style serve` keeps a detector resident and scores batches of texts over
+stdin/stdout, one JSON object per line each way. The embedding model loads once
+(~5 s), after which a whole document scores in tens of milliseconds — what makes
+a live editor marker viable (`_plans/vscode-marker.md`; NDJSON not LSP, D20).
 
     -> {"id": 1, "op": "info"}
     <- {"id": 1, "meta": {...artifact meta.json...}}
@@ -16,16 +12,6 @@ The protocol is deliberately minimal (NDJSON, not LSP or JSON-RPC framing):
     -> {"id": 5, "op": "segment", "text": "<whole document>", "min_chars": 80}
     <- {"id": 5, "segments": [{"start": 0, "end": 42, "kind": "prose",
                                "context": "## A heading"}, ...]}
-
-`segment` is what stops the client owning a segmenter of its own. It answers
-"which spans of this document are scoreable prose, and what heading is each
-under?" from `stylebot.markdown`, under the `div_is_prose` policy the sidecar
-was started with — so a `.callout-note` paragraph is prose here exactly when it
-is a training target, which no client-side port could know.
-
-Two further ops arm only when their seam is injected; an unarmed op errors
-politely. They are the editor rewrite loop (`_plans/decisions.md` D20):
-
     -> {"id": 3, "op": "rewrite", "text": "...", "context": "## Heading",
         "best_of": 4}
     <- {"id": 3, "input_score": 0.52,
@@ -34,18 +20,13 @@ politely. They are the editor rewrite loop (`_plans/decisions.md` D20):
     -> {"id": 4, "op": "prefer", "decision": {...}}
     <- {"id": 4, "ok": true}
 
-`rewrite` delegates to an injected `rewriter(text, context, best_of)` (typically
-`stylebot.infer.rewrite_candidates` closed over a styler + scorer); `prefer`
-hands the client's decision dict to an injected sink (the preference-data seam —
-the caller owns the schema).
-
-`info` doubles as the client's ready handshake: the first response arrives
-only after the model has loaded. Errors never kill the loop — a malformed or
-failing request gets `{"id": ..., "error": "..."}` and the server keeps
-reading. EOF on stdin is the shutdown signal.
-
-Like `stylebot.classify`, this module is ML-dependency-free: the detector,
-rewriter, and prefer sink are injected, so tests drive `serve_loop` with stubs.
+`segment` is what stops the client owning a segmenter of its own: it answers
+from `stylebot.markdown` under the `div_is_prose` policy the sidecar was started
+with. `rewrite` and `prefer` arm only when their seam is injected — a rewriter
+`(text, context, best_of)` and a sink whose schema the caller owns; unarmed,
+they error politely. `info` doubles as the ready handshake. An error never kills
+the loop; EOF on stdin is the shutdown signal. Like `stylebot.classify`, this
+module is ML-dependency-free — everything expensive is injected.
 """
 
 from __future__ import annotations
@@ -88,21 +69,16 @@ def prose_paragraphs(
     """The scoreable prose paragraphs of a markdown document, with offsets.
 
     A paragraph is a maximal run of adjacent lines that `markdown.line_kinds`
-    calls prose — so blank lines, protected blocks (fences, display math,
-    blockquotes, divs) and heading lines all end one. `context` is the nearest
-    heading line above, by the same `markdown.ATX_HEADING_RE` training uses.
-    Leading YAML frontmatter is dropped; `min_chars` drops short paragraphs,
-    which score noisily (`_plans/vscode-marker.md`).
+    calls prose, so blank lines, protected blocks and heading lines all end one.
+    `context` is the nearest heading line above. Leading YAML frontmatter is
+    dropped; `min_chars` drops short paragraphs, which score noisily.
 
     Offsets are UTF-16 code units into the ORIGINAL document, frontmatter
-    included — see `_utf16_mapper`. Slicing the document by them reproduces the
-    paragraph, which is why the response carries no text: the client already
-    holds the document it sent.
+    included (`_utf16_mapper`), so slicing by them reproduces the paragraph —
+    which is why the response carries no text.
 
-    This is the composition the VS Code marker used to re-implement in
-    TypeScript (`vscode-voice-marker/src/segment.ts`, deleted 2026-09-03). It
-    lives here rather than in `stylebot.markdown` because it needs two things
-    that module refuses on purpose — frontmatter knowledge, and a paragraph
+    Here rather than in `stylebot.markdown` because it needs two things that
+    module refuses on purpose: frontmatter knowledge, and a paragraph
     granularity that is the *editor's* unit rather than the chunk budget's.
     """
     from stylebot.infer import split_frontmatter
@@ -180,7 +156,7 @@ def handle_request(
                 return {"id": rid, "error": "'texts' must be a list of strings"}
             # One `encode` for the whole request, not one per text: the
             # marker sends a document's paragraphs as a single `score` op,
-            # and batch-of-one encodes cost 1.56x (`_plans/decisions.md` D57).
+            # and batch-of-one encodes cost 1.56x (D59).
             return {"id": rid, "scores": [r["score"] for r in detect_many(detector, texts)]}
         if op == "segment":
             text = request.get("text")

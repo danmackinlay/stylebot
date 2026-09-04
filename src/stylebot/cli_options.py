@@ -45,18 +45,12 @@ CLI = "cli"
 # ---------------------------------------------------------------------------
 # The output sink.
 #
-# A library entry point must not decide where its progress and summary lines
-# go: a non-CLI caller cannot capture, redirect or silence a `click.echo`. So
-# the library takes an *emitter* and defaults it to `silent`; the CLI passes
-# `click_emitter()`, and the stream/colour routing is written down exactly once
-# — here.
-#
-# A level names a (stream, emphasis) pair, not a syslog severity. That is why
-# `note` is yellow on *stdout*: the hygiene-drop counts are part of the run's
-# report, which stays on stdout with the rest of the summary, and only the
-# emphasis marks them as needing attention. `status` and `error` render
-# identically today and stay apart anyway — they differ in meaning, so errors
-# could be coloured later without auditing every progress tick.
+# A library entry point must not decide where its lines go — a non-CLI caller
+# cannot capture or silence a `click.echo` — so it takes an *emitter*
+# defaulting to `silent`, and the CLI passes `click_emitter()`. A level names a
+# (stream, emphasis) pair, not a syslog severity: `note` is yellow on *stdout*
+# because a hygiene-drop count is part of the run's report. `status` and `error`
+# render identically today and stay apart because they differ in meaning.
 # ---------------------------------------------------------------------------
 
 
@@ -256,14 +250,10 @@ class SectionedCommand(click.Command):
 
 
 # ---------------------------------------------------------------------------
-# The error boundary.
-#
-# Every library module in stylebot raises `stylebot.errors`' vocabulary and
-# never exits; this is the one place the process consequences are decided.
-# Installing it on the *group* rather than decorating each callback is
-# deliberate: a subcommand added tomorrow inherits the contract instead of
-# having to remember it, which is what `tests/test_errors.py` enumerates the
-# command tree to prove.
+# The error boundary (D47). Every library module raises `stylebot.errors`'
+# vocabulary and never exits; this is where the process consequences are
+# decided. On the *group* rather than each callback, so a subcommand added
+# tomorrow inherits the contract — `tests/test_errors.py` walks the tree.
 # ---------------------------------------------------------------------------
 
 

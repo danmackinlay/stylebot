@@ -1,9 +1,7 @@
 """Markdown block primitives — the ONE segmentation every phase shares.
 
-Before this module, segmentation was implemented five times across the package
-and the copies had silently diverged: what Phase 2 excluded from *training*
-targets was not what Phase 4 refused to send at *inference*. Everything that
-needs to know "is this line prose?" now asks here.
+Segmentation was implemented five times here and the copies diverged; everything
+asking "is this line prose?" asks here. Generic only: no frontmatter, no blog.
 
 **The protection principle.** A construct is protected — excluded from training
 targets *and* from inference chunks — when rewriting it would change meaning
@@ -17,48 +15,18 @@ rather than voice, or when there is no voice to apply. Three grounds:
    level/class semantics the rewrite must not touch — *though what they delimit
    may be prose.*
 
-**Corollary: a container is not protected merely for being a container.** Ground
-3 protects the ``:::`` lines, not automatically their contents. Which div
-classes bear prose is *policy* (``.callout-note`` is a Quarto convention, and
-stylebot's blog/generic boundary keeps Quarto policy out of here), so callers
-opt in through the ``div_is_prose`` hook. Its default — ``None``, every div
-protected wholesale — is the conservative behaviour this package shipped with.
+**Corollary: a container is not protected merely for being a container.**
+Ground 3 protects the ``:::`` lines, not automatically their contents. Which
+div classes bear prose is *policy* (``.callout-note`` is a Quarto convention,
+and stylebot's blog/generic boundary keeps Quarto policy out of here), so
+callers opt in through the ``div_is_prose`` hook; its default ``None``
+protects every div wholesale. ``raw_html`` and ``html_comments`` are the same
+shape of policy, off by default because nothing here reflows whole documents —
+their one production caller is `livingthing.qmd_core.segment_for_edit`, so
+changing them moves the blog's editing path (D29).
 
-**Raw HTML is the same shape of policy, and nothing in stylebot turns it on.**
-``<script>``/``<style>`` contents are ground 2 (not prose — they are JavaScript
-or CSS, and line structure is load-bearing), but only a caller that *reflows
-whole documents* needs the protection. stylebot cuts targets and never touches
-raw HTML, so ``raw_html`` defaults to False and no production call site here
-passes True.
-
-It is still not dead code, and the reason changed on 2026-09-03. It used to be
-that ``raw_html`` let this implementation express a *sibling's* policy so a
-conformance fixture could record both honestly. There is no sibling any more:
-``livingthing.qmd_core.segment_for_edit`` is now a thin call to
-`protected_spans` here, under the configuration ``block_only=False,
-raw_html=True, html_comments=True`` (stylebot's base install was always
-dependency-light, so the packaging line that forced a second implementation was
-in the wrong place — stylebot `_plans/decisions.md` D28/D30, superseded). What
-survives is D29, and it is the load-bearing half: the differences between the
-two policies are real, they derive from what each caller *does with* a protected
-span — livingthing reassembles them, stylebot deletes them — and they are
-expressed as keyword arguments rather than as forked code or a forced
-compromise. So these parameters have exactly one production caller each, in the
-other repo, and changing what they do moves the blog's editing path.
-
-Generic markdown tooling only: no frontmatter, no blog knowledge. THIS module is
-now the single block-level segmenter across both repos, which makes its own
-tests the only thing pinning it: ``tests/test_segment.py`` and
-``tests/test_markdown.py`` for behaviour, ``tests/test_protection_parity.py``
-for the train/serve contract, and ``tests/fixtures/segmenter_conformance.{qmd,json}``
-for the two named configurations — plus, blog-side, ``livingthing``'s
-``tests/test_corpus_stability.py``, which is the only thing that can see a change
-here re-cutting the corpus (it needs the corpus, which never enters this repo).
-The conformance fixture now asserts stylebot against its
-own output rather than across an implementation boundary; it earns its place as
-the written-down meaning of the configurations, and its regeneration hatch
-(``STYLEBOT_REGEN_SEGMENTS=1``) is how a deliberate change is recorded next to
-its reason.
+Pinned by `tests/test_segment.py`, `test_markdown.py`, `test_protection_parity.py`
+and `tests/fixtures/segmenter_conformance.{qmd,json}` (``STYLEBOT_REGEN_SEGMENTS=1``).
 """
 
 from __future__ import annotations
@@ -79,24 +47,13 @@ RAW_HTML = "raw_html"
 HTML_COMMENT = "html_comment"
 
 #: Kinds a rewrite must never be handed, in the default configuration.
-#: `HEADING` is deliberately absent: a heading is protected *as a line* but
-#: rides along as chunk context (or, under the cross-heading diet, as chunk
-#: content), so callers treat it separately. `RAW_HTML` is absent because it is
-#: opt-in — use `protected_kinds` when the option is not fixed at the call site.
-#:
-#: `HTML_COMMENT` is absent for the same reason as `RAW_HTML` and by the same
-#: mechanism, but on a different argument. An HTML comment is nobody's prose — it
-#: renders as nothing, and it routinely holds words that are not the author's at
-#: all (tool directives like ``<!-- vale off -->``, notes-to-self, imported
-#: reviewer comments) — so a *reflower* should always protect one. But a comment
-#: may open mid-line, and protecting it there **splits the prose around it**: a
-#: caller that deletes protected spans to cut training targets loses the target,
-#: where a caller that reassembles them loses nothing. Measured against the blog
-#: corpus at 1aa290e463, protecting comments unconditionally took section-bounded
-#: reproducibility from 3023/3028 to 3020/3028, all three losses prose interrupted
-#: by an inline ``<!-- vale … -->`` marker. So this is `block_only`'s trade in a
-#: second place, and it gets `block_only`'s answer: a keyword, and two recorded
-#: configurations, rather than one side's policy imposed on the other.
+#: `HEADING` is absent because a heading is protected *as a line* but rides
+#: along as chunk context or content, so callers treat it separately.
+#: `RAW_HTML` and `HTML_COMMENT` are absent because they are opt-in — a
+#: reflower wants both, a target-cutter loses prose to a mid-line comment, and
+#: that split is `block_only`'s trade in a second place, with `block_only`'s
+#: answer (D29). Use `protected_kinds` when the option is not fixed at the call
+#: site.
 PROTECTED_KINDS = frozenset({FENCE, MATH, DIV, BLOCKQUOTE})
 
 
@@ -117,41 +74,16 @@ def protected_kinds(*, raw_html: bool = False, html_comments: bool = False) -> f
 #: all route through `is_heading_line`.
 ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+(?P<title>.*?))?[ \t]*$")
 
-# Protected-block patterns.
-#
-# The opener/closer alternate independently rather than back-referencing one
-# another. A backreference form (``(```+|~~~+)…\1``) is NOT equivalent: it lets
-# a longer outer fence swallow the inner fences of a post that *documents*
-# nested fences (notebook/blogdown.qmd), which measurably moves the corpus:
-# 7 section-bounded and 19 cross-heading target bodies change. Mixing ``` and
-# ~~~ across a
-# block is malformed markdown either way; matching it loosely is the safer
-# failure, since over-protection only costs a target.
-#
-# The CLOSER takes ``{3,}`` where the opener takes a bare three, and that
-# asymmetry is not cosmetic: the opener runs ``.*?$`` after its three, so a
-# ```` ```` ```` line already opens, but with a bare-three closer it could never
-# *close*. The consequence was live and silent — in ``notebook/quarto.qmd`` one
-# fence span ran 999 chars past its own closer and swallowed three whole
-# ``.callout-tip`` divs, and in ``notebook/learning_with_ai.qmd`` a ```` ````
-# ```` block was not protected at all. Still not a backreference, so the nested
-# case above is unaffected: a ``` closer still ends a ```` opener, exactly as
-# before.
-#
-# **An UNCLOSED fence runs to end of document** — the second alternative below,
-# and the reason it is here rather than in a consumer. CommonMark says exactly
-# this ("if the end of the containing block is reached ... the code block
-# contains all of the lines after the opening fence"), so it is the correct
-# reading and not a defensive hack. It used to live only in
-# `infer._blocks_with_separators`, as a line-wise state machine running
-# alongside this pattern: inference swallowed a runaway fence and
-# `editable_prose` — hence every training target — did not. That is the same
-# shape of train/serve split this module exists to end, so the state machine
-# moved here and its consumer deleted it.
-#
-# The closed alternative is tried first and its `.*?` is lazy, so a document
-# with a closer is matched exactly as before; only a document with none reaches
-# the greedy run-to-EOF branch.
+# Protected-block patterns. Three shapes here are load-bearing and were each
+# arrived at against the live corpus (D27, findings.md "W2's fence rule"):
+# opener and closer alternate **independently** rather than back-referencing,
+# so a longer outer fence cannot swallow the inner fences of a post that
+# documents nested ones; the closer takes ``{3,}`` where the opener takes a bare
+# three, so a ```` ```` ```` line can close as well as open; and an **unclosed
+# fence runs to end of document** (the second alternative, and CommonMark's own
+# reading) here rather than in a consumer, so inference and `editable_prose`
+# cannot disagree about a runaway fence. The closed alternative is tried first
+# and is lazy, so only a document with no closer reaches the greedy branch.
 CODE_FENCE_RE = re.compile(
     r"^[ \t]*(?:```|~~~).*?$"
     r"(?:.*?^[ \t]*(?:`{3,}|~{3,})[ \t]*$(?:\n|\Z)|.*\Z)",
@@ -162,35 +94,21 @@ BLOCKQUOTE_RE = re.compile(r"^(?:[ \t]{0,3}>[^\n]*\n?)+", re.MULTILINE)
 
 #: ``<script>``/``<style>`` blocks — opener at line start, closer ending a line.
 #: These two are the elements whose content HTML defines as *raw text* rather
-#: than markup, so reflowing them is never right: join the line after a ``//``
-#: comment onto it and that line is now commented out. Not hypothetical — the
-#: blog shipped an ``Uncaught SyntaxError`` on its front page in 2026-05 when a
-#: reflow collapsed a topic-map ``<script>``. Every other element's content *is*
-#: markup, so prose inside a raw ``<div>`` should still be rewritable.
-#:
-#: DOTALL so a blank line inside the block cannot end the match; an unclosed
-#: opener yields no span, exactly as `CODE_FENCE_RE` and `_div_spans` do. Ported
-#: from ``livingthing.qmd_core`` with its numbered backreference made a named
-#: one, so the pattern survives being composed into a larger alternation.
+#: than markup, so reflowing them is never right (join the line after a ``//``
+#: comment onto it and the line is commented out). Every other element's content
+#: *is* markup, so prose inside a raw ``<div>`` stays rewritable. DOTALL so a
+#: blank line cannot end the match; an unclosed opener yields no span, as
+#: `CODE_FENCE_RE` and `_div_spans` do.
 RAW_HTML_BLOCK_RE = re.compile(
     r"^[ \t]*<(?P<tag>script|style)\b[^>]*>.*?</(?P=tag)[ \t]*>[ \t]*$(?:\n|\Z)",
     re.MULTILINE | re.DOTALL | re.IGNORECASE,
 )
 
 #: An HTML comment, at any indent, spanning any number of lines. Non-greedy, so
-#: two comments in one document are two spans rather than one that swallows the
-#: prose between them.
-#:
-#: Deliberately *not* folded into `RAW_HTML_BLOCK_RE`: that one is opt-in and this
-#: one is always on (see `PROTECTED_KINDS`), and a shared pattern could not express
-#: the difference. The line anchoring differs too — a comment may legitimately open
-#: mid-line, and a trailing ``<!-- vale on -->`` after a sentence must still be
-#: protected.
-#:
-#: Measured 2026-08-22 in livingthing, which is what prompted this: a multi-line
-#: comment handed to `format-sentences` had its opening line joined to its body and
-#: the result split at sentence boundaries. The comment survived only because
-#: nothing inside it happened to spell ``-->``.
+#: two comments are two spans rather than one that swallows the prose between
+#: them. Deliberately not folded into `RAW_HTML_BLOCK_RE`: the line anchoring
+#: differs, since a comment may open mid-line and a trailing ``<!-- vale on -->``
+#: must still be protected.
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 #: Receives a div opener's attribute text (e.g. ``{.callout-note}``) and says
@@ -308,25 +226,15 @@ def protected_spans(
 ) -> list[Span]:
     """Merged, sorted, non-overlapping protected spans of `text`.
 
-    `block_only` restricts ``$$…$$`` to line-anchored display math; an inline
-    ``$$k$$`` then stays in the prose the styler rewrites. `raw_html` adds
-    ``<script>``/``<style>`` blocks (`RAW_HTML_BLOCK_RE`), which nothing in
-    stylebot wants but a whole-document reflower does; `html_comments` adds
-    ``<!--…-->`` (`HTML_COMMENT_RE`), on the same terms and for the reason
-    recorded above `HTML_COMMENT_RE`. Overlapping spans of different kinds merge
-    under the kind that starts first.
+    `block_only` restricts ``$$…$$`` to line-anchored display math; `raw_html`
+    adds ``<script>``/``<style>`` blocks and `html_comments` adds ``<!--…-->``,
+    both on the terms recorded above their patterns. Overlapping spans of
+    different kinds merge under the kind that starts first.
 
-    Public on purpose, and since 2026-09-03 it has an out-of-package caller:
-    `livingthing.qmd_core.segment_for_edit` is a thin call to this function
-    rather than a second implementation of it. This IS the module's central
-    question — what a rewrite must never be handed — so it is the entry point a
-    consumer should call rather than re-port. The keyword arguments are what let
-    one implementation serve two policies without forking, and the difference
-    they express is genuine: livingthing **reassembles** protected spans, so
-    protecting an inline ``$$k$$`` costs it nothing and buys safety, while
-    stylebot **deletes** them, so protecting one joins the remnants and mangles
-    the sentence (see `block_only`). Contrast `_find_div_blocks`, private
-    because nothing outside wants divs alone.
+    Public on purpose: this IS the module's central question, and
+    `livingthing.qmd_core.segment_for_edit` is a thin call to it rather than a
+    second implementation — the keywords are what let one implementation serve
+    two policies without forking (D29).
     """
     spans: list[Span] = []
     for m in CODE_FENCE_RE.finditer(text):

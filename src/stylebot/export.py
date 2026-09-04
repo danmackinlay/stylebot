@@ -1,29 +1,22 @@
-"""Merge a trained LoRA adapter back into its base weights.
+"""Merge a trained LoRA adapter back into its base weights (D31).
 
 The step between `ai-style train` and serving the styler off somebody else's
 computer: `train --download-adapter` writes a PEFT adapter, and this turns that
-plus the base model into one merged HF checkpoint that a local runtime
-(`mlx_lm.convert`, llama.cpp, vLLM, plain transformers) can take from there.
+plus the base model into one merged HF checkpoint a local runtime can take.
 
-**Why this is stylebot's problem and not the caller's.** The adapter
-`train.py` exports is in *serving* key format, and
-`tinker_cookbook.weights.build_hf_model` — the merge it is meant to be fed to —
-expects *raw* Tinker keys and applies that same remap itself. Hand it stylebot's
-own output and the `language_model` prefix doubles and the merge dies with
-`WeightsMergeError`. So stylebot emits an artifact its own documented next step
-cannot consume, and every user hits that wall. `SERVING_TO_RAW` below is the
-inversion; it is the reason this module exists.
+**Why this is stylebot's problem.** The adapter `train.py` exports is in
+*serving* key format, while `tinker_cookbook.weights.build_hf_model` expects
+*raw* Tinker keys and applies the same remap itself — so stylebot emits an
+artifact its own documented next step cannot consume. `SERVING_TO_RAW` below is
+the inversion, and the reason this module exists.
 
-**What stays with the caller.** Where manifests, adapters and outputs live, and
-what the merged model is named, are policy — this module takes explicit paths
-like every other phase. So is anything downstream of the merge: quantization
-settings, the config-key surgery a particular server needs, chat-template
-edits. Those are per-runtime and per-model, and baking one server's quirks in
-here is exactly the blog/generic boundary CLAUDE.md warns about.
+**What stays with the caller**: where artifacts live, what the merged model is
+named, and everything downstream of the merge — quantization, config surgery,
+chat-template edits are per-runtime policy, and baking one server's quirks in
+here is the blog/generic boundary CLAUDE.md warns about.
 
 Heavy imports (`safetensors`, `huggingface_hub`, `tinker_cookbook`) are lazy, so
-importing this module costs nothing and the key-inversion logic above stays
-testable without the ``trainer`` extra.
+the key-inversion logic stays testable without the ``trainer`` extra.
 """
 
 from __future__ import annotations
@@ -53,10 +46,9 @@ ADAPTER_CONFIG = "adapter_config.json"
 #: it expects (`model.layers.*`, `model.unembed_tokens`).
 #:
 #: Safe because the planner validates every mapped key against the base state
-#: dict — a wrong rename raises rather than silently corrupting weights — and
-#: because `merge_adapter` refuses an adapter whose `lora_alpha != r` (see
-#: `check_adapter_scaling`), which is the one case where a rename could change
-#: what the merged weights mean rather than just where they land.
+#: dict, and because `merge_adapter` refuses an adapter whose `lora_alpha != r`
+#: (`check_adapter_scaling`) — the one case where a rename could change what the
+#: merged weights mean rather than where they land.
 SERVING_TO_RAW: tuple[tuple[str, str], ...] = (
     ("base_model.model.model.language_model.", "base_model.model.model."),
     ("base_model.model.lm_head.", "base_model.model.model.unembed_tokens."),

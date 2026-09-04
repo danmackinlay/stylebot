@@ -44,20 +44,11 @@ from stylebot.targets import Target
 logger = logging.getLogger(__name__)
 
 # --- re-exports ---------------------------------------------------------------
-# The surface this module publishes on behalf of its implementation homes
-# (`stylebot.generators`, `stylebot.targets`). Every name here is reached by
-# ATTRIBUTE lookup — `synth.openrouter_generator`, `synth.iter_targets` — by
-# `stylebot.synth_cli`, `bin/ai_style.py` and livingthing, and that indirection
-# is what lets a test monkeypatch a factory at the one place production resolves
-# it. Direct `from stylebot.generators import …` is the better spelling for
-# anything that does not need patching, and both consumers already do that where
-# they can; this list is only what the attribute idiom actually requires.
-#
-# Keep it minimal, and check before adding: three names (`MAX_CHUNK_CHARS`,
-# `MERGE_MAX_CHUNK_CHARS`, `MIN_CHUNK_CHARS`) sat here unreached once
-# `ChunkPolicy` moved to its consumer, because nothing prunes this list on its
-# own. Names used by this module's own code are imported normally above and are
-# not part of it.
+# Names reached by ATTRIBUTE lookup (`synth.openrouter_generator`) by
+# `synth_cli`, `bin/ai_style.py` and livingthing — the indirection that lets a
+# test monkeypatch a factory where production resolves it. Anything not needing
+# that imports from `stylebot.generators` / `.targets` directly. Keep this list
+# minimal and check before adding: nothing prunes it on its own.
 from stylebot.generators import (  # noqa: E402, F401
     DEFAULT_GEN_TIMEOUT,
     DEFAULT_SLOP_MAX_TOKENS,
@@ -92,15 +83,10 @@ def transform_similarity(a: str, b: str) -> float:
 # modes, not covariates worth sampling.
 SESSION_WINDOW_FILL_CAP = 0.8
 # Extra draws after a TRANSIENT upstream failure (502/429/timeout), and the
-# first backoff between them — doubling thereafter. Distinct from
-# `gate_retries`, which redraws a draw that ARRIVED and was rejected on quality:
-# these two failures want different remedies and the counts must not be pooled.
-#
-# 2 (three attempts) because the fix that works is re-pinning the provider, not
-# waiting: the openai SDK already retries the same request, and a `502 Provider
-# returned error` means the upstream OpenRouter chose is sick, so attempts 2 and
-# 3 ask for a different one. Backoff starts short for the same reason — a synth
-# run is thousands of independent cells with other work to do.
+# first backoff, doubling thereafter. Distinct from `gate_retries`, which
+# redraws a draw that ARRIVED and was rejected on quality; the counts must not
+# be pooled. 2, and a short backoff, because the fix that works is re-pinning
+# the provider rather than waiting — the SDK already retried the same request.
 DEFAULT_GEN_RETRIES = 2
 _RETRY_BACKOFF_SECS = 2.0
 # Default per-session prompt-token budget, same for every model (cost grows
@@ -122,23 +108,18 @@ def _synth_key(
     prompt_id: str = "",
     replicate: str = "",
 ) -> str:
-    """Stable id for one synthetic pair — the resume/dedup cell identity.
+    """Stable id for one synthetic pair — the resume/dedup cell identity (D11).
 
     **Key on content, record circumstance.** Keyed: generator, strategy,
-    reasoning effort, prompt id, heading context, target text, and the optional
-    `replicate` label. NOT keyed: sampling params (continuous — they would
-    explode the key space) and anything positional, session membership above all,
-    being a runtime outcome that would make resume incoherent under drift.
+    reasoning effort, prompt id, heading context, target text, `replicate`. NOT
+    keyed: sampling params, anything positional, and session membership above
+    all (D13).
 
     **Also not keyed: the chunk budget.** Two budgets that cut a passage to
-    byte-identical text produce ONE cell, generated once and stamped
-    (`meta.merge_max_chars`) by whichever batch reached it first — so that field
-    records provenance, not the design cell a scale ablation would want, and an
-    interrupted batch shifts the labelling. Keying on the budget instead would
-    mint a duplicate pair per budget for identical text, multiplying the weight
-    of exactly the short passages the section wall already over-represents.
-    Measured overlap and what to do about it:
-    `_plans/v2-longer-rewrites.md`, "What `meta.merge_max_chars` actually means".
+    byte-identical text are ONE cell, stamped `meta.merge_max_chars` by whichever
+    batch reached it first — so that field records provenance, not a design cell.
+    Keying on it would mint a duplicate pair per budget for identical text
+    (`_plans/v2-longer-rewrites.md`).
     """
     h = hashlib.sha256()
     for part in (generator_name, strategy, reasoning_effort, prompt_id, context, target_text):
@@ -181,29 +162,15 @@ _QUOTE_FOLD = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"'})
 def coverage_key(body: str) -> str:
     """The key `skip_covered` compares target bodies on, cosmetic drift removed.
 
-    The corpus is a frozen record and deliberately does NOT track current prose,
-    so a post edited after its pair was generated re-reads as an uncovered target
-    and gets paid for twice. Most of that drift is *mechanical* — link-anchor
-    repair scripts, a bulk quote-curling pass, a sentence-per-line reflow — and
-    none of it is a difference the styler could learn, so it should not mint a
-    second pair for the same passage.
+    The corpus is a frozen record and does NOT track current prose, so a post
+    edited after its pair was generated re-reads as uncovered and gets paid for
+    twice; most of that drift is mechanical and not a difference the styler
+    could learn (D53).
 
-    Three folds, each one a difference `STYLE_SYSTEM` makes invisible:
-
-    1. **Inline link destinations.** The model is told to preserve links
-       verbatim, so a rewritten URL or `#fragment` carries no voice; the link
-       *text* is kept, being prose.
-    2. **Curly quotes and apostrophes**, folded to ASCII.
-    3. **Whitespace runs**, collapsed — a join is not an edit.
-
-    Deliberately NOT folded: case, punctuation generally, dashes, ellipses,
-    entity spellings, emphasis markers. Every extra rule risks collapsing two
-    genuinely distinct passages onto one key, and that failure is silent — the
-    second passage would never get a pair at all. Measured over the 3686 distinct
-    corpus bodies, these three produce **zero** collisions.
-
-    NOT `_synth_key`. That is the corpus's cell identity and stays keyed on raw
-    text; this normalisation lives entirely inside the coverage comparison.
+    Three folds, each a difference `STYLE_SYSTEM` makes invisible: inline link
+    **destinations**, curly **quotes**, and **whitespace** runs. Nothing else —
+    every extra rule risks collapsing two distinct passages onto one key, and
+    that failure is silent. NOT `_synth_key`, which stays keyed on raw text.
     """
     return " ".join(_LINK_DEST_RE.sub("]()", body).translate(_QUOTE_FOLD).split())
 
@@ -405,14 +372,11 @@ def _assign(
 ) -> list[tuple[Target, Generator, str]]:
     """Pair targets with generators → ``(target, generator, effective_context)``.
 
-    Default (rotate, `per_generator=False`): **rendezvous (highest-random-weight)
-    assignment** — score every arm as ``sha256(salt, arm_identity, text)``, take
-    the argmax, break ties on arm identity. Scoring on *content* rather than
-    position keeps the arm exchangeable with document position and each target's
-    arm independent of the rest of the set, so adding posts or editing the roster
-    does not re-key the corpus wholesale. Balance is multinomial, not exact;
-    `per_generator=True` crosses every target × every generator instead, at n×
-    the pairs and cost. `assign_seed` re-randomizes the whole design — NOTE that
+    Default (rotate, `per_generator=False`): **rendezvous assignment** — score
+    every arm as ``sha256(salt, arm_identity, text)``, take the argmax, break
+    ties on arm identity (D12). Balance is multinomial, not exact;
+    `per_generator=True` crosses every target x every generator instead, at n x
+    the pairs and cost. `assign_seed` re-randomizes the whole design, which
     changes which arm generated each target, so those assignments regenerate.
     """
     if not generators:
@@ -563,24 +527,16 @@ class _RunState:
 class PairsWriter:
     """An append handle for a corpus that will not duplicate a cell.
 
-    Takes a `pairs.jsonl` **or a shard directory** (`stylebot.corpus`). Each
-    record is routed to its own shard by `corpus.shard_of`, so a run appends
-    only to the current month's file and leaves every other shard byte-identical
-    — which is the property that makes `git diff --stat` after a synth run name
-    one file. Handles are opened lazily and kept, one per shard touched.
+    Takes a `pairs.jsonl` **or a shard directory**, routing each record by
+    `corpus.shard_of` so a run leaves every other shard byte-identical (D50).
+    Handles are opened lazily and kept, one per shard touched.
 
-    Every append is guarded by `corpus.corpus_lock`, and inside that lock the
-    writer catches up on **whatever was appended since it last looked** before
-    deciding. The catch-up is a tail read from a remembered byte offset over
-    *every* shard, not a re-read of the corpus: re-reading 38 MB per record
-    would be quadratic, which is why "re-read `seen` before each write" is not
-    on its own an implementable instruction. The duplicate-cell defect this
-    answers, and why the lock is one file per corpus rather than one per shard:
-    D36 and D50. Without `fcntl` it degrades to the unlocked-but-still-tail-
-    checking path rather than failing to write.
-
-    A rewrite may replace a shard mid-run, so both the handle and the offset are
-    checked against the shard's inode before they are trusted (D60).
+    Every append is guarded by `corpus.corpus_lock`, and inside it the writer
+    catches up on whatever was appended since it last looked — a tail read from a
+    remembered offset over *every* shard, since re-reading per record would be
+    quadratic (D36). Without `fcntl` it degrades to the unlocked-but-still-tail-
+    checking path. A rewrite may replace a shard mid-run, so handle and offset
+    are checked against the inode before they are trusted (D60).
     """
 
     def __init__(self, path: Path, seen: set[str]) -> None:
@@ -709,13 +665,10 @@ def _gate_verdict(slop: str, target_text: str, st: _RunState) -> tuple[str, str]
     sidecar, session covariates), which a redrawn sample must not repeat.
 
     **Every reason describes what the GENERATOR did**, never what the pair looks
-    like afterwards. The distinction is not pedantry: synthesis is a reverse
-    edit, so a defect in the generated slop surfaces as an apparent property of
-    Dan's prose, and a message phrased the second way reads as an accusation
-    against the one artifact here that is above suspicion. "target invents 3
-    anchors" is exactly backwards — the target is a fixed human passage that
-    invents nothing; the generator DELETED three links while producing slop, and
-    reversing that edit is what would teach invention.
+    like afterwards: synthesis is a reverse edit, so a defect in the generated
+    slop surfaces as an apparent property of Dan's prose. "target invents 3
+    anchors" is backwards — the generator DELETED three links while producing
+    slop, and reversing that edit is what would teach invention.
     """
     if st.max_transform_sim is not None:
         sim = transform_similarity(slop, target_text)
@@ -802,27 +755,15 @@ def _record_lost_draw(
     """Append one draw that produced no pair to `<data-dir>/lost_draws.jsonl`.
 
     **One file for both ways a draw is lost**, `kind="gate"` and `kind="error"`,
-    because the operational question is which of the two is eating a run — and
-    that was unanswerable while both were printed to stderr and discarded.
+    because the operational question is which of the two is eating a run. A
+    gated draw is paid for and never written, so this is the only record that it
+    happened — the denominator for an arm's rejection rate (every pair left in
+    the corpus passed the gate) and the discarded half of its spend, neither
+    recoverable from `pairs.jsonl` (D32).
 
-    **A gated draw is paid for and never written**, so without this its cost and
-    its very existence vanish when the run ends — the counters were computed,
-    printed to stderr and discarded. Two questions that matters for, both of
-    which came up the day the fabrication gate landed:
-
-    - *What is this arm's rejection rate?* Once a gate is on, every pair in the
-      corpus passed it, so the rate is no longer recoverable from `pairs.jsonl`
-      at all. The denominator is written pairs (which carry `meta.gen.cost`)
-      plus these lines; the numerator is these lines.
-    - *What is this arm really costing?* `meta.gen.cost` prices only surviving
-      draws, so an arm that fails half its draws looks half as expensive as it
-      is. `cost` here is the discarded spend.
-
-    Unconditional, like `prompts.jsonl` and unlike the reasoning sidecar: it is
-    one short line per lost draw, carries no prose, and is the only record that
-    a paid draw happened. `attempt` is 0 for the first draw; `redrawn` says
-    whether a further draw followed, so `redrawn=false` marks the cell as
-    actually lost rather than recovered.
+    Unconditional, like `prompts.jsonl`: one short line, no prose. `attempt` is
+    0 for the first draw; `redrawn=false` marks a cell actually lost rather than
+    recovered.
     """
     append_jsonl(
         data_dir / "lost_draws.jsonl",
@@ -1220,57 +1161,29 @@ def synthesize_pairs(
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
 
-    Idempotent and resumable: assignments whose content-only `meta.synth_key` is
-    already in the file are skipped, so re-running never duplicates and a crashed
-    run resumes where it stopped (records are appended one-per-line, flushed as
-    they go). Missing cells are freshly packed into sessions each run.
+    Idempotent and resumable: cells whose content-only `meta.synth_key` is
+    already in the corpus are skipped, so re-running never duplicates and a
+    crashed run resumes where it stopped (D11). Missing cells are freshly packed
+    into sessions each run.
 
     **Concurrency**: sessions run on an asyncio event loop, `max_workers` at a
-    time (single-threaded — writes and callbacks interleave only between awaits,
-    so no locks). Generator callables may be sync or async.
+    time, single-threaded, so no locks (D56). Generator callables may be sync or
+    async.
 
     **Sessions** (`session_turns > 1`): missing cells are chunked into live
-    multi-turn sessions, so every turn sees the real prior (passage → slop)
-    exchanges and the window-position covariate is honest self-conditioned
-    context. Fill is *measured*, not engineered — `prompt_tokens`,
-    `context_window` and `window_fill` in `meta.gen` are the analysis covariates.
+    multi-turn sessions, so every turn sees the real prior exchanges and fill is
+    *measured* (`prompt_tokens`, `context_window`, `window_fill` in `meta.gen`).
     **The token budget is the depth control**: a session ends at
-    `min(session_budget or session_max_tokens, SESSION_WINDOW_FILL_CAP × window)`
-    estimated prompt tokens, and turns it couldn't run REFLOW into fresh sessions
-    rather than being dropped.
+    `min(session_budget or session_max_tokens, SESSION_WINDOW_FILL_CAP x window)`
+    estimated prompt tokens, and turns it could not run REFLOW into fresh
+    sessions rather than being dropped.
 
-    **Hygiene gates** all share one shape: count loudly, write nothing, leave
-    the cell un-keyed so a re-run retries it and a consistently failing model
-    burns visible spend until it leaves the roster. `max_transform_sim` catches
-    identity output, `max_length_ratio` catches inflation, and
-    `drop_invented_anchors` catches fabrication — a target carrying a link, URL
-    or citation its slop never had, which after the reverse-edit swap teaches
-    the styler to conjure destinations it cannot know.
-
-    The fabrication gate is the one that defaults **on**, unlike its two
-    threshold-valued siblings: there is no number to tune and no defensible
-    setting on the other side, since a pair teaching link invention has no
-    legitimate use. `infer.is_anchor_faithful` is the matching `selector` for
-    pairs written before it existed (`_plans/anchor-integrity.md`, D32).
-
-    **`gate_retries`** spends up to N extra draws clearing a gate before giving
-    up on a cell. Worth setting whenever a gate is on: a rejected draw is paid
-    for either way, so a redraw costs no more than the drop, and without it a
-    gate quietly biases coverage toward whatever the roster finds easy.
-
-    Heading `context` is prepended verbatim to both sides of the pair while slop
-    is generated from the body only, so the heading is never paraphrased;
+    **Hygiene gates** share one shape: count loudly, write nothing, leave the
+    cell un-keyed so a re-run retries it (D32). Heading `context` is prepended
+    verbatim to both sides while slop is generated from the body alone (D14);
     `context_dropout` keeps a deterministic fraction heading-less. `dry_run`
-    plans and counts without calling any generator or writing, so generators may
-    be name-only `Generator(name, generate=None)` stubs.
-
-    **Provenance** (`meta.provenance`) is resolved ONCE per run and stamped on
-    every record: `blog_root` names the prose repo whose SHA and dirty flag go
-    on the pair, defaulting to the git work-tree containing `data_dir` — which
-    is the blog, in the only deployment there is, since that is where the corpus
-    is committed. The chunk policy and the source post's `automation` level ride
-    in on the `Target`s (`targets._post_targets` stamps them at cut time), so
-    the record says what the frontmatter *said then*, not what it says now.
+    plans without calling a generator. **Provenance** is resolved once per run
+    and stamped on every record (D36).
     """
     data_dir = Path(data_dir)
     pairs_path = config.pairs_path(data_dir)

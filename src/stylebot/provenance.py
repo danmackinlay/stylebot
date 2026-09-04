@@ -120,16 +120,10 @@ def _canonical(value: object) -> object:
 def policy_digest(policy: object | None) -> str | None:
     """A short, stable digest of a chunking policy — None for no policy.
 
-    **Hash whatever the producer actually holds.** Today that is a
-    `targets.ChunkPolicy` for synthetic pairs and the cut knobs (`gap_paras`,
-    `max_chars`, …) for captures; the two are different shapes and the digests
-    are therefore only comparable *within* a producer, which is the question
-    anyone asks of them ("were these pairs cut the same way?"). Taking the
-    object rather than a fixed field list means the digest keeps meaning what it
-    says once the blog composes its policy in one place.
-
-    Twelve hex chars: this discriminates a handful of hand-chosen diets, and is
-    printed in reports next to `_recut_digest`'s eight.
+    **Hash whatever the producer actually holds** — a `targets.ChunkPolicy` for
+    synthetic pairs, the cut knobs for captures — so the digests are comparable
+    *within* a producer, which is the question anyone asks of them. Twelve hex
+    chars, printed next to `_recut_digest`'s eight.
     """
     if policy is None:
         return None

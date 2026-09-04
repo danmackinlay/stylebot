@@ -1,40 +1,27 @@
 """Shared CLI kit for synth-style commands.
 
-`ai-style synth` and downstream blog wrappers (e.g. livingthing's
-`dan-style synth`) present the same knobs over the same engine; only *selection*
-(which posts, which selector) and a few pinned defaults differ per caller. This
-module is the single source for the shared surface so specializations override
-instead of copy-paste:
+`ai-style synth` and downstream blog wrappers present the same knobs over the
+same engine; only *selection* and a few pinned defaults differ per caller. This
+module is the single source for the shared surface:
 
-- the six frozen **option bundles** below, grouped along the seams of the
-  surface (by the consumer each group feeds). Each field declares its own flag
-  via `cli_options.opt()`, so a default exists in exactly one place;
-- `synth_options(bundles=…, defaults=…, exclude=…)` — the click decorator over
-  those bundles (`stylebot.cli_options` is the generic, app-agnostic kit);
-- `run_synth(targets, …)` — the whole command body after target selection:
-  count echo, `--sample`/`--report` short-circuit, generator construction
-  (incl. dry-run stubs), `synthesize_pairs`, result reporting, and the
-  `SynthGenerationError` raised when any pair failed.
+- the six frozen **option bundles** below, grouped by the consumer each feeds.
+  Each field declares its own flag via `cli_options.opt()`, so a default exists
+  in exactly one place;
+- `synth_options(bundles=..., defaults=..., exclude=...)` — the click decorator
+  over them;
+- `run_synth(targets, ...)` — the whole command body after target selection:
+  count echo, `--sample`/`--report` short-circuit, generator construction,
+  `synthesize_pairs`, result reporting, and `SynthGenerationError`.
 
 Per-command concerns stay with the caller: target selection options, the
-`--data-dir` resolution policy (the caller checks for the inspection modes
-first and passes None when nothing will be written, so its own "no silent
-default" message stays in its own command), and provenance tags. A callback's
-`**kw` becomes bundles via `pop_bundles`.
+`--data-dir` resolution policy, provenance tags. A callback's `**kw` becomes
+bundles via `pop_bundles`. `ChunkPolicy` (re-exported from `stylebot.targets`)
+feeds `iter_targets` on the *selection* side, before `run_synth` sees a target.
 
-`ChunkPolicy` (re-exported from `stylebot.targets`, which consumes it) feeds
-`iter_targets` on the *selection* side, before `run_synth` ever sees a target;
-the other five bundles feed `run_synth` itself.
-
-**click declares this module's options; it does not decide its control flow,
-and it does not own its output.** The option bundles carry
-`click.Choice`/`click.Path` types because they exist to become flags, but the
-library entry points raise the `SynthError` family below and never exit the
-process, and they write their progress and summary lines to a caller-supplied
-`emit` sink (`stylebot.cli_options.Emitter`) that defaults to silence.
-`bin/ai_style.py` translates the errors into exit codes and passes
-`click_emitter()` for the rendering; both consequences are decided at the CLI
-boundary, not here.
+**click declares this module's options; it does not decide its control flow or
+own its output.** The library entry points raise the `SynthError` family and
+never exit, and they write to a caller-supplied `emit` sink defaulting to
+silence; `bin/ai_style.py` decides exit codes and rendering (D47).
 """
 
 from __future__ import annotations
@@ -90,17 +77,10 @@ _HEARTBEAT_SECS = 20.0
 
 
 # ---------------------------------------------------------------------------
-# The error vocabulary. A library function reachable without click must not
-# hand its caller a CLI exception, and must never exit the process — so nothing
-# here raises `click.UsageError` / `click.BadParameter` / `click.ClickException`
-# or `SystemExit`.
-#
-# These three were synth's own hierarchy until 2026-09-03; they are now three
-# named specializations of `stylebot.errors`' two classes, which every other
-# module raises too. `cli_options.translate_errors` is the one place any of
-# them becomes an exit code (config 2, run 1), so `synth`'s codes and
-# `train`'s can no longer differ by which `except` clause a command happened to
-# write.
+# The error vocabulary: three named specializations of `stylebot.errors`' two
+# classes (D47). A library function reachable without click must not hand its
+# caller a CLI exception, so nothing here raises one or exits the process;
+# `cli_options.translate_errors` is where they become exit codes.
 # ---------------------------------------------------------------------------
 
 
@@ -146,15 +126,10 @@ class SynthGenerationError(SynthRunError):
 # ---------------------------------------------------------------------------
 # The option bundles: the surface grouped along its seams, one frozen dataclass
 # per consumer. Each field carries its own flag (`opt(default, *decls, **kw)`),
-# so a default is declared exactly once and `run_synth` — a public library
-# entry point reachable without click — cannot drift from the CLI. A field
-# WITHOUT `opt()` is library-only: no flag, set by a caller in code.
-#
-# `ChunkPolicy` is the one bundle NOT declared here: it belongs to
-# `stylebot.targets`, whose `iter_targets` consumes it, and it carries its own
-# flags for the same reason the five below do. Re-exported rather than
-# relocated: it is part of this kit's surface, so a wrapper reaches it as
-# `synth_cli.ChunkPolicy`.
+# so a default is declared exactly once and `run_synth` cannot drift from the
+# CLI; a field WITHOUT `opt()` is library-only. `ChunkPolicy` is the one bundle
+# not declared here — it belongs to `stylebot.targets` — but is re-exported, so
+# a wrapper reaches it as `synth_cli.ChunkPolicy`.
 # ---------------------------------------------------------------------------
 
 
@@ -898,32 +873,18 @@ def run_synth(
     """Everything after target selection, shared by all synth-style commands.
 
     The knobs arrive as **option bundles** — ``run_synth(targets, data_dir=d,
-    gen=GenOpts(max_tokens=900))``, or splatted from ``pop_bundles(kw)`` in a
-    click callback. `ChunkPolicy` is not among them: it is consumed on the
-    selection side, by `iter_targets`.
-
+    gen=GenOpts(max_tokens=900))``, or splatted from ``pop_bundles(kw)``.
+    `ChunkPolicy` is not among them: it is consumed on the selection side.
     `data_dir` may be None **only** for the inspection modes, which write
-    nothing and need no corpus location or API keys: the caller decides
-    whether to resolve it (and owns its own "no silent default" message)
-    before calling, having seen `--sample`/`--report` first. Library callers
-    may inject ready-made `generators`, bypassing the OpenRouter construction
-    entirely. Returns the SynthResult, or None when an inspection mode
+    nothing and need no keys; the caller resolves it (and owns its "no silent
+    default" message) after seeing `--sample`/`--report`. Library callers may
+    inject ready-made `generators`. Returns the `SynthResult`, or None when
     short-circuited.
 
-    `emit` is where the substrate/count lines, the progress heartbeat, the
-    per-error lines and the run summary go — an `Emitter`
-    (`emit(message, level=…)`). **The default is silence**: a library caller
-    that asks for none gets a clean stdout and stderr, and everything the run
-    would have said is either in the returned `SynthResult` or on the raised
-    `SynthGenerationError`. A CLI passes `click_emitter()` (re-exported here),
-    which is the single place the stream-and-colour routing lives, so this
-    module's twin front-ends — `ai-style synth` and livingthing's `dan-style
-    synth` — cannot render the same run two different ways.
-
-    Raises `SynthConfigError` for an unusable configuration, `SynthRunError`
-    when the environment can't serve the run, and `SynthGenerationError` (which
-    carries the result) when pairs failed to generate. It does not exit the
-    process — see the note at the top of the module.
+    `emit` takes the counts, heartbeat, errors and summary and **defaults to
+    silence**; a CLI passes `click_emitter()`. Raises `SynthConfigError`,
+    `SynthRunError` or `SynthGenerationError` (which carries the result), and
+    never exits the process (D47).
     """
     say: Emitter = emit if emit is not None else silent
     gen = gen if gen is not None else GenOpts()
@@ -964,14 +925,10 @@ def run_synth(
         )
         say(f"substrate: {before} -> {len(targets)} target chunk(s) ({detail})")
 
-    # The frozen-eval guard. `splits.json` pins the posts the final eval scores;
-    # cutting their prose as synthesis targets trains the styler on the metric.
-    # Nothing enforced this before: `--role` is optional and the blog's canonical
-    # corpus run (RUNBOOK §6) passes no role at all, so an eval post that had
-    # been renamed out of its pinned path went straight into the training diet
-    # (2026-09-03). The guard therefore does not wait to be asked: it consults
-    # the corpus's own `splits.json` when `--splits` was not given, and the only
-    # way past it is the deliberate `--role eval`.
+    # The frozen-eval guard (D34): cutting eval-pinned prose as a synthesis
+    # target trains the styler on the metric, and `--role` is optional, so this
+    # does not wait to be asked — it consults the corpus's own `splits.json`
+    # when `--splits` was not given, and only `--role eval` gets past it.
     if substrate.role != "eval":
         eval_splits = loaded
         if eval_splits is None:

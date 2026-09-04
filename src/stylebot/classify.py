@@ -32,14 +32,10 @@ from stylebot.errors import RunError
 # here — livingthing supplies a sentence-transformers one; tests supply a stub.
 EmbedFn = Callable[[str], Sequence[float]]
 
-#: What identifies the *instrument* on a score, as opposed to the score itself.
-#: One classifier is the best-of reranker, the do-no-harm guard AND the verdict
-#: metric, and it gets refit whenever the corpus grows — so "P(slop) went down"
-#: is meaningless unless the two numbers came from the same head. `name` and
-#: `embed_model` were already carried; the artifact's `git_sha` / `trained_at` /
-#: `n_pairs` are what actually distinguish two refits of the same recipe, and
-#: they were the three that went unrecorded (run 4a's detector was refit the same
-#: day as the verdict it produced — `_plans/findings.md`, "Run 4").
+#: What identifies the *instrument* on a score, as opposed to the score itself
+#: (D39). One classifier is the reranker, the do-no-harm guard AND the verdict
+#: metric, and it is refit whenever the corpus grows; `git_sha` / `trained_at` /
+#: `n_pairs` are what distinguish two refits of the same recipe.
 DETECTOR_IDENTITY_KEYS = ("name", "embed_model", "git_sha", "trained_at", "n_pairs")
 
 
@@ -97,20 +93,15 @@ def embedding_classifier_detector(
 
     The returned callable embeds the passage, applies the logistic head, and
     returns ``{"score": P(slop), "p_dan": 1 - P(slop), "configured"}`` plus every
-    `DETECTOR_IDENTITY_KEYS` field the artifact's `meta` could answer — so a
-    `scores.jsonl` row says which head produced it, not merely that some head
-    did. The same dict (minus the score) is attached to the callable as
-    ``.identity``, which is how `eval.detector_identity` asks the question
-    without spending an embed.
+    `DETECTOR_IDENTITY_KEYS` field the artifact's `meta` could answer (D39). The
+    same dict minus the score is attached as ``.identity``, which is how
+    `eval.detector_identity` asks without spending an embed.
 
-    The embedding dimension MUST match ``len(head["coef"])`` — a mismatch means
-    the wrong embedder was wired, which would score garbage, so it raises
-    ``ValueError`` rather than guessing.
-
-    Given a `batch_embed_fn` (``encode(texts, batch_size=…) -> [N, D]``), the
-    detector also carries a **``.batch_detect(texts) -> list[dict]``** attribute
-    that scores many passages through ONE `encode` call (1.56x; D57). A caller
-    holding many texts should reach it through `detect_many`.
+    The embedding dimension MUST match ``len(head["coef"])``: a mismatch means
+    the wrong embedder was wired, so it raises ``ValueError`` rather than
+    scoring garbage. Given a `batch_embed_fn` the detector also carries
+    ``.batch_detect(texts) -> list[dict]``, scoring many passages through ONE
+    `encode` (1.56x; D59) — reach it through `detect_many`.
     """
     coef = head["coef"]
     intercept = float(head["intercept"])

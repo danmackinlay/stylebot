@@ -1,23 +1,8 @@
 """One-off data migrations: rewrite corpus state already on disk to a new schema.
 
-These used to be loose files under `scripts/`, the single carve-out from the
-"one entry point, subcommands" rule in CLAUDE.md. The carve-out cost more than
-it saved, and W5 (2026-09-03) closed it:
-
-* `scripts/` is not in the wheel, so `pip install stylebot` shipped a package
-  whose own error message (`capture.iter_archives`) named a file the user did
-  not have. The blog had to reach across the seam — `uv run python
-  ../stylebot/scripts/migrate_capture_archives.py` in two places in its
-  RUNBOOK — which is a hardcoded blog→stylebot *path*, the arrow W5 exists to
-  straighten.
-* "Typed once per schema change" was aspirational: only the prune script ever
-  grew a test, though CLAUDE.md claimed both had one.
-
-So the mechanism lives here, as ordinary typed library functions, and
-`ai-style data` (a **hidden** click group — see `bin/ai_style_data.py`) is the
-thin shell over it. Hidden keeps the promise the carve-out was really making:
-the `--help` tree stays the pipeline, uncluttered by commands nobody should be
-migrating with twice.
+Ordinary typed library functions, with `ai-style data` (a **hidden** click
+group, `bin/ai_style_data.py`) as the thin shell over them. Why they are not
+loose files under `scripts/`, and why the group is hidden: D38.
 
 Everything here is *deletable*. A migration is spent once the only corpus that
 exists has been through it (`restamp_style_system` and `prune_stale_synth_pairs`
@@ -27,7 +12,7 @@ dead code. Delete the function, its command and its test together.
 Three live migrations:
 
 `plan_stale_prune`
-    The corpus consequence of a policy change (W12): synthetic cells no current
+    The corpus consequence of a policy change (D53): synthetic cells no current
     cut reproduces, and synthetic cells sitting on frozen-eval prose.
 
 `migrate_captures` / `migrate_snapshots`
@@ -64,25 +49,14 @@ Log = Callable[[str], None]
 # ---------------------------------------------------------------------------
 # Legacy capture archives -> directories
 #
-# The old format put whole documents inside a one-line JSON file as escaped
-# strings:
+#     captures/<id>.json        -> captures/<id>/{before.md, after.md, meta.json}
+#     snapshots/<p>.qmd.json    -> snapshots/<p>.qmd/{content.md, meta.json}
 #
-#     captures/<capture_id>.json      {capture_id, source, snapped_at, whole,
-#                                      before_text, after_text}
-#     snapshots/<path>.qmd.json       {source, snapped_at, content}
-#
-# which is unreadable, unopenable and undiffable — perverse, given the
-# before->after diff IS the training signal. The new format puts the documents
-# on disk as ordinary files:
-#
-#     captures/<capture_id>/{before.md, after.md, meta.json}
-#     snapshots/<path>.qmd/{content.md, meta.json}
-#
-# `.md` and not `.qmd` deliberately: the blog's pre-commit hook reformats staged
-# `*.qmd` (which would destroy the verbatim record), `qmd` search indexes
-# `**/*.qmd` (which would return captured slop as if Dan wrote it), and
-# `iter_targets` samples `**/*.qmd` as synthesis targets. `.md` is invisible to
-# all three.
+# The old form escaped whole documents into one JSON line: unopenable and
+# undiffable, given the before->after diff IS the training signal. `.md` and not
+# `.qmd` deliberately — the blog's pre-commit hook reformats staged `*.qmd`, the
+# `qmd` index would return captured slop as Dan's, and `iter_targets` samples
+# `**/*.qmd`. `.md` is invisible to all three.
 # ---------------------------------------------------------------------------
 
 
@@ -213,16 +187,8 @@ def migrate_capture_archives(data_dir: Path, *, apply: bool, log: Log = print) -
 # ---------------------------------------------------------------------------
 # Anchor-invention cull (D32)
 #
-# Reverse-edit synthesis produces these directly: a generator that drops a link
-# while "improving" a paragraph becomes, after the swap, a training example
-# reading *given text without links, produce text with these links*. Measured
-# over the 4,595-pair corpus, 855 pairs (18.6%) did exactly that — half of the
-# invented anchors being external URLs whose destination no model can know.
-# Fabrication outnumbers the loss case the old guard checked by roughly 7:1
-# (stylebot#1, D32).
-#
-# `--drop-invented-anchors` now gates this at synthesis time and defaults on, so
-# no run after 0.3.0 writes such a pair. This is the one-off for the corpus that
+# `--drop-invented-anchors` gates this at synthesis time and defaults on, so no
+# run after 0.3.0 writes such a pair; this is the one-off for the corpus that
 # predates the gate. `infer.is_anchor_faithful` is the same predicate as a
 # training-assembly `selector`, for anyone who would rather filter than cull.
 # ---------------------------------------------------------------------------
@@ -243,16 +209,11 @@ def find_inventing(pairs_path: Path, *, include_real: bool) -> tuple[list[dict],
     """`(records_to_keep, report)`. Reads only; decides nothing about writing.
 
     **Synthetic and real pairs are different propositions, so `include_real`
-    defaults off wherever this is called.** A synthetic cell that goes is
-    *regenerable*: it leaves its `synth_key` missing, so the next `ai-style
-    synth` refills it — under the gate this time, and with `--gate-retries` most
-    cells clear on a redraw. A real pair is a captured record of an edit Dan
-    actually made and nothing can bring it back but git. They also fail
-    differently: 51.4% of what the synthetic stratum invents is an external URL
-    (a generator artifact), against 11.5% for the real stratum, which is
-    dominated by internal cross-references (53.8%) and citation keys (26.9%) —
-    Dan wiring a note into his own graph while editing. That is genuine
-    practice, even though the styler cannot learn to reproduce it.
+    defaults off wherever this is called** (D32): a culled synthetic cell leaves
+    its `synth_key` missing and the next `synth` refills it under the gate, while
+    a real pair records an edit Dan made and only git brings it back. They also
+    fail differently — the synthetic stratum invents external URLs, the real one
+    internal cross-references and citation keys (findings.md).
     """
     keep: list[dict] = []
     kinds: Counter[str] = Counter()
@@ -315,30 +276,20 @@ def write_pruned(pairs_path: Path, keep: list[dict]) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Stale-cell prune (W12): orphans, and eval contamination
+# Stale-cell prune: orphans, and eval contamination (D53)
 #
 # Two independent reasons a synthetic cell on disk no longer matches the policy
-# that would produce it, both introduced by fixes rather than by rot:
+# that would produce it: an ORPHAN (`synth_key` hashes the target TEXT, so a
+# policy change orphans a cell rather than colliding with it, and no future run
+# regenerates it), and EVAL CONTAMINATION (flagless runs cut frozen-eval prose
+# before `synth` learned to refuse the stratum — D34 stops it recurring but
+# cannot remove what is there).
 #
-# 1. ORPHANS. `synth_key` hashes the target TEXT, so a segmentation or policy
-#    change orphans a cell rather than colliding with it: the pair stays, and no
-#    future `synth` run regenerates it, because no cut asks for that text any
-#    more. This is the situation the 2026-08-10 `prune_stale_synth_pairs.py`
-#    handled for the unanchored-`$$` defect (A5) and was deleted after use.
-#
-# 2. EVAL CONTAMINATION. Until W0 gave `role_of` an alias map and taught `synth`
-#    to refuse the eval stratum, flagless runs cut frozen-eval prose as training
-#    targets. The guard stops it recurring; it cannot remove what is there.
-#
-# **Real captures are never orphans, and the asymmetry is structural rather than
-# a kindness.** A capture's target comes from a paragraph diff of an edit
-# archive (`capture.recut_archives`), never from `iter_targets`, so asking
-# whether the chunker reproduces it is a category error — it was not chunked.
-# `find_orphans` therefore reports real pairs as UNCHECKED, not as clean, and
-# refuses to drop one whatever the flags say. The same asymmetry, for the
-# different reason that a captured edit is irreplaceable, spares real pairs on
-# eval posts: `ai-style log save` warns on an eval post rather than refusing,
-# because capturing yourself de-slopping held-out prose is real editing work.
+# **Real captures are never orphans**, structurally: a capture's target comes
+# from a paragraph diff of an edit archive, never from `iter_targets`, so asking
+# whether the chunker reproduces it is a category error. `find_orphans` reports
+# real pairs as UNCHECKED, not clean, and refuses to drop one whatever the flags
+# say.
 # ---------------------------------------------------------------------------
 
 
@@ -361,11 +312,9 @@ def cell_diet(meta: dict, policy: ChunkPolicy) -> Diet:
 def diet_policy(policy: ChunkPolicy, diet: Diet) -> ChunkPolicy:
     """`policy` re-pinned to one cell's diet.
 
-    Asking every cell for the live budget is what made the corpus-stability
-    harness read a third of the corpus as broken: a 4500-char merge is not
-    reproducible under a 1500-char budget, and a cross-heading target is not
-    reproducible under section-bounded packing. Each regime is asked only for
-    the cells it cut.
+    Asking every cell for the live budget made the corpus-stability harness read
+    a third of the corpus as broken: a 4500-char merge is not reproducible under
+    a 1500-char budget. Each regime is asked only for the cells it cut.
     """
     mode, budget = diet
     return replace(policy, cross_heading=mode == CROSS_HEADING, merge_max_chars=budget)
@@ -419,21 +368,15 @@ def find_orphans(
 ) -> tuple[set[tuple[str, str]], OrphanReport]:
     """Cells the current cut no longer produces: `({(source, target body)}, report)`.
 
-    Re-cuts each source ONCE per diet present in the corpus for it, and calls a
+    Re-cuts each source ONCE per diet present in the corpus for it, calling a
     pair orphaned when its target body is absent from the derived set. The
-    identity returned is `(canonical source, target body)` rather than a
-    `synth_key`, because several generators' pairs share one target and a cell
-    that stopped existing takes all of them.
+    identity is `(canonical source, target body)` rather than a `synth_key`,
+    since several generators' pairs share one target.
 
-    Reads the blog's WORKING TREE, deliberately: the question a prune asks is
-    "would the next synth run regenerate this?", and the next synth run reads
-    the tree. That conflates a policy change with Dan having edited the post
-    since — which is why the caller should also read the same measurement
-    against a pinned revision (the blog's `tests/test_corpus_stability.py`) to
-    separate the two. Prose drift is not a reason to delete a pair.
-
-    `splits` is optional and used only for `canonical_source`, so a post renamed
-    since generation is re-cut at its new path rather than counted as missing.
+    Reads the blog's WORKING TREE deliberately — a prune asks "would the next
+    synth run regenerate this?" — which conflates a policy change with prose
+    drift; separate the two against a pinned revision (D53). `splits` is used
+    only for `canonical_source`, so a renamed post is re-cut at its new path.
     """
     cells = _corpus_cells(pairs_path, policy, splits)
     derived: dict[tuple[str, Diet], set[str] | None] = {}
@@ -615,16 +558,13 @@ def styler_passage_scale(
 ) -> dict:
     """Passage accounting for the styler train set a corpus would produce.
 
-    The number W9 made the point of: real pairs are a far larger share of train
-    *passages* than of train *pairs*, because the budget sweep walked the
-    synthetic side several times and the captures once. A prune is worth doing
-    only if it moves that, so a prune report has to be able to say so.
+    Real pairs are a far larger share of train *passages* than of train *pairs*,
+    because the budget sweep walked the synthetic side several times and the
+    captures once (D43); a prune is worth doing only if it moves that.
 
-    Deliberately NOT a call into `train.assemble_training_corpus`: that
-    validates and hashes a FILE, and this must answer for a record list that
-    does not exist on disk yet. It reproduces the same role filter and the same
-    passage grouping, and nothing else — no val split, since the dilution
-    question is about the train side.
+    Deliberately NOT a call into `train.assemble_training_corpus`, which
+    validates and hashes a FILE: this answers for a record list not yet on disk.
+    Same role filter and passage grouping, no val split.
     """
     from stylebot.train import passage_groups
 

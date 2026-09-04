@@ -1,44 +1,29 @@
 """
 ai-style log: capture (slop -> Dan rewrite) training pairs for the fine-tune.
 
-Phase 1 of the plan at `_plans/OVERVIEW.md`. Every time Dan rewrites
-an AI draft, we want the (before, after) so it can go into the corpus. The
-capture is deliberately manual — invoked by hand, no automation, no git hook,
-no surprise side effects.
-
-The cycle is one rewrite of one file per session:
+Phase 1 of `_plans/OVERVIEW.md`: every time Dan rewrites an AI draft, keep the
+(before, after). Deliberately manual — no automation, no git hook, no surprise
+side effects. One rewrite of one file per session:
 
     uv run ai-style log open <file>    # record the current text as "before"
     # ... user edits the file by hand, across one or more sittings ...
-    uv run ai-style log save <file>    # write pair(s) for what changed, close session
+    uv run ai-style log save <file>    # write pair(s) for what changed, close
 
-`save` diffs at paragraph granularity and emits one pair per changed region,
-not one pair per file. Pairs land in `$STYLEBOT_DATA_DIR/pairs.jsonl` in the
-shared chat-completion contract that Phase 2 synthesis also writes and Phase 3
-training reads.
+`save` diffs at paragraph granularity and emits one pair per changed region.
+Pairs land in the corpus in the chat-completion contract Phase 2 also writes and
+Phase 3 reads.
 
-This module is a **click shell**, nothing more: it declares the flags, resolves
-the store, calls `stylebot.session`, and prints. The mechanism sits in two
-modules below it — `stylebot.capture` does the diffing and the pair records,
-`stylebot.session` owns snapshot persistence, symlink canonicalisation, `save`'s
-disposition rule and `tidy`'s latest-wins rule. Those four were reachable only
-through click's `CliRunner` until 2026-09.
+This module is a **click shell**: it declares flags, resolves the store, calls
+`stylebot.session`, and prints. `stylebot.capture` does the diffing and the pair
+records; `stylebot.session` owns snapshot persistence, symlink canonicalisation,
+`save`'s disposition rule and `tidy`'s latest-wins rule (D35). The user-facing
+workflow is `_training_pairs/README.md`.
 
-The full workflow — chunking rules, the `snapped_at` disposition of prior
-pairs, the `--replace`/`--append`/`--keep-open`/`--redo` flags, editing
-cadence, the one-shot `pair` entry point, and the on-disk layout — is
-documented for users in `_training_pairs/README.md`.
-
-Errors follow the one `ai-style` idiom, which since 2026-09-03 is the whole
-package's: the library raises `errors.ConfigError` when the flags themselves
-are wrong (contradictory or missing a companion — exit 2) and
-`session.SessionError`, a `errors.RunError`, when the flags are fine but the
-world is not (no open session, nothing changed — exit 1). The translation is
-`ErrorTranslatingGroup` on the group below, not `except` clauses in each
-command; what stays here is the handful of `click.UsageError`s for flag
-*combinations*, which only click can see. Never a bare `sys.exit` after an
-`echo(err=True)`: raising leaves the exit code and the "Error:" prefix to
-click, which is what makes the two classes distinguishable to a caller.
+Errors follow the package idiom (D47): `ConfigError` for wrong flags (exit 2),
+`session.SessionError` — a `RunError` — for a world that is not ready (exit 1),
+translated by `ErrorTranslatingGroup` rather than per-command `except` clauses.
+What stays here is the `click.UsageError`s for flag *combinations*, which only
+click can see.
 """
 
 from __future__ import annotations
@@ -109,23 +94,12 @@ def capture_options(**kw):
     return bundle_options([CaptureOpts], **kw)
 
 
-# Root for all logged state (the corpus), resolved through `stylebot.config` —
-# the one home of the `--flag` > `$STYLEBOT_DATA_DIR` > cwd-relative
-# `_training_pairs` ladder. `ai-style log` passes no flag: it is the
-# convenience command where a mistake is cheap, so it takes the env/default.
-#
-# Why configurable: the corpus is the project's valuable, *private* asset. The
-# stylebot code repo is public, so the corpus must live outside it. The logger
-# runs in the blog repo and writes there; downstream phases (synthesis,
-# training) run in this repo and point STYLEBOT_DATA_DIR at the same corpus.
-# Both default and override are gitignored. See `_training_pairs/README.md`.
-#
-# Resolved lazily (per command, not at import time). Import-time constants
-# freeze whatever the environment looked like when the module was first
-# imported, which is the wrong moment: `log` is imported by the CLI entry point
-# and by tests, and in 2026-08 that made it the one subcommand that could
-# quietly write to a cwd-relative `_training_pairs/` instead of the configured
-# corpus. Resolving per use is a dict lookup — there is nothing to cache.
+# Root for all logged state, resolved through `stylebot.config` — the one home
+# of the `--flag` > `$STYLEBOT_DATA_DIR` > cwd-relative ladder (D45). `ai-style
+# log` passes no flag: it is the command where a mistake is cheap, so it takes
+# the env/default. Resolved lazily, per command: an import-time constant freezes
+# whatever the environment looked like when the CLI entry point imported this
+# module, which is how `log` once wrote to a cwd-relative `_training_pairs/`.
 def _store() -> SessionStore:
     """The session/corpus store for this invocation."""
     return SessionStore.resolve()
@@ -340,16 +314,11 @@ def save_session(
     By default emits one pair per changed paragraph region (use --whole for
     one whole-file pair).
 
-    Disposition of prior pairs for this source is **smart by default**:
-    pairs from the *same* session (matching `meta.snapped_at`) are replaced
-    — these are interim saves from `--keep-open` that should not stack —
-    while pairs from *earlier sessions* (different `snapped_at`) are kept,
-    because they represent legitimate prior rewrites of the same file
-    that both belong in the training corpus.
-
-    Override the default with --replace (force full replace, dropping
-    cross-session pairs too) or --append (force keep everything, even
-    interim pairs from the current session).
+    Disposition of prior pairs for this source is **smart by default**: pairs
+    from the *same* session (matching `meta.snapped_at`) are replaced, since
+    those are interim `--keep-open` saves that should not stack, while pairs
+    from earlier sessions are kept as legitimate prior rewrites. Override with
+    --replace (drop cross-session pairs too) or --append (keep everything).
     """
     if force_replace and force_append:
         raise click.UsageError("--replace and --append are mutually exclusive")

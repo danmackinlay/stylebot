@@ -74,18 +74,11 @@ def shard_pairs_cmd(data_dir: Path, apply: bool, keep_file: bool) -> None:
     """Split `<data-dir>/pairs.jsonl` into the `<data-dir>/pairs/` shard layout.
 
     One file becomes `captures.jsonl` plus one `synth-<YYYY-MM>.jsonl` per month
-    (`stylebot.corpus.shard_of` is the rule, and its docstring the argument).
-    Nothing else changes: same records, same order within a shard, same ids.
-
-    Committing a corpus means every append rewrites a whole blob, and git stores
-    each version at roughly its compressed size — measured on the blog,
-    2026-09-03: 122 versions of a 38 MB `pairs.jsonl`, 1.54 GB of a 1.8 GB
-    `.git`. Sharding makes the file a write TOUCHES small, which is the quantity
-    the commit count multiplies.
+    (`stylebot.corpus.shard_of` is the rule, D50 the argument). Nothing else
+    changes: same records, same order within a shard, same ids.
 
     A one-off: run it once per corpus and never again. `config.pairs_path`
-    prefers `pairs/` from the moment it exists, so every reader and writer
-    follows without a flag.
+    prefers `pairs/` from the moment it exists, so every reader follows.
 
         uv run ai-style data shard-pairs _training_pairs --apply
     """
@@ -200,15 +193,11 @@ def _import_attr(spec: str, hint: str):
 def _load_policy(spec: str):
     """Import `module:callable` and call it for a `ChunkPolicy`.
 
-    **The one knob that cannot be a flag, and the reason the whole command takes
-    a factory rather than a flag bundle.** A re-cut is only worth measuring
-    against the policy that will actually produce the corpus, and half of that
-    policy is not expressible on a command line: `div_is_prose` is a *predicate*,
-    and which `:::` classes wrap prose is the caller's policy, not stylebot's.
-    Re-composing the blog's diet out of `--merge-max-chars`-style flags is
-    exactly the hand-composition W2 abolished — three composers that did not
-    agree, one of which quietly dropped `div_is_prose` and charged the corpus 70
-    cells for it. So the user names the one composed policy object instead:
+    **The one knob that cannot be a flag**, and the reason this command takes a
+    factory rather than a flag bundle: `div_is_prose` is a *predicate*, and
+    re-composing the blog's diet out of flags is the hand-composition that
+    charged the corpus 70 cells when one composer dropped it (D29). The user
+    names the composed policy object instead:
 
         --policy livingthing.training_targets:chunk_policy
 
@@ -281,21 +270,14 @@ def prune_stale_cmd(
 ) -> None:
     """Drop cells the current policy would not produce, and eval contamination.
 
-    The corpus consequence of two fixes rather than of rot (W12). `synth_key`
-    hashes target TEXT, so a policy change ORPHANS a cell instead of colliding
-    with it: the pair stays and no future `synth` run regenerates it. And until
-    `role_of` learned about renames, flagless runs cut frozen-eval prose as
-    training targets; the guard stops it recurring but removes nothing.
-
-    **Real captures are never dropped.** They come from paragraph diffs of edit
-    archives, never from `iter_targets`, so the orphan question does not apply
-    to them and the report says UNCHECKED rather than clean; on eval posts they
-    are spared because a captured edit is irreplaceable.
+    The corpus consequence of two fixes rather than of rot: an ORPHAN (no future
+    `synth` run regenerates that cell) and eval contamination (D53). **Real
+    captures are never dropped** — the orphan question does not apply to them,
+    so the report says UNCHECKED rather than clean.
 
     An orphan is not automatically a mistake. Read the split this prints between
-    a policy change (which a re-cut caused, and which a paid re-synth can refill
-    where the diet is still live) and prose Dan has simply edited since — the
-    latter is the corpus being a frozen record of prose that moved, not damage.
+    a policy change and prose Dan has simply edited since; the latter is the
+    corpus being a frozen record of prose that moved, not damage.
 
         uv run ai-style data prune-stale _training_pairs/pairs.jsonl \\
             --blog-root . --splits _training_pairs/splits.json \\

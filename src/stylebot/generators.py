@@ -323,11 +323,9 @@ def openai_generator(
     `openrouter_generator` uses; `extra_body` passes provider-specific knobs
     through. `generate` returns a `GenOutput` of covariates plus token usage.
 
-    `model` is required. It carried a default until 0.3.1, which no caller ever
-    used — every arm in this package reaches here through
-    `openrouter_generator`, which always names a model — so the default's only
-    effect was to let a caller who forgot the argument silently bill a model
-    they did not choose.
+    `model` is required, and deliberately has no default: the only thing one
+    ever did was let a caller who forgot the argument silently bill a model they
+    did not choose.
     """
     import openai
 
@@ -484,10 +482,9 @@ def openrouter_generator(
     `meta.generator`. Reads `OPENROUTER_API_KEY` (required) and optional
     `OPENROUTER_BASE_URL` from the environment.
 
-    Many models (Qwen3, Nemotron, …) reason by default, which on a paraphrase
-    burns the token budget (≈14× completion tokens) and truncates the output;
-    `_reasoning_extra_body` maps `reasoning_effort` per model family. See
-    `DEFAULT_REASONING_EFFORT`.
+    Many models reason by default, which on a paraphrase burns the token budget
+    and truncates the output (D10); `_reasoning_extra_body` maps
+    `reasoning_effort` per model family.
     """
     from stylebot import config
 

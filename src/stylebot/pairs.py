@@ -25,25 +25,18 @@ from stylebot.provenance import PROVENANCE_KEYS
 #: The `meta.schema_version` stamped on every record written from now on.
 #:
 #: 1 is the shape as it stood on 2026-09-03: the message triple, the required
-#: meta keys below, and `meta.provenance`. The four earlier shape changes went
-#: unversioned, which is why nothing downstream can tell a pre-provenance record
-#: from a producer that failed to stamp one — records with NO `schema_version`
-#: are exactly the pre-2026-09 corpus, and that is the version-0 tell.
-#:
-#: Bump only for a change a consumer must branch on. Adding an optional meta key
-#: is not one; changing what an existing key MEANS is.
+#: meta keys below, and `meta.provenance`. A record with NO `schema_version` is
+#: exactly the pre-2026-09 corpus (D36). Bump only for a change a consumer must
+#: branch on: adding an optional meta key is not one, changing what an existing
+#: key MEANS is.
 PAIR_SCHEMA_VERSION = 1
 
-# meta keys every well-formed pair record carries (chunk 0 additionally may
-# carry before_frontmatter/after_frontmatter; tags/synthetic/generator are
-# optional provenance). These are the load-bearing ones downstream relies on.
-#
-# Chunk-scale facets (optional, synthetic pairs): `merge_max_chars` is the pack
-# budget, `chunk_mode` is how the chunk was cut — None/"section" for
-# section-bounded (heading excluded from the text, carried as `context`) or
-# "cross-heading" for headings packed in as CONTENT. Cross-heading records carry
-# no `context` (an inline heading is rewritable text, not fixed context), so the
-# verbatim-prefix invariant below simply does not apply to them.
+# meta keys every well-formed pair record carries; tags/synthetic/generator are
+# optional provenance. Optional chunk-scale facets on synthetic pairs:
+# `merge_max_chars` is the pack budget and `chunk_mode` is how the chunk was cut
+# — None/"section" (heading carried as `context`) or "cross-heading" (headings
+# packed in as CONTENT, so no `context`, so the verbatim-prefix invariant below
+# does not apply).
 REQUIRED_META_KEYS = (
     "source",
     "captured_at",
@@ -53,18 +46,13 @@ REQUIRED_META_KEYS = (
 )
 
 # --- meta.gen schema (synthetic pairs only) ----------------------------------
-# The generation covariates recorded under `meta.gen`, consumed by stylebot.eval
-# (flattened onto score records) and stylebot.report (row columns). Split by
-# WHICH WRITER produces each group, because that is what makes the declaration
-# checkable: `tests/test_synth_generator.py` and `tests/test_synth_sessions.py`
-# assert each group against a real record from its writer, in BOTH directions.
-#
-# The both-directions part is the point. Until 0.3.1 the guard only checked
-# writer ⊆ declaration, so a key the writer stopped emitting could sit here
-# indefinitely and the list would quietly become a wish rather than a schema —
-# and a downstream facet built on it comes back empty, which reads exactly like
-# "that covariate never varied". Callers may still extend the dict via a
-# factory's `extra_meta`; those keys belong in `GEN_EXTRA_KEYS`.
+# The generation covariates recorded under `meta.gen`, consumed by
+# `stylebot.scoring` (flattened onto score records) and `stylebot.report` (row
+# columns). Split by WHICH WRITER produces each group, which is what makes the
+# declaration checkable: the synth tests assert each group against a real record
+# from its writer in BOTH directions, so a key the writer stopped emitting
+# cannot sit here as a wish. Callers extend via a factory's `extra_meta`; those
+# keys belong in `GEN_EXTRA_KEYS`.
 
 #: Written unconditionally by `generators.openai_generator` for every draw.
 GEN_BASE_KEYS = (
@@ -97,13 +85,10 @@ GEN_SESSION_KEYS = ("session_id", "session_turn", "context_window", "window_fill
 
 #: Everything that can appear under `meta.gen`, whatever wrote it.
 GEN_META_KEYS = GEN_BASE_KEYS + GEN_EXTRA_KEYS + GEN_REPLICATE_KEYS
-# The experiment-relevant subset eval flattens onto each score record so
-# `summarize_scores(by=...)` and the report can facet by them directly.
-#
-# A scores.jsonl outlives the pairs.jsonl it was scored from, so this list must
-# keep the covariates that *explain* an outcome (cost, latency, context
-# position), not just the knobs that were set: dropping one costs an answer no
-# re-aggregation can recover.
+# The experiment-relevant subset flattened onto each score record. A
+# scores.jsonl outlives the pairs.jsonl it was scored from, so this keeps the
+# covariates that *explain* an outcome, not just the knobs that were set:
+# dropping one costs an answer no re-aggregation can recover.
 GEN_FACET_KEYS = (
     "model",
     "reasoning_effort",
@@ -223,24 +208,12 @@ def record_id(record: dict) -> str:
     Prefers `meta.synth_key` (synthetic pairs); else `capture_id:chunk_index`
     (real captures group by `capture_id`); else a hash of `source` + chunk index.
 
-    **Re-cut records additionally carry the cut policy in the key.**
-    `capture.recut_archives` REUSES the archive's `capture_id` and renumbers
-    `chunk_index` from 0, so `capture_id:chunk_index` alone is NOT stable across
-    a re-cut: after coalescing, `<cap>:0` names a merged multi-paragraph pair
-    where it used to name a single paragraph. Everything that joins or resumes
-    on this key would then silently mismatch — `eval.score_pairs_file` and
-    `infer.rewrite_pairs_file` would skip the pair as already done, leaving
-    stale scores attached to materially changed prose, and
-    `report.render_scores_report` would render new text under old numbers.
-
-    So fold `meta.recut` — the gap policy `recut_archives` stamps on every
-    record it emits — into the key. A re-cut id then differs from the original
-    cut's and from another policy's, while staying byte-identical when the SAME
-    policy is re-run, so a re-cut stays idempotent end to end.
-
-    Records with no `meta.recut` keep their key byte-for-byte. That is
-    load-bearing: a committed `scores.jsonl` must keep joining for the
-    never-re-cut captures that are most of the corpus.
+    **A re-cut record folds its cut policy (`meta.recut`) into the key**, since
+    `capture.recut_archives` reuses the `capture_id` and renumbers from 0 — so
+    `<cap>:0` can name a merged pair where it named one paragraph, and a
+    resuming consumer would skip changed prose as done. The same policy re-run
+    gives a byte-identical id. Records with no `meta.recut` keep their key
+    byte-for-byte, so a committed `scores.jsonl` keeps joining (D36).
     """
     meta = record.get("meta") or {}
     if meta.get("synth_key"):
@@ -260,14 +233,11 @@ def record_id(record: dict) -> str:
 
 # --- meta types and domains --------------------------------------------------
 # Key -> (accepted types, optional predicate, predicate description). Checked
-# only when the key is PRESENT, so this list may name keys older records never
-# carried; `REQUIRED_META_KEYS` above is the separate question of which must be
-# there at all. Anything absent from this table is unvalidated by design — the
-# schema is open (a caller's `extra_meta` lands in the same dict), and a closed
-# whitelist here would make every experiment's covariate a validation failure.
-#
-# NoneType is accepted where a producer legitimately writes null: `source` is
-# None for a hand-fed string, `merge_max_chars` for an unmerged chunk.
+# only when the key is PRESENT; `REQUIRED_META_KEYS` is the separate question of
+# which must be there at all. Anything absent from this table is unvalidated by
+# design — the schema is open, and a closed whitelist would make every
+# experiment's covariate a validation failure. NoneType is accepted where a
+# producer legitimately writes null.
 _NoneType = type(None)
 _META_TYPES: dict[str, tuple] = {
     "source": (str, _NoneType),
@@ -440,27 +410,16 @@ def validate_pairs_file(
 ) -> list[tuple[int | str, list[str]]]:
     """Validate every line of a corpus, and the corpus-level uniqueness rule.
 
-    Returns a list of `(location, errors)` for each invalid line. An empty
-    result means the whole corpus is valid. Unparseable JSON is reported as a
-    single error for that line.
+    Returns `(location, errors)` per invalid line; empty means valid.
+    Unparseable JSON is one error for that line. `location` is a 1-based line
+    number for a single-file corpus and `"<shard>.jsonl:<line>"` for a sharded
+    one, which is a line somebody can open.
 
-    `location` is a 1-based line number (blank lines skipped) for a single-file
-    corpus, and `"<shard>.jsonl:<line>"` for a sharded one — a global line
-    number over a concatenation of thirteen files would name a line nobody can
-    open. **Uniqueness is checked across the whole corpus, not per shard**,
-    which is the point of doing it here: two shards are one id space, and a
-    duplicate that straddles them is exactly the one a per-file check misses.
-
-    **`record_id` uniqueness is a property of the FILE, not of a record**, so it
-    is checked here and nowhere else. A repeat is reported against the *later*
-    line, because the earlier one is the copy every resuming consumer already
-    joined to: `eval.score_pairs_file` and `infer.rewrite_pairs_file` key on
-    `record_id`, score the first, and skip the second — so a duplicate is not a
-    harmless extra row, it is a training pair with double weight and no score of
-    its own. `dedupe_pairs_file` drops exactly the lines named here.
-
-    `check_duplicates=False` for a partial file (a shard, a `--limit` slice)
-    where the id space is legitimately shared with lines you are not looking at.
+    **`record_id` uniqueness is a property of the FILE, not of a record** (D36),
+    so it is checked here and nowhere else, across the whole corpus rather than
+    per shard (D50). A repeat is reported against the *later* line, the earlier
+    being what resuming consumers joined to. `check_duplicates=False` for a
+    partial file whose id space is shared with lines you are not looking at.
     """
     shards = corpus.shard_paths(path)
     sharded = len(shards) > 1 or corpus.is_sharded(path)
@@ -515,15 +474,11 @@ def dedupe_pairs_file(
 ) -> DedupeReport:
     """Drop every repeat of a `record_id`, keeping the FIRST occurrence.
 
-    **First, not best, and not newest** — the first is the one already joined to
-    by every committed `scores.jsonl` row and every resumable rewrite, so
-    keeping it leaves those artifacts valid while keeping any other copy would
-    silently re-point them at prose they were not measured on. The duplicates
-    this exists for are not byte-identical rows: they are two *draws* for the
-    same cell (same target, generator, strategy, prompt), written by two synth
-    processes that each loaded `existing_synth_keys` before the other appended.
-    Only one of them is the corpus's answer for that cell; the file order says
-    which.
+    **First, not best, and not newest**: the first is what every committed
+    `scores.jsonl` row already joined to, so keeping it leaves those artifacts
+    valid. The duplicates this exists for are not byte-identical rows — they are
+    two *draws* for the same cell, written by two synth processes that each read
+    `existing_synth_keys` before the other appended (D36).
 
     Dry-run by default. `apply` rewrites atomically, keeping a `.bak` beside the
     corpus unless `backup=False` — `<corpus>.bak` for a single file, a

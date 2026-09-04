@@ -111,21 +111,15 @@ QUARTO_SKIP_DIRS = frozenset({"renv", "packrat", "rsconnect", "node_modules"})
 def is_valid_qmd_file(path: Path, base: Path | None = None) -> bool:
     """Return True if this path qualifies as a valid .qmd file.
 
-    The `_`/`.` rule runs over **every** path segment, not just the filename.
-    That distinction is load-bearing and its failure is silent: this predicate
-    feeds `iter_targets`, so a segment-blind check walks `_tmp/scratch.qmd` and
-    `_freeze/…` and offers a scratch copy of a post to `synth` as prose to
-    generate training pairs from. `synth_key` hashes target text, so the
-    resulting pair is indistinguishable from a real one afterwards — nothing
-    downstream can detect it. See livingthing `_plans/qmd-walker-2026-08.md`.
+    The `_`/`.` rule runs over **every** path segment, not just the filename,
+    and that failure is silent: a segment-blind check walks `_tmp/scratch.qmd`
+    and offers a scratch copy of a post to `synth` as a target, after which the
+    pair is indistinguishable from a real one (livingthing
+    `_plans/qmd-walker-2026-08.md`).
 
-    Every rule here is about *project-relative* structure, so pass `base` when
-    you have one and the judgement is made below it. Without it an absolute
-    path is judged whole, which is the historical behaviour.
-
-    Suffix is deliberately not checked: the walk's glob is caller policy
-    (`iter_targets(glob=…)`, `ai-style synth --glob`), so this must not
-    hardcode `.qmd` the way a single-project walker can.
+    Every rule is about *project-relative* structure, so pass `base` when you
+    have one; without it an absolute path is judged whole. Suffix is deliberately
+    not checked — the walk's glob is caller policy.
     """
     # A path not under `base` is judged as given, same as with no `base` at all.
     parts = path.relative_to(base).parts if base and path.is_relative_to(base) else path.parts
@@ -156,17 +150,11 @@ def gather_qmd_files(
 def is_human_authored(meta: dict, *, field: str = "automation", max_level: int = 0) -> bool:
     """True if frontmatter marks this content as human-written (no/low AI).
 
-    This is the **one** blog-specific seam stylebot is allowed to carry (see
-    `_plans/OVERVIEW.md`). Dan's blog records an ``automation`` level per post;
-    ``automation: 0`` means no AI was involved, which is the pure-human prose we
-    want as training *targets*. Another blog retargets this by passing its own
-    ``field`` / ``max_level`` — the defaults encode Dan's convention, nothing more.
-
-    Conservative by design: a missing or unparseable field is treated as NOT
-    human-authored. The clean posts are *marked* (low ``automation``); absence
-    means "unknown", and we would rather under-select clean prose than poison
-    the training corpus with AI-touched text. Returns True only when the field
-    is present and parses to ``<= max_level``.
+    The **one** blog-specific seam stylebot is allowed to carry
+    (`_plans/OVERVIEW.md`): Dan's blog records an ``automation`` level per post
+    and ``0`` means no AI. Another blog retargets it with its own ``field`` /
+    ``max_level``. Conservative by design — clean posts are *marked*, so a
+    missing or unparseable field means "unknown" and returns False.
     """
     raw = meta.get(field)
     if raw is None:

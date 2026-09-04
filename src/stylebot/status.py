@@ -1,15 +1,8 @@
 """What the pipeline actually holds right now — the answer docs used to carry.
 
-Every prose description of this system had a shelf life. stylebot's `CLAUDE.md`
-said two trained runs existed and run 2 was serving; the blog's manifests said
-five and run 4a. `OVERVIEW.md` said 4,595 pairs; the corpus said 8,182. None of
-those sentences were wrong when they were written, and git cannot keep any of
-them true — the facts they state live in the blog's `_training_pairs/`, which is
-a different repo on a different commit clock, and the numbers change on every
-capture, synth run and promotion.
-
-So the documentation stops carrying them and points here instead. `collect` is a
-read-only sweep over the five artifacts that answer "where is this pipeline?":
+Prose cannot keep operational state true, so the documentation stops carrying it
+and points here (D52). `collect` is a read-only sweep over the five artifacts
+that answer "where is this pipeline?":
 
 1. the **corpus** — how many records, how they split real/synthetic, how they
    are sharded (`stylebot.corpus`);
@@ -20,23 +13,17 @@ read-only sweep over the five artifacts that answer "where is this pipeline?":
    serves by default (the `promoted` rule, below);
 4. the **detector** — the artifact's `git_sha`, when it was fit, and on how
    many pairs (`stylebot.classify.load_artifact_meta`);
-5. the **cross-checks between them**, which is the part no single artifact can
-   answer and the reason this is one function rather than four commands. A
-   detector fit under eval_v1 and a `splits.json` now at v2 are each internally
-   consistent and jointly wrong: every verdict computed with that head held out
-   the wrong posts. Same for a promoted run whose `splits_sha256` no longer
-   matches. Those comparisons are the `warnings` list.
+5. the **cross-checks between them**, which is why this is one function rather
+   than four commands. A detector fit under eval_v1 and a `splits.json` now at
+   v2 are each internally consistent and jointly wrong; same for a promoted run
+   whose `splits_sha256` no longer matches. Those are the `warnings` list.
 
 **Everything is optional and nothing is discovered.** stylebot does not know
-where the blog is (`_plans/OVERVIEW.md`, "the dependency arrow points one way"),
-so `collect` reports on exactly the paths it is handed and says "not given" for
-the rest — `ai-style status` takes them as flags, `dan-style status` fills them
-from `livingthing.training_targets`. A missing artifact is a reported absence,
-never an exception: status must run on a half-built pipeline, which is when it
-is most useful.
-
-Read-only and keyless. It costs a corpus read (a few seconds on 8k records)
-and nothing else.
+where the blog is, so `collect` reports on exactly the paths it is handed and
+says "not given" for the rest — `ai-style status` takes them as flags,
+`dan-style status` fills them from `livingthing.training_targets`. A missing
+artifact is a reported absence, never an exception: status must run on a
+half-built pipeline, which is when it is most useful. Read-only and keyless.
 """
 
 from __future__ import annotations
@@ -59,9 +46,8 @@ def promoted_manifest(runs_dir: str | Path) -> dict | None:
     `style_file.latest_manifest` is this function plus a click error.
 
     Manifests are named by run id, which is a timestamp, so a reverse filename
-    sort is newest-first. `"promoted": false` skips a run without hiding it: run
-    3 was nixed after an eval loss and run 4b is an ablation arm that was never
-    meant to serve, and both stay on record with their `promotion_note`.
+    sort is newest-first. `"promoted": false` skips a run without hiding it — a
+    nixed run and an ablation arm stay on record with their `promotion_note`.
 
     Returns the manifest with `_path` added. None when no manifest qualifies —
     an unbuilt pipeline, not an error.
