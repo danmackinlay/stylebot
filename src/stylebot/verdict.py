@@ -331,8 +331,7 @@ def compare_scores(
 
     **Refuses a cross-detector comparison** (D39): both files must have been
     written by the same detector artifact. `allow_cross_detector=True` says you
-    mean it, and the returned dict records that you did. A detector verdict on
-    rows whose `meta.reranker` is that detector is refused too: `signal="judge"`.
+    mean it, and the returned dict records that you did.
     """
     if signal not in SIGNAL_EXTRACTORS:
         raise ConfigError(f"unknown signal {signal!r}; known: {sorted(SIGNAL_EXTRACTORS)}")
@@ -348,7 +347,6 @@ def compare_scores(
             f"P(slop) by more than most effects being measured. Re-score both sides with one "
             f"head, or pass allow_cross_detector=True / --allow-cross-detector"
         )
-
     if signal == "detector":
         _refuse_circular_verdict(rows_a.values(), ids_a, "scores_a")
         _refuse_circular_verdict(rows_b.values(), ids_b, "scores_b")
