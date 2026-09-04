@@ -40,6 +40,7 @@ _CARRIED_META = (
     "slop_strategy",
     "chunk_index",
     "transform_sim",
+    "reranker",
 )
 # Generation covariates nested under `meta.gen` (synthetic pairs only), flattened
 # onto each score record so `summarize_scores(by=…)` can facet by them directly.

@@ -90,11 +90,6 @@ def _stub_detector(*, git_sha: str, score: float = 0.4):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="scoring._CARRIED_META does not carry `reranker` onto score rows "
-    "(C5 lists no scoring.py edit); the refusal cannot fire on a scored file until it does",
-)
 def test_a_scored_output_file_carries_the_reranker_to_the_verdict(tmp_path):
     from stylebot.ai_core import STYLE_SYSTEM
 
