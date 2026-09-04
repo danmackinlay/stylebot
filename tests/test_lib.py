@@ -2,9 +2,8 @@
 
 Everything here feeds corpus extraction (Phase 1 diffs and Phase 2 targets both
 come through these functions), so regressions corrupt training data silently.
-`segment_for_edit`'s protected-block semantics are pinned in test_segment.py;
-this file covers the rest plus the lossless round-trip property on inputs
-nastier than test_segment's.
+`segment_for_edit` is a one-line call to `markdown.segment_spans`, pinned in
+test_markdown.py; this file covers frontmatter, paragraphs and file gathering.
 """
 
 from __future__ import annotations
@@ -16,7 +15,6 @@ from stylebot.lib import (
     gather_qmd_files,
     is_valid_qmd_file,
     read_w_frontmatter_text,
-    segment_for_edit,
     split_paragraphs,
 )
 
@@ -89,40 +87,6 @@ def test_empty_input_gives_no_paragraphs():
 
 
 # -- segment_for_edit: the lossless round-trip property on nasty inputs --
-
-
-@pytest.mark.parametrize(
-    "doc",
-    [
-        # markers inside a fence must not open spans of their own
-        "p1\n\n```txt\n::: not a div\n$$ not math $$\n```\n\np2\n",
-        # inline math with a Quarto attr block
-        "text $$e=mc^2$$ {#eq-x} more\n",
-        # blockquote at EOF without trailing newline
-        "lead\n\n> quoted\n> more quoted",
-        # adjacent protected blocks
-        "```a\nx\n```\n$$y$$\n> q\n",
-        # unclosed div: nothing protected, but nothing lost either
-        "p\n\n::: open\nnever closed\n",
-        # empty document
-        "",
-    ],
-)
-def test_segment_roundtrip_is_lossless(doc):
-    assert "".join(seg for seg, _ in segment_for_edit(doc)) == doc
-
-
-def test_fence_swallows_inner_markers():
-    doc = "p1\n\n```txt\n::: not a div\n$$ not math $$\n```\n\np2\n"
-    protected = [seg for seg, editable in segment_for_edit(doc) if not editable]
-    assert len(protected) == 1  # ONE fence span, not fence+div+math
-    assert "::: not a div" in protected[0]
-
-
-def test_unclosed_div_stays_editable():
-    # No closing ::: -> no protected span; the text must not be dropped.
-    segs = segment_for_edit("p\n\n::: open\nnever closed\n")
-    assert segs == [("p\n\n::: open\nnever closed\n", True)]
 
 
 # -- file gathering --

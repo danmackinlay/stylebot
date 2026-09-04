@@ -1,11 +1,14 @@
 """Unit tests for the shared markdown primitives (`stylebot.markdown`).
 
-`segment_for_edit`'s end-to-end protected-block behaviour is pinned in
-test_segment.py and the train/serve contract in test_protection_parity.py; this
-file pins the primitives those rest on.
+The segmenter's unit spec. `lib.segment_for_edit` is a one-line call to
+`segment_spans`, so its behaviour is pinned here and nowhere else; the
+train/serve contract over a full document is test_infer_segment.py, and the two
+named policies over real posts are test_segment_hard.py.
 """
 
 from __future__ import annotations
+
+import pytest
 
 from stylebot import markdown as md
 
@@ -84,6 +87,14 @@ def test_a_four_backtick_fence_can_close_itself():
     assert doc[spans[0][0] : spans[0][1]] == "````markdown\n{{< include x.md >}}\n````\n"
 
 
+def test_a_fence_swallows_the_markers_inside_it():
+    # ONE fence span, not fence + div + math.
+    doc = "p1\n\n```txt\n::: not a div\n$$ not math $$\n```\n\np2\n"
+    spans = md.protected_spans(doc)
+    assert [k for _s, _e, k in spans] == [md.FENCE]
+    assert "::: not a div" in doc[spans[0][0] : spans[0][1]]
+
+
 def test_unclosed_div_yields_no_span():
     assert md.protected_spans("p\n\n::: open\nnever closed\n") == []
 
@@ -93,7 +104,13 @@ def test_block_only_keeps_display_math():
     assert _kinds(doc, block_only=True) == [md.MATH]
 
 
+def test_one_line_display_math_with_attrs_is_protected():
+    assert _kinds("text\n\n$$x = 1$$ {#eq-a}\n\nmore\n", block_only=True) == [md.MATH]
+
+
 def test_block_only_drops_midline_math():
+    # The corruption `block_only` fixed: excising a mid-sentence `$$d$$` joined
+    # the remnants, so a TRAINING TARGET read "high- behaviour".
     doc = "high-$$d$$ behaviour is strange.\n"
     assert _kinds(doc) == [md.MATH]
     assert _kinds(doc, block_only=True) == []
@@ -105,12 +122,28 @@ def test_block_only_keeps_indented_display_math():
     assert _kinds("    $$\nx\n$$\n", block_only=True) == []
 
 
-def test_segment_spans_roundtrip_is_lossless():
-    doc = "a\n\n```\nc\n```\n\n$$m$$\n\n> q\n\n::: d\nx\n:::\n\nz"
+@pytest.mark.parametrize(
+    "doc",
+    [
+        "a\n\n```\nc\n```\n\n$$m$$\n\n> q\n\n::: d\nx\n:::\n\nz",
+        # markers inside a fence must not open spans of their own
+        "p1\n\n```txt\n::: not a div\n$$ not math $$\n```\n\np2\n",
+        # inline math with a Quarto attr block
+        "text $$e=mc^2$$ {#eq-x} more\n",
+        # blockquote at EOF without trailing newline
+        "lead\n\n> quoted\n> more quoted",
+        # adjacent protected blocks
+        "```a\nx\n```\n$$y$$\n> q\n",
+        # unclosed div: nothing protected, but nothing lost either
+        "p\n\n::: open\nnever closed\n",
+        "",
+    ],
+)
+def test_segment_spans_roundtrip_is_lossless(doc):
     assert "".join(seg for seg, _ in md.segment_spans(doc)) == doc
 
 
-# -- raw HTML (opt-in) ------------------------------------------------------
+# -- the opt-in kinds: raw HTML and HTML comments ---------------------------
 
 SCRIPT = 'before\n\n<script src="x.js">\nconst a = 1;\n\nconst b = 2;\n</script>\n\nafter\n'
 
@@ -154,12 +187,6 @@ def test_raw_html_does_not_span_two_separate_blocks():
     assert "text between" in "".join(s for s, e in md.segment_spans(doc, raw_html=True) if e)
 
 
-def test_protected_kinds_gains_raw_html_only_when_enabled():
-    assert md.protected_kinds() == md.PROTECTED_KINDS
-    assert md.RAW_HTML not in md.PROTECTED_KINDS
-    assert md.protected_kinds(raw_html=True) == md.PROTECTED_KINDS | {md.RAW_HTML}
-
-
 def test_raw_html_stays_lossless_and_reaches_line_kinds():
     assert "".join(s for s, _ in md.segment_spans(SCRIPT, raw_html=True)) == SCRIPT
     kinds = md.line_kinds(SCRIPT, raw_html=True)
@@ -167,6 +194,15 @@ def test_raw_html_stays_lossless_and_reaches_line_kinds():
     assert got["const a = 1;"] == md.RAW_HTML
     assert got["before"] is None
     assert md.line_kinds(SCRIPT)[3] is None  # default off, all the way down
+
+
+def test_html_comments_are_off_by_default_and_span_lines_when_enabled():
+    doc = "p\n\n<!-- one line -->\n\nq <!-- opened\nmid-line, closed later -->\n\nr\n"
+    assert _kinds(doc) == []
+    spans = md.protected_spans(doc, html_comments=True)
+    assert [k for _s, _e, k in spans] == [md.HTML_COMMENT, md.HTML_COMMENT]
+    # A comment opened mid-line takes only the comment, not the prose before it.
+    assert doc[spans[1][0] : spans[1][1]] == "<!-- opened\nmid-line, closed later -->"
 
 
 # -- div policy -------------------------------------------------------------
@@ -200,11 +236,6 @@ def test_div_is_prose_frees_contents_but_not_fences_or_nested_figures():
     assert "![](x.png)" not in prose
 
 
-def test_div_is_prose_stays_lossless():
-    policy = lambda attrs: "callout" in attrs  # noqa: E731
-    assert "".join(s for s, _ in md.segment_spans(CALLOUT, div_is_prose=policy)) == CALLOUT
-
-
 # -- line kinds -------------------------------------------------------------
 
 
@@ -230,10 +261,6 @@ def test_line_kinds_do_not_bleed_past_a_span():
 def test_line_kinds_mark_blank_lines_inside_a_fence():
     doc = "```py\na\n\nb\n```\n"
     assert md.line_kinds(doc) == [md.FENCE] * 5 + [None]
-
-
-def test_line_kinds_ignore_midline_math():
-    assert md.line_kinds("high-$$d$$ behaviour\n") == [None, None]
 
 
 def test_line_kinds_can_skip_headings():
