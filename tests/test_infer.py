@@ -465,6 +465,26 @@ def test_content_anchors_counting():
     assert lost == ["@Cite2020"]
 
 
+def test_bare_url_anchor_stops_at_trailing_punctuation():
+    """CommonMark's autolink rule: sentence punctuation after a bare URL is not
+    part of it, so a rewrite that only repunctuates keeps its anchors (C13)."""
+    assert infer.content_anchors("see https://x.com.") == {"https://x.com": 1}
+    for mark in ".,;:!?)":
+        assert infer.anchor_delta("see https://x.com.", f"see https://x.com{mark}") == ([], [])
+    # Punctuation INSIDE a URL is still the URL.
+    assert infer.content_anchors("see https://x.com/a.b?c=1,2.") == {"https://x.com/a.b?c=1,2": 1}
+
+
+def test_email_local_part_is_not_a_citation_key():
+    assert infer.content_anchors("mail dan@x.name today") == {}
+    assert infer.content_anchors(r"mail dan\@x.name today") == {}  # pandoc-escaped `@`
+    assert infer.content_anchors("see @Cite2020 and [@Other2021; p. 3]") == {
+        "@Cite2020": 1,
+        "@Other2021": 1,
+    }
+    assert infer.anchor_delta("mail dan@x.name", "mail me at dan@x.name") == ([], [])
+
+
 # --- inline anchors (code spans + inline math), off by default -------------
 
 

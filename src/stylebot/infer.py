@@ -296,8 +296,8 @@ def is_truncated(
 # checked before any scoring, never after it.
 _ANCHOR_RES = (
     re.compile(r"\]\(([^)\s]+)"),  # markdown link/image destination
-    re.compile(r"(?<!\()https?://[^\s)\]]+"),  # bare URL
-    re.compile(r"@[A-Za-z][A-Za-z0-9_:-]*"),  # Quarto/pandoc citation key
+    re.compile(r"(?<!\()https?://[^\s)\]]*[^\s)\].,;:!?]"),  # bare URL, sans trailing punctuation
+    re.compile(r"(?<![\w.\\])@[A-Za-z][A-Za-z0-9_:-]*"),  # citation key, not an email
 )
 
 # Inline markup the styler must carry through verbatim. Unlike a fenced block
