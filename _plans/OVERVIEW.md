@@ -282,6 +282,10 @@ record of what was measured then, not a claim about now.
   `--report-max-rows`, `--all` and `--tag` retired (49 options); the substrate
   cluster and `--capture-reasoning` reviewed and kept, `--assign-seed` deferred
   as a `synth_key` input ([`synth-flag-audit.md`](synth-flag-audit.md)).
+  2026-09-04 (X3): the eight design knobs — `--sample-salt`, `--replicate`,
+  `--assign-seed`, `--per-generator`, `--provider-sort`, `--sticky-provider`,
+  `--prompt-cache`, `--capture-reasoning` — became library-only bundle fields
+  at their old values (41 options; D83).
 - ~~**`ai-style log` never adopted the option-bundle idiom**~~ — **closed
   2026-08-13.** `save`/`pair` share one `CaptureOpts` bundle; `list` and the
   open-session reminder share `_snapshot_dirs` / `_echo_snapshots`.

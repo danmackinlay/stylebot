@@ -5,8 +5,8 @@ same engine; only *selection* and a few pinned defaults differ per caller. This
 module is the single source for the shared surface:
 
 - the six frozen **option bundles** below, grouped by the consumer each feeds.
-  Each field declares its own flag via `cli_options.opt()`, so a default exists
-  in exactly one place;
+  A field declares its flag via `cli_options.opt()`, so a default exists in
+  exactly one place; a plain field is library-only (D83);
 - `synth_options(bundles=..., defaults=..., exclude=...)` — the click decorator
   over them;
 - `run_synth(targets, ...)` — the whole command body after target selection:
@@ -156,10 +156,8 @@ class InspectOpts:
         type=int,
         help="Print N random targets to stdout and exit (no generation).",
     )
-    # Library-only, no flags. `report_title` is a caller-supplied label;
-    # `report_max_rows` caps table rows (0 = all) and lost its `--report-max-rows`
-    # flag in 0.3.1 (synth-flag-audit C2) — the default had never been raised or
-    # zeroed, and a caller wanting another cap is already writing code.
+    # Library-only: `report_title` is a caller-supplied label; `report_max_rows`
+    # caps table rows (0 = all) and lost its flag in 0.3.1 (D83).
     report_title: str | None = None
     report_max_rows: int = 2000
 
@@ -186,32 +184,9 @@ class GenOpts:
         "anthropic/claude-opus-4-8. One key ($OPENROUTER_API_KEY) reaches many upstream "
         "models — ideal for multi-source rotation.",
     )
-    provider_sort: str = opt(
-        "throughput",
-        "--provider-sort",
-        type=click.Choice(["throughput", "price", "latency", "none"]),
-        show_default=True,
-        help="OpenRouter provider-routing preference (default load-balancing favours price and "
-        "can land on ~10 tok/s upstreams; 'none' restores it). OpenRouter models only; "
-        "recorded in meta.gen next to the served provider.",
-    )
-    sticky_provider: bool = opt(
-        True,
-        "--sticky-provider/--no-sticky-provider",
-        show_default=True,
-        help="Pin each live session to the provider that served its first turn — keeps its "
-        "prefix cache hot AND the serving stack constant, so window-position covariates "
-        "aren't confounded by provider hops. OpenRouter models only; no effect on stateless "
-        "runs.",
-    )
-    prompt_cache: bool = opt(
-        True,
-        "--prompt-cache/--no-prompt-cache",
-        show_default=True,
-        help="Anthropic models: mark session history with a moving cache_control breakpoint "
-        "(cache reads at 0.1x after a 1.25x write; inert under ~1024-token prefixes and for "
-        "other model families). Verify via meta.gen cached_tokens/cost.",
-    )
+    provider_sort: str = "throughput"  # no flag (D83): throughput|price|latency|none (OpenRouter)
+    sticky_provider: bool = True  # no flag (D83): pin a live session to its first turn's provider
+    prompt_cache: bool = True  # no flag (D83): Anthropic cache_control breakpoint on the session
     slop_strategies: Sequence[str] = opt(
         (synth.DEFAULT_STRATEGY,),
         "--slop-strategy",
@@ -259,14 +234,7 @@ class GenOpts:
         "(facet eval by reasoning_effort). Recorded in meta.gen and folded into synth_key; "
         "the requested effort is recorded regardless of what the provider honors.",
     )
-    capture_reasoning: bool = opt(
-        False,
-        "--capture-reasoning",
-        is_flag=True,
-        help="Save each pair's reasoning/thinking trace to <data-dir>/reasoning.jsonl (keyed by "
-        "synth_key; never enters pairs.jsonl). Diagnose reasoning blowouts by READING what "
-        "the model deliberated about; costs nothing extra (the tokens were already paid for).",
-    )
+    capture_reasoning: bool = False  # no flag (D83): save traces to <data-dir>/reasoning.jsonl
     temperature: float | None = opt(
         None,
         "--temperature",
@@ -361,12 +329,7 @@ class SubstrateOpts:
         "larger corpus is a SUPERSET of this one, so the two stay comparable (--limit is "
         "not, its first N shifts as posts are added).",
     )
-    sample_salt: str = opt(
-        "",
-        "--sample-salt",
-        show_default=True,
-        help="Re-draw an independent subsample of the same size (a fresh replicate of the design).",
-    )
+    sample_salt: str = ""  # no flag (D83): re-draw an independent subsample of the same size
     limit: int | None = opt(
         None,
         "--limit",
@@ -389,21 +352,9 @@ class CorpusOpts:
 
     cli_section = "Corpus (design cell + write gates)"
 
-    per_generator: bool = opt(
-        False,
-        "--per-generator",
-        is_flag=True,
-        help="Emit a pair from EVERY generator per target (n× cost) — the fully-crossed "
-        "within-target design for experiments; default assigns each target ONE arm by "
-        "content hash.",
-    )
-    assign_seed: str = opt(
-        "",
-        "--assign-seed",
-        help="Salt for the content-hash arm assignment. Change it to re-randomize which (model, "
-        "strategy, effort) arm each target gets — a fresh replicate of the design (changed "
-        "assignments regenerate on resume).",
-    )
+    # No flags (D83); `assign_seed` / `replicate` are synth_key inputs (D11, D12).
+    per_generator: bool = False  # every arm per target (n× cost); default: one arm by hash
+    assign_seed: str = ""  # salt for the content-hash arm assignment; a change regenerates
     context_dropout: float = opt(
         0.0,
         "--context-dropout",
@@ -412,15 +363,7 @@ class CorpusOpts:
         help="Fraction of pairs to keep heading-less (deterministic) so the styler doesn't "
         "require a heading.",
     )
-    replicate: str = opt(
-        "",
-        "--replicate",
-        show_default=True,
-        help="Deliberate-resample label folded into synth_key: the same substrate under a new "
-        "label mints new cells without colliding with the base corpus (e.g. 'deep128k' for a "
-        "deep-window arm, 'draw2' for a second sample). Recorded as meta.gen.replicate. "
-        "Empty = the base corpus.",
-    )
+    replicate: str = ""  # resample label minting new cells (meta.gen.replicate); "" = base corpus
     skip_covered: bool = opt(
         False,
         "--skip-covered/--no-skip-covered",

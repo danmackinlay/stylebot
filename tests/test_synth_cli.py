@@ -7,7 +7,7 @@ stubs, the domain errors the kit raises and the exit codes `ai-style` maps
 them to).
 
 The "-- the drift guard --" block below is the structural half: `synth` is a
-50-option command, and every one of its shared flags must reach a consumer.
+41-option command, and every one of its shared flags must reach a consumer.
 The bundles are the single source of the surface (each field declares its own
 flag via `cli_options.opt`), so a default can no longer drift between the flag
 and `run_synth` — the generic machinery is covered in `test_cli_options.py`.
@@ -199,14 +199,26 @@ def test_synth_command_surface_is_exactly_the_bundles_plus_its_own():
     params = [p for p in ai_style_main.commands["synth"].params if isinstance(p, click.Option)]
     own = {"blog_root", "data_dir", "field", "max_level", "glob"}
     shared = {f.name for bundle in synth_cli.DEFAULT_BUNDLES for f, _, _ in cli_fields(bundle)}
-    assert len(params) == 49
+    assert len(params) == 41
     assert {p.name for p in params} - own == shared
     # Library-only fields stay off the CLI — that is what omitting opt() means.
     # `report_max_rows` joined them when its flag retired; `sort_name` did too,
-    # and was then deleted outright (D43).
-    assert {"session_budgets", "report_title", "sort_name", "report_max_rows"} & {
-        p.name for p in params
-    } == set()
+    # and was then deleted outright (D43); the eight design knobs followed (D83).
+    library_only = {
+        "session_budgets",
+        "report_title",
+        "sort_name",
+        "report_max_rows",
+        "sample_salt",
+        "replicate",
+        "assign_seed",
+        "per_generator",
+        "provider_sort",
+        "sticky_provider",
+        "prompt_cache",
+        "capture_reasoning",
+    }
+    assert library_only & {p.name for p in params} == set()
 
 
 def test_synth_help_is_sectioned():
@@ -408,22 +420,21 @@ def test_timeout_reaches_generator_factories(tmp_path, monkeypatch, make_blog):
     # The heartbeat brackets the run: first and last pair always echo.
     assert "1/2 pairs" in result.output and "2/2 pairs" in result.output
 
-    # --provider-sort none restores OpenRouter's own load-balancing (field omitted).
-    result = CliRunner().invoke(
-        ai_style_main,
-        [
-            "synth",
-            "--blog-root",
-            str(root),
-            "--data-dir",
-            str(tmp_path / "corpus2"),
-            "--openrouter-model",
-            "x/y",
-            "--provider-sort",
-            "none",
-        ],
+    # provider_sort "none" restores OpenRouter's own load-balancing (field
+    # omitted). A library field, not a flag (D83), so it is set on the consumer.
+    synth_cli.build_generators(
+        synth_cli.iter_arms([synth.resolve_strategy("polish")], ["off"], ["x/y"]),
+        dry_run=False,
+        custom_system=None,
+        max_tokens=1,
+        timeout=None,
+        capture_reasoning=False,
+        temperature=None,
+        top_p=None,
+        provider_sort="none",
+        sticky_provider=True,
+        prompt_cache=True,
     )
-    assert result.exit_code == 0, result.output
     assert captured["provider_sort"] is None
 
 

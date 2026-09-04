@@ -84,7 +84,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "docstrings": (26,),
     },
     "synth_cli.py": {
-        "lines": 1117,
+        "lines": 1059,
         "functions": {"run_synth": 259, "_report_result": 123},
         "docstrings": (16,),
     },
