@@ -93,9 +93,19 @@ promotion: **< $30**, most of it the Claude arm.
 ## Stage 0 — the proxy extractor (prerequisite, keyless, no spend)
 
 The done-criteria above need a repeatable measurement. This is the minimal
-first cut of the "fifth eval capability" in
-[`eval-harness.md`](eval-harness.md) §"Planned", scoped to what this slice
-needs.
+first cut of the eval harness's planned fifth capability, scoped to what this
+slice needs. That capability, as specified 2026-06-28 and never built: the
+four signals score *individual passages* and aggregate scalar means, so they
+cannot answer the question Phase 2 needs — **does synthetic slop match the
+distribution of real Claude output Dan actually cleans up?** (Eyeballing showed
+synthetic slop missing real mannerisms, e.g. incoherent mixed metaphors.) The
+plan was a feature extractor (hedge rate, signposting density, sentence-length
+variance, the `_voices/slop_patterns.md` families, optionally an AI-detector
+score) over **two strata** — synthetic pairs against the real-slop reference
+(the Phase-1 captures plus `automation:1/2` prose) — with a side-by-side
+distribution view per strategy/covariate. **Seam:** the `meta.synthetic` facet
+(real = `synthetic` falsy/absent) over the existing aggregation, consuming the
+`meta.gen` covariates synth records per pair.
 
 - **Library**: `stylebot.features.syntax_profile(text) -> dict[str, float]` —
   per-sentence rates for the proxies named above plus sentence-length
@@ -106,7 +116,7 @@ needs.
   the same rule used for the table.
 - **Aggregation**: `stylebot.features.profile_pairs(pairs_path, *, field="slop",
   by=None)` → per-facet medians, faceting by any `meta` key with `synthetic`
-  falsy/absent as the real stratum (the seam `eval-harness.md` names). A
+  falsy/absent as the real stratum (the seam named above). A
   `same_sources_as_real: bool` filter reproduces the fair reference row.
 - **Separability**: `stylebot.features.separability(pairs_path, facet_value,
   *, by="slop_strategy")` → cross-validated AUC of a logistic head on the

@@ -164,7 +164,8 @@ sit under a heading (D14).
 
 Section prose is median **553** chars, p90 **1729**; only **13.6%** of sections
 exceed 1500 chars and **0.8%** exceed 4500. Dan writes short sections, which is
-why raising the merge budget alone does almost nothing. Decided: D15, D64.
+why raising the merge budget alone does almost nothing: the corpus's synthetic
+median target was **662** chars against a 1500-char budget. Decided: D15, D64.
 
 ### Chunk yield by budget and mode — 2026-08-04, real chunker, blog policy
 
@@ -235,7 +236,9 @@ near-equalities, able to fail for a reason. D37.
 4143, across only 331 records. **Real rewrites compress** (no sample size
 recorded) ~**1.5×** commonly, **3×** rarely — so the real corpus supplies no
 *inflated* slop and inflation must be asked for deliberately (the `verbose`
-strategy); `--max-length-ratio 3.0` sits at the top of that range.
+strategy); `--max-length-ratio 3.0` sits at the top of that range. The **109**
+captures logged before the archive shipped (2026-07-23) have no `before.md` /
+`after.md` to recut, so they are chunk-scale forever.
 
 ### What has actually varied across the synthetic corpus — 2026-08-10, over 4,169 pairs
 
@@ -249,8 +252,11 @@ strategy); `--max-length-ratio 3.0` sits at the top of that range.
 | `gen.temperature`, `gen.top_p`, `gen.provider_sort` | **1 each — never varied** |
 | `gen.context_window` | 5, all from the OpenRouter registry, never from a flag |
 | `meta.merge_max_chars`, `meta.chunk_mode` | **absent from all 4,624** — the keys, not the values |
+| `gen.max_tokens` | 2 — `8192` (4130), `16384` (39) |
+| `gen.replicate` | `verbose1` on 460 pairs, unset on 3709 |
+| `meta.tags` | 1 — `["synthetic","paraphrase","livingthing"]` on every pair |
 
-Decided: D21 (retire the unused preset path), D11 (covariates, not keys).
+Decided: D21 (retire the unused preset path), D11 (covariates, not keys), D83.
 
 ### The chunk-scale facet is absent from the corpus — 2026-08-11, 4,595 records / 4,140 synthetic
 
@@ -318,8 +324,10 @@ corpus impact. D29, D38.
 **Capture diffing loses almost nothing** (2026-08-04, all 41 archives): the
 theory that `diff_chunks` discarded paragraph-count-changing edits died on
 measurement — **1** dropped opcode. **Gap-coalescing vs fixed-width windowing**:
-coalescing gives **87 pairs, median 1191 chars, p90 4230** and changed-fraction
-**0.96** against **0.41**; bridging tolerance **2 paragraphs / 800 chars**.
+coalescing gives **87 pairs, median 1191 chars, p90 4230** (uncoalesced: 130 /
+845 / 1938) and changed-fraction **0.96** (p10 0.86, none below 0.5) against
+**0.41** under a 4500-char window; bridging tolerance **2 paragraphs / 800
+chars**. D81.
 
 ### Two constructs the corpus no longer holds — 2026-09-04 (F12g/j)
 
@@ -406,9 +414,13 @@ The AUC column is the tell: mxbai's topic-dominance collapses on the absolute
 "is this slop" question while a content-independent *style* embedding holds —
 which made Pangram and a contrastive fine-tune unnecessary for v1. **The score
 distribution is narrow** (2026-07-06, 264 pairs): all of it in ≈[0.32, 0.68], Dan
-p5/p50/p95 .32/.46/.62 against slop .40/.55/.68, hence the warped editor buckets
-`[0.51, 0.55, 0.59, 0.65]`. **Editor latency is a non-issue** (same day, MPS):
-5.0 s cold load once, **34 ms** for a 30-paragraph notebook. D7, D20, D44.
+p5/p25/p50/p75/p95 .32/.40/.46/.51/.62 against slop .40/.47/.55/.59/.68, hence
+the warped editor buckets `[0.51, 0.55, 0.59, 0.65]` = Dan-p75 (below it,
+unmarked, sits three-quarters of Dan's own prose), slop-p50, slop-p75,
+≈slop-p95 — the rule that re-derives the edges after a refit. **Editor latency
+is a non-issue** (same day, MPS): 5.0 s cold load once, 7 ms warm for one
+paragraph (28 µs of it the head's dot-product), **34 ms** for a 30-paragraph
+notebook. D7, D20, D44.
 
 ## The alias seam — 2026-09-03 (D34), re-measured 2026-09-04 (F3)
 
@@ -475,7 +487,8 @@ These differ from the sizing table above, which predates the prune.
 added posts were styler-role, so the detector pool does not move by a pair, and
 real prose goes from 4.3% of the styler's pairs to 1.7%. `ai_search.qmd` brings
 28 synthetic pairs, so the stratum is 16% synthetic again (D53's open half), and
-document-scale eval goes from 3 documents to **35**, ≈$0.015 → ≈$0.27.
+document-scale eval goes from 3 documents (86,820 chars) to **35** (**1,561,740**
+chars — of 86 capture archives, those on eval-role posts), ≈$0.015 → ≈$0.27.
 **The refit moves more than the effects it measures:**
 
 | | old | new |
@@ -663,17 +676,36 @@ The v2 curriculum is ~8.9M target chars, ≈ **$39**. Decided: D66.
 of the first v2 batches by `meta.merge_max_chars` (cross-heading; 4,532 stamped
 pairs, 2,629 / 1,096 / 807 per budget); no command was recorded.
 
-| budget | `transform_sim` p90 | length-ratio p90 | pairs at sim ≥ 0.95 | pairs above 3× |
-|---|---:|---:|---:|---:|
-| 1500 | 0.90 | 1.91 | 11 | 0 |
-| 3000 | 0.91 | 1.67 | 6 | 0 |
-| 4500 | 0.92 | 1.66 | 1 | 0 |
+| budget | `transform_sim` p90 | length-ratio p90 | pairs at sim ≥ 0.95 | pairs above 3× | median anchors per target |
+|---|---:|---:|---:|---:|---:|
+| 1500 | 0.90 | 1.91 | 11 | 0 | 4 |
+| 3000 | 0.91 | 1.67 | 6 | 0 | 7 |
+| 4500 | 0.92 | 1.66 | 1 | 0 | 10 |
 
 Neither threshold behaves differently with scale, and nothing piles up against
 either boundary. **These are post-gate survivors**, so this bounds the *shape* of
 what got through, not the rejection rate (`skipped_degenerate` has that). It let
 the run-4 pre-flight skip the 4500 audition, and is why the two hygiene gates
 stay as calibrated (D32's siblings).
+
+### Anchor delta over the v1 corpus — 2026-08-11/12
+
+`infer.anchor_delta` over the 4,595-pair corpus through the production
+extractors (`pairs.extract_slop` / `extract_target`); the measurement stylebot#1
+was briefed on, and the one D32 cites.
+
+| anchor-bearing pairs: 3,775 | pairs | share |
+|---|---:|---:|
+| identical anchor multiset | 2,803 | 74.3% |
+| target lost anchors only | 117 | 3.1% |
+| target gained anchors only | 678 | 18.0% |
+| both | 177 | 4.7% |
+
+855 pairs (18.6% of the corpus) carry invented anchors, 2,062 instances: 49.9%
+external URLs, 37.1% internal site links, 12.9% citation keys. Invention
+outnumbers loss ~7:1, and the issue thread's reordering worry is 51 pairs (1.1%)
+against 876 fabricating in the first count — its "53% of chunks carry 2+ links"
+is exposure, not incidence. Decided: D32.
 
 ### Anchor invention is a property of the arm, not of the passage — 2026-08-12
 
@@ -748,8 +780,11 @@ Targets per cross-heading budget, and how many are unique to it: 1500 → 2,491 
 overlaps 1500∩3000 = 100, 1500∩4500 = 71, 3000∩4500 = 151, all three = 46 — a
 section shorter than the smallest budget is packed identically at every budget,
 and since `_synth_key` hashes target text and not the budget, such a passage is
-one cell stamped by whichever batch reached it first. How to analyse it honestly:
-[`v2-longer-rewrites.md`](v2-longer-rewrites.md). Decided: D43.
+one cell stamped by whichever batch reached it first: of the targets in both the
+1500 and 4500 sets, 57 carry `merge_max_chars: 1500` and 2 carry `4500`, the
+1500 batch having been interrupted at 1,985 of 2,491 — so the stamp is
+contaminated by run order at the ~2–16% level. How to analyse it honestly: D82.
+Decided: D43, D82.
 
 ### Length-ratio distribution of a real rewrite — 2026-08-11, over the 4,595-pair corpus
 
@@ -835,8 +870,9 @@ Decided: D68.
 
 **`ai-style synth` flag audit** (2026-08-10): **54** click options against **19**
 for the next-largest subcommand — 14 load-bearing / 24 policy constants / 16
-retirement candidates; retiring the `gpt`/`local` preset path left **50**.
-[`synth-flag-audit.md`](synth-flag-audit.md). Decided: D21.
+retirement candidates; retiring the `gpt`/`local` preset path left **50**, and
+the 2026-08-13 close (four more retired) left **49**.
+[`synth-flag-audit.md`](synth-flag-audit.md). Decided: D21, D83.
 
 **Segmenter implementations: 7 → 3** (2026-08-11), then **3 → 1** (2026-09-03).
 Five copies inside stylebot merged into `stylebot.markdown`; each survivor was
