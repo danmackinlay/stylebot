@@ -11,10 +11,10 @@ in exactly `pairs/`'s shard layout so every `corpus.iter_records` reader keeps
 working. Data flows draws -> views, never back; a prune is a policy clause
 plus a rebuild.
 
-Step 1 (W4) is read-side: `draws_from_pairs` lifts today's pair records into
-accepted draws, and `build_view` under an identity policy reproduces `pairs/`
-byte-for-byte (`findings.md` "The view reproduces the corpus"). Step 2 adds
-`new_draw`, the native draw `synth` appends per generator call. Nothing here
+`draws_from_pairs` lifts a pair record into an accepted draw, and `build_view`
+under an identity policy reproduces `pairs/` byte-for-byte (`findings.md` "The
+view reproduces the corpus"); `new_draw` is the native draw `synth` appends per
+generator call; a capture's draw is `capture.capture_pairs`'s. Nothing here
 writes to `pairs/`; there is no lock, thread or process (P8).
 """
 
@@ -24,7 +24,7 @@ import hashlib
 import json
 import re
 import shutil
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -50,9 +50,10 @@ class Draw:
     """One generator call or human edit, as it happened (D84).
 
     `record` is the pair record a view emits for an accepted draw, kept whole
-    so a lifted draw round-trips byte-for-byte; step 2's native draws render
-    it from the other fields. `superseded_by` names the later save of the
-    same session, when there is one.
+    so a lifted draw round-trips byte-for-byte. A draw is never edited, so a
+    later save of the same session names what it replaced: `supersedes` holds
+    the prior `capture_id`s (W4 step 4); `superseded_by` is the backfill's
+    forward pointer on a draw that predates it. `build_view` honours both.
     """
 
     draw_id: str
@@ -67,14 +68,17 @@ class Draw:
     raw_output: str | None = None
     outcome: str = ACCEPTED
     superseded_by: str | None = None
+    supersedes: tuple[str, ...] | None = None
     drawn_at: str | None = None
     record: dict | None = None
 
     def to_json(self) -> dict:
-        """The JSONL shape; `span` becomes a two-element list."""
+        """The JSONL shape; `span` and `supersedes` become lists."""
         d = asdict(self)
         if self.span is not None:
             d["span"] = list(self.span)
+        if self.supersedes is not None:
+            d["supersedes"] = list(self.supersedes)
         return d
 
     @classmethod
@@ -84,6 +88,8 @@ class Draw:
         kw = {k: v for k, v in d.items() if k in known}
         if kw.get("span") is not None:
             kw["span"] = tuple(kw["span"])
+        if kw.get("supersedes") is not None:
+            kw["supersedes"] = tuple(kw["supersedes"])
         return cls(**kw)
 
 
@@ -203,6 +209,12 @@ def draws_from_pairs(pairs_path: str | Path) -> Iterator[Draw]:
         yield draw_from_pair(record)
 
 
+def capture_id_of(draw: Draw) -> str | None:
+    """The `capture_id` of a real capture's draw; None for synthetic or no record."""
+    meta = (draw.record or {}).get("meta") or {}
+    return None if meta.get("synthetic") else meta.get("capture_id")
+
+
 def content_sha256(draws_dir: str | Path) -> str | None:
     """16 hex over the draw shards, in `corpus.content_sha256`'s shape, so a
     manifest's `draws_sha256` reads like its `pairs_sha256` (W4 step 4)."""
@@ -218,8 +230,8 @@ class ViewPolicy:
 
     Each field is optional so the blog's `view_policy()` fills what it has;
     all of them enter `policy_sha`. Only `keep_superseded` and
-    `excluded_draw_ids` are applied as clauses in step 1: the gates already
-    ran on today's draws and their raw output is not kept, so re-applying a
+    `excluded_draw_ids` are applied as clauses so far: the gates already ran
+    on today's draws and their raw output is not kept, so re-applying a
     threshold waits for draws that carry one.
     """
 
@@ -259,16 +271,34 @@ class ViewReport:
 Clause = tuple[str, Callable[[Draw], bool]]
 
 
-def _clauses(policy: ViewPolicy) -> list[Clause]:
-    """The exclusion clauses a policy applies, first match wins."""
+def _clauses(policy: ViewPolicy, draws: Sequence[Draw]) -> list[Clause]:
+    """The exclusion clauses a policy applies, first match wins.
+
+    A draw is superseded when it says so (`superseded_by`, the backfill's) or
+    when any draw names its `capture_id` in `supersedes` (a later save's).
+    """
     excluded = frozenset(policy.excluded_draw_ids)
+    replaced = frozenset(cid for d in draws for cid in (d.supersedes or ()))
     out: list[Clause] = [("outcome", lambda d: d.outcome != ACCEPTED)]
     if not policy.keep_superseded:
-        out.append(("superseded", lambda d: d.superseded_by is not None))
+        out.append(
+            ("superseded", lambda d: d.superseded_by is not None or capture_id_of(d) in replaced)
+        )
     if excluded:
         out.append(("excluded_draw_ids", lambda d: d.draw_id in excluded))
     out.append(("no_record", lambda d: d.record is None))
     return out
+
+
+def view_records(draws: Iterable[Draw], policy: ViewPolicy) -> Iterator[dict]:
+    """The records the view of `draws` under `policy` holds, in draw order;
+    what `ai-style log` reads back as the live corpus (W4 step 4)."""
+    draws = list(draws)
+    clauses = _clauses(policy, draws)
+    for draw in draws:
+        if not any(hit(draw) for _name, hit in clauses):
+            assert draw.record is not None
+            yield draw.record
 
 
 def _bump(counts: dict[str, int], key: str) -> None:
@@ -293,7 +323,8 @@ def build_view(
             raise ConfigError(f"{out} already holds a view; build into a fresh directory")
         out.mkdir(parents=True, exist_ok=True)
     report = ViewReport(policy_sha=policy_sha(policy))
-    clauses = _clauses(policy)
+    draws = list(draws)  # `supersedes` points backwards, so the clauses need every draw
+    clauses = _clauses(policy, draws)
     buckets: dict[str, list[str]] = {}
     for draw in draws:
         _bump(report.by_outcome, draw.outcome)

@@ -49,7 +49,7 @@ RATIO_PIN: float | None = None
 ALLOWLIST: dict[str, dict[str, object]] = {
     "bin/ai_style.py": {"lines": 1023, "docstrings": (16,)},
     "bin/ai_style_data.py": {"functions": {"prune_stale_cmd": 113}},
-    "capture.py": {"functions": {"recut_archives": 99, "capture_pairs": 93}},
+    "capture.py": {"functions": {"recut_archives": 98}},
     "classify_train.py": {
         "lines": 964,
         "functions": {"train": 82},
@@ -68,7 +68,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "functions": {"rewrite_text": 174, "rewrite_candidates": 94},
         "docstrings": (17, 16),
     },
-    "session.py": {"lines": 845, "functions": {"save_session": 110}},
+    "session.py": {"lines": 839},
     "splits.py": {
         "functions": {"apply_eval_extension": 112},
         "docstrings": (19,),

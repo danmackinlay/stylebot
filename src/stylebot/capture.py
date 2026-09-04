@@ -14,9 +14,10 @@ import json
 import os
 import shutil
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 
-from stylebot import corpus
+from stylebot import config, corpus, draws
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.errors import RunError
 from stylebot.jsonl import append_jsonl
@@ -203,6 +204,7 @@ def build_pair_record(
     context: str = "",
     extra_meta: dict | None = None,
     provenance: dict | None = None,
+    captured_at: str | None = None,
 ) -> dict:
     """Build a chat-completion JSONL record from pre-stripped body strings.
 
@@ -219,7 +221,7 @@ def build_pair_record(
         "schema_version": PAIR_SCHEMA_VERSION,
         "system_sha": system_sha(),
         "source": source,
-        "captured_at": now_iso(),
+        "captured_at": captured_at or now_iso(),
         "capture_id": capture_id,
         "chunk_index": chunk_index,
         "chunk_total": chunk_total,
@@ -286,56 +288,37 @@ def capture_pairs(
     coalesce_gap_chars: int = 0,
     max_chars: int | None = None,
     blog_root: Path | str | None = None,
+    supersedes: Sequence[str] = (),
 ) -> list[dict]:
-    """Strip frontmatter, diff, and append one or more pair records.
+    """Strip frontmatter, diff, archive the texts and land one draw per chunk.
 
-    Returns the records written, one per chunk-pair. Raises ValueError if nothing
-    changed worth capturing. `whole` mode spans many headings, so it carries no
-    context; the gap/`max_chars` args pass through to `diff_chunks`.
-
-    The full before/after texts are archived beside the corpus
-    (`<pairs_dir>/captures/<capture_id>/`): the chunk records are a lossy VIEW,
-    so the archive is what lets the corpus be re-cut later. Every record carries
+    Returns the records written, one per chunk-pair; raises if nothing changed
+    worth capturing. `whole` mode spans many headings, so it carries no
+    context; the gap/`max_chars` args pass through to `diff_chunks`. The full
+    texts are archived beside the corpus (`<data_dir>/captures/<capture_id>/`)
+    and each record becomes an accepted draw under `<data_dir>/draws/` naming
+    the `capture_id`s it `supersedes` (D84, `_land`). Every record carries
     `meta.provenance` (D36); a capture's "policy" is its cut knobs, so
     `policy_digest`s compare within a producer and not across one.
     """
     before_meta, before_body = split_frontmatter_meta(before_text)
     after_meta, after_body = split_frontmatter_meta(after_text)
+    knobs = {
+        "whole": whole,
+        "heading_context": heading_context,
+        "gap_paras": coalesce_gap_paras,
+        "gap_chars": coalesce_gap_chars,
+        "max_chars": max_chars,
+    }
     provenance = pair_provenance(
         repo_provenance(blog_root if blog_root is not None else pairs_path.parent),
-        policy_digest=policy_digest(
-            {
-                "producer": "capture",
-                "whole": whole,
-                "heading_context": heading_context,
-                "gap_paras": coalesce_gap_paras,
-                "gap_chars": coalesce_gap_chars,
-                "max_chars": max_chars,
-            }
-        ),
+        policy_digest=policy_digest({"producer": "capture", **knobs}),
         source_automation=_automation_of(after_meta) or _automation_of(before_meta),
     )
-
-    if whole:
-        # A whole-file pair spans many headings, so no single one applies.
-        chunk_pairs: list[tuple[str, str, str]] = [(before_body, after_body, "")]
-    else:
-        chunk_pairs = diff_chunks(
-            before_body,
-            after_body,
-            heading_context=heading_context,
-            coalesce_gap_paras=coalesce_gap_paras,
-            coalesce_gap_chars=coalesce_gap_chars,
-            max_chars=max_chars,
-        )
-
-    if not chunk_pairs:
-        raise RunError(
-            "no changed text chunks to capture "
-            "(only whitespace, frontmatter, pure inserts, or pure deletes changed)"
-        )
+    chunk_pairs = _chunk_pairs(before_body, after_body, **knobs)
 
     cap_id = new_capture_id()
+    captured_at = now_iso()
     write_archive(
         pairs_path.parent / "captures" / cap_id,
         capture_id=cap_id,
@@ -344,27 +327,84 @@ def capture_pairs(
         whole=whole,
         before_text=before_text,
         after_text=after_text,
+        captured_at=captured_at,
     )
-    written: list[dict] = []
-    with corpus.corpus_lock(pairs_path):  # an append is a writer too (D60)
-        for i, (b, a, context) in enumerate(chunk_pairs):
-            record = build_pair_record(
-                before_body=b,
-                after_body=a,
-                source=source,
-                snapped_at=snapped_at,
-                before_frontmatter=before_meta if i == 0 else None,
-                after_frontmatter=after_meta if i == 0 else None,
-                capture_id=cap_id,
-                chunk_index=i,
-                chunk_total=len(chunk_pairs),
-                context=context,
-                extra_meta=extra_meta,
-                provenance=provenance,
-            )
-            append_jsonl(corpus.shard_path_for(pairs_path, record), record)
-            written.append(record)
-    return written
+    records = [
+        build_pair_record(
+            before_body=b,
+            after_body=a,
+            source=source,
+            snapped_at=snapped_at,
+            before_frontmatter=before_meta if i == 0 else None,
+            after_frontmatter=after_meta if i == 0 else None,
+            capture_id=cap_id,
+            chunk_index=i,
+            chunk_total=len(chunk_pairs),
+            context=context,
+            extra_meta=extra_meta,
+            provenance=provenance,
+            captured_at=captured_at,
+        )
+        for i, (b, a, context) in enumerate(chunk_pairs)
+    ]
+    spans = [_span_of(before_text, b) for b, _a, _c in chunk_pairs]
+    return _land(pairs_path, records, spans, supersedes=tuple(supersedes) or None)
+
+
+def _chunk_pairs(
+    before_body: str, after_body: str, *, whole: bool, heading_context: bool, **cut
+) -> list[tuple[str, str, str]]:
+    """The (before, after, context) triples of one capture: the whole body as
+    one pair (no single heading applies), else `diff_chunks` under `cut`."""
+    if whole:
+        return [(before_body, after_body, "")]
+    triples = diff_chunks(
+        before_body,
+        after_body,
+        heading_context=heading_context,
+        coalesce_gap_paras=cut["gap_paras"],
+        coalesce_gap_chars=cut["gap_chars"],
+        max_chars=cut["max_chars"],
+    )
+    if not triples:
+        raise RunError(
+            "no changed text chunks to capture "
+            "(only whitespace, frontmatter, pure inserts, or pure deletes changed)"
+        )
+    return triples
+
+
+def _span_of(text: str, chunk: str) -> tuple[int, int] | None:
+    """Where `chunk` sits in `text` (the archived `before.md`), when it does."""
+    start = text.find(chunk)
+    return (start, start + len(chunk)) if start >= 0 else None
+
+
+def _land(
+    pairs_path: Path,
+    records: list[dict],
+    spans: Sequence[tuple[int, int] | None],
+    *,
+    supersedes: tuple[str, ...] | None,
+) -> list[dict]:
+    """Land a capture's records as draws (D84): `draw_from_pair`-shaped, no
+    blog sha (the tree is dirty by definition), `span` into `before.md`.
+
+    Transition: a data dir with no `draws/` is the old layout and keeps
+    today's append into `pairs/`, with nothing superseded; W4 step 5 removes
+    that branch with `pairs/`.
+    """
+    draws_dir = config.draws_path(pairs_path.parent)
+    if not draws_dir.is_dir():
+        with corpus.corpus_lock(pairs_path):  # an append is a writer too (D60)
+            for record in records:
+                append_jsonl(corpus.shard_path_for(pairs_path, record), record)
+        return records
+    for record, span in zip(records, spans, strict=True):
+        draw = draws.draw_from_pair(record)
+        draw.blog_dirty, draw.span, draw.supersedes = True, span, supersedes
+        draws.append(draws_dir, draw)
+    return records
 
 
 # ---- The capture archive ----
@@ -393,8 +433,10 @@ def write_archive(
     whole: bool,
     before_text: str,
     after_text: str,
+    captured_at: str | None = None,
 ) -> Path:
-    """Write one capture archive directory, atomically.
+    """Write one capture archive directory, atomically; `captured_at` is the
+    save time, so the order of one session's saves is checkable (W4 step 4).
 
     Three separate files make a partial write possible, so build in a sibling
     temp directory and `os.replace` it into place: an archive is either wholly
@@ -414,6 +456,7 @@ def write_archive(
                 "source": source,
                 "snapped_at": snapped_at,
                 "whole": whole,
+                "captured_at": captured_at,
             },
             ensure_ascii=False,
             indent=2,

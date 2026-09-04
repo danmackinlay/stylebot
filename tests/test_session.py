@@ -26,7 +26,10 @@ SLOP = "## S\n\nIt is worth noting the rich tapestry.\n"
 
 @pytest.fixture
 def store(tmp_path) -> SessionStore:
-    return SessionStore(tmp_path / "corpus")
+    """A data dir in the draws layout (D84): a save lands under `draws/`."""
+    store = SessionStore(tmp_path / "corpus")
+    store.draws_dir.mkdir(parents=True)
+    return store
 
 
 @pytest.fixture
@@ -411,7 +414,7 @@ def test_capture_pair_replace_drops_prior_pairs_for_the_source(store):
         notify=notices.append,
     )
     assert result.replaced == 1
-    assert notices == ["replaced 1 prior pair(s) for clipboard"]
+    assert notices == ["superseded 1 prior pair(s) for clipboard"]
     assert _bodies(store) == ["We dig in again."]
 
 
@@ -462,7 +465,8 @@ def _rec(source, captured_at, body):
     }
 
 
-def test_tidy_keeps_only_the_latest_save_per_source(store):
+def test_tidy_keeps_only_the_latest_save_per_source(tmp_path):
+    store = SessionStore(tmp_path / "corpus")  # old layout: no draws/
     write_jsonl_atomic(
         store.pairs_path,
         [
@@ -495,7 +499,8 @@ def test_tidy_can_be_scoped_to_one_source(store):
     assert sorted(r["messages"][0]["content"] for r in result.kept) == ["new a", "new b", "old b"]
 
 
-def test_tidy_dry_run_reports_without_writing(store):
+def test_tidy_dry_run_reports_without_writing(tmp_path):
+    store = SessionStore(tmp_path / "corpus")  # old layout: no draws/
     records = [
         _rec("a.qmd", "2026-01-01T00:00:00+00:00", "old a"),
         _rec("a.qmd", "2026-02-01T00:00:00+00:00", "new a"),
@@ -506,7 +511,8 @@ def test_tidy_dry_run_reports_without_writing(store):
     assert len(session.read_pairs(store)) == 2
 
 
-def test_tidy_keeps_sourceless_and_undecodable_records(store):
+def test_tidy_keeps_sourceless_and_undecodable_records(tmp_path):
+    store = SessionStore(tmp_path / "corpus")  # old layout: no draws/
     store.pairs_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         json.dumps(_rec("a.qmd", "2026-01-01T00:00:00+00:00", "old a")),
@@ -595,7 +601,7 @@ def test_corpus_summary_counts_heading_context(store, post):
     summary = session.corpus_summary(store)
     assert summary.pairs == 2
     assert summary.with_context == 1
-    assert summary.path == store.pairs_path
+    assert summary.path == store.draws_dir == store.corpus_path
 
 
 # ---- age rendering --------------------------------------------------------
@@ -614,3 +620,30 @@ def test_humanize_age_buckets(seconds, expected):
 
 def test_humanize_age_passes_through_an_unparseable_stamp():
     assert session.humanize_age("not a timestamp") == "not a timestamp"
+
+
+# ---- a second save in one session supersedes the first (W4 step 4) -------
+
+
+def test_a_second_save_in_one_session_supersedes_the_first(store, post):
+    """Nothing is rewritten: both saves stay as draws, the successor names the
+    capture it supersedes, and the identity view renders only the final one."""
+    from stylebot import draws
+
+    session.open_session(store, post)
+    Path(post).write_text("## S\n\nInterim rewrite here.\n", encoding="utf-8")
+    first = session.save_session(store, post, keep_open=True)
+    Path(post).write_text("## S\n\nFinal rewrite here.\n", encoding="utf-8")
+    notices: list[str] = []
+    second = session.save_session(store, post, notify=notices.append)
+
+    got = list(draws.iter_draws(store.draws_dir))
+    assert [d.record for d in got] == first.written + second.written
+    cap1 = first.written[0]["meta"]["capture_id"]
+    assert (got[0].supersedes, got[1].supersedes) == (None, (cap1,))
+    assert notices == ["superseded 1 interim pair(s) from this session"]
+    assert len(second.prior.same_session) == 1
+    assert _bodies(store) == ["Final rewrite here."]
+    report = draws.build_view(got, draws.ViewPolicy())
+    assert (report.records, report.excluded) == (1, {"superseded": 1})
+    assert draws.build_view(got, draws.ViewPolicy(keep_superseded=True)).records == 2

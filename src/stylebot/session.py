@@ -1,22 +1,15 @@
 """Rewrite-session state for `ai-style log`, as a library (D35).
 
 `stylebot.capture` owns the capture *mechanism* — paragraph diffing, the pair
-record, the archive. This module owns everything around it:
-
-* **where session state lives** (`SessionStore`);
-* **snapshot persistence** — a snapshot is a directory holding the base text as
-  an ordinary file plus a `meta.json` sidecar, and closing a session *archives*
-  it rather than deleting it, which is what makes `reopen` / `save --redo`
-  possible;
-* **symlink canonicalisation** (`canonical_source`), so the blog's `_focus/`
-  render harness cannot key a session under a scratch tree that gets wiped;
-* **`save`'s disposition rule** and **`tidy`'s latest-wins rule**.
-
-Everything takes explicit paths, so a second caller can drive a session without
-the CLI; `bin/ai_style_log.py` is the click shell that resolves the data dir,
-translates exceptions and prints. `SessionError` (a `RunError`) means the world
-is not ready, a `ValueError` that the arguments contradict (D47). Nothing here
-prints or exits.
+record, the archive, the draw. This module owns everything around it: where
+session state lives (`SessionStore`); snapshot persistence — a directory of
+the base text plus a `meta.json` sidecar, *archived* rather than deleted on
+close, which is what makes `reopen` / `save --redo` possible; symlink
+canonicalisation (`canonical_source`), so the blog's `_focus/` harness cannot
+key a session under a scratch tree that gets wiped; and `save`'s disposition
+rule. Everything takes explicit paths; `bin/ai_style_log.py` is the click
+shell. `SessionError` (a `RunError`) means the world is not ready, a
+`ValueError` that the arguments contradict (D47). Nothing here prints or exits.
 """
 
 from __future__ import annotations
@@ -29,7 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from stylebot import capture, config, corpus
+from stylebot import capture, config, corpus, draws
 from stylebot.errors import ConfigError, RunError
 
 __all__ = [
@@ -75,24 +68,17 @@ __all__ = [
 Disposition = Literal["smart", "replace-all", "append"]
 
 
-# A snapshot is a DIRECTORY mirroring the source path:
-#
-#     snapshots/post/foo.qmd/{content.md, meta.json}
-#
-# Same reasoning as the capture archive (`stylebot.capture`): readable on disk
-# rather than JSON-escaped, and `.md` so the blog's `*.qmd` tooling cannot see
-# it.
+# A snapshot is a DIRECTORY mirroring the source path,
+# `snapshots/post/foo.qmd/{content.md, meta.json}`: readable on disk rather
+# than JSON-escaped, and `.md` so the blog's `*.qmd` tooling cannot see it.
 SNAPSHOT_CONTENT = "content.md"
 SNAPSHOT_META = "meta.json"
 
 
 class SessionError(RunError):
-    """The arguments are fine; the world is not ready.
-
-    No open session, nothing changed since the snapshot, no archive to reopen.
-    The CLI maps this to `click.ClickException` (exit 1), which is what keeps it
-    distinguishable from a contradictory invocation (`ValueError` -> exit 2).
-    """
+    """The arguments are fine; the world is not ready — no open session, nothing
+    changed, no archive to reopen. Exit 1 at the CLI, unlike a contradictory
+    invocation (`ValueError` -> exit 2)."""
 
 
 # ---- Where session state lives -------------------------------------------
@@ -102,11 +88,9 @@ class SessionError(RunError):
 class SessionStore:
     """The on-disk home of session state and the corpus, under one data dir.
 
-    Resolved per invocation rather than baked into module constants: import-time
-    constants freeze whatever the environment looked like when the module was
-    first imported, and in 2026-08 that made `log` the one subcommand that could
-    quietly write to a cwd-relative `_training_pairs/` instead of the configured
-    corpus.
+    Resolved per invocation, not baked into module constants: an import-time
+    constant freezes the environment at first import, which in 2026-08 had
+    `log` writing to a cwd-relative `_training_pairs/` instead of the corpus.
     """
 
     data_dir: Path
@@ -126,33 +110,34 @@ class SessionStore:
 
     @property
     def closed_snapshots_dir(self) -> Path:
-        """Where closed sessions' snapshots are retained.
-
-        A sibling directory rather than a suffix inside the snapshots dir,
-        because the open-session listings rglob there and would otherwise report
-        closed sessions as open.
-        """
+        """Where closed sessions' snapshots are retained: a sibling directory, not
+        a suffix inside `snapshots_dir`, whose rglob would list them as open."""
         return self.data_dir / "snapshots-closed"
 
     @property
     def pairs_path(self) -> Path:
-        """The corpus file itself — what every downstream phase reads."""
+        """The pair corpus: `pairs/` or `pairs.jsonl` (`config.pairs_path`)."""
         return config.pairs_path(self.data_dir)
 
-    def snapshot_path(self, source: Path | str) -> Path:
-        """Where the snapshot for `source` lives.
+    @property
+    def draws_dir(self) -> Path:
+        """`<data_dir>/draws`, where a save lands (D84); may not exist yet."""
+        return config.draws_path(self.data_dir)
 
-        Mirrors the source path under the snapshots dir as a directory, so
-        `post/foo.qmd` -> `_training_pairs/snapshots/post/foo.qmd/`.
-        """
+    @property
+    def corpus_path(self) -> Path:
+        """What `read_pairs` reads: the draws when there are any, else the
+        pair corpus (the old layout, until W4 step 5)."""
+        return self.draws_dir if self.draws_dir.is_dir() else self.pairs_path
+
+    def snapshot_path(self, source: Path | str) -> Path:
+        """Where the snapshot for `source` lives: the source path mirrored under
+        the snapshots dir, `post/foo.qmd` -> `snapshots/post/foo.qmd/`."""
         return self.snapshots_dir / str(source)
 
     def closed_snapshot_path(self, source: Path | str) -> Path:
-        """Where the retained snapshot of `source`'s last closed session lives.
-
-        One archive per source, overwritten each time a session closes — the
-        redo workflow only ever wants the most recent base.
-        """
+        """The retained snapshot of `source`'s last closed session: one per
+        source, overwritten on each close — redo only wants the latest base."""
         return self.closed_snapshots_dir / str(source)
 
 
@@ -297,12 +282,10 @@ def canonical_source(value: Path | None, *, cwd: Path | None = None) -> Path | N
 
 
 def read_pairs(store: SessionStore) -> list[dict]:
-    """Read `pairs.jsonl` into memory. Returns [] if the file is missing.
-
-    Unparseable lines come back as ``{"_raw": line}`` so the rewrite path
-    (`stylebot.jsonl.write_jsonl_atomic`) round-trips them instead of silently
-    dropping them.
-    """
+    """The live pair records: the identity view of the draws (superseded
+    saves excluded, D84), or the pair corpus under the old layout; [] if absent."""
+    if store.draws_dir.is_dir():
+        return list(draws.view_records(draws.iter_draws(store.draws_dir), draws.ViewPolicy()))
     return corpus.read_records(store.pairs_path, keep_undecodable=True)
 
 
@@ -321,7 +304,7 @@ def corpus_summary(store: SessionStore) -> CorpusSummary:
     with_ctx = sum(
         1 for r in pairs if isinstance(r, dict) and (r.get("meta", {}).get("context") or "").strip()
     )
-    return CorpusSummary(path=store.pairs_path, pairs=len(pairs), with_context=with_ctx)
+    return CorpusSummary(path=store.corpus_path, pairs=len(pairs), with_context=with_ctx)
 
 
 # ---- Sessions -------------------------------------------------------------
@@ -428,12 +411,9 @@ class PriorPairs:
 
     @property
     def sessionless(self) -> int:
-        """Prior pairs for this source logged outside a session (`pair`, `synth`).
-
-        They carry `snapped_at=None`, so they have no session timestamp to sort
-        or age and must be counted separately — sorting the mixed set raised
-        `TypeError: '<' not supported between 'str' and 'NoneType'`.
-        """
+        """Prior pairs for this source logged outside a session (`pair`, `synth`):
+        `snapped_at=None`, so no session timestamp to sort or age; counted apart
+        (sorting the mixed set raised `TypeError`)."""
         return sum(
             1
             for rec in self.other_session
@@ -482,35 +462,45 @@ class SaveResult:
         return sum(rec["meta"]["after_chars"] for rec in self.written)
 
 
-def save_session(
+def _capture_ids(records: Sequence[dict]) -> tuple[str, ...]:
+    """The distinct `capture_id`s of `records`, in first-seen order."""
+    seen: dict[str, None] = {}
+    for rec in records:
+        cid = (rec.get("meta") or {}).get("capture_id") if isinstance(rec, dict) else None
+        if cid:
+            seen[cid] = None
+    return tuple(seen)
+
+
+def _to_supersede(
     store: SessionStore,
-    source: Path,
+    prior: PriorPairs,
+    disposition: Disposition,
     *,
-    keep_open: bool = False,
-    disposition: Disposition = "smart",
-    redo: bool = False,
-    tags: Sequence[str] = (),
-    whole: bool = False,
-    heading_context: bool = True,
-    notify: Callable[[str], None] | None = None,
-) -> SaveResult:
-    """Diff `source` against its session snapshot and write the pair(s).
+    source: Path,
+    say: Callable[[str], None],
+) -> list[dict]:
+    """The prior records this save supersedes under `disposition`, announced."""
+    superseded = prior.same_session if disposition == "smart" else []
+    if disposition == "replace-all":
+        superseded = prior.same_session + prior.other_session
+    if superseded and not store.draws_dir.is_dir():
+        say(f"no {store.draws_dir}: prior pairs are kept, not superseded")
+        return []
+    if disposition == "smart" and superseded:
+        say(f"superseded {len(superseded)} interim pair(s) from this session")
+    elif superseded:
+        earlier = len(prior.other_session)
+        note = f" (including {earlier} from earlier session(s))" if earlier else ""
+        say(f"superseded {len(superseded)} prior pair(s) for {source}{note}")
+    return superseded
 
-    Disposition of prior pairs for this source is **smart by default**: pairs
-    from the *same* session (matching `meta.snapped_at`) are replaced, being
-    interim `keep_open` saves that should not stack, while earlier sessions'
-    pairs are kept as legitimate prior rewrites. `"replace-all"` drops
-    cross-session pairs too; `"append"` keeps everything.
 
-    `redo` reopens the last closed session first, so a corrected rewrite is
-    re-diffed against the SAME base and lands in the same session. `notify`
-    receives the lines describing work done *before* the capture — a callback
-    rather than a return value, because that work is committed to disk by the
-    time the capture can raise.
-    """
-    say = notify or (lambda _line: None)
+def _open_for_save(
+    store: SessionStore, source: Path, *, redo: bool, say: Callable[[str], None]
+) -> Snapshot | None:
+    """Reopen for `redo` when nothing is open; raise when there is no session."""
     snap = store.snapshot_path(source)
-
     reopened: Snapshot | None = None
     if redo and not snap.exists():
         try:
@@ -527,55 +517,62 @@ def save_session(
         if store.closed_snapshot_path(source).exists():
             hint += ", or `save --redo` to reopen the last closed session"
         raise SessionError(f"no open session for {source}; {hint}")
+    return reopened
 
-    snapshot = read_snapshot(snap)
+
+def save_session(
+    store: SessionStore,
+    source: Path,
+    *,
+    keep_open: bool = False,
+    disposition: Disposition = "smart",
+    redo: bool = False,
+    tags: Sequence[str] = (),
+    whole: bool = False,
+    heading_context: bool = True,
+    notify: Callable[[str], None] | None = None,
+) -> SaveResult:
+    """Diff `source` against its session snapshot and land the pair(s) as draws.
+
+    Nothing is rewritten (D84): prior pairs are *superseded* — the new draws
+    name their `capture_id`s and a view drops them. **Smart by default**:
+    pairs from the *same* session (matching `meta.snapped_at`) are superseded,
+    being interim `keep_open` saves that should not stack, while earlier
+    sessions' pairs are kept as legitimate prior rewrites. `"replace-all"`
+    supersedes cross-session pairs too; `"append"` supersedes nothing. Under
+    the old layout (no `draws/`) nothing is superseded and the pairs stack.
+
+    `redo` reopens the last closed session first, so a corrected rewrite is
+    re-diffed against the SAME base and lands in the same session. `notify`
+    receives the lines describing work done *before* the capture.
+    """
+    say = notify or (lambda _line: None)
+    if disposition not in ("append", "replace-all", "smart"):  # pragma: no cover
+        raise ValueError(f"unknown disposition {disposition!r}")
+    reopened = _open_for_save(store, source, redo=redo, say=say)
+
+    snapshot = read_snapshot(store.snapshot_path(source))
     before_text = snapshot.content
     after_text = Path(source).read_text(encoding="utf-8")
     if before_text == after_text:
         raise SessionError(f"no changes since session opened on {source}; nothing to save")
 
-    session_snapped_at = snapshot.snapped_at
-    if disposition not in ("append", "replace-all", "smart"):  # pragma: no cover
-        raise ValueError(f"unknown disposition {disposition!r}")
-    partitioned: list[PriorPairs] = []
+    prior = partition_prior_pairs(
+        read_pairs(store), source=str(source), snapped_at=snapshot.snapped_at
+    )
+    superseded = _to_supersede(store, prior, disposition, source=source, say=say)
 
-    def drop_prior(recs: list[dict]) -> list[dict] | None:
-        prior = partition_prior_pairs(recs, source=str(source), snapped_at=session_snapped_at)
-        partitioned.append(prior)
-        keep = prior.other_source
-        if disposition == "smart":
-            keep = keep + prior.other_session
-        return None if disposition == "append" or len(keep) == len(recs) else keep
-
-    corpus.rewrite_with(store.pairs_path, drop_prior)
-    prior = partitioned[0]
-
-    # Report disposition before the save line.
-    if disposition == "smart" and prior.same_session:
-        say(f"replaced {len(prior.same_session)} interim pair(s) from this session")
-    elif disposition == "replace-all":
-        total_dropped = len(prior.same_session) + len(prior.other_session)
-        if total_dropped:
-            extra_note = (
-                f" (including {len(prior.other_session)} from earlier session(s))"
-                if prior.other_session
-                else ""
-            )
-            say(f"replaced {total_dropped} prior pair(s) for {source}{extra_note}")
-
-    extra: dict = {}
-    if tags:
-        extra["tags"] = list(tags)
     try:
         written = capture.capture_pairs(
             before_text,
             after_text,
             pairs_path=store.pairs_path,
             source=str(source),
-            snapped_at=session_snapped_at,
+            snapped_at=snapshot.snapped_at,
             whole=whole,
-            extra_meta=extra or None,
+            extra_meta={"tags": list(tags)} if tags else None,
             heading_context=heading_context,
+            supersedes=_capture_ids(superseded),
         )
     except RunError as exc:
         raise SessionError(str(exc)) from exc
@@ -629,23 +626,23 @@ def capture_pair(
     """One-shot pair capture from two texts, with no session dance.
 
     Unlike `save_session`, this APPENDS by default: the typical use is a one-off
-    pair from a clipboard or a script. `replace` drops prior pairs for `source`
-    first, and requires one. `notify` is `save_session`'s pre-capture progress
-    channel — the removal is committed to disk before the capture can raise.
+    pair from a clipboard or a script. `replace` supersedes every prior pair
+    for `source` (D84), and requires one. `notify` is `save_session`'s
+    pre-capture progress channel.
     """
     say = notify or (lambda _line: None)
     if before_text == after_text:
         raise SessionError("before and after are identical; refusing to log")
 
-    replaced = 0
+    superseded: list[dict] = []
     if replace:
         if source is None:
             # A contradiction in the arguments, not an unready world: the CLI
             # turns this into a UsageError (exit 2), so keep it a ValueError.
             raise ConfigError("--replace requires --source")
-        replaced = capture.remove_pairs_for_source(store.pairs_path, source)
-        if replaced:
-            say(f"replaced {replaced} prior pair(s) for {source}")
+        superseded = [r for r in read_pairs(store) if (r.get("meta") or {}).get("source") == source]
+        if superseded:
+            say(f"superseded {len(superseded)} prior pair(s) for {source}")
 
     try:
         written = capture.capture_pairs(
@@ -657,10 +654,11 @@ def capture_pair(
             whole=whole,
             extra_meta={"tags": list(tags)} if tags else None,
             heading_context=heading_context,
+            supersedes=_capture_ids(superseded),
         )
     except RunError as exc:
         raise SessionError(str(exc)) from exc
-    return PairResult(written=written, replaced=replaced, whole=whole)
+    return PairResult(written=written, replaced=len(superseded), whole=whole)
 
 
 # ---- list -----------------------------------------------------------------
@@ -701,7 +699,7 @@ def summarize_state(store: SessionStore) -> StateSummary:
         by_source.append(SourceSummary(source=src, pairs=len(recs), saves=len(capture_ids)))
 
     return StateSummary(
-        pairs_path=store.pairs_path,
+        pairs_path=store.corpus_path,
         pair_count=len(records),
         by_source=by_source,
         open_sessions=load_snapshots(store.snapshots_dir),

@@ -586,3 +586,39 @@ def test_capture_pairs_appends_under_the_corpus_lock(tmp_path):
     appender.join(5)
     on_disk = corpus.read_records(pairs_path)
     assert [r["meta"].get("tag") for r in on_disk] == ["rewritten", None]
+
+
+# --- a save lands as draws (W4 step 4, D84) ----------------------------------
+
+
+def test_capture_pairs_lands_as_draws_when_the_data_dir_has_them(tmp_path):
+    """With `<data_dir>/draws/` present a capture is appended as draws and
+    nothing is written to `pairs/`; the identity view renders the pair back."""
+    from stylebot import draws
+    from stylebot.pairs import record_id
+
+    data_dir = tmp_path / "dd"
+    (data_dir / "draws").mkdir(parents=True)
+    pairs_path = data_dir / "pairs"
+    slop = "It is worth noting the rich tapestry."
+    before = f"## S\n\nKept.\n\n{slop}\n"
+    written = capture.capture_pairs(
+        before,
+        "## S\n\nKept.\n\nWe dig in.\n",
+        pairs_path=pairs_path,
+        source="post/foo.qmd",
+        snapped_at="2026-09-05T00:00:00+00:00",
+    )
+    assert len(written) == 1 and not pairs_path.exists()
+    got = list(draws.iter_draws(data_dir / "draws"))
+    assert [d.record for d in got] == written
+    draw = got[0]
+    assert draw.outcome == draws.ACCEPTED and draw.draw_id == record_id(written[0])
+    assert (draw.blog_sha, draw.blog_dirty, draw.supersedes) == (None, True, None)
+    assert draw.span == (before.index(slop), before.index(slop) + len(slop))
+    assert draw.drawn_at == written[0]["meta"]["captured_at"]
+    # The archive's sidecar carries the save time, so save order is checkable.
+    cap_id = written[0]["meta"]["capture_id"]
+    meta = json.loads((data_dir / "captures" / cap_id / "meta.json").read_text(encoding="utf-8"))
+    assert meta["captured_at"] == written[0]["meta"]["captured_at"]
+    assert draws.build_view(got, draws.ViewPolicy()).records == 1
