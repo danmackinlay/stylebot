@@ -15,12 +15,14 @@ once their work shipped and the code became the better description):
 | [`decisions.md`](decisions.md) | why each non-obvious choice landed, what we got wrong, what we rejected |
 | [`findings.md`](findings.md) | every measured result — not re-derivable from git |
 | [`eval-harness.md`](eval-harness.md) | the four signals, the detector decision, the split contract |
-| [`v2-longer-rewrites.md`](v2-longer-rewrites.md) | the scale curriculum — mechanism shipped, generation not yet run |
+| [`v2-longer-rewrites.md`](v2-longer-rewrites.md) | the scale curriculum — mechanism shipped, generation run 2026-08, trained as the blog's run 4 |
 | [`synth-flag-audit.md`](synth-flag-audit.md) | the `synth` option surface, as-audited evidence + open retirement proposals |
 | [`vscode-marker.md`](vscode-marker.md) | the editor marker design, thresholds, honesty caveats |
 | [`anchor-integrity.md`](anchor-integrity.md) | the anchor guard/gate/audit — shipped (D32); the as-audited case is kept as the argument for it |
 | [`masking-placement.md`](masking-placement.md) | *where* masking goes (D33) — decided, not yet built |
 | [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md) | the mask *encoding* — the open half of the masking work |
+| [`argued-slop-arm.md`](argued-slop-arm.md) | a slop strategy for concessive/justificatory structure — the first prompt-ablation arm, specified 2026-09-03, not built |
+| [`transcript-mining.md`](transcript-mining.md) | real pairs replayed from Claude Code session transcripts (+~70% on the real stratum, with the objections Claude was answering) — specified 2026-09-03, not built |
 
 Narrative rationale (the "why") lives in the blog post
 [*Fine-tuning danbot*](https://danmackinlay.name/notebook/fine_tuning_danbot.html). This file is
@@ -52,8 +54,10 @@ and the contracts *between* stages matter more than internal abstraction. So:
    parallel against a few fixture rows, and farmed out to subagents.
 4. **The corpus and secrets never enter this public repo.** The corpus is
    gitignored here; its canonical home is the livingthing repo, where it is
-   committed (`_training_pairs/pairs.jsonl`, since 2026-07, for portability —
-   see `_training_pairs/README.md`). Keys arrive as environment variables —
+   committed (`_training_pairs/pairs/`, since 2026-07, for portability — a
+   single `pairs.jsonl` until 2026-09-03, a directory of append-only shards
+   since ([`decisions.md`](decisions.md) D50); see `_training_pairs/README.md`).
+   Keys arrive as environment variables —
    direnv in practice — from a file that is never committed.
 5. **Verify with a number, never with vibes.** "Does the styler work" is
    exactly where an ML project rots. The eval harness is therefore an *early*
@@ -71,15 +75,21 @@ whole pipeline from its own build.
   a thin `click` wrapper that parses flags and calls it. The blog build can
   `import` the function directly — no subprocess/parse tax — *or* shell out to
   the CLI. Build the function; the CLI is a shell over it.
-- **One entry point, subcommands** — `ai-style log | synth | split | train |
-  eval` — not a scatter of loose scripts. Shared option parsing, one `--help`
-  tree; loose scripts drift in flag conventions. Phase 1's logger is exempt from
-  nothing: it shipped as a standalone `ai-style-log` console script until
-  2026-07-20 (history, not design) and is now `ai-style log` like everything
-  else. There is exactly one console script.
+- **One entry point, subcommands** — `ai-style log | synth | make-splits |
+  check-splits | extend-eval | train | train-clf | run | serve | eval | status |
+  validate-pairs | export-table | merge-adapter`, plus the hidden `data` group
+  for one-off migrations — not a scatter of loose scripts. Shared option
+  parsing, one `--help` tree; loose scripts drift in flag conventions. Phase 1's
+  logger is exempt from nothing: it shipped as a standalone `ai-style-log`
+  console script until 2026-07-20 (history, not design) and is now `ai-style
+  log` like everything else. There is exactly one console script, and since
+  2026-09-03 there is no `scripts/` directory either (D38).
 - **Two distinct path inputs, never collapsed:**
   - `--blog-root` — a *read* source (authored `.qmd` prose, sample paragraphs).
-  - `--data-dir` — *read/write* state (the `pairs.jsonl` corpus, manifests).
+  - `--data-dir` — *read/write* state (the corpus, manifests). The corpus is
+    `<data-dir>/pairs/` when that shard directory exists and
+    `<data-dir>/pairs.jsonl` otherwise; `stylebot.config.pairs_path` decides,
+    and every reader and writer goes through it (D45, D50).
   Phase 2 reads blog-root, writes data-dir; train reads data-dir only.
 - **Option precedence: `--flag` > `$STYLEBOT_DATA_DIR` (env) > default.**
   Resolved in one place, `stylebot.config`. The env var is a convenience for
@@ -87,7 +97,7 @@ whole pipeline from its own build.
 - **Defaults where a mistake is cheap; required flags where it isn't.**
   `ai-style log` keeps a cwd-relative default `--data-dir` (run dozens of times
   a day against the focused file — zero friction). The expensive/stateful
-  commands (`train`, `split`) take **no default `--data-dir`**: an explicit
+  commands (`train`, `make-splits`) take **no default `--data-dir`**: an explicit
   path is the reproducibility record, and you never want to silently train on
   the wrong or empty corpus.
 - **Caller decides *which* files; stylebot decides *what to do* with them.**
@@ -103,8 +113,15 @@ whole pipeline from its own build.
      with any user logic.
   2. **Injected policy.** For callers who want stylebot to do the walking, the
      phase entry points accept callables — `selector: Callable[[dict], bool]`
-     and a `sort_key` / `sampler` — defaulting to bundled examples. You swap the
-     default by passing your own; ordering is in scope, not just inclusion.
+     over frontmatter, defaulting to a bundled example, and at assembly
+     `per_passage` (which pairs covering one stretch of prose to keep) and
+     `pair_weight` (record → integer replication of the train row). You swap a
+     default by passing your own. **Ordering is *not* in scope**: there is no
+     `sort_key` and no `sampler`. `--sort` retired in 0.3.1 because arms are
+     assigned by content hash, so target order cannot change what the corpus
+     holds; the library-only `ChunkPolicy.sort_name` / `sort_key()` twin
+     survived it for a caller who never appeared, and was deleted 2026-09-03
+     ([`decisions.md`](decisions.md) D43).
   `stylebot.lib.is_human_authored` is a **shipped example** of such a selector,
   not a mandated path. The contract is "bring your own callable"; we ship one
   that happens to encode Dan's `automation: 0` convention.
@@ -132,7 +149,8 @@ Most of what we imported is *generic*, not Dan-specific. The boundary:
   **Built** in `stylebot.lib.is_human_authored` (conservative: missing/
   unparseable → excluded), tested in `tests/test_selection.py`. Its `field` /
   `max_level` knobs are the *shallow* retarget; the *real* extension story is
-  the bullet above — a user passes their own `selector` / `sort_key`. This
+  the bullet above — a user passes their own `selector` (and, at assembly,
+  `per_passage` / `pair_weight`). This
   function is the default that ships, not a gate stylebot imposes. Phases must
   therefore never call it directly on a hardcoded path: they accept a selector
   argument and use this only as the default value.
@@ -149,14 +167,16 @@ notify downstream.
 
 | Artifact | Producer | Consumer | Format |
 |----------|----------|----------|--------|
-| `pairs.jsonl` | Phase 1 (real), Phase 2 (synthetic) | Phase 3 | chat-completion JSONL, `{messages:[system,user,assistant], meta:{...}}` — schema enforced by `stylebot.pairs.validate_pair_record`; mechanics in `_training_pairs/README.md` |
+| the corpus (`pairs/` or `pairs.jsonl`) | Phase 1 (real), Phase 2 (synthetic) | Phase 3 | chat-completion JSONL, `{messages:[system,user,assistant], meta:{...}}` — schema, types and `record_id` uniqueness enforced by `stylebot.pairs.validate_pairs_file`; one file or a directory of shards, resolved by `stylebot.corpus` (D50); mechanics in `_training_pairs/README.md` |
 | trained adapter | Phase 3 | Phase 4, eval | LoRA weights (Tinker-trained → HF export; Fireworks-hosted or local MLX) |
 | candidate text | Phase 4 | eval harness | plain prose in, plain prose out |
-| `scores.jsonl` | eval harness | humans, Phase 3/4 | id-keyed (`synth_key`/`capture_id:idx`) per-pair `{meta, scores:{field:{vale,judge,detector}}}`; joins back to `pairs.jsonl` |
+| `scores.jsonl` | eval harness | humans, Phase 3/4 | id-keyed (`synth_key`/`capture_id:idx`) per-pair `{meta, scores:{field:{vale,judge,detector}}}` plus the detector identity that produced them (D39); joins back to the corpus |
 
-The crucial deliberate choice: **Phase 1 and Phase 2 emit the *same*
-`pairs.jsonl` schema**, chunked the same way, so training data from real edits
-and synthetic paraphrase is shape-compatible and mixable with a weight column.
+The crucial deliberate choice: **Phase 1 and Phase 2 emit the *same* record
+schema**, chunked the same way, so training data from real edits and synthetic
+paraphrase is shape-compatible and mixable with a weight column. Sharding is
+below that line: `shard_of` routes by record content, so which file a record
+sits in is never part of its meaning.
 
 ## Phase map & status
 
@@ -167,11 +187,12 @@ has a durable document, it is linked.
 |-------|------------------------|--------|
 | 0 · Scaffolding | pyproject / `stylebot.config` | ✅ done |
 | 1 · Pair capture | `stylebot.capture`, `ai-style log`; mechanics in `_training_pairs/README.md` | ✅ shipped, daily use; heading context on both producers (immediate depth) |
-| 2 · Synthetic pairs | `stylebot.synth`, `stylebot.targets`, `ai-style synth` | ✅ shipped; corpus settled 2026-07-22 (~4k pairs) behind the identity + inflation gates (`--max-transform-sim` / `--max-length-ratio`) |
-| 3 · LoRA training | `stylebot.train`, `ai-style train` | ✅ shipped — two paid runs (manifests in the blog's `_training_pairs/runs/`); run 2 is the serving default |
-| E · Eval harness | `stylebot.eval`, `ai-style eval` — [`eval-harness.md`](eval-harness.md) | ✅ built; all four signals live, detector = the trained voice classifier |
-| 4 · Inference CLI | `stylebot.infer`, `ai-style run` / `dan-style run` | ✅ built; Tinker-sampling backend v1, MLX exit verified, Fireworks open |
-| — · VS Code marker | `stylebot.serve`, `vscode-voice-marker/` — [`vscode-marker.md`](vscode-marker.md) | 🔧 in progress — sidecar + extension marking paragraphs with `P(slop)`, plus interactive best-of rewrite |
+| 2 · Synthetic pairs | `stylebot.synth`, `stylebot.targets`, `ai-style synth` | ✅ shipped, behind the identity + inflation gates (`--max-transform-sim` / `--max-length-ratio`) and the anchor gate (D32) |
+| 3 · LoRA training | `stylebot.train`, `ai-style train` | ✅ shipped — paid runs, with `per_passage` / `pair_weight` hooks and a per-passage histogram in the manifest (D43). **Which runs exist and which one serves: `dan-style status`**, never this table |
+| E · Eval harness | `stylebot.eval`, `ai-style eval` — [`eval-harness.md`](eval-harness.md) | ✅ built; all four signals live, detector = the trained voice classifier, verdicts carrying the detector identity that produced them and clustered by post (D39/D40) |
+| 4 · Inference CLI | `stylebot.infer`, `ai-style run` / `dan-style run` | ✅ built; the backend surface is `stylebot.backends` (D35); Tinker-sampling v1, MLX exit verified, Fireworks open |
+| — · VS Code marker | `stylebot.serve`, `vscode-voice-marker/` — [`vscode-marker.md`](vscode-marker.md) | ✅ built — sidecar + extension marking paragraphs with `P(slop)` and offering best-of rewrites; the extension segments through the sidecar's `segment` op rather than porting the segmenter (D44) |
+| — · Pipeline state | `stylebot.status`, `ai-style status` / `dan-style status` | ✅ built 2026-09-03 — corpus composition, splits health, promoted run, detector sha, and the cross-checks between them (D52) |
 
 > **Codebase hygiene (2026-06-29).** A QA declutter pass removed the dead
 > blog-build code bulk-copied into stylebot (`migrate_ai_dates`,
@@ -180,27 +201,36 @@ has a durable document, it is linked.
 > models go through OpenRouter now). The mechanism is lean — don't redo it; ship
 > functionality.
 
-**Where things stand (2026-08-11):** the whole pipeline runs end-to-end —
+**Where things stand (2026-09-03):** the whole pipeline runs end-to-end —
 capture → synth (gated) → train (Tinker LoRA, manifests committed blog-side)
 → `dan-style run` (guarded inference) → eval (detector + judge + Vale).
-Segmentation is now one implementation (`stylebot.markdown`) with training and
-inference held to the same protection contract; the corpus is 4595 pairs after
-the A5 prune, and neither trained run has been re-run against it. Operations
-live in the blog's `_training_pairs/RUNBOOK.md`; durable decisions in
-[`decisions.md`](decisions.md), measurements in [`findings.md`](findings.md).
+Segmentation is one implementation (`stylebot.markdown`), training and inference
+held to the same protection contract, and the editor asks the sidecar for it
+(D44). The 2026-09-03 seam pass moved the backend surface, the migrations, the
+log session store and the corpus-stability floor to whichever side owns them
+(D35–D38, D45–D50).
+
+**Counts and run numbers are deliberately not written here** — they change under
+git's feet in another repo, and every number this paragraph used to carry was
+wrong within three weeks. `dan-style status` prints the live corpus composition,
+eval stratum, promoted run and detector sha (D52). Operations live in the blog's
+`_training_pairs/RUNBOOK.md`; durable decisions in
+[`decisions.md`](decisions.md), *dated* measurements in
+[`findings.md`](findings.md) — where a number like "the 4,595-pair corpus" is a
+record of what was measured then, not a claim about now.
 
 **Open slices** (each self-contained):
 
-- **v2 scale curriculum** — **the generation ran (2026-08)**; the scale-mixed
-  training run has not. The blog corpus carries 4,532 pairs stamped
-  `chunk_mode: cross-heading` at 1500/3000/4500 (2,629 / 1,096 / 807) beside
-  3,335 unstamped legacy pairs, so the 2026-08-11 "no labelled arm" block is
-  cleared. Full state: [`v2-longer-rewrites.md`](v2-longer-rewrites.md); the
-  adapter is the blog's run 4 (`_plans/styler-run4-preflight-2026-08.md` there).
-  **Read that doc's label caveat before faceting**: `merge_max_chars` records
-  which batch first produced a target's text, not its design cell, so a clean
-  contrast needs the budget-unique targets (2,366 / 1,077 / 761) or a
-  length-stratified eval of the adapter itself.
+- ~~**v2 scale curriculum**~~ — **generated 2026-08, trained as the blog's run
+  4** (`_plans/styler-run4-preflight-2026-08.md` there; the arm split and the
+  per-budget counts are in [`v2-longer-rewrites.md`](v2-longer-rewrites.md) and
+  the run's own manifest, not here). What is *still* open is reading it:
+  **`merge_max_chars` records which batch first produced a target's text, not
+  its design cell**, so a clean scale contrast needs the budget-unique targets
+  or a length-stratified eval of the adapter itself. D43's finding is the same
+  fact from the training side — the budget sweep is why one passage carries
+  ~4 pairs — and it means a scale facet and a multiplicity cap are the same
+  knob seen twice.
 - **Masking** ([stylebot#1](https://github.com/danmackinlay/stylebot/issues/1)
   step 3): the guard, write-gate and audit log shipped 2026-08-12 (D32), and the
   gate promptly answered the question it was built to gate on — at v2 chunk
@@ -226,7 +256,23 @@ live in the blog's `_training_pairs/RUNBOOK.md`; durable decisions in
   real edits) now that generator-accident inflation is gated at 3×.
 - **Synthetic↔real distribution match**: the fifth eval capability — a
   feature/mannerism extractor over the synthetic vs real-slop strata. Spec in
-  [`eval-harness.md`](eval-harness.md) §"Planned".
+  [`eval-harness.md`](eval-harness.md) §"Planned". Its minimal first cut
+  (`stylebot.features`, syntactic proxies + a separability AUC) is stage 0 of
+  the `argued` arm below.
+- **`argued` slop arm** ([`argued-slop-arm.md`](argued-slop-arm.md)): real
+  captures carry more subordinate and justificatory structure than any synth
+  strategy on the same posts, and reasoning effort does not move it. A
+  single-call strategy prompt is the stage-1 test (zero cost delta; the
+  registry already spans a 3× range on these proxies by prompt alone); a
+  brief→write two-call arm is the contingent stage 2. Numeric elicitation
+  criteria and a < $30 budget are in the file.
+- **Transcript mining** ([`transcript-mining.md`](transcript-mining.md)):
+  Claude Code transcripts record every `.qmd` edit as an explicit diff, so
+  the real stratum can grow by replaying each session onto its base file and
+  diffing against Dan's next commit through the existing `capture_pairs` —
+  no paragraph matching, layering resolved by construction. ~290 clean pairs
+  against HEAD today, more with time-bounding. The sessions' user turns go to
+  a gitignored sidecar and become the `argued` arm's real objection source.
 - ~~**`synth` option-surface retirements**~~ — **closed 2026-08-13.** `--sort`,
   `--report-max-rows`, `--all` and `--tag` retired (49 options); the substrate
   cluster and `--capture-reasoning` reviewed and kept, `--assign-seed` deferred
@@ -238,10 +284,13 @@ live in the blog's `_training_pairs/RUNBOOK.md`; durable decisions in
   by writer (`GEN_BASE_KEYS` / `GEN_EXTRA_KEYS` / `GEN_REPLICATE_KEYS` /
   `GEN_SESSION_KEYS`) so each group is assertable as an equality against a real
   record from the writer that produces it, in both directions.
-- **`openai` as an `[api]` extra**: every import of it is lazy, so a
-  `classify`/`serve`/keyless-`eval` install carries the SDK for nothing. Written
-  up as [`decisions.md`](decisions.md) P1 — undecided, and it would cost
-  `ai-style synth` its plain-install path.
+- ~~**`openai` as an `[api]` extra**~~ — **rejected 2026-09-03**
+  ([`decisions.md`](decisions.md) P1). Its facts held (all 30 modules import
+  with the SDK blocked), but the balance moved: after W3 the only consumer
+  declares `openai` itself, so the extra would save that install nothing, while
+  `uv add stylebot` would start giving you a `synth` subcommand that cannot run.
+  Re-evaluate on a PyPI release, a second consumer, or a non-OpenAI generator
+  backend.
 - **Phase 7 preference/DPO** on the same Tinker platform (decisions #D5), with
   the eval-harness Goodhart guards. Preference data already accrues from
   ordinary `--best-of` use.
@@ -266,11 +315,24 @@ Before farming out an open slice, confirm it has:
   distributional comparison exists yet. See `eval-harness.md` §"Planned".
 - Single-source vs multi-source slop ablation — worth publishing? (post §"Whose
   slop?"; measurable now via `meta.generator`/`meta.gen`.)
-- Down-weighting synthetic vs real pairs — what weight? `meta.weight` is a hook
-  (`pair_weight`/`per_target` callables), uniform so far.
-- Per-target multiplicity — re-key epochs and deliberate variants can stack
-  several pairs on one target; assembly should expose a per-target cap so
-  duplicated targets don't silently up-weight their passages.
+- Weighting real against synthetic pairs — **the mechanism shipped 2026-09-03
+  (D43); the diet is still nobody's choice.** `pair_weight` stamps `meta.weight`
+  and `_write_conversations` honours it as integer replication of the train row
+  (val is never replicated). What made it urgent is that the corpus was already
+  weighted, by accident: reproducing run 4a's selection gives **3,981 train
+  pairs over 982 passages — 4.05 cuts of the same prose each**, because the
+  budget sweep cut every passage at up to four `merge_max_chars`. Real captures
+  went through once, so they are **3.09% of train pairs but 12.2% of train
+  passages**: the scarce human side is diluted 4× by an artifact of generation,
+  and the by-post val split cannot see it (val inflates identically, mean 4.13).
+  Choosing the correction costs a paid retrain and is Dan's call.
+- Per-passage multiplicity — **the cap shipped as `per_passage` (D43)**; what to
+  set it to has not. Grouping is by source post + character-span containment,
+  not exact body: exact-body grouping saw 1.13 pairs per target against
+  containment's 4.05, which is why every manifest ever written records
+  `per_target: null`. Capping leaves **982 pairs at 1, ~1,660 at 2, ~2,212 at
+  3** — the last of which would lift the real share from 3.1% toward 12%.
+  `dan-style train --dry-run` prints the histogram before you spend.
 - Base-model headroom — `Qwen/Qwen3.5-9B` today; step-up candidates are
   Qwen3.6-27B (dense) or Qwen3.6-35B-A3B (MoE, the Mac-friendliest shape).
 - Detector — **settled (2026-06-30):** the trained Dan-voice classifier
