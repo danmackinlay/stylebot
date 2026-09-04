@@ -90,9 +90,9 @@ and what was rejected: D58; measurement and repairs, the blog's
   directory** — an error message must name a command that exists, and a
   directory outside the package is outside the checks (D38).
 - **Migrations live behind `ai-style data`** (`stylebot.migrations`), a hidden
-  group: `migrate-captures`, `prune-invented-anchors`, `prune-stale`,
-  `shard-pairs`. Dry-run until `--apply`; prunes keep a `.bak`; each has a test.
-  Delete function, command and test together once every corpus has run it (D38).
+  group: `migrate-captures`, `prune-stale`, `shard-pairs`. Dry-run until
+  `--apply`; the prune keeps a `.bak`; each has a test. Delete function, command
+  and test together once its corpus has run it (D38) — so went D73's.
 - **Explicit paths, precedence `--flag` > `$STYLEBOT_DATA_DIR` > default**,
   resolved in `stylebot.config`. Two distinct inputs, never collapsed:
   `--blog-root` (read source) vs `--data-dir` (read/write state) — D45, D50.

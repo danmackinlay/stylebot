@@ -537,11 +537,3 @@ def test_prune_stale_accepts_a_directory(sharded, tmp_path):
     assert res.exit_code == 0, res.output
     assert f"{len(before)} total" in res.output
 
-
-def test_prune_invented_anchors_accepts_a_directory(sharded):
-    data_dir, before = sharded
-    res = CliRunner().invoke(
-        data_cli, ["prune-invented-anchors", str(data_dir / "pairs")]
-    )
-    assert res.exit_code == 0, res.output
-    assert f"records          : {len(before)}" in res.output

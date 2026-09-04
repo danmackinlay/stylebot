@@ -9,7 +9,7 @@ exists has been through it (`restamp_style_system` and `prune_stale_synth_pairs`
 went that way in 0.3); users migrate on version increment rather than carrying
 dead code. Delete the function, its command and its test together.
 
-Three live migrations:
+Two live migrations:
 
 `plan_stale_prune`
     The corpus consequence of a policy change (D53): synthetic cells no current
@@ -19,10 +19,6 @@ Three live migrations:
     The superseded `captures/<id>.json` blobs -> `captures/<id>/` directories.
     The only remaining reader of the old format, which is why it parses the
     blobs itself rather than calling `capture.read_archive` on them.
-
-`find_inventing`
-    The anchor-invention cull (D32), for the corpus that predates
-    `--drop-invented-anchors`.
 """
 
 from __future__ import annotations
@@ -36,8 +32,7 @@ from pathlib import Path
 from stylebot import corpus
 from stylebot.capture import read_archive, write_archive
 from stylebot.errors import RunError
-from stylebot.infer import invented_anchors
-from stylebot.pairs import backup_corpus, extract_slop, extract_target, iter_pairs
+from stylebot.pairs import backup_corpus, extract_target, iter_pairs
 from stylebot.splits import canonical_source, role_of
 from stylebot.targets import ChunkPolicy, iter_targets
 
@@ -185,78 +180,8 @@ def migrate_capture_archives(data_dir: Path, *, apply: bool, log: Log = print) -
 
 
 # ---------------------------------------------------------------------------
-# Anchor-invention cull (D32)
-#
-# `--drop-invented-anchors` gates this at synthesis time and defaults on, so no
-# run after 0.3.0 writes such a pair; this is the one-off for the corpus that
-# predates the gate. `infer.is_anchor_faithful` is the same predicate as a
-# training-assembly `selector`, for anyone who would rather filter than cull.
+# The corpus rewriter the prunes share
 # ---------------------------------------------------------------------------
-
-
-def anchor_kind(key: str) -> str:
-    """Coarse taxonomy of an invented anchor, for the report."""
-    if key.startswith("http"):
-        return "external URL"
-    if key.startswith("@"):
-        return "citation key"
-    if key.startswith("#"):
-        return "same-page anchor"
-    return "internal link"
-
-
-def find_inventing(pairs_path: Path, *, include_real: bool) -> tuple[list[dict], dict]:
-    """`(records_to_keep, report)`. Reads only; decides nothing about writing.
-
-    **Synthetic and real pairs are different propositions, so `include_real`
-    defaults off wherever this is called** (D32): a culled synthetic cell leaves
-    its `synth_key` missing and the next `synth` refills it under the gate, while
-    a real pair records an edit Dan made and only git brings it back. They also
-    fail differently — the synthetic stratum invents external URLs, the real one
-    internal cross-references and citation keys (findings.md).
-    """
-    keep: list[dict] = []
-    kinds: Counter[str] = Counter()
-    dropped = Counter({"synthetic": 0, "real": 0})
-    spared_real = 0
-    samples: list[tuple[str, list[str]]] = []
-    # Coverage accounting: a target losing EVERY pair goes back to uncovered, so
-    # a plain re-run regenerates it. That is the intended repair, not a loss —
-    # but it is the number that says how much regeneration the cull implies.
-    per_target: dict[str, list[int]] = {}
-    total = 0
-
-    for rec in iter_pairs(pairs_path):
-        total += 1
-        meta = rec.get("meta") or {}
-        synthetic = bool(meta.get("synthetic"))
-        invented = invented_anchors(extract_slop(rec), extract_target(rec))
-        if synthetic:
-            seen = per_target.setdefault(extract_target(rec), [0, 0])
-            seen[0] += 1
-            seen[1] += bool(invented)
-        if not invented:
-            keep.append(rec)
-            continue
-        if not synthetic and not include_real:
-            spared_real += 1
-            keep.append(rec)
-            continue
-        dropped["synthetic" if synthetic else "real"] += 1
-        kinds.update(anchor_kind(k) for k in invented)
-        if len(samples) < 5:
-            samples.append((meta.get("source") or "?", sorted(set(invented))[:3]))
-
-    wiped = sum(1 for n, bad in per_target.values() if n and n == bad)
-    return keep, {
-        "records": total,
-        "dropped": dict(dropped),
-        "spared_real": spared_real,
-        "kinds": kinds.most_common(),
-        "targets_wiped": wiped,
-        "targets": len(per_target),
-        "samples": samples,
-    }
 
 
 def write_pruned(pairs_path: Path, keep: list[dict]) -> Path:

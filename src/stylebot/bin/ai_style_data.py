@@ -19,7 +19,7 @@ So: absent from `ai-style --help`, fully documented under `ai-style data
 
 Every command **dry-runs by default** and needs `--apply` to write, because all
 of them are destructive in the one direction that matters — one unlinks legacy
-archive files, the other two delete corpus records. Both prunes keep a `.bak`. A
+archive files, the other deletes corpus records. The prune keeps a `.bak`. A
 migration is deleted once the only corpus that exists has been through it; see
 the module docstring in `stylebot.migrations`.
 """
@@ -120,61 +120,6 @@ def shard_pairs_cmd(data_dir: Path, apply: bool, keep_file: bool) -> None:
         src.unlink()
         click.echo(f"removed {src} (the shards are the corpus now)")
     click.echo("next: `ai-style validate-pairs <data-dir>/pairs` to confirm 0 problems.")
-
-
-@main.command("prune-invented-anchors")
-@click.argument("pairs", type=click.Path(exists=True, path_type=Path), required=True)
-@click.option("--apply", is_flag=True, help="Rewrite pairs.jsonl (default: dry run).")
-@click.option(
-    "--include-real",
-    is_flag=True,
-    help="Also cull captured (non-synthetic) pairs. They cannot be regenerated.",
-)
-def prune_invented_anchors_cmd(pairs: Path, apply: bool, include_real: bool) -> None:
-    """Drop pairs whose target carries a link/URL/citation its slop never had.
-
-    The one-off for the corpus that predates `--drop-invented-anchors` (D32),
-    which gates this at synthesis time and defaults on. Synthetic pairs only
-    unless `--include-real`: a culled synthetic cell is regenerable by the next
-    `synth` run, a captured one is not.
-    """
-    from stylebot import migrations
-
-    keep, report = migrations.find_inventing(pairs, include_real=include_real)
-    n_dropped = sum(report["dropped"].values())
-
-    click.echo(f"records          : {report['records']}")
-    click.echo(
-        f"dropped          : {n_dropped} "
-        f"({report['dropped']['synthetic']} synthetic, {report['dropped']['real']} real)"
-    )
-    if report["spared_real"]:
-        click.echo(
-            f"real, left alone : {report['spared_real']} "
-            "(captured records — pass --include-real to cull, or exclude them at "
-            "training assembly with infer.is_anchor_faithful)"
-        )
-    click.echo(f"remaining        : {len(keep)}")
-    for kind, n in report["kinds"]:
-        click.echo(f"    {kind:18} {n}")
-    click.echo(
-        f"targets emptied  : {report['targets_wiped']} of {report['targets']} "
-        "— these go back to uncovered, so the next synth run refills them"
-    )
-    for source, anchors in report["samples"]:
-        click.echo(f"  e.g. {source}: invented {', '.join(anchors)}")
-
-    if not n_dropped:
-        click.echo("\nnothing to prune.")
-        return
-    if not apply:
-        click.echo("\ndry run — nothing written. Re-run with --apply to prune.")
-        return
-
-    backup = migrations.write_pruned(pairs, keep)
-    click.echo(f"\npruned {n_dropped} pair(s) -> {pairs} (backup at {backup})")
-    click.echo("next: `ai-style synth --gate-retries 2` to refill the emptied cells,")
-    click.echo("      then `ai-style eval --prune-orphans` if you keep scores.jsonl.")
 
 
 def _import_attr(spec: str, hint: str):
