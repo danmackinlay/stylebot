@@ -23,7 +23,9 @@ per workspace (the repo that holds your trained artifact), e.g. in
 
 The sidecar is spawned on activation (status bar: spinner while the embedding
 model loads, ~5 s), restarted with backoff if it crashes, and killed on
-window close. Commands: `Voice Marker: Rescore Document`, `Toggle Marks`,
+window close. One request is in flight at a time: the sidecar writes a reply
+before it reads the next line, so a long `rewrite` delays a queued `score`.
+Commands: `Voice Marker: Rescore Document`, `Toggle Marks`,
 `Restart Sidecar` (after retraining the head).
 
 ## Build, test, install

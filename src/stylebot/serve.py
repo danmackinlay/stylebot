@@ -1,9 +1,8 @@
 """NDJSON scoring sidecar — the editor-facing seam over a detector.
 
-`ai-style serve` keeps a detector resident and scores batches of texts over
-stdin/stdout, one JSON object per line each way. The embedding model loads once
-(~5 s), after which a whole document scores in tens of milliseconds — what makes
-a live editor marker viable (`_plans/vscode-marker.md`; NDJSON not LSP, D20).
+`ai-style serve` keeps a detector resident and scores texts over stdin/stdout,
+one JSON object per line each way. Load once (~5 s), then score a document in
+tens of milliseconds, a live marker's budget (`_plans/vscode-marker.md`, D20).
 
     -> {"id": 1, "op": "info"}
     <- {"id": 1, "meta": {...artifact meta.json...}}
@@ -20,13 +19,14 @@ a live editor marker viable (`_plans/vscode-marker.md`; NDJSON not LSP, D20).
     -> {"id": 4, "op": "prefer", "decision": {...}}
     <- {"id": 4, "ok": true}
 
-`segment` is what stops the client owning a segmenter of its own: it answers
-from `stylebot.markdown` under the `div_is_prose` policy the sidecar was started
-with. `rewrite` and `prefer` arm only when their seam is injected — a rewriter
+`segment` stops the client owning a segmenter: it answers from
+`stylebot.markdown` under the `div_is_prose` policy the sidecar started with.
+`rewrite` and `prefer` arm only when their seam is injected — a rewriter
 `(text, context, best_of)` and a sink whose schema the caller owns; unarmed,
-they error politely. `info` doubles as the ready handshake. An error never kills
-the loop; EOF on stdin is the shutdown signal. Like `stylebot.classify`, this
-module is ML-dependency-free — everything expensive is injected.
+they error politely. `info` doubles as the ready handshake. One request is
+in flight at a time: the reply is written before the next line is read, so a
+long `rewrite` delays a queued `score`. An error never kills the loop; EOF on
+stdin shuts down. Like `stylebot.classify`, all ML is injected, none imported.
 """
 
 from __future__ import annotations
