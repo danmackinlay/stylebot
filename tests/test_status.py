@@ -187,7 +187,7 @@ def test_collect_says_when_a_promoted_run_predates_the_splits_pin(tmp_path):
 # --- the CLI ----------------------------------------------------------------
 
 
-def test_ai_style_status_prints_the_promoted_run_id(tmp_path):
+def test_ai_style_status_prints_the_promoted_run_id_and_lists_the_rest(tmp_path):
     runs = tmp_path / "runs"
     _write_runs(runs, [_manifest("20260101-old"), _manifest("20260102-nixed", promoted=False)])
     data_dir = tmp_path / "data"
@@ -196,8 +196,10 @@ def test_ai_style_status_prints_the_promoted_run_id(tmp_path):
         ai_style, ["status", "--data-dir", str(data_dir), "--runs", str(runs)]
     )
     assert result.exit_code == 0, result.output
-    assert "20260101-old" in result.output
-    assert "20260102-nixed" not in result.output
+    assert "serving:  20260101-old" in result.output
+    # Nixed, not hidden: it is listed, and it is not the one that serves.
+    assert "20260102-nixed" in result.output
+    assert "serving:  20260102-nixed" not in result.output
 
 
 def test_ai_style_status_json_round_trips(tmp_path):
@@ -207,3 +209,91 @@ def test_ai_style_status_json_round_trips(tmp_path):
     assert result.exit_code == 0, result.output
     doc = json.loads(result.output)
     assert doc["corpus"]["n_records"] == 1
+
+
+# --- the per-run listing (F6 / D74) -----------------------------------------
+
+
+def _verdict(run_id, *, produced_at, styler="20260817-170037"):
+    """A verdict manifest: no `result`, `promoted: false`, pins under `pins`."""
+    return {
+        "run_id": run_id,
+        "kind": "docscale-eval-verdict",
+        "promoted": False,
+        "produced_at": {"rewrite": produced_at, "note": "not a timestamp"},
+        "pins": {
+            "styler": {"run_id": styler},
+            "corpus": {"content_sha256": "25524b9737caa448"},
+            "splits": {"splits_sha256": "05b495adac68cdc4"},
+            "detector": {"git_sha": "c0e2ac85be"},
+        },
+    }
+
+
+def test_a_verdict_manifest_is_listed_with_its_pins(tmp_path):
+    runs = tmp_path / "runs"
+    _write_runs(
+        runs,
+        [
+            _manifest("20260101-old"),
+            _verdict("docscale-20260904", produced_at="2026-09-04T10:14+10:00"),
+        ],
+    )
+    report = st.collect(runs_dir=runs)
+    listed = {e.run_id: e for e in report.runs.entries}
+    assert set(listed) == {"docscale-20260904", "20260101-old"}
+    assert listed["docscale-20260904"].state == "not promoted"
+    assert listed["docscale-20260904"].pins == {
+        "styler": "20260817-170037",
+        "corpus": "25524b9737caa448",
+        "splits": "05b495adac68cdc4",
+        "detector": "c0e2ac85be",
+    }
+    assert listed["20260101-old"].state == "serving"
+    text = st.format_status(report)
+    assert "docscale-20260904" in text and "detector=c0e2ac85be" in text
+
+
+def test_a_verdict_manifest_does_not_become_the_promoted_one(tmp_path):
+    """The trap F6 documented: `docscale-...` sorts above every timestamp stem.
+
+    Its `promoted: false` and its missing `result` are both load-bearing, and
+    the ordering must not depend on either.
+    """
+    runs = tmp_path / "runs"
+    _write_runs(
+        runs,
+        [
+            _manifest("20260101-old"),
+            _verdict("docscale-20260904", produced_at="2026-09-04T10:14+10:00"),
+        ],
+    )
+    assert st.promoted_manifest(runs)["run_id"] == "20260101-old"
+
+
+def test_manifests_are_ordered_by_their_own_clock_not_their_filename(tmp_path):
+    """A run id is a timestamp by convention only, so the clock decides (D74)."""
+    runs = tmp_path / "runs"
+    old = _manifest("20260101-old")
+    old["created_at"] = "2026-01-01T00:00:00+00:00"
+    new = _manifest("aardvark")
+    new["created_at"] = "2026-09-04T00:00:00+00:00"
+    _write_runs(runs, [old, new])
+    assert [e.run_id for e in st.collect(runs_dir=runs).runs.entries] == [
+        "aardvark",
+        "20260101-old",
+    ]
+    assert st.promoted_manifest(runs)["run_id"] == "aardvark"
+
+
+def test_an_offset_stamp_is_parsed_rather_than_compared_as_a_string(tmp_path):
+    """`...T10:14+10:00` is EARLIER than `...T05:00+00:00`; a string sort says later."""
+    runs = tmp_path / "runs"
+    _write_runs(
+        runs,
+        [
+            _verdict("verdict-a", produced_at="2026-09-04T10:14+10:00"),
+            _verdict("verdict-b", produced_at="2026-09-04T05:00+00:00"),
+        ],
+    )
+    assert [e.run_id for e in st.collect(runs_dir=runs).runs.entries] == ["verdict-b", "verdict-a"]

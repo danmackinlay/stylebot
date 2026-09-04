@@ -36,27 +36,26 @@ RATIO_BUDGET = 0.40
 # 0.4108. This, not the ratio, is the ratchet: deleting mechanism raises the
 # ratio while lowering the prose. Only ever lower it; set it to None once the
 # package meets RATIO_BUDGET.
-PROSE_CEILING: int | None = 4711
+PROSE_CEILING: int | None = 4688
 
 # module -> the budgets it is over today, at their exact current size.
 # "functions" and "docstrings" list every over-budget span, largest first.
 # A failure names the exact number to lower an entry to, or the entry to delete.
 ALLOWLIST: dict[str, dict[str, object]] = {
-    "bin/ai_style.py": {"lines": 1669, "functions": (152, 105, 88), "docstrings": (16,)},
+    "bin/ai_style.py": {"lines": 1668, "functions": (139, 105, 88), "docstrings": (16,)},
     "bin/ai_style_data.py": {"functions": (113,)},
     "capture.py": {"functions": (99, 93)},
     "classify_train.py": {
         "lines": 965,
         "functions": (82,),
-        "docstrings": (22, 19),
-        "module_docstring": 33,
+        "docstrings": (22, 17),
+        "module_docstring": 31,
     },
     "generators.py": {"functions": (158, 102, 99)},
-    "infer.py": {"lines": 865, "functions": (197, 96), "docstrings": (28, 18)},
+    "infer.py": {"lines": 863, "functions": (177, 94), "docstrings": (17, 16)},
     "report.py": {"lines": 885, "functions": (130,)},
     "session.py": {"lines": 845, "functions": (110,)},
     "splits.py": {"functions": (112,), "docstrings": (19,), "module_docstring": 32},
-    "status.py": {"functions": (88,)},
     "synth.py": {"lines": 1264, "functions": (128, 128), "docstrings": (26,)},
     "synth_cli.py": {
         "lines": 1117,
@@ -67,7 +66,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     "train.py": {
         "lines": 997,
         "functions": (97, 95, 90, 89),
-        "docstrings": (26, 23, 20, 20, 18, 17),
+        "docstrings": (26, 23, 20, 18, 17, 17),
         "module_docstring": 35,
     },
 }

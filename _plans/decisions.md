@@ -55,6 +55,13 @@ keep their numbers — the second index below is how you find them.
 | D67 | the blog's Linux/CI machinery for `stylebot` is deleted | live |
 | D68 | segmenter tests run thirteen hard posts; the sweep is opt-in | live; amended 2026-09-04 (eleven) |
 | D69 | a closing code fence back-references its opener's length | live |
+| D70 | *(never written — reserved during concurrent work; the cull it was for is D73)* | — |
+| D71 | the blog's serving policy is a module, not a `bin/` script | live |
+| D72 | the blog's classifier commands are a shell over `voice_classifier` | live |
+| D73 | the anchor-invention cull is spent, so it is deleted | live |
+| D74 | `status` lists every run manifest, ordered by the manifest's own clock | live |
+| D75 | a sampled message's content may be parts, not a string | live |
+| D76 | an unclosed `:::` opener yields no span; the source is where it is fixed | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D33)
 
@@ -977,9 +984,10 @@ masked corpus is generated: its placeholder shape must be settled first.
 ## D65: `--include-real` defaults off — the two strata invent different things
 
 **Decision (2026-08-12, recorded 2026-09-04).** The anchor-invention cull
-(`ai-style data prune-invented-anchors`, D38) drops **synthetic** pairs only
-unless `--include-real` is passed, and real pairs are excluded from *training* by
-`infer.is_anchor_faithful` (D32) rather than culled from disk.
+dropped **synthetic** pairs only unless `--include-real` was passed, and real
+pairs are excluded from *training* by `infer.is_anchor_faithful` (D32) rather
+than culled from disk. The cull itself is deleted (D73); the training-side half
+of this entry is the part still live.
 
 **Why, part one: regenerability.** A culled synthetic cell leaves its `synth_key`
 missing, so the next `ai-style synth` refills it — under the gate this time, and
@@ -1127,3 +1135,167 @@ opener never backtracks; rejected as mechanism with nothing to buy (P8).
 accepts it, CommonMark does not, and the answer is a count of how many posts do
 it before any loosening.
 
+
+## D71: the blog's serving policy is a module, not `bin/style_file.py`
+
+**Decision (2026-09-04, F11; written after the code, which is the defect F12b
+records).** `livingthing.styler` holds the blog's *serving* policy: manifest
+resolution, endpoint probing and the local staleness warning, the backend
+option skin, `arm_styler`, the scorer and preference sink, the chunk diet, the
+corpus rewrite and `serve_blog`. `bin/style_file.py` keeps option declarations,
+the three commands, echoes and exit codes. Anything that is a thin call into
+`stylebot.backends` is imported rather than wrapped.
+
+**Alternatives.** Leave it in `bin/` — rejected: the seam tests already reached
+into `livingthing.bin` to use it, and the copy that shape produces had lost
+`--max-tokens` from `run` and `serve`, so every rewrite truncated at the
+2000-token floor while the promoted run served a 4500-char diet. Split it
+further (manifest / backend / sidecar) — rejected: all three read the same
+manifest and diet, so the split buys three mutually importing modules and no
+seam a caller asks for. Fold it into `training_targets` — rejected: that module
+answers what a *training target* is, is imported by synth and the classifier,
+and must not drag the backend surface in behind them.
+
+**Deciding constraint.** D35: a library reachable only through a CLI module
+gets copied, and the copy drifts. At 505 lines with no function over 80 it is
+inside P2's budgets, so no allowlist entry is needed for it.
+
+**Re-evaluate if** it passes 800 lines, or `serve_blog` grows a second
+protocol — the editor sidecar is the natural first split.
+
+## D72: the blog's classifier commands are a shell over `voice_classifier`
+
+**Decision (2026-09-04, F12c).** `train_pass` and `eval_pass` — the
+orchestration behind `dan-style train-clf` and `dan-style eval` — move from
+`bin/train_voice_clf.py` into `livingthing.voice_classifier`, reporting through
+stylebot's `Emitter` with `click_emitter()` supplied at the CLI boundary. The
+bin module keeps flags, the four commands and exit codes: 414 → 188 lines, no
+plain top-level def, and all four of its `test_budget.py` allowlist entries
+deleted.
+
+**Alternatives.** Split `status` and `extend-eval` into a second `bin/` module —
+rejected: a new module (P8) that moves ~90 lines and still leaves the shell over
+250, because what is over budget is the orchestration, not the command count.
+Allowlist 414 and stop — rejected: F11 recorded it as a debt and the allowlist
+only shrinks. A new `livingthing.voice_eval` — rejected: `document_pass` already
+lives in `voice_classifier` and the eval pass calls it, so the two modules would
+import each other.
+
+**Deciding constraint.** The blog's 250-line `bin/` budget (F11, on D58's
+allowlist rule) and D61's rule that the executables package holds no libraries.
+`voice_classifier` goes 175 → 445 lines, inside P2's 800 with no function over
+80 and no docstring over 15; package prose does not grow (`PROSE_CEILING`
+8580 → 8579).
+
+**Re-evaluate if** `voice_classifier` passes 800 lines — the eval pass is the
+natural split, and it takes `document_pass` with it.
+
+## D73: the anchor-invention cull is spent, so it is deleted
+
+**Decision (2026-09-04, F12j).** `migrations.find_inventing`, `anchor_kind`,
+`ai-style data prune-invented-anchors` and their tests are deleted. D38 says a
+migration goes once the only corpus that exists has been through it, and this one
+has: the dry run drops **0 of 8,156** records (`findings.md`, "Two constructs the
+corpus no longer holds"). `write_pruned` stays — `prune-stale` also calls it.
+
+**Alternatives.** *Keep it as a report* — rejected: `infer.invented_anchors` and
+`is_anchor_faithful` are the predicate, reachable without a command, and a
+migration kept for its printout is a migration nobody re-reads before running.
+*Keep it for `--include-real`* — rejected, and the measurement is why: that flag
+would drop **49 real captures**, and reading them they are Dan adding a
+cross-reference while editing, not a generator inventing a destination. Culling
+them is the thing D65 exists to refuse.
+
+**Deciding constraint.** The synthesis gate (`--drop-invented-anchors`, on by
+default since 0.3) means no future run writes such a pair, so the count cannot
+rise; a migration pinned at zero is dead code with an `--apply` flag on it.
+
+**Re-evaluate if** a corpus predating 0.3 is ever restored from a backup; git
+holds the function, and the predicate it wrapped is still in `infer`.
+
+**Follow-up outside this repo:** the blog's `_training_pairs/RUNBOOK.md` §6a
+still names the command. It needs deleting there.
+
+## D74: `status` lists every run manifest, ordered by the manifest's own clock
+
+**Decision (2026-09-04, F12f).** `stylebot.status` gains `load_manifests` and a
+`RunEntry` per manifest — run id, `kind`, state (serving / completed / not
+promoted / incomplete) and the artifacts it pinned — which `format_status`
+prints under the runs block. `promoted_manifest` keeps its contract and now reads
+the same list. This is what makes F6's "`dan-style status` lists the docscale run
+with its pins" true; before it, a verdict manifest showed only as the count
+going up.
+
+**The ordering changes with it.** Manifests were sorted by filename in reverse on
+the convention that a run id is a timestamp. A verdict manifest's stem
+(`docscale-20260904`) sorts above every real timestamp, so the convention was
+load-bearing for a rule it was never asked about. Ordering is now the manifest's
+own `created_at` / `produced_at`, parsed (the two shapes carry different UTC
+offsets), with the filename as the tiebreak.
+
+**Alternatives.** *Leave the sort and rely on `promoted: false`* — rejected: it
+works for a reason nothing states, and the two docscale manifests carry both
+guards only because their author found the trap by hand. *Sort by file mtime* —
+rejected: a checkout rewrites mtimes. *A separate `ai-style runs` command* —
+rejected under P8, a new command for data `status` already reads.
+
+**Deciding constraint.** The guards on the two committed verdict manifests stay
+load-bearing: no `result` key, `promoted: false`. Nothing here may make a
+manifest without a `result` promotable, and a test pins that.
+
+**Re-evaluate if** a runs directory grows past ~30 manifests, when the listing
+wants a `--limit` more than it wants completeness.
+
+## D75: a sampled message's content may be parts, not a string
+
+**Decision (2026-09-04, F12h).** `infer._message_text` flattens a renderer
+`Message.content` — `str | list[ContentPart]` — before `tinker_backend` strips
+it. A `ThinkingPart` is **re-wrapped** as `<think>…</think>` rather than dropped.
+
+**The defect it fixes.** One eval document, capture `43f0e688`
+(`notebook/local_llm_mac.qmd`), failed every document-scale run with
+`AttributeError: 'list' object has no attribute 'strip'`, caught by the
+per-document guard so 34 of 35 completed. The post's prose contains a literal
+`` `<think>`…`</think>` `` and the styler faithfully reproduces it;
+`parse_content_blocks` then splits any such sample into parts, so `content` is a
+list. Two blog posts contain the construct.
+
+**Alternatives.** *Keep only the `TextPart`s* — rejected: it silently deletes the
+author's own text from the rewrite, and no guard sees it (a `<think>` span
+carries no anchor, and the loss is too small to read as truncation). *Bypass
+`parse_response` and decode the tokens* — rejected: it re-implements stop-token
+handling to avoid one line. *Reconstruct `tool_calls` too* — not done: no blog
+post contains a `<tool_call>` block, and a prose styler emitting one is a
+malformed sample, not text to preserve.
+
+**Deciding constraint.** The served renderer is `qwen3_5_disable_thinking`, so a
+thinking part is not reasoning — it is prose that happened to look like a tag,
+and the styler's contract is that its answer is text.
+
+**Re-evaluate if** a thinking-enabled renderer is ever served, when a real
+reasoning block would be re-wrapped into the document.
+
+## D76: an unclosed `:::` opener yields no span; the source is where it is fixed
+
+**Decision (2026-09-04, F12h).** `markdown._div_spans` keeps its behaviour: an
+opener with no closer produces no protected span at all, so the `::: foo` line
+itself is offered as prose. Documented, not fixed. Corpus-wide there are **0**
+unclosed openers across 1,758 `.qmd` (`findings.md`, "Two constructs the corpus
+no longer holds") since the blog fixed five asymmetric fences at `25cf42e5c5`.
+
+**Alternatives.** *Protect to end of document* — pandoc's own reading (it closes
+the div implicitly and warns), rejected here: one typo would remove the rest of
+the post from training targets and from every rewrite, while a div's contents
+render as the same markdown either way, so nothing is destroyed by leaving them
+editable. An unclosed **fence** is the opposite case and runs to EOF (D69),
+its contents being code. *Protect the opener line alone* — the narrow reading of
+ground 3, rejected on P8: a live change to the one segmenter, moving training
+targets and the blog's editing path, for a construct no post contains.
+
+**Deciding constraint.** The construct is a source typo that pandoc warns about,
+so the fix belongs in the `.qmd`, where it happened, and where it has already
+happened five times.
+
+**Re-evaluate if** an unclosed opener reappears in the corpus sweep, or a rewrite
+is ever observed altering a `:::` line — either would make the narrow fix cheap
+and obviously right.

@@ -9,8 +9,8 @@ that answer "where is this pipeline?":
 2. the **splits contract** — eval stratum version and `splits_sha256`, whether
    every pinned eval post is still on disk, the per-role table and the danger
    report (`stylebot.splits`);
-3. the **runs** — which manifests exist, which are completed, and which one
-   serves by default (the `promoted` rule, below);
+3. the **runs** — every manifest with the artifacts it pinned, which are
+   completed, and which one serves by default (the `promoted` rule, below);
 4. the **detector** — the artifact's `git_sha`, when it was fit, and on how
    many pairs (`stylebot.classify.load_artifact_meta`);
 5. the **cross-checks between them**, which is why this is one function rather
@@ -30,10 +30,54 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from stylebot import corpus as corpus_mod
 from stylebot import splits as splits_mod
+
+
+def _run_time(doc: dict) -> float:
+    """When a manifest says it was made, as a POSIX timestamp; 0.0 if it doesn't.
+
+    `created_at` (a training run) or `produced_at` (a verdict, which records a
+    stamp per phase and takes the earliest). Parsed rather than compared as a
+    string, because the two shapes carry different UTC offsets.
+    """
+    stamps: list[str] = []
+    for value in (doc.get("created_at"), doc.get("produced_at")):
+        if isinstance(value, str):
+            stamps.append(value)
+        elif isinstance(value, dict):
+            stamps += [v for v in value.values() if isinstance(v, str)]
+    for stamp in sorted(stamps):
+        try:
+            return datetime.fromisoformat(stamp).timestamp()
+        except ValueError:
+            continue
+    return 0.0
+
+
+def load_manifests(runs_dir: str | Path) -> list[tuple[Path, dict]]:
+    """Every readable `runs/*.json`, newest first. Unreadable ones are skipped.
+
+    Ordered by the manifest's own clock (`_run_time`) with the filename as the
+    tiebreak, so a run id that is not a timestamp — a verdict directory's
+    manifest — sorts by when it says it was made rather than by where its stem
+    falls in a filename sort (D74).
+    """
+    runs = Path(runs_dir)
+    if not runs.is_dir():
+        return []
+    found: list[tuple[Path, dict]] = []
+    for path in sorted(runs.glob("*.json")):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(doc, dict):
+            found.append((path, doc))
+    return sorted(found, key=lambda pd: (_run_time(pd[1]), pd[0].name), reverse=True)
 
 
 def promoted_manifest(runs_dir: str | Path) -> dict | None:
@@ -45,23 +89,14 @@ def promoted_manifest(runs_dir: str | Path) -> dict | None:
     serving cannot disagree about which adapter is live — the blog's
     `style_file.latest_manifest` is this function plus a click error.
 
-    Manifests are named by run id, which is a timestamp, so a reverse filename
-    sort is newest-first. `"promoted": false` skips a run without hiding it — a
-    nixed run and an ablation arm stay on record with their `promotion_note`.
+    `"promoted": false` skips a run without hiding it — a nixed run, an ablation
+    arm and a verdict manifest stay on record with their `promotion_note` and
+    are listed by `run_entries`.
 
     Returns the manifest with `_path` added. None when no manifest qualifies —
     an unbuilt pipeline, not an error.
     """
-    runs = Path(runs_dir)
-    if not runs.is_dir():
-        return None
-    for path in sorted(runs.glob("*.json"), reverse=True):
-        try:
-            manifest = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(manifest, dict):
-            continue
+    for path, manifest in load_manifests(runs_dir):
         if manifest.get("result") and manifest.get("promoted") is not False:
             manifest["_path"] = str(path)
             return manifest
@@ -94,12 +129,23 @@ class SplitsStatus:
 
 
 @dataclass(frozen=True)
+class RunEntry:
+    """One manifest under `runs/`: what it is, and the artifacts it pinned."""
+
+    run_id: str
+    kind: str
+    state: str
+    pins: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class RunsStatus:
     path: Path | None
     exists: bool
     n_manifests: int = 0
     n_completed: int = 0
     promoted: dict | None = None
+    entries: list[RunEntry] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -194,24 +240,66 @@ def _splits_status(
     )
 
 
+def _run_pins(doc: dict) -> dict[str, str]:
+    """The artifacts a manifest pinned, in either shape it is written in.
+
+    A training run records them under `data` and `hyperparameters`; a verdict
+    records them under `pins`, and names the styler run it sampled from. Absent
+    pins are absent keys, so an old manifest reads as short rather than wrong.
+    """
+    pins = doc.get("pins") if isinstance(doc.get("pins"), dict) else {}
+    data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
+    hyper = doc.get("hyperparameters") if isinstance(doc.get("hyperparameters"), dict) else {}
+
+    def pin(block: str, key: str):
+        sub = pins.get(block)
+        return sub.get(key) if isinstance(sub, dict) else None
+
+    lora = f"/r{hyper['lora_rank']}" if hyper.get("lora_rank") else ""
+    found = {
+        "styler": pin("styler", "run_id"),
+        "model": f"{hyper['base_model']}{lora}" if hyper.get("base_model") else None,
+        "corpus": pin("corpus", "content_sha256") or data.get("pairs_sha256"),
+        "splits": pin("splits", "splits_sha256") or data.get("splits_sha256"),
+        "detector": pin("detector", "git_sha"),
+    }
+    return {key: str(value) for key, value in found.items() if value}
+
+
+def _run_entries(manifests: list[tuple[Path, dict]], promoted: dict | None) -> list[RunEntry]:
+    """One row per manifest, newest first — F6's "list the run with its pins"."""
+    serving = (promoted or {}).get("_path")
+    entries = []
+    for path, doc in manifests:
+        if doc.get("promoted") is False:
+            state = "not promoted"
+        elif not doc.get("result"):
+            state = "incomplete"
+        else:
+            state = "serving" if str(path) == serving else "completed"
+        entries.append(
+            RunEntry(
+                run_id=str(doc.get("run_id") or path.stem),
+                kind=str(doc.get("kind") or "?"),
+                state=state,
+                pins=_run_pins(doc),
+            )
+        )
+    return entries
+
+
 def _runs_status(path: Path | None) -> RunsStatus:
     if path is None or not path.is_dir():
         return RunsStatus(path=path, exists=False)
-    manifests = sorted(path.glob("*.json"))
-    completed = 0
-    for candidate in manifests:
-        try:
-            doc = json.loads(candidate.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(doc, dict) and doc.get("result"):
-            completed += 1
+    manifests = load_manifests(path)
+    promoted = promoted_manifest(path)
     return RunsStatus(
         path=path,
         exists=True,
         n_manifests=len(manifests),
-        n_completed=completed,
-        promoted=promoted_manifest(path),
+        n_completed=sum(1 for _p, doc in manifests if doc.get("result")),
+        promoted=promoted,
+        entries=_run_entries(manifests, promoted),
     )
 
 
@@ -312,6 +400,34 @@ def _ellipsis(text: str, width: int) -> str:
     return f"{head} ..."
 
 
+def _format_runs(r: RunsStatus) -> list[str]:
+    """The runs block: the counts, the serving run, then every manifest listed."""
+    if not r.exists:
+        return [f"runs       {r.path or '(not given)'} — absent"]
+    lines = [f"runs       {r.path} — {r.n_manifests} manifest(s), {r.n_completed} completed"]
+    if r.promoted:
+        hp = r.promoted.get("hyperparameters") or {}
+        lines.append(
+            f"           serving:  {r.promoted.get('run_id')}  "
+            f"({hp.get('base_model')}, lora r{hp.get('lora_rank')})"
+        )
+        note = (r.promoted.get("promotion_note") or "").strip().splitlines()
+        if note:
+            lines.append(f"           {_ellipsis(note[0], 92)}")
+        scale = (r.promoted.get("data") or {}).get("chunk_scale") or {}
+        if scale.get("budgets"):
+            budgets = ", ".join(f"{k}:{v}" for k, v in sorted(scale["budgets"].items()))
+            lines.append(f"           diet:     {budgets}")
+    else:
+        lines.append("           serving:  (none promoted)")
+    for entry in r.entries:
+        lines.append(f"           {entry.run_id:<26} {entry.kind:<22} {entry.state}")
+        if entry.pins:
+            pins = "  ".join(f"{k}={v}" for k, v in entry.pins.items())
+            lines.append(f"             {pins}")
+    return lines
+
+
 def format_status(status: Status) -> str:
     """Render a `Status` as the plain-text block both CLIs print."""
     lines: list[str] = []
@@ -352,30 +468,8 @@ def format_status(status: Status) -> str:
                 f"({entry['pairs_real']} real / {entry['pairs_synthetic']} synthetic)"
             )
 
-    r = status.runs
     lines.append("")
-    if not r.exists:
-        lines.append(f"runs       {r.path or '(not given)'} — absent")
-    else:
-        lines.append(
-            f"runs       {r.path} — {r.n_manifests} manifest(s), {r.n_completed} completed"
-        )
-        if r.promoted:
-            hp = r.promoted.get("hyperparameters") or {}
-            data = r.promoted.get("data") or {}
-            lines.append(
-                f"           serving:  {r.promoted.get('run_id')}  "
-                f"({hp.get('base_model')}, lora r{hp.get('lora_rank')})"
-            )
-            note = (r.promoted.get("promotion_note") or "").strip().splitlines()
-            if note:
-                lines.append(f"           {_ellipsis(note[0], 92)}")
-            scale = data.get("chunk_scale") or {}
-            if scale.get("budgets"):
-                budgets = ", ".join(f"{k}:{v}" for k, v in sorted(scale["budgets"].items()))
-                lines.append(f"           diet:     {budgets}")
-        else:
-            lines.append("           serving:  (none promoted)")
+    lines.extend(_format_runs(status.runs))
 
     d = status.detector
     lines.append("")
