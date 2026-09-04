@@ -231,7 +231,8 @@ def format_summary(summary: dict) -> list[str]:
         for name, agg in fields.items():
             lines.append(
                 f"{prefix}{name}: n={agg['n']} judge={agg['mean_judge_score']} "
-                f"vale_alerts={agg['mean_vale_alerts']} detector={agg['mean_detector_score']}"
+                f"unscored={agg['n_unscored']} vale_alerts={agg['mean_vale_alerts']} "
+                f"detector={agg['mean_detector_score']}"
             )
 
     facets = summary.get("by_provenance") or {}
@@ -252,12 +253,12 @@ def format_summary(summary: dict) -> list[str]:
 
 def format_verdict(verdict: dict, a_label: object = "a", b_label: object = "b") -> list[str]:
     """The paired comparison as printable lines, CI and cluster count included."""
-    delta = verdict["delta"]
+    delta, unscored = verdict["delta"], verdict["n_unscored"]
     lines = [
         f"verdict — {verdict['signal']} on '{verdict['field']}', "
         f"{verdict['provenance'] or 'all'} pairs, clustered by {verdict['cluster_by']}",
-        f"  a = {a_label}  mean {verdict['mean_a']}",
-        f"  b = {b_label}  mean {verdict['mean_b']}",
+        f"  a = {a_label}  mean {verdict['mean_a']}  unscored {unscored['a']}",
+        f"  b = {b_label}  mean {verdict['mean_b']}  unscored {unscored['b']}",
     ]
     if delta is None:
         lines.append("  not enough shared, scored ids to compare")
@@ -307,7 +308,8 @@ def compare_scores(
     Joins on the score `id`, keeps the ids both files carry, and reports the
     paired difference with a bootstrap clustered on `meta[cluster_by]` — the
     post, by default. `provenance` restricts the comparison to one facet,
-    `"real"` by default; pass None for all rows (D40).
+    `"real"` by default; pass None for all rows (D40). A row one side has no
+    `signal` value for (a judge refusal) is dropped and counted in ``n_unscored``.
 
     **Refuses a cross-detector comparison** (D39): both files must have been
     written by the same detector artifact. `allow_cross_detector=True` says you
@@ -360,6 +362,7 @@ def compare_scores(
         "n_shared_ids": len(shared),
         "mean_a": mean(usable_a) if usable_a else None,
         "mean_b": mean(usable_b) if usable_b else None,
+        "n_unscored": {"a": a_vals.count(None), "b": b_vals.count(None)},
         "delta": delta,
         "verdict": _verdict_label(delta, lower_is_better=(signal != "judge")),
         "detector_a": ids_a[0] if ids_a else None,

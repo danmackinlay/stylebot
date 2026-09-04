@@ -24,7 +24,6 @@ and no key. Corpus-scale scoring is `stylebot.scoring`, the paired verdict
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import subprocess
 import tempfile
@@ -37,10 +36,10 @@ from typing import Protocol
 # contract from it keeps one definition of "which head scored this".
 from stylebot.classify import DETECTOR_IDENTITY_KEYS
 
-# Bumped to 3 on 2026-09-03: the summary gained `by_provenance` +
-# `headline_facet` (D40) and `detectors` (D39). Additive, but the headline
-# convention changed, so consumers keying on the version should see it move.
-SCHEMA_VERSION = 3
+# Bumped to 4 on 2026-09-04: a judge refusal scores `None`, not a guessed digit,
+# and the summary and verdict gained `n_unscored` (ship-shape C4). Additive, but
+# the judge mean moved, so consumers keying on the version should see it move.
+SCHEMA_VERSION = 4
 
 # ---------------------------------------------------------------------------
 # Signal 1 — Vale (mechanical slop)
@@ -225,30 +224,23 @@ JUDGE_SYSTEM = (
 def parse_judge_reply(reply: str) -> dict:
     """Extract ``{"score": int, "rationale": str}`` from a model reply.
 
-    Robust to extra prose around the JSON object and to a missing/invalid
-    score (clamped into 1-5; falls back to a mid score with the raw reply as
-    rationale if nothing parseable is found).
+    Tolerates prose around the JSON object and clamps the score into 1-5. A
+    reply with no JSON object carrying a numeric ``score`` — a refusal, a hedge,
+    a paragraph count — is ``{"score": None, "parse_error": True, "rationale":
+    reply}``: unscored, never a digit fished out of the prose (ship-shape C4).
     """
     obj = _first_json_object(reply)
-    if obj is not None:
-        score = obj.get("score")
-        try:
-            score_int = int(score)
-        except (TypeError, ValueError):
-            score_int = None
-        if score_int is not None:
-            score_int = max(1, min(5, score_int))
-            rationale = obj.get("rationale")
-            return {
-                "score": score_int,
-                "rationale": str(rationale) if rationale is not None else "",
-            }
-
-    # Last-ditch: a bare integer somewhere in the reply.
-    m = re.search(r"\b([1-5])\b", reply)
-    if m:
-        return {"score": int(m.group(1)), "rationale": reply.strip()}
-    return {"score": 3, "rationale": reply.strip()}
+    try:
+        score = int(obj.get("score")) if obj is not None else None
+    except (TypeError, ValueError):
+        score = None
+    if score is None:
+        return {"score": None, "parse_error": True, "rationale": reply}
+    rationale = obj.get("rationale")
+    return {
+        "score": max(1, min(5, score)),
+        "rationale": str(rationale) if rationale is not None else "",
+    }
 
 
 def _first_json_object(text: str) -> dict | None:
@@ -570,12 +562,13 @@ def _mean_or_none(values: Iterable[float]) -> float | None:
 
 
 def _aggregate(records: list[dict]) -> dict:
-    """Per-group aggregates over a list of `score_candidate` records."""
-    judge_scores = [
-        r["judge"]["score"]
-        for r in records
-        if isinstance(r.get("judge"), dict) and r["judge"].get("score") is not None
-    ]
+    """Per-group aggregates over a list of `score_candidate` records.
+
+    ``n_unscored``: judge replies with no score (a refusal), kept out of the
+    mean; a keyless run (judge ``None``) is unjudged, not unscored.
+    """
+    judged = [r["judge"] for r in records if isinstance(r.get("judge"), dict)]
+    judge_scores = [j["score"] for j in judged if j.get("score") is not None]
     vale_alerts = [r["vale"]["alerts"] for r in records if r.get("vale", {}).get("available")]
     detector_scores = [
         r["detector"]["score"]
@@ -584,6 +577,7 @@ def _aggregate(records: list[dict]) -> dict:
     ]
     return {
         "n": len(records),
+        "n_unscored": len(judged) - len(judge_scores),
         "mean_judge_score": _mean_or_none(judge_scores),
         "mean_vale_alerts": _mean_or_none(vale_alerts),
         "mean_detector_score": _mean_or_none(detector_scores),

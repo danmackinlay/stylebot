@@ -164,6 +164,23 @@ def test_scores_report_keyless_no_crash(tmp_path):
     assert "—" in h  # placeholder badge / delta
 
 
+def test_scores_report_shows_unscored_beside_the_judge_mean(tmp_path):
+    async def refusing_judge(text):
+        if "<script>" in text and not text.startswith("slop:"):  # one target declined
+            return ev.parse_judge_reply("I cannot evaluate this passage; 3 lines of it.")
+        return await _judge(text)
+
+    pairs, scores = _make_scored(tmp_path, judge=refusing_judge)
+    p = tmp_path / "r.html"
+    report.render_scores_report(scores, pairs, p)
+    h = p.read_text()
+    # The refusal is counted, not averaged: the target mean is the other pair's 4.
+    assert "<b>1</b><span>unscored</span>" in h
+    assert "<b>4.0</b><span>mean target judge</span>" in h
+    # And the per-facet headline table carries the count too.
+    assert "<th class=num>unscored</th>" in h
+
+
 def test_scores_report_max_rows_caps(tmp_path):
     d = tmp_path / "c"
     for i in range(6):

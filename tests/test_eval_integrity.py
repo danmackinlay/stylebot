@@ -247,6 +247,30 @@ def test_compare_scores_reports_the_real_facet_by_default():
     assert everything["delta"]["n"] == 3
 
 
+def _with_judge(rows, scores):
+    for row, score in zip(rows, scores, strict=True):
+        row["scores"]["output"]["judge"] = (
+            {"score": score} if score is not None else {"score": None, "parse_error": True}
+        )
+    return rows
+
+
+def test_compare_scores_counts_a_refusal_as_unscored_not_a_3():
+    # A judge refusal on one side drops that pair from the paired delta and is
+    # reported as unscored beside the mean it did not enter (C4).
+    ids = [("p1", 0.1), ("p2", 0.1), ("p3", 0.1)]
+    a = _with_judge(_score_rows(ids, git_sha="x"), [4, None, 5])
+    b = _with_judge(_score_rows(ids, git_sha="x"), [3, 3, 3])
+    verdict = ev.compare_scores(a, b, signal="judge")
+    assert verdict["n_unscored"] == {"a": 1, "b": 0}
+    assert verdict["mean_a"] == pytest.approx(4.5)
+    assert verdict["mean_b"] == pytest.approx(3.0)
+    assert verdict["delta"]["n"] == 2
+    assert verdict["delta"]["mean"] == pytest.approx(1.5)
+    lines = ev.format_verdict(verdict)
+    assert any("unscored 1" in line for line in lines if "a =" in line)
+
+
 # ---------------------------------------------------------------------------
 # 4. document-scale eval
 # ---------------------------------------------------------------------------

@@ -280,11 +280,22 @@ def test_judge_reply_parser_extracts_score_from_surrounding_prose():
     assert verdict["rationale"] == "hedgy and generic"
 
 
-def test_judge_reply_parser_clamps_and_falls_back():
-    # Out-of-range score is clamped into 1-5.
-    assert ev.parse_judge_reply('{"score": 9, "rationale": "x"}')["score"] == 5
-    # No JSON object, but a bare digit is still recoverable.
-    assert ev.parse_judge_reply("I would rate this a 3 overall.")["score"] == 3
+def test_judge_reply_parser_clamps_and_a_refusal_scores_none():
+    # Out-of-range score is clamped into 1-5; a clean reply carries no parse_error.
+    ok = ev.parse_judge_reply('{"score": 9, "rationale": "x"}')
+    assert ok["score"] == 5 and "parse_error" not in ok
+    # No JSON object -> unscored, whatever digits the prose happens to contain.
+    # A refusal used to score whichever digit came first (C4).
+    for reply in (
+        "I would rate this a 3 overall.",
+        "There are 3 paragraphs; I refuse.",
+        "I cannot evaluate this passage.",
+        '{"score": "n/a", "rationale": "declined"}',
+    ):
+        verdict = ev.parse_judge_reply(reply)
+        assert verdict["score"] is None, reply
+        assert verdict["parse_error"] is True
+        assert verdict["rationale"] == reply
 
 
 def test_openrouter_judge_records_what_the_call_cost(monkeypatch):
@@ -767,6 +778,31 @@ def test_summarize_scores_by_facet():
     assert summary["by"]["catalogue"]["slop"]["mean_judge_score"] == 3.0  # (2+4)/2
     assert summary["by"]["catalogue"]["target"]["mean_judge_score"] == 5.0
     assert summary["by"]["polish"]["slop"]["mean_judge_score"] == 3.0
+
+
+def test_summarize_scores_counts_a_refusal_as_unscored_not_a_3():
+    # One judge refusal (score None) moves n_unscored, never the mean (C4).
+    records = [
+        _score_rec("catalogue", 2, 5),
+        _score_rec("catalogue", 4, 5),
+        _score_rec("polish", None, 4),
+    ]
+    summary = ev.summarize_scores(records, by="slop_strategy")
+    slop, target = summary["fields"]["slop"], summary["fields"]["target"]
+    assert slop["n"] == 3 and slop["n_unscored"] == 1
+    assert slop["mean_judge_score"] == 3.0  # (2+4)/2, the refusal excluded
+    assert target["n_unscored"] == 0
+    assert summary["by"]["polish"]["slop"] == {
+        "n": 1,
+        "n_unscored": 1,
+        "mean_judge_score": None,
+        "mean_vale_alerts": None,
+        "mean_detector_score": None,
+    }
+    assert "unscored=1" in ev.format_summary(summary)[0]
+    # A keyless run has no judge at all, which is not the same as refusing.
+    keyless = ev.summarize_scores([{"id": "k", "scores": {"slop": {"judge": None}}}])
+    assert keyless["fields"]["slop"]["n_unscored"] == 0
 
 
 def test_carried_gen_meta_flattened_and_faceted(tmp_path):

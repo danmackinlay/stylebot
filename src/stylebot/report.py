@@ -401,6 +401,7 @@ def _scores_rows_data(
                 "text": _field_text(pair, f),
                 "score": _signal(scores.get(f), "judge"),
                 "rationale": _signal(scores.get(f), "judge", "rationale") or "",
+                "unscored": _signal(scores.get(f), "judge", "parse_error") is True,
                 "detector": _signal(scores.get(f), "detector"),
                 "vale": _vale_alerts(scores.get(f)),
             }
@@ -415,25 +416,22 @@ def _scores_rows_data(
             {
                 "strategy": meta.get("slop_strategy") or "—",
                 "source": meta.get("source") or "—",
-                # Row-level facet covariates. Score records carry these since the
-                # _CARRIED_GEN flattening; fall back to the joined pair for score
-                # files written before that.
+                # Facet covariates: the score record (_CARRIED_GEN flattening), else
+                # the joined pair for score files written before that.
                 "generator": str(meta.get("generator") or pair_meta.get("generator") or "—"),
                 "reasoning": str(
                     meta.get("reasoning_effort") or gen.get("reasoning_effort") or "—"
                 ),
                 "prompt": str(meta.get("prompt_id") or gen.get("prompt_id") or "—"),
-                # Human-readable prompt: "catalogue v1" (the content-hash id stays
-                # as the dedup/facet key and the tooltip).
+                # Human-readable prompt, "catalogue v1"; the hash id stays the key + tooltip.
                 "prompt_label": _prompt_display(
                     meta.get("prompt_label") or gen.get("prompt_label"),
                     meta.get("prompt_version") or gen.get("prompt_version"),
                     meta.get("prompt_id") or gen.get("prompt_id"),
                 ),
                 "turn": gen.get("session_turn"),
-                # Copying ratio slop<->target (1.0 = verbatim no-op) — the frozen
-                # hygiene covariate synth records; sortable to surface near-identity
-                # pairs instantly.
+                # Copying ratio slop<->target (1.0 = verbatim no-op), the hygiene
+                # covariate synth records; sortable to surface near-identity pairs.
                 "sim": meta.get("transform_sim", pair_meta.get("transform_sim")),
                 "cells": cells,
                 "delta": delta,
@@ -458,8 +456,8 @@ def _load_scores_rows(scores, pairs_path, fields: Sequence[str]) -> tuple[list[d
 
 
 def _scores_stat_cards(rows: Sequence[dict], fields: Sequence[str]) -> str:
-    """Counts, judge means and mean Δ — plus the detector means, but only when a
-    trained detector was wired (otherwise both are None and the cards are noise)."""
+    """Counts, judge means (with the refusals they exclude) and mean Δ — plus the
+    detector means, but only when a trained detector was wired (else noise)."""
     lo, hi = fields[0], fields[-1]
     det = (_cell_mean(rows, lo, "detector"), _cell_mean(rows, hi, "detector"))
     cards: list[tuple[object, str]] = [
@@ -467,6 +465,7 @@ def _scores_stat_cards(rows: Sequence[dict], fields: Sequence[str]) -> str:
         (len({r["strategy"] for r in rows}), "strategies"),
         (_cell_mean(rows, lo, "score"), f"mean {lo} judge"),
         (_cell_mean(rows, hi, "score"), f"mean {hi} judge"),
+        (sum(r["cells"][f]["unscored"] for r in rows for f in {lo, hi}), "unscored"),
         (_mean([r["delta"] for r in rows]), "mean Δ"),
     ]
     if det[0] is not None or det[1] is not None:
@@ -475,8 +474,7 @@ def _scores_stat_cards(rows: Sequence[dict], fields: Sequence[str]) -> str:
 
 
 def _headline_table(records: Sequence[dict], fields: Sequence[str], *, by: str) -> str:
-    """The compare-flavours headline: per-facet judge means from
-    `summarize_scores(by=…)`, one row per value of the `by` covariate."""
+    """Per-facet judge means and refusals from `summarize_scores(by=…)`, one row per facet."""
     buckets = summarize_scores(records, by=by).get("by", {})
     if not buckets:
         return ""
@@ -486,15 +484,17 @@ def _headline_table(records: Sequence[dict], fields: Sequence[str], *, by: str) 
         lof, hif = byfields.get(fields[0]) or {}, byfields.get(fields[-1]) or {}
         lo, hi = lof.get("mean_judge_score"), hif.get("mean_judge_score")
         delta = round(hi - lo, 2) if (lo is not None and hi is not None) else None
+        unscored = lof.get("n_unscored", 0) + hif.get("n_unscored", 0)
         body += (
             f"<tr><td>{html.escape(str(facet))}</td><td class=num>{lof.get('n', 0)}</td>"
             f"<td class=num>{fmt(lo)}</td><td class=num>{fmt(hi)}</td>"
-            f"<td class=num>{fmt(delta)}</td></tr>"
+            f"<td class=num>{fmt(delta)}</td><td class=num>{unscored}</td></tr>"
         )
+    cols = ("n", fields[0], fields[-1], "Δ", "unscored")
+    heads = "".join(f"<th class=num>{html.escape(c)}</th>" for c in cols)
     return (
-        f"<table class=headline><thead><tr><th>{html.escape(by)}</th><th class=num>n</th>"
-        f"<th class=num>{html.escape(fields[0])}</th><th class=num>{html.escape(fields[-1])}</th>"
-        f"<th class=num>Δ</th></tr></thead><tbody>{body}</tbody></table>"
+        f"<table class=headline><thead><tr><th>{html.escape(by)}</th>{heads}</tr></thead>"
+        f"<tbody>{body}</tbody></table>"
     )
 
 
