@@ -16,6 +16,7 @@ tics.
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import hashlib
 import inspect
@@ -864,23 +865,10 @@ async def _attempt(fn, text: str, history: Sequence[dict]) -> tuple[str, dict]:
 async def _draw(
     call, gen: Generator, turn: _Turn, history: Sequence[dict], st: _RunState
 ) -> tuple[str, dict, object]:
-    import asyncio
-
     """One paid draw, retried across providers. Raises once it gives up.
 
-    Returns `(slop, gen_meta, call)` — the callable comes back because a retry
-    RE-PINS it, and the caller must keep using the one that worked.
-
-    **Re-pinning matters more than waiting.** OpenRouter routes to an upstream
-    and sticky routing keeps a session on whoever served turn 1, so when that
-    upstream is sick (`502 Provider returned error` from Cloudflare is the
-    common one) a plain retry re-hits the same broken box — which is why the
-    openai SDK's own retries do not save this, and why every attempt after the
-    first asks for a fresh provider.
-
-    The backoff is there for the case re-pinning cannot fix, an upstream being
-    rate-limited or restarting; it is short because a synth run is thousands of
-    independent cells and there is other work to do.
+    Returns `(slop, gen_meta, call)`: a retry RE-PINS the provider (see
+    `DEFAULT_GEN_RETRIES`), so the caller must keep using the callable that worked.
     """
     delay = _RETRY_BACKOFF_SECS
     for attempt in range(st.gen_retries + 1):
@@ -911,23 +899,10 @@ async def _draw(
 async def _draw_past_gates(
     call, gen: Generator, turn: _Turn, history: Sequence[dict], st: _RunState
 ) -> tuple[str, dict, tuple[str, str] | None, int, object]:
-    import asyncio
+    """Draw for one turn, redrawing while a hygiene gate rejects the sample (D32).
 
-    """Draw for one turn, redrawing while a hygiene gate rejects the sample.
-
-    Returns `(slop, gen_meta, verdict, redraws, call)`. `verdict` is None once a
-    sample cleared, or the last rejection when the redraw budget ran out — the
-    caller decides what a surviving verdict costs. Every rejected draw is
-    accounted for here, since it was paid for.
-
-    A gated sample is paid for whether or not it is written, so a redraw costs
-    no more than the drop already did — and it usually clears: rejection is
-    mostly a per-sample accident, not a property of the passage (measured
-    2026-08-12, anchor invention spans 1.3% to 51% BY ARM, and of the corpus
-    targets that ever lost an anchor only 20% lost one under every arm that saw
-    them). Without redraws a gate silently biases coverage toward the passages
-    models find easy — link-dense prose drops 33% of the time against 16% for
-    single-link — which is exactly the prose anchor fidelity matters most for.
+    Returns `(slop, gen_meta, verdict, redraws, call)`: `verdict` is None once a
+    sample cleared, else the last rejection when the redraw budget ran out.
     """
     slop, gen_meta, call = await _draw(call, gen, turn, history, st)
     verdict = _gate_verdict(slop, turn.target.text, st)
@@ -990,8 +965,6 @@ async def _run_session(sess: _Session, writer: PairsWriter, st: _RunState) -> li
     session always attempts its first turn — every reflow either writes a pair or
     sheds an errored turn, strictly shrinking the leftover list.
     """
-    import asyncio
-
     gen = sess.generator
     # Multi-turn sessions get a per-session callable when the generator offers
     # one (sticky provider routing state); stateless stays on the plain path.
@@ -1117,8 +1090,6 @@ async def _run_sessions(
     same worker slot until the work list is empty, so the run finishes with every
     planned turn either written or individually errored.
     """
-    import asyncio
-
     sem = asyncio.Semaphore(max(1, max_workers))
 
     async def _gated(sess: _Session, writer: PairsWriter) -> None:
@@ -1258,7 +1229,5 @@ def synthesize_pairs(
         repo_prov=repo_provenance(blog_root if blog_root is not None else data_dir),
         disk_keys=disk_keys,
     )
-    import asyncio
-
     asyncio.run(_run_sessions(sessions, pairs_path, st, max_workers))
     return result

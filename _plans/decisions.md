@@ -18,7 +18,7 @@ keep their numbers — the second index below is how you find them.
 
 | # | title | status |
 |---|---|---|
-| D49 | asyncio is deferred; the rest of the eager import block stays | live |
+| D49 | asyncio is deferred; the rest of the eager import block stays | reverted 2026-09-04 |
 | P1 | move `openai` to an `[api]` extra | **rejected** 2026-09-03 |
 | D50 | a corpus is a directory of shards, by producer then by month | live |
 | D51 | `git filter-repo` on the corpus is not worth a force-push | live |
@@ -128,6 +128,9 @@ The win is real and small; the item exists to say so rather than to ship churn.
 
 **Re-evaluate if** `--help` latency becomes a real irritation (it is far below
 the ~100 ms where a shell feels slow), or click gains lazy subcommands.
+
+**Reverted 2026-09-04 (T5):** the deferred import cost two docstrings (`_draw`,
+`_draw_past_gates` had `__doc__ is None`); the 4.9 ms is below the re-evaluate line.
 
 ## P1: move `openai` to an `[api]` extra — PROPOSED 2026-08-10, REJECTED 2026-09-03
 
