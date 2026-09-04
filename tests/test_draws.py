@@ -166,6 +166,29 @@ def test_draw_id_is_a_function_of_the_design_cell():
     assert draws.draw_id(*base, replicate=1) != draws.draw_id(*base)
     assert draws.draw_id("post/b.qmd", *base[1:]) != draws.draw_id(*base)
     assert len(draws.draw_id(*base)) == 16
+    # A span names the cell; the chunk index only stands in while there is none.
+    assert draws.draw_id(*base, chunk_index=3) == draws.draw_id(*base)
+    unspanned = ("post/a.qmd", "abc123", None, "gpt", "polish", "p1", "off")
+    assert draws.draw_id(*unspanned, chunk_index=0) != draws.draw_id(*unspanned, chunk_index=1)
+    assert draws.draw_id(*unspanned, chunk_index=None) == draws.draw_id(*unspanned)
+
+
+def test_new_draws_of_one_source_are_keyed_by_chunk_until_spans_exist():
+    """W4 step 4: two chunks of one post under one arm were one `draw_id` (step 2)."""
+    from stylebot.generators import Generator
+    from stylebot.targets import Target
+
+    arm = Generator(name="g", strategy="polish", prompt_id="p1", reasoning_effort="off")
+    cut = [Target(text=f"c{i}", source="post/a.qmd", chunk_index=i, chunk_total=2) for i in (0, 1)]
+    prov = {"blog_sha": "abc"}
+    made = [
+        draws.new_draw(arm, prov, t, None, gen=None, raw_output="x", outcome="gate:x") for t in cut
+    ]
+    assert made[0].draw_id != made[1].draw_id
+    assert [d.chunk_index for d in made] == [0, 1] and all(d.span is None for d in made)
+    cell = ("post/a.qmd", "abc", None, "g", "polish", "p1", "off")
+    assert made[1].draw_id == draws.draw_id(*cell, 0, chunk_index=1)
+    assert draws.Draw.from_json(made[1].to_json()) == made[1]
 
 
 # --- the policy's name -----------------------------------------------------

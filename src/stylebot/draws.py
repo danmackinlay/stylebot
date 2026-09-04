@@ -60,6 +60,7 @@ class Draw:
     blog_sha: str | None = None
     blog_dirty: bool | None = None
     span: tuple[int, int] | None = None
+    chunk_index: int | None = None
     target_text: str | None = None
     context: str | None = None
     gen: dict | None = None
@@ -95,10 +96,17 @@ def draw_id(
     prompt_id: str | None,
     reasoning_effort: str | None,
     replicate: int = 0,
+    *,
+    chunk_index: int | None = None,
 ) -> str:
-    """16 hex of the design cell: what was drawn, from where, by whom (D84)."""
-    cell = [source, blog_sha, list(span) if span else None, generator, strategy]
-    cell += [prompt_id, reasoning_effort, replicate]
+    """16 hex of the design cell: what was drawn, from where, by whom (D84).
+
+    The place is the `span` when one is known; until the cutter records
+    offsets, `chunk_index` stands in for it (W4 step 4), so two chunks of one
+    source under one arm are two cells. A backfilled draw has its span.
+    """
+    where = list(span) if span else chunk_index
+    cell = [source, blog_sha, where, generator, strategy, prompt_id, reasoning_effort, replicate]
     return hashlib.sha256(json.dumps(cell).encode("utf-8")).hexdigest()[:16]
 
 
@@ -165,18 +173,20 @@ def new_draw(
     """A native draw for one generator call, as `synth` makes it (W4 step 2).
 
     `draw_id` is the cell — `arm` supplies generator, strategy, prompt and
-    effort; `repo_prov` the blog SHA (`provenance.repo_provenance`) — with
-    `span=None` until step 3 records offsets. A `reasoning_text` in `gen` is
-    dropped: traces are diagnostics, not corpus (`synth`'s sidecar keeps them).
+    effort; `repo_prov` the blog SHA (`provenance.repo_provenance`); the
+    target's `chunk_index` stands in for a span the cutter does not record.
+    A `reasoning_text` in `gen` is dropped: traces are diagnostics, not corpus
+    (`synth`'s sidecar keeps them).
     """
     prov = repo_prov or {}
     sha = prov.get("blog_sha")
     cell = (target.source, sha, None, arm.name, arm.strategy, arm.prompt_id, arm.reasoning_effort)
     return Draw(
-        draw_id=draw_id(*cell, replicate),
+        draw_id=draw_id(*cell, replicate, chunk_index=target.chunk_index),
         source=target.source,
         blog_sha=sha,
         blog_dirty=prov.get("blog_dirty"),
+        chunk_index=target.chunk_index,
         target_text=target.text,
         context=context or None,
         gen={k: v for k, v in gen.items() if k != "reasoning_text"} if gen else None,
