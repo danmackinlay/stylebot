@@ -55,9 +55,9 @@ and the contracts *between* stages matter more than internal abstraction. So:
    parallel against a few fixture rows, and farmed out to subagents.
 4. **The corpus and secrets never enter this public repo.** The corpus is
    gitignored here; its canonical home is the livingthing repo, where it is
-   committed (`_training_pairs/pairs/`, since 2026-07, for portability — a
-   single `pairs.jsonl` until 2026-09-03, a directory of append-only shards
-   since ([`decisions.md`](decisions.md) D50); see `_training_pairs/README.md`).
+   committed — `_training_pairs/draws/` since 2026-09-05 (D84), before that
+   `pairs/` shards from 2026-09-03 (D50) and a single `pairs.jsonl` from
+   2026-07; views are built there, never committed; see `_training_pairs/README.md`.
    Keys arrive as environment variables —
    direnv in practice — from a file that is never committed.
 5. **Verify with a number, never with vibes.** "Does the styler work" is
@@ -77,20 +77,21 @@ whole pipeline from its own build.
   `import` the function directly — no subprocess/parse tax — *or* shell out to
   the CLI. Build the function; the CLI is a shell over it.
 - **One entry point, subcommands** — `ai-style log | synth | make-splits |
-  check-splits | extend-eval | train | train-clf | run | serve | eval | status |
-  validate-pairs | export-table | merge-adapter`, plus the hidden `data` group
-  for one-off migrations — not a scatter of loose scripts. Shared option
-  parsing, one `--help` tree; loose scripts drift in flag conventions. Phase 1's
-  logger is exempt from nothing: it shipped as a standalone `ai-style-log`
-  console script until 2026-07-20 (history, not design) and is now `ai-style
-  log` like everything else. There is exactly one console script, and since
-  2026-09-03 there is no `scripts/` directory either (D38).
+  check-splits | extend-eval | train | train-clf | promote | run | serve | eval |
+  status | validate-pairs | export-table | merge-adapter` — not a scatter of
+  loose scripts. Shared option parsing, one `--help` tree; loose scripts drift in
+  flag conventions. Phase 1's logger is exempt from nothing: it shipped as a
+  standalone `ai-style-log` console script until 2026-07-20 (history, not
+  design) and is now `ai-style log` like everything else. There is exactly one
+  console script; since 2026-09-03 no `scripts/` directory (D38); and since
+  2026-09-05 no migration group either — nothing rewrites the corpus (D84).
 - **Two distinct path inputs, never collapsed:**
   - `--blog-root` — a *read* source (authored `.qmd` prose, sample paragraphs).
   - `--data-dir` — *read/write* state (the corpus, manifests). The corpus is
-    `<data-dir>/pairs/` when that shard directory exists and
-    `<data-dir>/pairs.jsonl` otherwise; `stylebot.config.pairs_path` decides,
-    and every reader and writer goes through it (D45, D50).
+    `<data-dir>/draws/`, which every reader takes as the view built under its
+    policy at `<data-dir>/views/pairs-<policy_sha>/` (`stylebot.draws`, D84);
+    `stylebot.config.pairs_path` still resolves a legacy `pairs/` or
+    `pairs.jsonl`, which reads as accepted draws (D45, D50).
   Phase 2 reads blog-root, writes data-dir; train reads data-dir only.
 - **Option precedence: `--flag` > `$STYLEBOT_DATA_DIR` (env) > default.**
   Resolved in one place, `stylebot.config`. The env var is a convenience for
@@ -168,7 +169,9 @@ notify downstream.
 
 | Artifact | Producer | Consumer | Format |
 |----------|----------|----------|--------|
-| the corpus (`pairs/` or `pairs.jsonl`) | Phase 1 (real), Phase 2 (synthetic) | Phase 3 | chat-completion JSONL, `{messages:[system,user,assistant], meta:{...}}` — schema, types and `record_id` uniqueness enforced by `stylebot.pairs.validate_pairs_file`; one file or a directory of shards, resolved by `stylebot.corpus` (D50); mechanics in `_training_pairs/README.md` |
+| `captures/<id>/` | Phase 1 | Phase 1 (re-cuts), the view | the real edit, verbatim: `before.md`, `after.md`, `meta.json`; append-only, guarded blog-side by `MANIFEST.json` and the pre-commit hook |
+| draws (`draws/captures.jsonl`, `draws/synth-<YYYY-MM>.jsonl`) | Phase 1 (human saves), Phase 2 (generator calls) | `stylebot.draws.build_view` | append-only JSONL, one record per generator call or save, accepted or not: `draw_id`, `source`, `blog_sha`, `span`, `outcome` (`accepted` / `gate:<name>` / `error:<class>`), the raw output, `supersedes`/`superseded_by` for a session's interim saves; committed (D84) |
+| the view (`views/pairs-<policy_sha>/`) | `build_view` under a `ViewPolicy` | Phase 3, eval, `status` | chat-completion JSONL, `{messages:[system,user,assistant], meta:{...}}`, `pairs/`-shaped shards plus a `VIEW.json` naming `policy_sha` and `draws_sha256`; schema, types and `record_id` uniqueness enforced by `stylebot.pairs.validate_pairs_file`; built on first use, never committed; a manifest pins both shas (D84); mechanics in `_training_pairs/README.md` |
 | trained adapter | Phase 3 | Phase 4, eval | LoRA weights (Tinker-trained → HF export; Fireworks-hosted or local MLX) |
 | candidate text | Phase 4 | eval harness | plain prose in, plain prose out |
 | `scores.jsonl` | eval harness | humans, Phase 3/4 | id-keyed (`synth_key`/`capture_id:idx`) per-pair `{meta, scores:{field:{vale,judge,detector}}}` plus the detector identity that produced them (D39); joins back to the corpus |
@@ -177,7 +180,8 @@ The crucial deliberate choice: **Phase 1 and Phase 2 emit the *same* record
 schema**, chunked the same way, so training data from real edits and synthetic
 paraphrase is shape-compatible and mixable with a weight column. Sharding is
 below that line: `shard_of` routes by record content, so which file a record
-sits in is never part of its meaning.
+sits in is never part of its meaning — and so is the view: a prune, re-cut or
+restamp is a `ViewPolicy` change plus a rebuild, never an edit to a draw (D84).
 
 ## Phase map & status
 
@@ -187,9 +191,9 @@ has a durable document, it is linked.
 | Phase | Where it lives in code | Status |
 |-------|------------------------|--------|
 | 0 · Scaffolding | pyproject / `stylebot.config` | ✅ done |
-| 1 · Pair capture | `stylebot.capture`, `ai-style log`; mechanics in `_training_pairs/README.md` | ✅ shipped, daily use; heading context on both producers (immediate depth) |
+| 1 · Pair capture | `stylebot.capture`, `ai-style log`; a save archives to `captures/` and appends draws (`stylebot.draws`, D84); mechanics in `_training_pairs/README.md` | ✅ shipped, daily use; heading context on both producers (immediate depth) |
 | 2 · Synthetic pairs | `stylebot.synth`, `stylebot.targets`, `ai-style synth` | ✅ shipped, behind the identity + inflation gates (`--max-transform-sim` / `--max-length-ratio`) and the anchor gate (D32) |
-| 3 · LoRA training | `stylebot.train`, `ai-style train` | ✅ shipped — paid runs, with `per_passage` / `pair_weight` hooks and a per-passage histogram in the manifest (D43). **Which runs exist and which one serves: `dan-style status`**, never this table |
+| 3 · LoRA training | `stylebot.train`, `ai-style train --draws`; `ai-style promote` | ✅ shipped — paid runs, with `per_passage` / `pair_weight` hooks and a per-passage histogram in the manifest (D43); the manifest pins `data.policy_sha` / `data.draws_sha256`, and a run serves only once promoted (D74, D84). **Which runs exist and which one serves: `dan-style status`**, never this table |
 | E · Eval harness | `stylebot.eval`, `ai-style eval` — [`eval-harness.md`](eval-harness.md) | ✅ built; all four signals live, detector = the trained voice classifier, verdicts carrying the detector identity that produced them and clustered by post (D39/D40) |
 | 4 · Inference CLI | `stylebot.infer`, `ai-style run` / `dan-style run` | ✅ built; the backend surface is `stylebot.backends` (D35); Tinker-sampling v1, MLX exit verified, Fireworks open |
 | — · VS Code marker | `stylebot.serve`, `vscode-voice-marker/` — [`vscode-marker.md`](vscode-marker.md) | ✅ built — sidecar + extension marking paragraphs with `P(slop)` and offering best-of rewrites; the extension segments through the sidecar's `segment` op rather than porting the segmenter (D44) |
@@ -209,7 +213,8 @@ Segmentation is one implementation (`stylebot.markdown`), training and inference
 held to the same protection contract, and the editor asks the sidecar for it
 (D44). The 2026-09-03 seam pass moved the backend surface, the migrations, the
 log session store and the corpus-stability floor to whichever side owns them
-(D35–D38, D45–D50).
+(D35–D38, D45–D50). On 2026-09-05 the corpus became append-only draws plus
+built views (D84): the migrations, the corpus lock and every rewrite path went.
 
 **Counts and run numbers are deliberately not written here** — they change under
 git's feet in another repo, and every number this paragraph used to carry was

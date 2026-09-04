@@ -85,14 +85,14 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
   wrapper translating `stylebot.errors` into exit codes (D47). A library
   reachable only through `CliRunner` gets copied, and the copy drifts (D35).
 - **One entry point, subcommands** (`ai-style
-  check-splits|eval|export-table|extend-eval|log|make-splits|merge-adapter|run|serve|status|synth|train|train-clf|validate-pairs`),
+  check-splits|eval|export-table|extend-eval|log|make-splits|merge-adapter|promote|run|serve|status|synth|train|train-clf|validate-pairs`),
   not a scatter of loose scripts. **No carve-out, and there is no `scripts/`
   directory** — an error message must name a command that exists, and a
   directory outside the package is outside the checks (D38).
-- **Migrations live behind `ai-style data`** (`stylebot.migrations`), a hidden
-  group: `migrate-captures`, `prune-stale`, `shard-pairs`. Dry-run until
-  `--apply`; the prune keeps a `.bak`; each has a test. Delete function, command
-  and test together once its corpus has run it (D38) — so went D73's.
+- **Nothing rewrites the corpus: draws are appended, views are built** (D84).
+  A prune, re-cut or restamp is a policy clause plus a rebuild. A one-off
+  migration is a hidden command deleted once its corpus has run it (D38) —
+  none exists today.
 - **Explicit paths, precedence `--flag` > `$STYLEBOT_DATA_DIR` > default**,
   resolved in `stylebot.config`. Two distinct inputs, never collapsed:
   `--blog-root` (read source) vs `--data-dir` (read/write state) — D45, D50.
@@ -102,14 +102,14 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
   `selector: Callable[[dict], bool]` (plus, at assembly, `per_passage` and
   `pair_weight`), defaulting to `stylebot.lib.is_human_authored` — an example,
   not a gate. Never hardcode it; no `sort_key`/`sampler` hook (D43).
-- **Validate a corpus before training on it.** `pairs.validate_pairs_file(path)`,
-  or `ai-style validate-pairs PAIRS [--fix]`, checks a `pairs.jsonl` or `pairs/`
-  shard dir against the Phase 1 schema: roles, frozen system prompt, required
-  `meta`, **`record_id` uniqueness across all shards**. Pre-`schema_version`
-  records stay valid; why uniqueness is file-level, not per-record: D36, D50.
+- **Validate a corpus before training on it.** `pairs.validate_pairs_file(path)`
+  / `ai-style validate-pairs PAIRS` checks a `pairs.jsonl`, `pairs/` dir or built
+  view against the Phase 1 schema: roles, frozen system prompt, required `meta`,
+  **`record_id` uniqueness across all shards**. Read-only: a duplicate is a policy
+  clause plus a rebuild. Pre-`schema_version` records stay valid; D36, D50.
 - **`STYLE_SYSTEM` (`stylebot.ai_core`) is frozen**: it is baked into every
-  logged pair, so a change means re-stamping every record, done once (D64).
-  Phase 2 emits it verbatim as `messages[0]`.
+  logged pair, so a change re-stamps every record — a view rebuild under D84,
+  once a migration (D64). Phase 2 emits it verbatim as `messages[0]`.
 - **Blog/generic boundary.** Generic frontmatter+markdown tooling is reusable; the
   only blog-specific code allowed is the bundled selector example. Don't
   reintroduce the blog-build cruft removed 2026-06-29 — OVERVIEW draws the line.
@@ -127,7 +127,7 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
   (`direnv exec ~/Source/livingthing uv run ai-style …`); whatever holds them
   stays out of git. stylebot has no dotenv loader (D24).
 - So before any commit here, `git status` must never show `.env` / `.envrc`, a
-  `pairs.jsonl`, or a `pairs/` directory.
+  `pairs.jsonl`, or a `pairs/`, `draws/` or `views/` directory.
 
 ## Blog integration (Dan's blog, wired 2026-06-27)
 
@@ -137,24 +137,24 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
   `.`-prefixed) are already in the `gather_qmd_files` skip-list.
 - `automation:` is an int frontmatter level of how much AI touched a post; `0`
   is the slop-free target prose, and matches `is_human_authored`'s defaults.
-- The captured corpus is `_training_pairs/pairs/` there (shards since
-  2026-09-03) — reach it with `STYLEBOT_DATA_DIR` or `--data-dir`.
+- The corpus is `_training_pairs/` there — committed `draws/`, built `views/`,
+  `pairs/` until its retirement (step 5) — via `STYLEBOT_DATA_DIR`/`--data-dir`.
 
 ## Current status
 
-The pipeline runs end-to-end: capture → gated synth → Tinker LoRA train → guarded
-inference → multi-signal eval; per-phase state is OVERVIEW's phase map. **No
-count, run number or "serving default" is written here** — those move in another
-repo on another commit clock, and every one ever written here went stale (D52):
+End-to-end: capture and gated synth append draws → view built under policy →
+Tinker LoRA train → guarded inference → multi-signal eval; per-phase state is
+OVERVIEW's phase map. **No count, run number or "serving default" is written
+here** — they move in another repo on another clock and every one went stale (D52):
 
 ```sh
-uv run ai-style status --pairs … --splits … --runs … --detector-model … --blog-root …
+uv run ai-style status --draws … --splits … --runs … --detector-model … --blog-root …
 cd ~/Source/livingthing && uv run dan-style status   # the same, every path from policy
 ```
 
 **Naming rule:** `dan-style X` is the blog-policy mirror of `ai-style X`.
 **Operations run blog-side**: the ordered pipeline is the blog's
 `_training_pairs/RUNBOOK.md`; policy constants (roster, strategies, gates,
-chunking) are `livingthing.training_targets`, and promoting a config change means
-editing and committing them; what serves is the newest promoted manifest in the
-blog's `_training_pairs/runs/`. Open work: OVERVIEW's "Open slices".
+chunking, `view_policy()`) are `livingthing.training_targets` — promoting a
+config change is a commit there; what serves is the run `dan-style promote
+RUN_ID` marked `promoted: true` (D74). Open work: OVERVIEW's "Open slices".

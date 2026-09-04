@@ -67,14 +67,16 @@ the 2026-09 re-analysis that took a later run's headline gain back to
 uv sync
 uv run ai-style log --help
 uv run ai-style --help
-uv run ai-style status --pairs _training_pairs/pairs  # what the corpus holds
+uv run ai-style status --draws _training_pairs/draws  # what the corpus holds
 ```
 
 The pair-logger is run from inside the prose working tree (e.g. the blog repo),
-where it writes captured pairs to the corpus under `$STYLEBOT_DATA_DIR` —
-`pairs.jsonl` by default, or into `pairs/captures.jsonl` once you have sharded
-(`ai-style data shard-pairs`). Both shapes are first-class; `stylebot.config.pairs_path`
-picks whichever exists.
+where a save archives the full before/after under `captures/` and appends one
+*draw* per changed region to `draws/captures.jsonl`, both under
+`$STYLEBOT_DATA_DIR`. Nothing rewrites a draw: the training corpus is a *view*
+of the draws, built on first use under a policy (`ai-style train --draws`,
+`status --draws`; D84). A legacy `pairs.jsonl` or `pairs/` shard dir still reads
+as accepted draws.
 
 ## Specializing stylebot for your own blog
 
@@ -221,12 +223,13 @@ reinstall.
 
 ## Data & secrets
 
-- **Corpus** — the pairs corpus and open editing sessions are written under
-  `STYLEBOT_DATA_DIR` (default `./_training_pairs`). The corpus is one
-  `pairs.jsonl`, or a `pairs/` directory of append-only shards once it is big
-  enough that rewriting it whole on every append bloats git history —
-  `ai-style data shard-pairs` is the one-way move, and every reader takes
-  either shape. That directory is **gitignored here**: the corpus never enters
+- **Corpus** — draws and open editing sessions are written under
+  `STYLEBOT_DATA_DIR` (default `./_training_pairs`): `captures/` (the real-edit
+  archive, append-only), `draws/` (one record per generator call or human save,
+  accepted or not, append-only) and `views/` (built from the draws under a
+  policy; disposable, never committed). A `pairs.jsonl` / `pairs/` shard dir is
+  read as accepted draws by an install that predates draws (D84). That
+  directory is **gitignored here**: the corpus never enters
   this public repo. Its canonical home is the (livingthing) blog repo, where it
   *is* committed (since 2026-07, for portability). See
   [`_training_pairs/README.md`](_training_pairs/README.md).

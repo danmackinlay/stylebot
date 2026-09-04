@@ -25,8 +25,8 @@ shape of policy, off by default because nothing here reflows whole documents —
 their one production caller is `livingthing.qmd_core.segment_for_edit`, so
 changing them moves the blog's editing path (D29).
 
-Pinned by `tests/test_segment.py`, `test_markdown.py`, `test_protection_parity.py`
-and `tests/fixtures/segmenter_conformance.{qmd,json}` (``STYLEBOT_REGEN_SEGMENTS=1``).
+Pinned by `tests/test_markdown.py`, `test_infer_segment.py`, `test_segment_hard.py`
+and `tests/fixtures/segmenter_conformance.json` (``STYLEBOT_REGEN_SEGMENTS=1``).
 """
 
 from __future__ import annotations
