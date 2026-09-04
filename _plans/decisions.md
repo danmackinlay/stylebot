@@ -1076,32 +1076,32 @@ decided, not deferred.
 
 ## D84: the corpus is append-only draws plus derived views
 
-**Decision (2026-09-04, W4 step 1).** Two layers. *Draws* record what
-happened — one per generator call or human edit, keyed on what it was (source,
-blog SHA, span, generator, strategy, prompt, effort, replicate), raw generator
-output kept, `outcome` of `accepted | gate:<name> | error:<class>`; every
-interim save of a capture session stays a draw with `superseded_by` naming its
-successor. *Views* are a function of the draws and a `ViewPolicy` whose sha
-names the file; built, never committed. Data flows draws → views, never back:
-a prune is a policy clause plus a rebuild, a recut a chunk-policy change plus a
-rebuild; nothing edits a draw. The five null-provenance cells are kept. One
-new module, `src/stylebot/draws.py` (≤ 800, P2); step 1 adds no writer to
-`pairs/`, no thread, lock or process, and `corpus.iter_records` reads a view
-unchanged. An explicit `dan-style promote`, a `SourcePolicy` and an author
-slot ride the step 4 re-stamp (D74, D36, D64 amended then).
+**Decision (2026-09-04, W4 step 1).** Two layers. *Draws* record what happened —
+one per generator call or human edit, keyed on its cell (`draws.draw_id`), raw
+generator output kept, `outcome` of `accepted | gate:<name> | error:<class>`;
+every interim save of a capture session stays a draw with `superseded_by` naming
+its successor. *Views* are a function of the draws and a `ViewPolicy` whose sha
+names the file; built, never committed. Data flows draws → views, never back: a
+prune is a policy clause plus a rebuild, a recut a chunk-policy change plus a
+rebuild; nothing edits a draw. The five null-provenance cells are kept. One new
+module, `src/stylebot/draws.py` (≤ 800, P2), no thread, lock or process;
+`corpus.iter_records` reads a view unchanged. `dan-style promote`,
+`SourcePolicy` and an author slot ride step 4 (D74, D36, D64).
 
 **Alternatives.** *Keep the store, add a draws side file for rejects only* —
 recovers the rejects but `synth_key` stays keyed on cut text, so a recut still
 orphans and the eight rewrite paths stay; step 2's shape, not the model.
-*SQLite* — rejected outright: versions and compacts worse in git than
-append-only text and cannot be hand-edited, which the RUNBOOK's repair relies
-on. *Span-based `synth_key` and stop* — fixes orphaning, every prune still
-rewrites. *Dedupe interim saves first* — no save order is recorded
-(`meta.json` has no timestamp), so the "final" save is a guess.
+*SQLite* — rejected: versions worse in git than append-only text and cannot be
+hand-edited, which the RUNBOOK's repair relies on. *Span-based `synth_key` and
+stop* — fixes orphaning, every prune still rewrites. *Dedupe interim saves
+first* — no save order is recorded, so the "final" save is a guess.
 
 **Deciding constraint.** The recut orphans every synthetic cell because
 `synth_key` hashes the cut text, and 6,429 rejected draws (45% of spend) are
 unrecoverable because only the pair was kept (`findings.md` "The view reproduces the corpus").
+
+**Amended 2026-09-05 (step 3)**: the `resolve` hook is the blog's
+`livingthing.corpus_provenance` (≤ 300 lines, D45); `keep_superseded` until step 5.
 
 **Re-evaluate if** a draw shard passes a few hundred MB (finer shards, not a
 database) or a view is needed offline more often than it is rebuilt.
