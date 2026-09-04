@@ -327,6 +327,50 @@ def test_a_rewrite_between_two_appends_does_not_swallow_the_second(sharded):
     assert keys.count("k2") == 1
 
 
+def test_an_append_between_a_read_and_its_rewrite_survives_only_under_rewrite_with(sharded):
+    """The residual window D60 left open, closed by reading inside the lock.
+
+    Deterministic rather than raced: the append is placed at exactly the instant
+    the race needs it, after the caller has read and before it writes. Under the
+    old shape the write is derived from a snapshot that predates the append, so
+    the append is overwritten; `rewrite_with` derives it from a read the lock
+    covers, so no snapshot can predate it.
+    """
+    from stylebot.synth import PairsWriter
+
+    data_dir, _ = sharded
+    pairs = data_dir / "pairs"
+
+    def _synth(key):
+        rec = _rec(synthetic=True, at="2026-09-01T00:00:00+00:00", body=key)
+        rec["meta"]["synth_key"] = key
+        return rec
+
+    def drop_doomed(records):
+        return [r for r in records if (r.get("meta") or {}).get("synth_key") != "doomed"]
+
+    def keys():
+        return [(r.get("meta") or {}).get("synth_key") for r in iter_pairs(pairs)]
+
+    # The old shape: read, the append lands, write.
+    corpus.rewrite(pairs, corpus.read_records(pairs) + [_synth("doomed")])
+    stale = corpus.read_records(pairs)
+    with PairsWriter(pairs, set()) as w:
+        assert w.write("lost", _synth("lost")) is True
+    corpus.rewrite(pairs, drop_doomed(stale))
+    assert "doomed" not in keys()
+    assert "lost" not in keys(), "the append between the read and the write was overwritten"
+
+    # The same interleaving, with the read moved inside the critical section.
+    corpus.rewrite(pairs, corpus.read_records(pairs) + [_synth("doomed")])
+    corpus.read_records(pairs)  # whatever the caller read before is no longer the input
+    with PairsWriter(pairs, set()) as w:
+        assert w.write("survivor", _synth("survivor")) is True
+    corpus.rewrite_with(pairs, drop_doomed)
+    assert "doomed" not in keys()
+    assert "survivor" in keys()
+
+
 def test_capture_save_appends_to_the_captures_shard(sharded):
     from stylebot import capture
 
@@ -418,9 +462,12 @@ def test_check_splits_accepts_a_directory(sharded, tmp_path):
         ai_style,
         [
             "check-splits",
-            "--splits", str(out),
-            "--blog-root", str(blog),
-            "--pairs", str(data_dir / "pairs"),
+            "--splits",
+            str(out),
+            "--blog-root",
+            str(blog),
+            "--pairs",
+            str(data_dir / "pairs"),
         ],
     )
     assert res.exit_code == 0, res.output
@@ -472,9 +519,7 @@ def test_shard_pairs_migration_removes_the_source_file(tmp_path, write_pairs_cor
     res = CliRunner().invoke(data_cli, ["shard-pairs", str(data_dir), "--apply"])
     assert res.exit_code == 0, res.output
     assert not src.exists()
-    assert {record_id(r) for r in iter_pairs(data_dir / "pairs")} == {
-        record_id(r) for r in before
-    }
+    assert {record_id(r) for r in iter_pairs(data_dir / "pairs")} == {record_id(r) for r in before}
 
 
 def test_shard_pairs_refuses_a_corpus_that_is_already_sharded(sharded):
@@ -508,9 +553,7 @@ def test_run_pairs_mode_rewrites_every_shards_records(sharded, tmp_path):
 
     data_dir, before = sharded
     out = tmp_path / "out.jsonl"
-    n = rewrite_pairs_file(
-        data_dir / "pairs", out, lambda messages, num_samples=1: ["rewritten"]
-    )
+    n = rewrite_pairs_file(data_dir / "pairs", out, lambda messages, num_samples=1: ["rewritten"])
     assert n == len(before)
     assert {r["id"] if "id" in r else record_id(r) for r in read_jsonl(out)} == {
         record_id(r) for r in before
@@ -531,9 +574,9 @@ def test_prune_stale_accepts_a_directory(sharded, tmp_path):
             "prune-stale",
             str(data_dir / "pairs"),
             "--no-orphans",
-            "--splits", str(out),
+            "--splits",
+            str(out),
         ],
     )
     assert res.exit_code == 0, res.output
     assert f"{len(before)} total" in res.output
-

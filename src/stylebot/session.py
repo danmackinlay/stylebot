@@ -535,20 +535,20 @@ def save_session(
         raise SessionError(f"no changes since session opened on {source}; nothing to save")
 
     session_snapped_at = snapshot.snapped_at
-    all_records = read_pairs(store)
-    prior = partition_prior_pairs(all_records, source=str(source), snapped_at=session_snapped_at)
-
-    if disposition == "append":
-        records_to_keep = all_records
-    elif disposition == "replace-all":
-        records_to_keep = prior.other_source
-    elif disposition == "smart":
-        records_to_keep = prior.other_source + prior.other_session
-    else:  # pragma: no cover — a typo in a caller, not a user error
+    if disposition not in ("append", "replace-all", "smart"):  # pragma: no cover
         raise ValueError(f"unknown disposition {disposition!r}")
+    partitioned: list[PriorPairs] = []
 
-    if len(records_to_keep) != len(all_records):
-        corpus.rewrite(store.pairs_path, records_to_keep)
+    def drop_prior(recs: list[dict]) -> list[dict] | None:
+        prior = partition_prior_pairs(recs, source=str(source), snapped_at=session_snapped_at)
+        partitioned.append(prior)
+        keep = prior.other_source
+        if disposition == "smart":
+            keep = keep + prior.other_session
+        return None if disposition == "append" or len(keep) == len(recs) else keep
+
+    corpus.rewrite_with(store.pairs_path, drop_prior)
+    prior = partitioned[0]
 
     # Report disposition before the save line.
     if disposition == "smart" and prior.same_session:
@@ -732,42 +732,38 @@ def tidy_pairs(
     undecodable lines) are always kept. Normally unnecessary, since
     `save_session` replaces by default; this is the cleanup after `"append"`.
     """
-    records = read_pairs(store)
-    if not records:
-        return TidyResult(kept=[], removed=0, empty=True, applied=False)
+    result: list[TidyResult] = []
 
-    latest_ts: dict[str, str] = {}
-    for rec in records:
-        if not isinstance(rec, dict):
-            continue
-        meta = rec.get("meta", {})
-        src = meta.get("source")
-        ts = meta.get("captured_at", "")
-        if src is None:
-            continue
-        if ts > latest_ts.get(src, ""):
-            latest_ts[src] = ts
+    def tidy(records: list[dict]) -> list[dict] | None:
+        latest_ts: dict[str, str] = {}
+        for rec in records:
+            meta = rec.get("meta", {}) if isinstance(rec, dict) else {}
+            src = meta.get("source")
+            if src is not None and meta.get("captured_at", "") > latest_ts.get(src, ""):
+                latest_ts[src] = meta["captured_at"]
 
-    kept: list[dict] = []
-    removed = 0
-    for rec in records:
-        if not isinstance(rec, dict) or "meta" not in rec:
-            kept.append(rec)
-            continue
-        meta = rec["meta"]
-        src = meta.get("source")
-        if src is None or (source is not None and src != source):
-            kept.append(rec)
-            continue
-        if meta.get("captured_at", "") == latest_ts.get(src):
-            kept.append(rec)
-        else:
-            removed += 1
+        kept: list[dict] = []
+        removed = 0
+        for rec in records:
+            if not isinstance(rec, dict) or "meta" not in rec:
+                kept.append(rec)
+                continue
+            meta = rec["meta"]
+            src = meta.get("source")
+            if src is None or (source is not None and src != source):
+                kept.append(rec)
+                continue
+            if meta.get("captured_at", "") == latest_ts.get(src):
+                kept.append(rec)
+            else:
+                removed += 1
 
-    applied = bool(removed) and not dry_run
-    if applied:
-        corpus.rewrite(store.pairs_path, kept)
-    return TidyResult(kept=kept, removed=removed, empty=False, applied=applied)
+        applied = bool(removed) and not dry_run
+        result.append(TidyResult(kept=kept, removed=removed, empty=not records, applied=applied))
+        return kept if applied else None
+
+    corpus.rewrite_with(store.pairs_path, tidy)
+    return result[0]
 
 
 # ---- recut ----------------------------------------------------------------

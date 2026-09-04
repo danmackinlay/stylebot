@@ -487,28 +487,33 @@ def dedupe_pairs_file(
     (`iter_jsonl(keep_undecodable=True)`).
     """
     path = Path(path)
-    records = corpus.read_records(path, keep_undecodable=True)
-    report = DedupeReport(total=len(records))
-    first_line: dict[str, int] = {}
-    kept: list[dict] = []
-    for lineno, rec in enumerate(records, start=1):
-        if "_raw" in rec or not isinstance(rec.get("meta"), dict):
+    report = DedupeReport()
+
+    def dedupe(records: list[dict]) -> list[dict] | None:
+        report.total = len(records)
+        first_line: dict[str, int] = {}
+        kept: list[dict] = []
+        for lineno, rec in enumerate(records, start=1):
+            if "_raw" in rec or not isinstance(rec.get("meta"), dict):
+                kept.append(rec)
+                continue
+            rid = record_id(rec)
+            if rid in first_line:
+                report.drops.append((rid, lineno, first_line[rid]))
+                continue
+            first_line[rid] = lineno
             kept.append(rec)
-            continue
-        rid = record_id(rec)
-        if rid in first_line:
-            report.drops.append((rid, lineno, first_line[rid]))
-            continue
-        first_line[rid] = lineno
-        kept.append(rec)
-    report.dropped = len(report.drops)
-    report.kept = len(kept)
-    report.duplicate_ids = len({rid for rid, _, _ in report.drops})
-    if apply and report.dropped:
+        report.dropped = len(report.drops)
+        report.kept = len(kept)
+        report.duplicate_ids = len({rid for rid, _, _ in report.drops})
+        if not (apply and report.dropped):
+            return None
         if backup:
             report.backup = backup_corpus(path)
-        corpus.rewrite(path, kept)
         report.applied = True
+        return kept
+
+    corpus.rewrite_with(path, dedupe)
     return report
 
 

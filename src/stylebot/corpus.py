@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -125,47 +125,62 @@ def read_records(corpus: str | Path, **kw) -> list[dict]:
 
 
 def rewrite(corpus: str | Path, records: Iterable[dict]) -> list[Path]:
-    """Rewrite a corpus so it holds exactly `records`. Returns the shards touched.
-
-    The one write path for every read-filter-write caller — `log save`'s replace
-    rule, `log tidy`, `remove_pairs_for_source`, `recut`, `dedupe_pairs_file`,
-    the migration prunes. On a single-file corpus it is `write_jsonl_atomic` and
-    nothing else, so nothing about the unsharded install changes.
-
-    On a sharded corpus every record is routed by `shard_of`, **a shard whose
-    bytes would not change is not written at all** (the property D50 exists for),
-    and a shard that ends up empty is truncated rather than deleted, so a prune
-    that empties a month shows as a diff and not as a vanished file.
-
-    Held under `corpus_lock`: a rewrite is a writer, and replacing a shard under
-    an appender loses what it appends (D60).
-    """
+    """Replace a corpus with `records`, under `corpus_lock`. Narrower: see below (D60)."""
     path = Path(corpus)
     records = list(records)
     with corpus_lock(path):
-        if not path.is_dir():
-            write_jsonl_atomic(path, records)
-            return [path]
-
-        buckets: dict[str, list[dict]] = {}
-        for rec in records:
-            buckets.setdefault(shard_of(rec), []).append(rec)
-        # Shards that exist but got no records must be emptied, not left stale.
-        for shard in shard_paths(path):
-            buckets.setdefault(shard.name, [])
-
-        touched: list[Path] = []
-        for name, recs in sorted(buckets.items()):
-            shard = path / name
-            wanted = "".join(_line(rec) for rec in recs)
-            if shard.exists() and shard.read_text(encoding="utf-8") == wanted:
-                continue
-            write_jsonl_atomic(shard, recs)
-            touched.append(shard)
-        return touched
+        return _write_locked(path, records)
 
 
-def _line(record: dict) -> str:
+def rewrite_with(
+    corpus: str | Path, transform: Callable[[list[dict]], list[dict] | None]
+) -> list[Path]:
+    """Read, transform and write back a corpus in ONE critical section (D60).
+
+    The write path for every read-filter-write caller. `transform` is called
+    under the lock with every record (undecodable lines as `{"_raw": ...}`) and
+    returns what to write, or **None** to write nothing — so a caller settles
+    "nothing changed" without dropping the lock. It must not itself write here:
+    `corpus_lock` is not re-entrant.
+    """
+    path = Path(corpus)
+    with corpus_lock(path):
+        records = list(iter_records(path, keep_undecodable=True))
+        out = transform(records)
+        if out is None:
+            return []
+        return _write_locked(path, list(out))
+
+
+def _write_locked(path: Path, records: list[dict]) -> list[Path]:
+    """The write half of a rewrite; the caller holds `corpus_lock`. Records route
+    by `shard_of`, a shard whose bytes would not change is not written at all
+    (the property D50 exists for), and an emptied one is truncated, not deleted.
+    """
+    if not path.is_dir():
+        write_jsonl_atomic(path, records)
+        return [path]
+
+    buckets: dict[str, list[dict]] = {}
+    for rec in records:
+        buckets.setdefault(shard_of(rec), []).append(rec)
+    # Shards that exist but got no records must be emptied, not left stale.
+    for shard in shard_paths(path):
+        buckets.setdefault(shard.name, [])
+
+    touched: list[Path] = []
+    for name, recs in sorted(buckets.items()):
+        shard = path / name
+        wanted = "".join(line_of(rec) for rec in recs)
+        if shard.exists() and shard.read_text(encoding="utf-8") == wanted:
+            continue
+        write_jsonl_atomic(shard, recs)
+        touched.append(shard)
+    return touched
+
+
+def line_of(record: dict) -> str:
+    """The exact bytes a rewrite gives `record` — and so its identity on disk."""
     if "_raw" in record and set(record.keys()) == {"_raw"}:
         return record["_raw"] + "\n"
     return dumps_line(record) + "\n"
@@ -218,11 +233,10 @@ def corpus_lock(corpus: str | Path):
     """Exclusive advisory lock over a whole corpus, whatever its shape.
 
     One lock per corpus rather than one per shard, so two writers targeting
-    *different* shards still serialise (D36, D50). Both writers take it:
-    `PairsWriter.write` for an append, `rewrite` for a replace. It does **not**
-    cover a caller that reads, filters, then calls `rewrite`, and it is not
-    re-entrant — D60 has the residual window and why it was left. A no-op
-    without `fcntl`.
+    *different* shards still serialise (D36, D50). Every writer takes it:
+    `PairsWriter.write` for an append, `rewrite` for a replace, `rewrite_with`
+    across a read and the replace it derives. It is not re-entrant, so nothing
+    called under it may take it again (D60). A no-op without `fcntl`.
     """
     path = Path(corpus)
     data_dir = path.parent

@@ -184,19 +184,29 @@ def migrate_capture_archives(data_dir: Path, *, apply: bool, log: Log = print) -
 # ---------------------------------------------------------------------------
 
 
-def write_pruned(pairs_path: Path, keep: list[dict]) -> Path:
-    """Rewrite the corpus at `pairs_path` with `keep`, returning the backup path.
+def write_pruned(pairs_path: Path, dropped: list[dict]) -> Path:
+    """Remove `dropped` from the corpus at `pairs_path`. Returns the backup path.
 
-    Atomic (a sibling temp file per shard) and backed up, so an interrupted run
-    cannot leave a half-written corpus. Takes a `pairs.jsonl` or a shard
-    directory; on a sharded corpus only the shards whose content actually
-    changes are rewritten, and the backup is a `<corpus>.bak/` directory.
-    Sidecars are NOT touched: `scores.jsonl` has its own pruner
-    (`eval.prune_orphan_scores`), and `reasoning.jsonl` is a diagnostic whose
-    orphans cost nothing.
+    What the plan REMOVES, not what it keeps: the corpus is re-read under the
+    lock, where "keep exactly this list" would also delete whatever was appended
+    while the user read the dry run (D60). Records match by serialised line, one
+    occurrence per planned drop. Sidecars are NOT touched — `scores.jsonl` has
+    its own pruner (`eval.prune_orphan_scores`).
     """
     backup = backup_corpus(pairs_path)
-    corpus.rewrite(pairs_path, keep)
+    budget = Counter(corpus.line_of(rec) for rec in dropped)
+
+    def prune(records: list[dict]) -> list[dict]:
+        kept: list[dict] = []
+        for rec in records:
+            line = corpus.line_of(rec)
+            if budget[line]:
+                budget[line] -= 1
+                continue
+            kept.append(rec)
+        return kept
+
+    corpus.rewrite_with(pairs_path, prune)
     return backup
 
 
@@ -384,6 +394,8 @@ class PrunePlan:
     """What a prune would remove and what it would leave. Decides nothing."""
 
     keep: list[dict] = field(default_factory=list)
+    #: What the prune removes — the half `write_pruned` applies; see it for why.
+    dropped: list[dict] = field(default_factory=list)
     orphan_report: OrphanReport | None = None
     eval_report: EvalReport | None = None
     n_orphans: int = 0
@@ -461,6 +473,7 @@ def plan_stale_prune(
 
     keep = [r for i, r in enumerate(records) if not is_orphan[i] and i not in eval_rows]
     plan.keep = keep
+    plan.dropped = [r for i, r in enumerate(records) if is_orphan[i] or i in eval_rows]
     plan.n_dropped = len(records) - len(keep)
     # Only the variants actually computed. A "minus orphans" row that reads
     # identical to "now" because orphan detection was switched off is a number

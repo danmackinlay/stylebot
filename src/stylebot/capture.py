@@ -254,19 +254,21 @@ def build_pair_record(
     }
 
 
+def _meta_of(record: object) -> dict:
+    return record.get("meta", {}) if isinstance(record, dict) else {}
+
+
 def remove_pairs_for_source(pairs_path: Path, source: str) -> int:
     """Drop every record whose meta.source matches. Returns count removed."""
-    records = corpus.read_records(pairs_path, keep_undecodable=True)
-    kept: list[dict] = []
     removed = 0
-    for rec in records:
-        meta = rec.get("meta", {}) if isinstance(rec, dict) else {}
-        if meta.get("source") == source:
-            removed += 1
-        else:
-            kept.append(rec)
-    if removed:
-        corpus.rewrite(pairs_path, kept)
+
+    def drop_source(records: list[dict]) -> list[dict] | None:
+        nonlocal removed
+        kept = [r for r in records if _meta_of(r).get("source") != source]
+        removed = len(records) - len(kept)
+        return kept if removed else None
+
+    corpus.rewrite_with(pairs_path, drop_source)
     return removed
 
 
@@ -571,11 +573,10 @@ def recut_archives(
             )
 
     if not dry_run and records:
-        kept = [
-            rec
-            for rec in corpus.read_records(pairs_path, keep_undecodable=True)
-            if (rec.get("meta", {}) if isinstance(rec, dict) else {}).get("capture_id")
-            not in recut_ids
-        ]
-        corpus.rewrite(pairs_path, kept + records)
+        corpus.rewrite_with(
+            pairs_path,
+            lambda old: (
+                [r for r in old if _meta_of(r).get("capture_id") not in recut_ids] + records
+            ),
+        )
     return records

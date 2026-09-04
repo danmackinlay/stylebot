@@ -311,7 +311,7 @@ def prune_stale_cmd(
         click.echo("\ndry run — nothing written. Re-run with --apply to prune.")
         return
 
-    backup = migrations.write_pruned(pairs, plan.keep)
+    backup = migrations.write_pruned(pairs, plan.dropped)
     click.echo(f"\npruned {plan.n_dropped} pair(s) -> {pairs} (backup at {backup})")
     click.echo("next: `ai-style eval --prune-orphans` if you keep scores.jsonl, and a")
     click.echo("      `synth` run to refill the cells whose diet is still live policy.")
