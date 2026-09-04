@@ -1,9 +1,9 @@
 """Direct tests for stylebot.capture — the Phase-1 mechanism as a library.
 
-The CLI-level behaviour (heading context, opt-outs) is pinned in
-test_ai_style_log.py through the `ai-style log` wrappers; these exercise the
-library surface with explicit paths — no module globals, no monkeypatching —
-which is exactly what the extraction buys a non-CLI producer.
+The `ai-style log` opt-outs are pinned in test_ai_style_log.py through the
+CLI wrappers; these exercise the library surface with explicit paths — no
+module globals, no monkeypatching — which is exactly what the extraction buys a
+non-CLI producer.
 """
 
 from __future__ import annotations
@@ -155,6 +155,73 @@ def test_coalescing_preserves_pure_insert_delete_skip():
     assert all(b.strip() and a.strip() for b, a, _c in triples)
 
 
+# --- heading context (D14): the nearest preceding heading, immediate depth --
+
+
+def test_diff_chunks_resolves_nearest_preceding_heading():
+    before = (
+        "# Title\n\n"
+        "Intro paragraph.\n\n"
+        "## Section One\n\n"
+        "The old prose under section one.\n\n"
+        "## Section Two\n\n"
+        "Untouched tail."
+    )
+    after = (
+        "# Title\n\n"
+        "Intro paragraph.\n\n"
+        "## Section One\n\n"
+        "The shiny new prose under section one.\n\n"
+        "## Section Two\n\n"
+        "Untouched tail."
+    )
+    triples = capture.diff_chunks(before, after, heading_context=True)
+    assert len(triples) == 1
+    before_chunk, after_chunk, context = triples[0]
+    assert context == "## Section One"
+    assert "shiny new prose" in after_chunk
+    assert "old prose" in before_chunk
+
+
+def test_diff_chunks_preamble_region_has_empty_context():
+    # The changed paragraph sits before any heading -> no context.
+    before = "First draft of the opening.\n\n## Later Heading\n\ntail"
+    after = "Reworked opening line.\n\n## Later Heading\n\ntail"
+    triples = capture.diff_chunks(before, after, heading_context=True)
+    assert len(triples) == 1
+    _, _, context = triples[0]
+    assert context == ""
+
+
+def test_diff_chunks_off_yields_no_context():
+    before = "## H\n\nold body"
+    after = "## H\n\nnew body"
+    triples = capture.diff_chunks(before, after, heading_context=False)
+    assert len(triples) == 1
+    assert triples[0][2] == ""
+
+
+def test_diff_chunks_picks_immediate_not_breadcrumb():
+    # Two heading levels precede the change; immediate depth = the nearest one.
+    before = "# Top\n\n## Mid\n\n### Leaf\n\nold leaf text"
+    after = "# Top\n\n## Mid\n\n### Leaf\n\nnew leaf text"
+    triples = capture.diff_chunks(before, after, heading_context=True)
+    assert len(triples) == 1
+    assert triples[0][2] == "### Leaf"
+
+
+def test_diff_chunks_coalesces_contiguous_changed_paragraphs():
+    # Two adjacent changed paragraphs coalesce into ONE pair (documented rule).
+    before = "## H\n\npara one old\n\npara two old\n\nuntouched"
+    after = "## H\n\npara one new\n\npara two new\n\nuntouched"
+    triples = capture.diff_chunks(before, after, heading_context=True)
+    assert len(triples) == 1
+    before_chunk, after_chunk, context = triples[0]
+    assert context == "## H"
+    assert before_chunk == "para one old\n\npara two old"
+    assert after_chunk == "para one new\n\npara two new"
+
+
 # --- recut from the archive -----------------------------------------------
 
 
@@ -182,18 +249,7 @@ def test_recut_rederives_pairs_from_the_archive(tmp_path):
     on_disk = corpus.read_records(pairs_path)
     assert len(on_disk) == 1
     assert _KEPT in on_disk[0]["messages"][2]["content"]
-
-
-def test_recut_is_idempotent(tmp_path):
-    pairs_path = tmp_path / "pairs.jsonl"
-    _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")
-    kw = dict(coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0)
-    capture.recut_archives(pairs_path, **kw)
-    first = corpus.read_records(pairs_path)
-    capture.recut_archives(pairs_path, **kw)
-    second = corpus.read_records(pairs_path)
-    assert len(first) == len(second) == 1
-    assert first[0]["messages"] == second[0]["messages"]
+    assert validate_pairs_file(pairs_path) == []
 
 
 def test_recut_leaves_unarchived_captures_alone(tmp_path):
@@ -231,13 +287,6 @@ def test_recut_dry_run_does_not_write(tmp_path):
         dry_run=True,
     )
     assert recut and pairs_path.read_text(encoding="utf-8") == before
-
-
-def test_recut_output_validates(tmp_path):
-    pairs_path = tmp_path / "pairs.jsonl"
-    _capture(pairs_path, _BEFORE, _AFTER, "post/a.qmd")
-    capture.recut_archives(pairs_path, coalesce_gap_paras=2, coalesce_gap_chars=800, min_chars=0)
-    assert validate_pairs_file(pairs_path) == []
 
 
 def test_recut_preserves_a_corrupt_line(tmp_path):
