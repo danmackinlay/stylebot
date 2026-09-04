@@ -13,26 +13,19 @@ Dan strips — `argued-slop-arm.md` §"Risks"). The sessions that produced them
 are on disk as Claude Code transcripts, and they record every edit as an
 explicit diff, so the slop side is *read off*, not recovered by matching.
 
-Measured 2026-09-03 on `~/.claude/projects/-Users-dan-Source-livingthing/`:
+The corpus was surveyed 2026-09-03 to size this, and the survey says it is
+worth building: the sessions yield a few hundred clean pair candidates, a
+material addition to the real stratum, and that is a floor rather than an
+estimate — matching against HEAD conflates Dan's edit with later drift,
+which the time-bounded design below removes. The overlap with the existing
+hand captures is small: the logger snapshots a file when Dan opens his own
+editing session, after Claude's has ended, so the two sources sit beside
+each other rather than overlapping.
 
-| | |
-|---|---|
-| sessions on disk | 209 (120 edit a `.qmd`) |
-| `Edit` calls on `.qmd` files | 2,798 — each with exact `old_string` / `new_string` |
-| edits rewriting text Claude wrote earlier in the *same* session | 1,370 (49%) — the layering Dan expects |
-| unique terminal Claude paragraphs (chains chased to their last version) | 1,439 |
-| … verbatim in HEAD (accepted) | 151 |
-| … edited by Dan, difflib ratio 0.80–0.97 | 154 |
-| … edited by Dan, ratio 0.60–0.80 | 133 |
-| … unmatched (< 0.60: deleted, moved, restructured, or drifted) | 993 |
-| terminal paragraphs with a substantive user turn earlier in the session | 96% |
-
-So ~290 clean pair candidates against HEAD, i.e. **+70% on the real stratum**,
-and that is a floor: matching against HEAD conflates Dan's edit with months of
-later drift, which the time-bounded design below removes. The join to the
-*existing* 398 captures is small (29 exact) because the logger snapshots a
-file when Dan opens his own editing session, after Claude's session has ended
-— the two sources sit beside each other rather than overlapping.
+**The counts are deliberately not here.** They are derived from Dan's
+private session logs and this is a public repo; they live in the blog's
+`_plans/transcript-mining-sizing.md`, which is also where any future
+measurement of that corpus goes.
 
 ## Design: replay the session, then reuse `capture_pairs`
 
@@ -82,12 +75,10 @@ heading context, archiving and provenance.
 
 **The deliberation sidecar.** The transcript holds both halves of the
 regime the real slop comes from: Dan's pushback and Claude's own account of
-what it did and why. Measured 2026-09-03 across the 209 sessions: 8,951
-`thinking` blocks (8.2M chars) and 6,134 visible `text` turns (5.2M chars)
-beside the 15,374 tool calls, and the text turns are exactly the "explaining
-the outcome" prose — *"the sentence leaves the noun implicit and also skates
-over a logical wrinkle: if no such prices exist, no process can find them, so
-… Making both explicit:"* — followed by the Edit. Keep both, per edit:
+what it did and why. The visible assistant text turns are "explaining the
+outcome" prose sitting immediately before the Edit that acts on it, which is
+the pairing this exploits. Volumes are in the private sizing note. Keep both
+halves, per edit:
 
 - **User turns**: substantive only (> 25 words, not tool output, not
   `<`-prefixed reminder blocks), the ones preceding the edit in the session.
@@ -181,7 +172,7 @@ print the real stratum's `novel_after` distribution beside its count.
 
 ## Non-goals
 
-- Paragraphs Dan deleted outright (most of the 993 unmatched) are not pairs;
+- Paragraphs Dan deleted outright (most of the unmatched majority) are not pairs;
   `diff_chunks` already drops pure deletes. A "what Dan deletes" study is a
   different slice.
 - Transcripts from other tools (Claude Desktop chats, Cursor) have other
