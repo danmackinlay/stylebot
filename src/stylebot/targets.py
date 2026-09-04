@@ -501,10 +501,10 @@ def iter_targets(
 ) -> list[Target]:
     """Collect prose chunks to use as synthesis targets.
 
-    Two mutually exclusive input modes: **`files`** is a pre-selected list, and
-    the `selector` is **not** applied to it (the caller owns selection);
-    **`blog_root`** walks for `glob` and keeps posts where `selector(meta)` is
-    true. Chunk hygiene is generic — policy stays in `selector`.
+    `blog_root` supplies the label root and the selector; `files` replaces only
+    the walk (D80). Alone, `blog_root` walks for `glob` and keeps posts where
+    `selector(meta)` is true, and `files` is taken as-is, unselected; together
+    the caller's list is gated by the selector and labelled blog-relative.
 
     The chunk knobs arrive as a ready `policy=ChunkPolicy(...)` or as loose
     keywords forwarded to its constructor — `iter_targets(blog_root=r,
@@ -514,10 +514,6 @@ def iter_targets(
     no ordering knob — arms are assigned by content hash, so order cannot change
     the corpus (D43); a caller that wants one sorts the returned list.
     """
-    if files is not None and blog_root is not None:
-        raise ValueError(
-            "pass either `files` (pre-selected) or `blog_root` (walk + selector), not both"
-        )
     if files is None and blog_root is None:
         raise ValueError("provide `files` (pre-selected list) or `blog_root` (walk)")
     if policy is not None and chunk_kw:
@@ -531,18 +527,14 @@ def iter_targets(
     policy = policy if policy is not None else ChunkPolicy(**chunk_kw)
 
     if files is not None:
-        for f in files:
-            path = Path(f)
-            if not path.is_file():
-                continue
-            meta, body = _load_meta_body(path)
-            targets.extend(_post_targets(body, _source_label(path, root), policy, meta=meta))
+        paths = (p for p in map(Path, files) if p.is_file())
     else:
-        for path in gather_qmd_files([], base=root, default_glob=glob):
-            meta, body = _load_meta_body(path)
-            if not selector(meta):
-                continue
-            targets.extend(_post_targets(body, _source_label(path, root), policy, meta=meta))
+        paths = gather_qmd_files([], base=root, default_glob=glob)
+    for path in paths:
+        meta, body = _load_meta_body(path)
+        if root is not None and not selector(meta):
+            continue
+        targets.extend(_post_targets(body, _source_label(path, root), policy, meta=meta))
 
     return targets
 

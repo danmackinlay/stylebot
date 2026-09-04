@@ -6,6 +6,8 @@ hygiene rules (divs, stub markers, link dumps, size caps, cut headers).
 
 from __future__ import annotations
 
+from conftest import HUMAN_POST
+
 from stylebot import synth
 from stylebot.targets import iter_targets
 
@@ -184,3 +186,22 @@ def test_stop_at_headers_truncates_trailing_section(tmp_path):
     assert len(synth.iter_targets(blog_root=root, stop_at_headers=["incoming"])) == 1
     # Without the option, the post-Incoming paragraphs survive.
     assert len(synth.iter_targets(blog_root=root)) == 3
+
+
+def test_iter_targets_files_with_blog_root_labels_and_selects(tmp_path):
+    # D80: `blog_root` supplies the label root and the selector; `files`
+    # replaces only the walk. So a caller's own list is still gated by
+    # `selector(meta)` and still labelled blog-relative -- the relative source
+    # is what `splits.role_of` keys on.
+    root = tmp_path / "blog"
+    (root / "notebook").mkdir(parents=True)
+    (root / "tests").mkdir()
+    (root / "notebook" / "y.qmd").write_text(HUMAN_POST, encoding="utf-8")
+    (root / "notebook" / "z.qmd").write_text(
+        HUMAN_POST.replace("automation: 0", "automation: 2"), encoding="utf-8"
+    )
+    (root / "tests" / "x.qmd").write_text(HUMAN_POST, encoding="utf-8")
+    files = [root / "notebook" / "y.qmd", root / "notebook" / "z.qmd"]
+    targets = synth.iter_targets(files=files, blog_root=root)
+    assert targets
+    assert {t.source for t in targets} == {"notebook/y.qmd"}

@@ -1311,32 +1311,9 @@ stay that way; only the blog has a `--blog-root`, so only the blog folds it in.
 
 ## D46: the synth walker's blog exclusions stay pinned, not routed around
 
-**Decision.** `dan-style synth` keeps calling `iter_targets(blog_root=…)` and
-walking with stylebot's predicate. The QA list (W11.f) proposed handing it a
-pre-selected `files=` list from `livingthing.lib.gather_qmd_files`, so the walk
-would honour the blog's `LOCAL_SKIP_DIRS` (`src`, `bin`, `tests`). Refused on
-two measurements.
-
-*The gap is empty.* The two walkers agree on every `.qmd` in the live tree
-(`findings.md` "The synth walker's gap") — the two skip-lists are disjoint, and
-no `.qmd` has ever lived under `renv`/`packrat`/`rsconnect`/`node_modules`.
-Exactly one file ever fell in the gap and the selector rejected it anyway.
-
-*The fix costs more than the gap.* `files=` and `blog_root=` are mutually
-exclusive in `iter_targets`, and without `blog_root` `_source_label` falls back
-to `str(path)` — so `splits.role_of` answers `styler` instead of `eval`,
-reopening the leak W0 had just closed and orphaning every pair keyed on the
-relative source. `files=` also skips the selector, so the blog would
-re-implement the frontmatter gates it currently passes as a callable.
-
-*So instead:* the divergence is asserted.
-`tests/test_qmd_walker.py::test_the_synth_walker_sees_exactly_what_this_repo_calls_a_post`
-compares the two walks over the live tree and names any file either side has that
-the other does not.
-
-**Re-evaluate if** a `.qmd` ever needs to live under `src/`, `bin/` or `tests/`
-again, or if `iter_targets` grows a label-only `blog_root` companion to `files=`
-— the one-line change that would make the pre-selected form safe.
+**Superseded by D80 on 2026-09-04.** `iter_targets` now takes `files=` with
+`blog_root=` — the root labels and selects, the list replaces the walk — so
+the blog hands it its own walk and the divergence pin is deleted.
 
 ## D47: two error classes for the whole package, translated once at the group
 

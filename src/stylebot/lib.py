@@ -103,8 +103,8 @@ def editable_prose(content: str, *, div_is_prose: markdown.DivIsProse | None = N
 
 # Directories Quarto itself never treats as project inputs. This set mirrors
 # upstream rather than inventing policy — which is the whole of what belongs
-# here: a *project's* own exclusions are the caller's business, not ours (the
-# blog's live in its `_quarto.yml`, and `livingthing.lib` reads them there).
+# here: a *project's* own exclusions are the caller's (the blog composes
+# `LOCAL_SKIP_DIRS` over this predicate).
 QUARTO_SKIP_DIRS = frozenset({"renv", "packrat", "rsconnect", "node_modules"})
 
 
