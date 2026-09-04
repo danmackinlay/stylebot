@@ -561,6 +561,29 @@ Every signal says the two arms are indistinguishable: the filter costs 15% of th
 scarce real pairs (31 of 172) and buys nothing measurable at n=127, including on
 anchor fidelity at inference. The pre-registered rule keeps it on a tie.
 
+### Run 4's pre-flight inputs — 2026-08-17, from the retired blog plan
+
+Read on 2026-08-17 from `pairs.jsonl`, `dan-style train --dry-run` and the two
+run manifests, by the blog's `_plans/styler-run4-preflight-2026-08.md` (a P7
+stub since 2026-09-04; `git show 367f170565:` there). The inputs the verdict
+above rests on that appear nowhere else:
+
+| what | value |
+|---|---|
+| `pairs.jsonl` before the recut | 8,335 pairs — 468 captured / 7,867 synthetic |
+| `--dry-run`, pre-recut, no anchor filter | 4,905 (188 real / 4,717 synthetic), ~$5.89 |
+| assembled post-recut, unfiltered (4b's arm) | 4,578 (172 / 4,406) |
+| assembled post-recut, anchor-filtered + rostered (4a's arm) | 4,390 (141 / 4,249), ~$5.15 |
+| 4a eval, interrupted at 48 of 127 chunks (Tinker 402) | detector 0.2899 in → 0.2346 out (Dan 0.2007); Vale/chunk 1.04 → 1.00 (0.83) |
+| `preferences.jsonl` | 13 records |
+
+The 48-chunk row was a smoke test of the scoring path — unpaired, no judge, no
+4b — and the 127-chunk verdict above supersedes it. The filter's pre-recut cost
+(29 of 188 real) became 31 of 172 after the recut, because bridged captures
+carry more anchors. Thirteen preference records are why DPO stayed out of
+scope. Decided: D40 (the verdict's interval), D43 (the by-passage weighting
+the arm split exposed).
+
 ### Run 4's verdict, re-analysed 2026-09-03 (W10) — the gain over run 2 does not survive
 
 Same score files, re-read through `eval.compare_scores` with the POST cluster
