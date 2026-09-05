@@ -13,6 +13,7 @@ import shutil
 import subprocess
 
 import pytest
+from conftest import corpus_file
 
 from stylebot import eval as ev
 from stylebot import scoring, synth
@@ -306,10 +307,10 @@ def test_openrouter_judge_records_what_the_call_cost(monkeypatch):
 
 
 def _make_pairs(data_dir, specs):
-    """Build a valid pairs.jsonl via the real synth path with a fake generator.
+    """A valid corpus via the real synth path with a fake generator.
 
     `specs`: list of (text, context, strategy). One pair per spec (distinct
-    target text -> distinct synth_key), appended to data_dir/pairs.jsonl.
+    target text -> distinct synth_key); returns the view of the draws (D84).
     """
     for i, (text, context, strategy) in enumerate(specs):
         target = synth.Target(
@@ -321,7 +322,7 @@ def _make_pairs(data_dir, specs):
         )
         gen = synth.Generator(name="m", generate=lambda s: "[slop] " + s, strategy=strategy)
         synth.synthesize_pairs([target], data_dir, [gen])
-    return data_dir / "pairs.jsonl"
+    return corpus_file(data_dir, data_dir / "pairs.jsonl")
 
 
 def test_score_pairs_file_emits_id_keyed_scores(tmp_path):
@@ -687,7 +688,7 @@ def test_carried_gen_meta_flattened_and_faceted(tmp_path):
     synth.synthesize_pairs([t2], data_dir, [g_lo])
 
     out = tmp_path / "scores.jsonl"
-    ev.score_pairs_file(data_dir / "pairs.jsonl", out, judge=fake_judge)
+    ev.score_pairs_file(corpus_file(data_dir, tmp_path / "p.jsonl"), out, judge=fake_judge)
     recs = [json.loads(line) for line in out.read_text().splitlines() if line.strip()]
     # flattened from meta.gen
     assert {r["meta"].get("reasoning_effort") for r in recs} == {"high", "low"}

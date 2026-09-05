@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from conftest import corpus_records, corpus_view
+from conftest import corpus_file, corpus_records
 
 from stylebot import capture
 from stylebot.errors import RunError
@@ -29,7 +29,7 @@ def test_capture_pairs_writes_valid_records_to_explicit_path(tmp_path):
     )
     assert len(written) == 1
     assert written[0]["meta"]["context"] == "## S"
-    assert validate_pairs_file(corpus_view(pairs_path.parent, tmp_path / "view")) == []
+    assert validate_pairs_file(corpus_file(pairs_path.parent, tmp_path / "p.jsonl")) == []
     assert corpus_records(pairs_path.parent) == written
 
 
@@ -301,7 +301,7 @@ def test_captured_records_carry_provenance(tmp_path):
     assert sorted(meta["provenance"]) == sorted(PROVENANCE_KEYS)
     assert meta["provenance"]["source_automation"] == 0
     assert meta["provenance"]["policy_digest"]
-    assert validate_pairs_file(corpus_view(tmp_path, tmp_path / "view")) == []
+    assert validate_pairs_file(corpus_file(tmp_path, tmp_path / "p.jsonl")) == []
 
 
 def test_capture_policy_digest_tracks_the_cut_knobs(tmp_path):

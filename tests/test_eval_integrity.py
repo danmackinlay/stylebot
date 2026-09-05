@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from conftest import corpus_file
 
 from stylebot import classify, synth
 from stylebot import eval as ev
@@ -37,12 +38,15 @@ from stylebot.errors import ConfigError
 
 
 def _make_pairs(data_dir, specs):
-    """A valid pairs.jsonl via the real synth path. `specs`: (text, source)."""
+    """A valid corpus via the real synth path, as the view of its draws (D84).
+
+    `specs`: (text, source).
+    """
     for i, (text, source) in enumerate(specs):
         target = synth.Target(text=text, source=source, chunk_index=0, chunk_total=1, context="")
         gen = synth.Generator(name=f"m{i}", generate=lambda s: "[slop] " + s, strategy="polish")
         synth.synthesize_pairs([target], data_dir, [gen])
-    return data_dir / "pairs.jsonl"
+    return corpus_file(data_dir, data_dir / "pairs.jsonl")
 
 
 def _stub_detector(*, git_sha: str, score: float = 0.4, trained_at: str = "2026-01-01", n=10):

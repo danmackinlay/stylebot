@@ -14,6 +14,7 @@ and chunk hygiene), `test_synth_generator.py` (the OpenRouter wire),
 from __future__ import annotations
 
 import pytest
+from conftest import corpus_file, corpus_records
 from synth_helpers import _fake, _targets
 
 from stylebot import synth
@@ -28,12 +29,8 @@ def test_pairs_validate_and_carry_synthetic_meta(tmp_path, make_blog):
     result = synth.synthesize_pairs(targets, data_dir, [_fake("claude-x"), _fake("gpt-y")])
     assert result.written == len(targets)
 
-    pairs_path = data_dir / "pairs.jsonl"
-    assert validate_pairs_file(pairs_path) == []  # empty == valid
-
-    import json
-
-    recs = [json.loads(line) for line in pairs_path.read_text().splitlines() if line.strip()]
+    assert validate_pairs_file(corpus_file(data_dir, tmp_path / "p.jsonl")) == []
+    recs = corpus_records(data_dir)
     assert all(r["meta"]["synthetic"] is True for r in recs)
     assert all("synthetic" in r["meta"]["tags"] for r in recs)
     # user = slop, assistant = the real target
@@ -54,10 +51,8 @@ def test_idempotent_resume(tmp_path, make_blog):
     assert second.written == 0
     assert second.skipped_existing == len(targets)
 
-    # File did not grow.
-    pairs_path = data_dir / "pairs.jsonl"
-    n_lines = len([ln for ln in pairs_path.read_text().splitlines() if ln.strip()])
-    assert n_lines == len(targets)
+    # The corpus did not grow.
+    assert len(corpus_records(data_dir)) == len(targets)
 
 
 def test_per_generator_mode_doubles_pairs(tmp_path, make_blog):
@@ -76,7 +71,6 @@ def test_heading_context_prepended_both_sides(tmp_path):
     # slop (user) and the Dan body (assistant); slop is generated from the body
     # only (the fake echoes its input, so the heading must NOT appear in the
     # generated portion).
-    import json
 
     from stylebot.pairs import validate_pairs_file
 
@@ -100,9 +94,8 @@ def test_heading_context_prepended_both_sides(tmp_path):
     assert result.written == 1
     assert "## A Heading" not in given["arg"]  # generator saw the body only
 
-    pairs_path = data_dir / "pairs.jsonl"
-    assert validate_pairs_file(pairs_path) == []  # incl. the context-prefix invariant
-    rec = json.loads(pairs_path.read_text().splitlines()[0])
+    assert validate_pairs_file(corpus_file(data_dir, tmp_path / "p.jsonl")) == []
+    rec = corpus_records(data_dir)[0]
     assert rec["messages"][1]["content"].startswith("## A Heading\n\n")
     assert rec["messages"][2]["content"].startswith("## A Heading\n\n")
     assert rec["meta"]["context"] == "## A Heading"
@@ -112,7 +105,6 @@ def test_heading_context_prepended_both_sides(tmp_path):
 def test_strategies_coexist_no_collision(tmp_path):
     # The same target generated under two strategies (same model name) yields two
     # distinct pairs in one file — the experimental "one run per strategy" loop.
-    import json
 
     data_dir = tmp_path / "corpus"
     target = synth.Target(
@@ -129,8 +121,7 @@ def test_strategies_coexist_no_collision(tmp_path):
     second = synth.synthesize_pairs([target], data_dir, [make("catalogue")])  # must NOT be skipped
     assert second.written == 1
 
-    lines = (data_dir / "pairs.jsonl").read_text().splitlines()
-    recs = [json.loads(ln) for ln in lines if ln.strip()]
+    recs = corpus_records(data_dir)
     assert {r["meta"]["slop_strategy"] for r in recs} == {"polish", "catalogue"}
 
 
@@ -159,12 +150,11 @@ def test_dry_run_writes_nothing(tmp_path, make_blog):
     )
     assert result.written == 0
     assert result.planned == len(targets)
-    assert not (data_dir / "pairs.jsonl").exists()
+    assert not (data_dir / "draws").exists()
 
 
 def test_gen_output_meta_recorded(tmp_path):
     # A generator returning GenOutput records its covariates under meta.gen.
-    import json
 
     data_dir = tmp_path / "corpus"
     target = synth.Target(
@@ -180,9 +170,9 @@ def test_gen_output_meta_recorded(tmp_path):
         ),
     )
     synth.synthesize_pairs([target], data_dir, [gen])
-    rec = json.loads((data_dir / "pairs.jsonl").read_text().splitlines()[0])
+    rec = corpus_records(data_dir)[0]
     assert rec["meta"]["gen"] == {"model": "m", "reasoning_effort": "low", "completion_tokens": 5}
-    assert validate_pairs_file(data_dir / "pairs.jsonl") == []
+    assert validate_pairs_file(corpus_file(data_dir, tmp_path / "p.jsonl")) == []
 
 
 def test_model_stats_fold_run_economics(tmp_path):
@@ -227,7 +217,6 @@ def test_model_stats_fold_run_economics(tmp_path):
 def test_replicate_mints_new_cells(tmp_path):
     # A replicate label deliberately resamples the same substrate: same target,
     # same config, new cells — recorded as meta.gen.replicate for faceting.
-    import json
 
     targets = _targets(1)
     gen = synth.Generator("g", generate=lambda t, history=None: "[slop] " + t)
@@ -235,7 +224,7 @@ def test_replicate_mints_new_cells(tmp_path):
     again = synth.synthesize_pairs(targets, tmp_path / "c", [gen])
     draw2 = synth.synthesize_pairs(targets, tmp_path / "c", [gen], replicate="draw2")
     assert (first.written, again.written, draw2.written) == (1, 0, 1)
-    recs = [json.loads(ln) for ln in (tmp_path / "c" / "pairs.jsonl").read_text().splitlines()]
+    recs = corpus_records(tmp_path / "c")
     assert "replicate" not in (recs[0]["meta"].get("gen") or {})  # base corpus stays unlabelled
     assert recs[1]["meta"]["gen"]["replicate"] == "draw2"
 
@@ -255,18 +244,20 @@ def test_skip_covered_prevents_cross_epoch_target_doubling(tmp_path):
     )
     first = synth.synthesize_pairs([a], tmp_path / "c", [old], context_dropout=0.0)
     assert first.written == 1
-    # Give the recorded pair a heading context, as the old corpus has.
-    rec_path = tmp_path / "c" / "pairs.jsonl"
-    rec = json.loads(rec_path.read_text())
+    # Give the recorded pair a heading context, as the old corpus has. Editing
+    # a shard by hand is test surgery; no command rewrites a draw (D84).
+    shard = next(iter((tmp_path / "c" / "draws").glob("*.jsonl")))
+    drawn = json.loads(shard.read_text())
+    rec = drawn["record"]
     rec["messages"][2]["content"] = "## Heading\n\n" + rec["messages"][2]["content"]
     rec["meta"]["context"] = "## Heading"
-    rec_path.write_text(json.dumps(rec) + "\n")
+    shard.write_text(json.dumps(drawn) + "\n")
 
     new = synth.Generator("g", generate=lambda t, history=None: "[new slop] " + t)  # effort=off
     covered_run = synth.synthesize_pairs([a, b], tmp_path / "c", [new], skip_covered=True)
     assert covered_run.written == 1  # B only
     assert covered_run.skipped_covered == 1
-    recs = [json.loads(ln) for ln in rec_path.read_text().splitlines()]
+    recs = corpus_records(tmp_path / "c")
     a_pairs = [r for r in recs if r["messages"][2]["content"].endswith(a.text)]
     assert len(a_pairs) == 1  # still only the old-epoch pair for A
 
@@ -369,8 +360,6 @@ def test_transform_similarity_bounds():
 
 
 def test_transform_sim_recorded_on_pairs(tmp_path):
-    import json
-
     target = synth.Target(
         text="A paragraph long enough to be a worthwhile target here.",
         source="p.qmd",
@@ -386,8 +375,8 @@ def test_transform_sim_recorded_on_pairs(tmp_path):
     )
     synth.synthesize_pairs([target], tmp_path / "a", [echo])
     synth.synthesize_pairs([target], tmp_path / "b", [rewrite])
-    sim_a = json.loads((tmp_path / "a" / "pairs.jsonl").read_text())["meta"]["transform_sim"]
-    sim_b = json.loads((tmp_path / "b" / "pairs.jsonl").read_text())["meta"]["transform_sim"]
+    sim_a = corpus_records(tmp_path / "a")[0]["meta"]["transform_sim"]
+    sim_b = corpus_records(tmp_path / "b")[0]["meta"]["transform_sim"]
     assert sim_a == 1.0
     assert sim_b < 0.5
 
@@ -413,7 +402,7 @@ def test_reasoning_text_routed_to_sidecar_not_corpus(tmp_path):
     result = synth.synthesize_pairs(_targets(1), data_dir, [synth.Generator("g", generate=gen)])
     assert result.written == 1
 
-    rec = json.loads((data_dir / "pairs.jsonl").read_text().splitlines()[0])
+    rec = corpus_records(data_dir)[0]
     assert "reasoning_text" not in rec["meta"]["gen"]  # corpus stays lean
     side = json.loads((data_dir / "reasoning.jsonl").read_text().splitlines()[0])
     assert side["synth_key"] == rec["meta"]["synth_key"]  # joinable to its pair
@@ -433,8 +422,7 @@ def test_max_transform_sim_gate_drops_identity_outputs(tmp_path):
     result = synth.synthesize_pairs(targets, data_dir, [echo], max_transform_sim=0.95)
     assert result.skipped_degenerate == 6
     assert result.written == 0
-    pairs = data_dir / "pairs.jsonl"
-    assert not pairs.exists() or not pairs.read_text().strip()
+    assert corpus_records(data_dir) == []
     # The spend is still accounted even though nothing was written.
     assert result.model_stats["echo-model"]["pairs"] == 6
 
@@ -567,7 +555,7 @@ def test_gate_drops_sidecar_recovers_rate_and_wasted_spend(tmp_path):
     # A redrawn draw is marked as such; the last attempt per cell is not.
     assert sorted(r["redrawn"] for r in rows) == [False] * 3 + [True] * 3
     assert sorted(r["attempt"] for r in rows) == [0, 0, 0, 1, 1, 1]
-    # The spend that `pairs.jsonl` cannot see, because nothing was written.
+    # The spend the corpus cannot see, because nothing was written.
     assert sum(r["cost"] for r in rows) == pytest.approx(0.024)
     # And the reason blames the generator, not Dan's prose.
     assert all(r["reason"].startswith("generator deleted") for r in rows)
@@ -706,7 +694,6 @@ def test_is_anchor_faithful_selects_over_an_existing_corpus(tmp_path):
     """Step 2's other half: the corpus is a frozen record, so pairs already
     written are filtered out of the training SIGNAL rather than migrated away."""
     from stylebot import infer
-    from stylebot.jsonl import iter_jsonl
 
     data_dir = tmp_path / "corpus"
     # Gate off: the corpus this selector exists for was written before it.
@@ -714,7 +701,7 @@ def test_is_anchor_faithful_selects_over_an_existing_corpus(tmp_path):
         _linked_targets(2), data_dir, [_delinker("dropper")], drop_invented_anchors=False
     )
     synth.synthesize_pairs(_linked_targets(2), data_dir, [_fake("keeps-links")])
-    records = list(iter_jsonl(data_dir / "pairs.jsonl"))
+    records = corpus_records(data_dir)
     assert len(records) == 4
     kept = [r for r in records if infer.is_anchor_faithful(r)]
     assert len(kept) == 2
@@ -729,7 +716,6 @@ def test_is_anchor_faithful_selects_over_an_existing_corpus(tmp_path):
 def test_written_records_carry_the_five_provenance_keys(tmp_path, make_blog):
     """W8: every record written after 2026-09 says which trees and which cut
     produced it, and what the source frontmatter said AT THAT MOMENT."""
-    import json
 
     from stylebot.pairs import PAIR_SCHEMA_VERSION, system_sha
     from stylebot.provenance import PROVENANCE_KEYS, policy_digest
@@ -741,11 +727,7 @@ def test_written_records_carry_the_five_provenance_keys(tmp_path, make_blog):
     targets = synth.iter_targets(blog_root=root, policy=policy)
     synth.synthesize_pairs(targets, data_dir, [_fake("g")], blog_root=root)
 
-    recs = [
-        json.loads(line)
-        for line in (data_dir / "pairs.jsonl").read_text().splitlines()
-        if line.strip()
-    ]
+    recs = corpus_records(data_dir)
     assert recs
     for r in recs:
         meta = r["meta"]
@@ -764,7 +746,6 @@ def test_provenance_records_a_higher_automation_level_it_was_handed(tmp_path, ma
     """The 75 pairs sitting on `automation: 2` posts had nothing recording that.
     A pre-selected FILES list bypasses the selector by design, so the record is
     the only place the level can be caught."""
-    import json
 
     root = make_blog()  # includes the AI-touched post the default selector drops
     ai_post = root / "post" / "ai.qmd"
@@ -773,12 +754,7 @@ def test_provenance_records_a_higher_automation_level_it_was_handed(tmp_path, ma
     assert targets
     synth.synthesize_pairs(targets, data_dir, [_fake("g")])
 
-    recs = [
-        json.loads(line)
-        for line in (data_dir / "pairs.jsonl").read_text().splitlines()
-        if line.strip()
-    ]
-    levels = {r["meta"]["provenance"]["source_automation"] for r in recs}
+    levels = {r["meta"]["provenance"]["source_automation"] for r in corpus_records(data_dir)}
     assert levels == {2}
 
 
@@ -789,15 +765,14 @@ def test_a_cell_claimed_mid_run_by_another_writer_is_not_duplicated(tmp_path, ma
 
     Injected through the generator rather than a real race, so the interleaving
     is exact rather than hoped for."""
-    import json
 
-    from stylebot.jsonl import append_jsonl
+    from stylebot import draws
     from stylebot.pairs import validate_pairs_file
 
     root = make_blog(ai=False)
     data_dir = tmp_path / "corpus"
-    data_dir.mkdir()
-    pairs_path = data_dir / "pairs.jsonl"
+    draws_dir = data_dir / "draws"
+    draws_dir.mkdir(parents=True)
     targets = synth.iter_targets(blog_root=root)
     assert len(targets) >= 2
 
@@ -808,7 +783,7 @@ def test_a_cell_claimed_mid_run_by_another_writer_is_not_duplicated(tmp_path, ma
     competitor: dict[str, dict] = {}
 
     def _rival_then_slop(text: str) -> str:
-        """Impersonate a concurrent run: append the record for this cell first."""
+        """Impersonate a concurrent run: append this cell's draw first."""
         for t in targets:
             if t.text == text:
                 key = synth._synth_key("g", t.text, t.context)
@@ -819,7 +794,7 @@ def test_a_cell_claimed_mid_run_by_another_writer_is_not_duplicated(tmp_path, ma
                     synth_key=key,
                     context=t.context,
                 )
-                append_jsonl(pairs_path, rec)
+                draws.append(draws_dir, draws.draw_from_pair(rec))
                 competitor[key] = rec
                 break
         return f"[g-slop] {text}"
@@ -828,11 +803,11 @@ def test_a_cell_claimed_mid_run_by_another_writer_is_not_duplicated(tmp_path, ma
         targets, data_dir, [synth.Generator(name="g", generate=_rival_then_slop)]
     )
 
-    recs = [json.loads(line) for line in pairs_path.read_text().splitlines() if line.strip()]
+    recs = corpus_records(data_dir)
     assert len(recs) == len(targets), "one record per cell, whoever wrote it"
     assert result.written == 0 and result.skipped_existing == len(targets)
     # The rival's draw is the one on disk — first writer wins, as `record_id`
     # consumers already assume.
     assert all(r["messages"][1]["content"].startswith("[rival]") for r in recs)
-    assert validate_pairs_file(pairs_path) == []
+    assert validate_pairs_file(corpus_file(data_dir, tmp_path / "p.jsonl")) == []
 

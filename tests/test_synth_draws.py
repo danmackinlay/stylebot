@@ -1,8 +1,8 @@
-"""`synth` writes draws alongside pairs, and the view equals the pairs (D84, W4 step 2).
+"""`synth` writes draws, and their view is the corpus (D84, W4 steps 2 and 5).
 
 Every generator call ends in exactly one draw — accepted, gated or errored —
-and the identity view over those draws is byte-identical to the `pairs/` the
-same run appended to. Keyless: the fakes from `synth_helpers`.
+and the identity view over those draws is what a reader sees; the run writes no
+`pairs.jsonl` and no `pairs/`. Keyless: the fakes from `synth_helpers`.
 """
 
 from __future__ import annotations
@@ -29,19 +29,18 @@ def _metered(name: str, rewrite=lambda text: text) -> synth.Generator:
 
 
 def _corpus(tmp_path: Path) -> tuple[Path, Path]:
-    """A sharded corpus dir plus its draws dir; `pairs/` must exist to be chosen."""
+    """A data dir and the draws dir a run appends to; neither exists yet."""
     data_dir = tmp_path / "corpus"
-    (data_dir / "pairs").mkdir(parents=True)
     return data_dir, data_dir / "draws"
 
 
-def _view_equals_pairs(data_dir: Path, draws_dir: Path, out: Path) -> draws.ViewReport:
-    pairs_dir = config.pairs_path(data_dir)
+def _viewed(draws_dir: Path, out: Path) -> draws.ViewReport:
+    """Build the identity view and check it renders exactly the records the
+    accepted draws carry — the corpus a reader now sees (W4 step 5)."""
     report = draws.build_view(draws.iter_draws(draws_dir), draws.ViewPolicy(), out=out)
-    assert report.content_sha256 == corpus.content_sha256(pairs_dir)
-    assert corpus.content_sha256(out) == corpus.content_sha256(pairs_dir)
-    view_ids = {pairs.record_id(r) for r in corpus.iter_records(out)}
-    assert view_ids == {pairs.record_id(r) for r in corpus.iter_records(pairs_dir)}
+    kept = [d.record for d in draws.iter_draws(draws_dir) if d.record is not None]
+    assert corpus.read_records(out) == kept
+    assert corpus.content_sha256(out) == report.content_sha256
     return report
 
 
@@ -54,18 +53,20 @@ def _linked(n: int) -> list[synth.Target]:
 # --- (a) accepted draws render the pairs the run wrote --------------------------
 
 
-def test_view_from_the_runs_draws_equals_the_pairs_it_wrote(tmp_path):
+def test_the_view_of_a_runs_draws_is_the_corpus_it_wrote(tmp_path):
     data_dir, draws_dir = _corpus(tmp_path)
     result = synth.synthesize_pairs(
         _targets(6), data_dir, [_fake("a"), _metered("b")], draws_dir=draws_dir
     )
     assert result.written == 6
+    assert not config.pairs_path(data_dir).exists()
 
-    report = _view_equals_pairs(data_dir, draws_dir, tmp_path / "view")
+    view = tmp_path / "view"
+    report = _viewed(draws_dir, view)
     assert report.records == 6 and report.by_outcome == {draws.ACCEPTED: 6}
 
     written = list(draws.iter_draws(draws_dir))
-    records = corpus.read_records(config.pairs_path(data_dir))
+    records = corpus.read_records(view)
     assert [d.record for d in written] == records
     assert any(d.gen for d in written), "the metered arm's gen block reached its draws"
     for d, r in zip(written, records, strict=True):
@@ -95,7 +96,7 @@ def test_a_gated_draw_is_kept_with_its_raw_output_and_no_record(tmp_path):
     )
     assert result.written == 2 and result.skipped_invented_anchors == 1
 
-    report = _view_equals_pairs(data_dir, draws_dir, tmp_path / "view")
+    report = _viewed(draws_dir, tmp_path / "view")
     assert report.by_outcome == {draws.ACCEPTED: 2, "gate:skipped_invented_anchors": 1}
     assert report.excluded == {"outcome": 1}
     gated = [d for d in draws.iter_draws(draws_dir) if d.outcome.startswith("gate:")]
@@ -146,19 +147,21 @@ def test_a_rerun_appends_no_draws_for_cells_it_skips(tmp_path):
     )
     assert covered.written == 0 and covered.skipped_covered == 4
     assert list(draws.iter_draws(draws_dir)) == before
-    _view_equals_pairs(data_dir, draws_dir, tmp_path / "view")
+    _viewed(draws_dir, tmp_path / "view")
 
 
-# --- (e) without draws_dir nothing is written -----------------------------------
+# --- (e) without draws_dir the draws land under the data dir --------------------
 
 
-def test_without_a_draws_dir_no_draw_is_written(tmp_path):
+def test_without_a_draws_dir_the_draws_land_under_the_data_dir(tmp_path):
+    """No `draws_dir` is no longer "write nothing" (W4 step 5): it is
+    `<data-dir>/draws`, and the run leaves nothing beside it but its sidecar."""
     data_dir, draws_dir = _corpus(tmp_path)
     result = synth.synthesize_pairs(_targets(2), data_dir, [_fake("a")])
     assert result.written == 2
-    assert not draws_dir.exists()
+    assert len(list(draws.iter_draws(draws_dir))) == 2
     visible = sorted(p.name for p in data_dir.iterdir() if not p.name.startswith("."))
-    assert visible == ["pairs", "prompts.jsonl"]
+    assert visible == ["draws", "prompts.jsonl"]
 
 
 # --- the CLI: `--draws`, defaulting to `<data-dir>/draws` ------------------------
@@ -168,7 +171,7 @@ def test_run_synth_defaults_draws_to_the_data_dirs_draws_dir(tmp_path):
     data_dir, draws_dir = _corpus(tmp_path)
     synth_cli.run_synth(_targets(2), data_dir=data_dir, generators=[_fake("a")])
     assert len(list(draws.iter_draws(draws_dir))) == 2
-    _view_equals_pairs(data_dir, draws_dir, tmp_path / "view")
+    _viewed(draws_dir, tmp_path / "view")
 
     elsewhere = tmp_path / "elsewhere"
     synth_cli.run_synth(
@@ -177,7 +180,9 @@ def test_run_synth_defaults_draws_to_the_data_dirs_draws_dir(tmp_path):
         generators=[_fake("a")],
         corpus=synth_cli.CorpusOpts(draws_dir=elsewhere),
     )
-    assert len(list(draws.iter_draws(elsewhere))) == 2  # only the two new cells
+    # `--draws` names the CORPUS now, so resume reads that one: all four cells
+    # are missing from an empty dir, and the default dir is left alone.
+    assert len(list(draws.iter_draws(elsewhere))) == 4
     assert len(list(draws.iter_draws(draws_dir))) == 2
 
 
@@ -187,3 +192,30 @@ def test_dry_run_writes_no_draws(tmp_path):
         _targets(2), data_dir=data_dir, generators=[_fake("a")], gen=synth_cli.GenOpts(dry_run=True)
     )
     assert not draws_dir.exists()
+
+
+# --- (f) the run writes draws and nothing else (W4 step 5) ----------------------
+
+
+def test_a_run_writes_draws_and_no_pairs(tmp_path):
+    """`synth` appends draws only: the corpus a reader sees is their view, and
+    no `pairs.jsonl` or `pairs/` shard is written at all (D84)."""
+    data_dir = tmp_path / "corpus"
+    result = synth.synthesize_pairs(_targets(3), data_dir, [_fake("a")])
+    assert result.written == 3
+    assert not (data_dir / "pairs.jsonl").exists() and not (data_dir / "pairs").exists()
+    got = list(draws.iter_draws(data_dir / "draws"))
+    assert len(got) == 3 and all(d.record is not None for d in got)
+    assert draws.build_view(got, draws.ViewPolicy()).records == 3
+
+
+def test_a_rerun_resumes_off_the_draws_with_no_pairs_file(tmp_path):
+    """Resume and coverage are reads of the draws, not of a `pairs.jsonl`."""
+    data_dir = tmp_path / "corpus"
+    targets = _targets(4)
+    synth.synthesize_pairs(targets, data_dir, [_fake("a")])
+    again = synth.synthesize_pairs(targets, data_dir, [_fake("a")])
+    assert again.written == 0 and again.skipped_existing == 4
+    covered = synth.synthesize_pairs(targets, data_dir, [_fake("b")], skip_covered=True)
+    assert covered.written == 0 and covered.skipped_covered == 4
+    assert len(list(draws.iter_draws(data_dir / "draws"))) == 4

@@ -19,6 +19,7 @@ from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.bin.ai_style import main as ai_style
 from stylebot.jsonl import read_jsonl
 from stylebot.pairs import iter_pairs, record_id, validate_pairs_file
+from stylebot.synth import DrawWriter
 
 
 def _rec(source="post/a.qmd", *, synthetic=False, at="2026-07-21T00:00:00+00:00", body="x"):
@@ -119,41 +120,46 @@ def test_a_duplicate_that_straddles_two_shards_is_caught(sharded):
 # --- writers ---------------------------------------------------------------
 
 
-def test_synth_appends_only_to_its_own_month_shard(sharded):
-    from stylebot.synth import PairsWriter
+def _lifted(data_dir):
+    """`sharded`'s corpus lifted into the `draws/` a run appends to."""
+    out = data_dir / "draws"
+    for draw in draws.draws_from_pairs(data_dir / "pairs"):
+        draws.append(out, draw)
+    return out
 
+
+def test_synth_appends_only_to_its_own_month_shard(sharded):
     data_dir, _ = sharded
-    pairs = data_dir / "pairs"
-    captures = pairs / "captures.jsonl"
-    july = pairs / "synth-2026-07.jsonl"
+    drawn = _lifted(data_dir)
+    captures = drawn / "captures.jsonl"
+    july = drawn / "synth-2026-07.jsonl"
     before = {p: p.read_bytes() for p in (captures, july)}
 
     rec = _rec(synthetic=True, at="2026-09-04T10:00:00+00:00", body="a september pair")
     rec["meta"]["synth_key"] = "k1"
-    with PairsWriter(pairs, set()) as w:
-        assert w.write("k1", rec) is True
+    with DrawWriter(drawn, set()) as w:
+        assert w.write(draws.draw_from_pair(rec)) is True
 
     assert {p: p.read_bytes() for p in (captures, july)} == before
-    assert (pairs / "synth-2026-09.jsonl").exists()
-    assert len(list(iter_pairs(pairs))) == 9
+    assert (drawn / "synth-2026-09.jsonl").exists()
+    assert len(list(draws.iter_draws(drawn))) == 9
 
 
 def test_two_writers_on_different_shards_still_refuse_the_same_cell(sharded):
     """W8's guarantee, held across the window sharding introduces: a catch-up
     over every shard, so a run appending to September sees a key another run
-    just put in August."""
-    from stylebot.synth import PairsWriter
-
+    just put in August. The loser keeps its draw, without the record (D84)."""
     data_dir, _ = sharded
-    pairs = data_dir / "pairs"
+    drawn = _lifted(data_dir)
     aug = _rec(synthetic=True, at="2026-08-01T00:00:00+00:00", body="contested cell")
     aug["meta"]["synth_key"] = "shared"
     sep = _rec(synthetic=True, at="2026-09-01T00:00:00+00:00", body="contested cell")
     sep["meta"]["synth_key"] = "shared"
 
-    with PairsWriter(pairs, set()) as a, PairsWriter(pairs, set()) as b:
-        assert a.write("shared", aug) is True
-        assert b.write("shared", sep) is False
+    with DrawWriter(drawn, set()) as a, DrawWriter(drawn, set()) as b:
+        assert a.write(draws.draw_from_pair(aug)) is True
+        assert b.write(draws.draw_from_pair(sep)) is False
+    assert [d.record for d in draws.iter_draws(drawn)].count(None) == 1
 
 
 def test_capture_save_appends_to_the_captures_shard(sharded):

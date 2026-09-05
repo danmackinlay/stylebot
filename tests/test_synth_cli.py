@@ -22,6 +22,7 @@ from pathlib import Path
 import click
 import pytest
 from click.testing import CliRunner
+from conftest import corpus_records
 
 from stylebot import splits as sp
 from stylebot import synth, synth_cli
@@ -399,8 +400,6 @@ def test_max_workers_auto_rule(tmp_path, monkeypatch, make_blog):
 
 
 def test_run_synth_sessions_end_to_end(tmp_path, monkeypatch, make_blog):
-    import json
-
     targets = synth.iter_targets(blog_root=make_blog(ai=False))
     hist_lens = []
 
@@ -420,7 +419,7 @@ def test_run_synth_sessions_end_to_end(tmp_path, monkeypatch, make_blog):
     )
     assert result is not None and result.written == 2
     assert hist_lens == [0, 2]
-    recs = [json.loads(ln) for ln in (tmp_path / "corpus" / "pairs.jsonl").read_text().splitlines()]
+    recs = corpus_records(tmp_path / "corpus")
     gens_meta = [r["meta"]["gen"] for r in recs]
     assert [g["session_turn"] for g in gens_meta] == [1, 2]
     assert all(g["context_window"] == 8000 for g in gens_meta)
@@ -431,8 +430,6 @@ def test_run_synth_sessions_end_to_end(tmp_path, monkeypatch, make_blog):
 
 
 def test_strategy_rotation_cross_product(tmp_path, make_blog):
-    import json
-
     # 2 strategies x 1 model: one run spreads targets across both prompts, at
     # no cost multiplier (still one generation per target).
     root = make_blog(ai=False, many=10)
@@ -488,7 +485,7 @@ def test_strategy_rotation_cross_product(tmp_path, make_blog):
         )
     assert live.exit_code == 0, live.output
     assert captured == ["polish", "casual"]  # one generator per strategy
-    recs = [json.loads(ln) for ln in (tmp_path / "corpus" / "pairs.jsonl").read_text().splitlines()]
+    recs = corpus_records(tmp_path / "corpus")
     assert {r["meta"]["slop_strategy"] for r in recs} == {"polish", "casual"}
 
 

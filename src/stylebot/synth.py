@@ -6,12 +6,13 @@ Library-first: `synthesize_pairs` is a typed function over explicit paths/params
 Method (see `_plans/decisions.md` D9, D11-D13): human-authored prose is the
 **target** (`messages[2]`); an LLM paraphrases it into "more polished" prose, the
 **slop source** (`messages[1]`), and the styler learns to undo that transform.
-Output is the Phase-1 `pairs.jsonl` schema chunked the same way, so real and
-synthetic pairs are mixable; synthetic records add `meta.synthetic`,
+Every generator call is appended to `draws_dir` as one draw (D84); a reader sees
+the accepted draws' records, in the Phase-1 schema chunked the same way, so real
+and synthetic pairs are mixable. Synthetic records add `meta.synthetic`,
 `meta.generator`, `meta.slop_strategy`, `meta.synth_key` and `meta.tags`.
 Generators and slop prompts are injected knobs, both folded into `synth_key`;
 rotate ≥2 generators so the styler undoes AI writing broadly, not one model's
-tics. `draws_dir` also records every generator call as one draw (D84).
+tics.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import inspect
 import json
 import logging
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,7 +38,7 @@ from stylebot.generators import (
 )
 from stylebot.infer import invented_anchors
 from stylebot.jsonl import append_jsonl, dumps_line, iter_jsonl
-from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content, iter_pairs, system_sha
+from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content, system_sha
 from stylebot.provenance import now_iso, pair_provenance, repo_provenance
 from stylebot.targets import Target
 
@@ -175,16 +176,24 @@ def coverage_key(body: str) -> str:
     return " ".join(_LINK_DEST_RE.sub("]()", body).translate(_QUOTE_FOLD).split())
 
 
-def covered_target_keys(pairs_path: Path | str) -> set[str]:
-    """The `coverage_key`s that already have >=1 pair in a corpus, any config.
+def drawn_records(draws_dir: Path | str) -> Iterator[dict]:
+    """The records a draws dir holds — the lines `DrawWriter` keys on (D84)."""
+    for draw in draws.iter_draws(draws_dir):
+        if draw.record is not None:
+            yield draw.record
+
+
+def covered_target_keys(records: Iterable[dict]) -> set[str]:
+    """The `coverage_key`s that already have >=1 pair, over any record stream.
 
     Context-agnostic: the assistant side of every record is
     `build_pair_content(meta.context, body)`, so the body is recovered by
     stripping the recorded prefix. Backs `skip_covered`, and returns normalised
-    keys rather than raw bodies — see `coverage_key`.
+    keys rather than raw bodies — see `coverage_key`. A run passes
+    `drawn_records`; `pairs.iter_pairs` reads a corpus file instead.
     """
     bodies: set[str] = set()
-    for rec in iter_pairs(pairs_path):
+    for rec in records:
         msgs = rec.get("messages") or []
         if len(msgs) < 3 or not isinstance(msgs[2], dict):
             continue
@@ -200,14 +209,10 @@ def covered_target_keys(pairs_path: Path | str) -> set[str]:
     return bodies
 
 
-def existing_synth_keys(pairs_path: Path | str) -> set[str]:
-    """Read the `meta.synth_key`s already present in a `pairs.jsonl`.
-
-    Tolerant: blank/undecodable lines are skipped, a missing file reads as empty.
-    """
-    return {
-        key for rec in iter_pairs(pairs_path) if (key := (rec.get("meta") or {}).get("synth_key"))
-    }
+def existing_synth_keys(records: Iterable[dict]) -> set[str]:
+    """The `meta.synth_key`s a record stream already holds — `drawn_records` for
+    a run, `pairs.iter_pairs` for a corpus file; records without one are skipped."""
+    return {key for rec in records if (key := (rec.get("meta") or {}).get("synth_key"))}
 
 
 def _build_record(
@@ -507,6 +512,7 @@ class _RunState:
     data_dir: Path
     extra_tags: Sequence[str]
     total: int  # pairs this run will attempt (for progress)
+    writer: DrawWriter  # the one handle on `draws/` for this run's duration
     max_transform_sim: float | None = None  # identity gate (None = off)
     max_length_ratio: float | None = None  # inflation gate (None = off)
     drop_invented_anchors: bool = True  # fabrication gate (see `_gate_verdict`)
@@ -517,39 +523,35 @@ class _RunState:
     on_progress: Callable[[int, int, SynthResult], None] | None = None
     on_error: Callable[[str, str], None] | None = None
     repo_prov: Mapping | None = None  # tree provenance, resolved once per run
-    draws_dir: Path | None = None  # where every generator call lands as a draw (D84)
-    # The synth_keys actually ON DISK, handed to `PairsWriter`. Deliberately
-    # NOT the planner's `seen`, which additionally holds every cell this run
-    # PLANS to write — feeding that to the writer would make it refuse its own
-    # first write of every cell.
-    disk_keys: set[str] = field(default_factory=set)
 
 
-class PairsWriter:
-    """An append handle for a corpus that will not duplicate a cell.
+def synth_key_of(record: Mapping | None) -> str:
+    """A draw's cell key, or "" for one that renders nothing and stays redrawable."""
+    return ((record or {}).get("meta") or {}).get("synth_key") or ""
 
-    Takes a `pairs.jsonl` **or a shard directory**, routing each record by
-    `corpus.shard_of` so a run leaves every other shard byte-identical (D50).
-    Handles are opened lazily and kept, one per shard touched.
+
+class DrawWriter:
+    """The one append handle on a `draws/`, which will not duplicate a cell.
+
+    Every draw a run makes goes through it, routed by `draws.draw_shard_of` so
+    the run leaves every other shard byte-identical (D50); handles are opened
+    lazily and kept, one per shard touched.
 
     Before each append the writer catches up on whatever another run appended
     since it last looked — a tail read from a remembered offset over *every*
     shard, since re-reading per record would be quadratic (D36). No lock and
     no inode check: nothing rewrites a corpus (D84), so a handle never goes
-    stale. The pair side stays beside the draws until W4 step 5.
+    stale and a run is the only writer of its shards.
     """
 
-    def __init__(self, path: Path, seen: set[str]) -> None:
-        self._path = Path(path)
+    def __init__(self, draws_dir: Path, seen: set[str]) -> None:
+        self._path = Path(draws_dir)
         self._seen = seen
         self._offsets: dict[Path, int] = {}
         self._handles: dict[Path, object] = {}
 
-    def __enter__(self) -> PairsWriter:
-        if self._path.is_dir():
-            self._path.mkdir(parents=True, exist_ok=True)
-        else:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
+    def __enter__(self) -> DrawWriter:
+        self._path.mkdir(parents=True, exist_ok=True)
         for shard in corpus.shard_paths(self._path):
             self._offsets[shard] = shard.stat().st_size if shard.exists() else 0
         return self
@@ -598,24 +600,27 @@ class PairsWriter:
                     rec = json.loads(raw.decode("utf-8"))
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
-                key = (rec.get("meta") or {}).get("synth_key") if isinstance(rec, dict) else None
+                key = synth_key_of(rec.get("record")) if isinstance(rec, dict) else ""
                 if key:
                     self._seen.add(key)
 
-    def write(self, key: str, record: dict) -> bool:
-        """Append `record` to its shard unless `key` is already in the corpus."""
-        shard = corpus.shard_path_for(self._path, record)
+    def write(self, draw: draws.Draw) -> bool:
+        """Append `draw`, dropping its record if the corpus already has its cell:
+        it was paid for either way, but only one draw per cell renders. True = ours."""
         self._catch_up()
-        if key and key in self._seen:
-            return False
+        key = synth_key_of(draw.record)
+        fresh = not (key and key in self._seen)
+        if not fresh:
+            draw.record = None
+        shard = self._path / draws.draw_shard_of(draw)
         fp = self._handle(shard)
         fp.seek(0, 2)
-        fp.write((dumps_line(record) + "\n").encode("utf-8"))
+        fp.write((dumps_line(draw.to_json()) + "\n").encode("utf-8"))
         fp.flush()
         self._offsets[shard] = fp.tell()
         if key:
             self._seen.add(key)
-        return True
+        return fresh
 
 
 def _session_token_cap(
@@ -824,11 +829,9 @@ def _record_draw(
     raw_output: str | None,
     outcome: str,
     record: dict | None = None,
-) -> None:
-    """Append the draw one generator call made to `st.draws_dir`, when set (D84).
-    A plain `draws.append`, no lock: this run is the only writer of its month shard."""
-    if st.draws_dir is None:
-        return
+) -> bool:
+    """Append one generator call's draw through the run's one writer, no lock;
+    True when it kept its record, i.e. this run claimed the cell (D84)."""
     draw = draws.new_draw(
         gen,
         st.repo_prov,
@@ -840,7 +843,7 @@ def _record_draw(
         record=record,
         replicate=st.replicate or 0,
     )
-    draws.append(st.draws_dir, draw)
+    return st.writer.write(draw)
 
 
 async def _attempt(fn, text: str, history: Sequence[dict]) -> tuple[str, dict]:
@@ -927,7 +930,7 @@ async def _draw_past_gates(
     return slop, gen_meta, verdict, redraws, call
 
 
-async def _run_session(sess: _Session, writer: PairsWriter, st: _RunState) -> list[_Turn]:
+async def _run_session(sess: _Session, st: _RunState) -> list[_Turn]:
     """Run one session's turns in order, appending records as they complete.
 
     Returns the turns this session could NOT run, for the caller to reflow —
@@ -1026,15 +1029,13 @@ async def _run_session(sess: _Session, writer: PairsWriter, st: _RunState) -> li
             # "gate dropped a draw", not "degenerate output": the anchor gate
             # catches a fluent draw that merely deleted a link (D32).
             logger.warning("gate dropped a draw: %s — %s (%s)", gen.name, reason, turn.key)
-        elif writer.write(turn.key, record):
-            _record_draw(st, turn, gen, gen_meta, slop, draws.ACCEPTED, record)
+        elif _record_draw(st, turn, gen, gen_meta, slop, draws.ACCEPTED, record):
             st.result.written += 1
             st.result.per_generator[gen.name] = st.result.per_generator.get(gen.name, 0) + 1
             st.result.add_gen_stats(gen.name, gen_meta)
         else:
-            # Another writer claimed this cell between plan and write (`PairsWriter`):
+            # Another writer claimed this cell between plan and write (`DrawWriter`):
             # the draw is kept without its record, so a view renders theirs.
-            _record_draw(st, turn, gen, gen_meta, slop, draws.ACCEPTED)
             st.result.skipped_existing += 1
             logger.info("cell already written by a concurrent run: %s", turn.key)
         st.done += 1
@@ -1049,9 +1050,7 @@ async def _run_session(sess: _Session, writer: PairsWriter, st: _RunState) -> li
     return []
 
 
-async def _run_sessions(
-    sessions: Sequence[_Session], pairs_path: Path, st: _RunState, max_workers: int
-) -> None:
+async def _run_sessions(sessions: Sequence[_Session], st: _RunState, max_workers: int) -> None:
     """Run sessions concurrently, `max_workers` at a time, on one append handle.
 
     Leftover turns (budget bind, error) reflow into fresh sessions inside the
@@ -1060,17 +1059,17 @@ async def _run_sessions(
     """
     sem = asyncio.Semaphore(max(1, max_workers))
 
-    async def _gated(sess: _Session, writer: PairsWriter) -> None:
+    async def _gated(sess: _Session) -> None:
         async with sem:
-            leftover = await _run_session(sess, writer, st)
+            leftover = await _run_session(sess, st)
             while leftover:
                 st.result.reflow_sessions += 1
                 st.result.reflowed_turns += len(leftover)
                 sess = _respin_session(sess.generator, leftover)
-                leftover = await _run_session(sess, writer, st)
+                leftover = await _run_session(sess, st)
 
-    with PairsWriter(pairs_path, st.disk_keys) as writer:
-        await asyncio.gather(*(_gated(s, writer) for s in sessions))
+    with st.writer:
+        await asyncio.gather(*(_gated(s) for s in sessions))
 
 
 def synthesize_pairs(
@@ -1099,7 +1098,7 @@ def synthesize_pairs(
     blog_root: Path | str | None = None,
     draws_dir: Path | str | None = None,
 ) -> SynthResult:
-    """Generate synthetic pairs and append them to `data_dir/pairs.jsonl`.
+    """Generate synthetic pairs and append them to `draws_dir` as draws.
 
     Idempotent and resumable: cells whose content-only `meta.synth_key` is
     already in the corpus are skipped, so re-running never duplicates and a
@@ -1117,11 +1116,11 @@ def synthesize_pairs(
     **Hygiene gates** count loudly, write nothing and leave the cell un-keyed so
     a re-run retries it (D32). Heading `context` is prepended verbatim to both
     sides, slop is generated from the body alone (D14). `dry_run` only plans.
-    **Provenance** is resolved once per run (D36); with `draws_dir`, every
-    generator call is also one appended draw (D84).
+    **Provenance** is resolved once per run (D36). Every call lands as one draw
+    under `draws_dir` (default `<data-dir>/draws`); no `pairs.jsonl` (D84).
     """
     data_dir = Path(data_dir)
-    pairs_path = config.pairs_path(data_dir)
+    draws_dir = Path(draws_dir) if draws_dir is not None else config.draws_path(data_dir)
 
     skipped_covered = 0
     if skip_covered:
@@ -1130,7 +1129,7 @@ def synthesize_pairs(
         # link destinations, curled quotes, a reflow) still reads as covered.
         # Applied before assignment; cell-level dedup below still governs the
         # rest, and it keys on RAW text.
-        covered = covered_target_keys(pairs_path)
+        covered = covered_target_keys(drawn_records(draws_dir))
         kept = [t for t in targets if coverage_key(t.text) not in covered]
         skipped_covered = len(targets) - len(kept)
         targets = kept
@@ -1146,7 +1145,9 @@ def synthesize_pairs(
 
     # Key everything, drop what the corpus already has plus in-run duplicates,
     # then plan sessions over only the missing cells.
-    disk_keys = existing_synth_keys(pairs_path)
+    # `disk_keys` is what is ON DISK, and is NOT the planner's `seen` below: that
+    # also holds every cell this run PLANS, which would refuse its own first write.
+    disk_keys = existing_synth_keys(drawn_records(draws_dir))
     seen = set(disk_keys)
     missing: list[tuple[Target, Generator, str, str]] = []
     for target, gen, ctx in assignments:
@@ -1182,6 +1183,7 @@ def synthesize_pairs(
         data_dir=data_dir,
         extra_tags=extra_tags,
         total=len(missing),
+        writer=DrawWriter(draws_dir, disk_keys),
         max_transform_sim=max_transform_sim,
         max_length_ratio=max_length_ratio,
         drop_invented_anchors=drop_invented_anchors,
@@ -1191,8 +1193,6 @@ def synthesize_pairs(
         on_progress=on_progress,
         on_error=on_error,
         repo_prov=repo_provenance(blog_root if blog_root is not None else data_dir),
-        draws_dir=Path(draws_dir) if draws_dir is not None else None,
-        disk_keys=disk_keys,
     )
-    asyncio.run(_run_sessions(sessions, pairs_path, st, max_workers))
+    asyncio.run(_run_sessions(sessions, st, max_workers))
     return result

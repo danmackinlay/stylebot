@@ -73,7 +73,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     },
     "synth.py": {
         "lines": 1198,
-        "functions": {"synthesize_pairs": 128, "_run_session": 128},
+        "functions": {"synthesize_pairs": 128, "_run_session": 118},
         "docstrings": (26,),
     },
     "synth_cli.py": {

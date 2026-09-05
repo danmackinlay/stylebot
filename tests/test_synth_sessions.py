@@ -7,6 +7,7 @@ which ends early sheds nothing.
 
 from __future__ import annotations
 
+from conftest import corpus_records
 from synth_helpers import _fake, _targets
 
 from stylebot import synth
@@ -17,8 +18,6 @@ from stylebot import synth
 
 
 def test_parallel_stateless_run_writes_each_pair_once(tmp_path):
-    import json
-
     targets = _targets(10)
     gens = [_fake("a"), _fake("b")]
     first = synth.synthesize_pairs(targets, tmp_path / "c", gens, max_workers=4)
@@ -29,10 +28,7 @@ def test_parallel_stateless_run_writes_each_pair_once(tmp_path):
     second = synth.synthesize_pairs(targets, tmp_path / "c", gens, max_workers=4)
     assert second.written == 0 and second.skipped_existing == 10
 
-    keys = [
-        json.loads(ln)["meta"]["synth_key"]
-        for ln in (tmp_path / "c" / "pairs.jsonl").read_text().splitlines()
-    ]
+    keys = [r["meta"]["synth_key"] for r in corpus_records(tmp_path / "c")]
     assert len(keys) == 10 == len(set(keys))
 
 
@@ -87,8 +83,6 @@ def test_identical_cells_collapse_within_a_run(tmp_path):
 
 
 def test_session_history_accumulates_and_covariates_recorded(tmp_path):
-    import json
-
     targets = _targets(3)
     seen_hist: list[list[dict]] = []
 
@@ -108,7 +102,7 @@ def test_session_history_accumulates_and_covariates_recorded(tmp_path):
     assert seen_hist[1][0] == {"role": "user", "content": targets[0].text}
     assert seen_hist[1][1]["content"] == "[slop] " + targets[0].text
 
-    recs = [json.loads(ln) for ln in (tmp_path / "c" / "pairs.jsonl").read_text().splitlines()]
+    recs = corpus_records(tmp_path / "c")
     assert [r["meta"]["gen"]["session_turn"] for r in recs] == [1, 2, 3]
     assert len({r["meta"]["gen"]["session_id"] for r in recs}) == 1
     assert recs[1]["meta"]["gen"]["context_window"] == 10_000
@@ -199,7 +193,6 @@ def test_budget_bind_reflows_instead_of_dropping(tmp_path):
     # The 2026-07-21 post-mortem: a binding token budget must END sessions, not
     # DISCARD their remaining turns. Every planned turn gets written, across as
     # many fresh sessions as the budget requires.
-    import json
 
     targets = _targets(3)
 
@@ -218,7 +211,7 @@ def test_budget_bind_reflows_instead_of_dropping(tmp_path):
     assert result.budget_bound_sessions == 2
     assert result.reflow_sessions == 2 and result.reflowed_turns == 3  # (2 leftover) + (1 leftover)
     # Each pair ran turn 1 of its own session: depth restarted, honestly recorded.
-    recs = [json.loads(ln) for ln in (tmp_path / "c" / "pairs.jsonl").read_text().splitlines()]
+    recs = corpus_records(tmp_path / "c")
     assert [r["meta"]["gen"]["session_turn"] for r in recs] == [1, 1, 1]
     assert len({r["meta"]["gen"]["session_id"] for r in recs}) == 3
 

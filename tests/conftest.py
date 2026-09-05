@@ -164,9 +164,11 @@ def corpus_records(data_dir) -> list[dict]:
     return list(draws.view_records(every, draws.ViewPolicy()))
 
 
-def corpus_view(data_dir, out) -> Path:
-    """`corpus_records` materialised at `out`, for a reader wanting a path."""
-    from stylebot import config, draws
+def corpus_file(data_dir, out) -> Path:
+    """`corpus_records` written as one `pairs.jsonl` at `out`, in draw order —
+    for a reader that wants the corpus as a path."""
+    from stylebot.jsonl import dumps_line
 
-    draws.build_view(draws.iter_draws(config.draws_path(data_dir)), draws.ViewPolicy(), out=out)
+    body = "".join(dumps_line(rec) + "\n" for rec in corpus_records(data_dir))
+    Path(out).write_text(body, encoding="utf-8")
     return Path(out)

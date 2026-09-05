@@ -606,11 +606,10 @@ def _inspect_targets(
     # run exits before any generator fires. Say so, and point at the pair
     # browser (the eval scores report) that DOES show generated slop.
     if generation_flags_set:
-        pairs_hint = f"{data_dir}/pairs.jsonl" if data_dir is not None else "<data-dir>/pairs.jsonl"
         emit(
             "[inspection] generation flags ignored; to generate then browse pairs: "
-            "re-run without --report/--sample, then: "
-            f"ai-style eval --pairs {pairs_hint} --report FILE.html --facet-by generator",
+            f"re-run without --report/--sample, build a view of {data_dir or '<data-dir>'}/draws"
+            ", then: ai-style eval --pairs VIEW --report FILE.html --facet-by generator",
             level="status",
         )
     if opts.sample_n is not None:
@@ -680,7 +679,7 @@ def _model_economics(ms: dict | None) -> str:
 
 def _report_result(
     result: synth.SynthResult,
-    pairs_path: Path,
+    draws_dir: Path,
     *,
     dry_run: bool,
     session_turns: int,
@@ -699,7 +698,7 @@ def _report_result(
     if dry_run:
         emit(
             f"[dry-run] would write {result.planned - result.skipped_existing} new pair(s) "
-            f"({result.skipped_existing} already present) to {pairs_path}"
+            f"({result.skipped_existing} already present) to {draws_dir}"
         )
         if result.skipped_covered:
             emit(f"  {result.skipped_covered} target(s) already covered, skipped (--skip-covered)")
@@ -710,7 +709,7 @@ def _report_result(
         return
     emit(
         f"wrote {result.written} pair(s) "
-        f"({result.skipped_existing} already present, skipped) -> {pairs_path}"
+        f"({result.skipped_existing} already present, skipped) -> {draws_dir}"
     )
     if result.skipped_covered:
         emit(f"  {result.skipped_covered} target(s) already covered, skipped (--skip-covered)")
@@ -756,8 +755,8 @@ def _report_result(
     for name, count in sorted(result.per_generator.items()):
         # Written, then rejected-as-a-share-of-draws. The rate is the roster
         # signal — an arm can be cheap per written pair and still be the most
-        # expensive one, because rejected draws are paid for and invisible in
-        # `pairs.jsonl` (llama-3.3-70b left the roster on exactly this number).
+        # expensive one, because rejected draws are paid for and never rendered
+        # (llama-3.3-70b left the roster on exactly this number).
         dropped = result.drops_by_generator.get(name, 0)
         rate = (
             f"  {dropped} dropped ({100 * dropped / (count + dropped):.0f}% of draws)"
@@ -1000,7 +999,7 @@ def run_synth(
     # Everything below writes: a data-dir is mandatory from here on (the
     # inspection modes returned above; `synth_cmd` owns the refusal message).
     if data_dir is None:
-        raise SynthConfigError("a data-dir is required to write pairs.jsonl")
+        raise SynthConfigError("a data-dir is required to write draws")
 
     # Heartbeat on wall-clock, not pair count: at high effort a pair takes ~1-2
     # min, so count-gated echoes sit silent for half an hour and look like a hang.
@@ -1018,6 +1017,7 @@ def run_synth(
         # Surface failures the moment they happen, not just in the exit summary.
         say(f"  !! {key[:12]}: {msg}", level="error")
 
+    draws_dir = corpus.draws_dir if corpus.draws_dir is not None else config.draws_path(data_dir)
     result = synth.synthesize_pairs(
         targets,
         data_dir,
@@ -1040,12 +1040,12 @@ def run_synth(
         drop_invented_anchors=corpus.drop_invented_anchors,
         gate_retries=corpus.gate_retries,
         gen_retries=corpus.gen_retries,
-        draws_dir=corpus.draws_dir if corpus.draws_dir is not None else data_dir / "draws",
+        draws_dir=draws_dir,
     )
 
     _report_result(
         result,
-        config.pairs_path(data_dir),
+        draws_dir,
         dry_run=gen.dry_run,
         session_turns=session.session_turns,
         emit=say,

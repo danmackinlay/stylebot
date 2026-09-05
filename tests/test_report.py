@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from html.parser import HTMLParser
 
+from conftest import corpus_file
+
 from stylebot import eval as ev
 from stylebot import report, synth
 from stylebot.pairs import iter_pairs, record_id
@@ -83,7 +85,7 @@ def _make_scored(tmp_path, *, judge=None):
         )
         g = synth.Generator(name="m", generate=lambda s: "slop: " + s, strategy=strategy)
         synth.synthesize_pairs([t], d, [g])
-    pairs, scores = d / "pairs.jsonl", tmp_path / "scores.jsonl"
+    pairs, scores = corpus_file(d, tmp_path / "pairs.jsonl"), tmp_path / "scores.jsonl"
     ev.score_pairs_file(pairs, scores, judge=judge)
     return pairs, scores
 
@@ -148,7 +150,7 @@ def _make_scored_with_gen(tmp_path, *, judge=None):
             ),
         )
         synth.synthesize_pairs([t], d, [g])
-    pairs, scores = d / "pairs.jsonl", tmp_path / "scores.jsonl"
+    pairs, scores = corpus_file(d, tmp_path / "pairs.jsonl"), tmp_path / "scores.jsonl"
     ev.score_pairs_file(pairs, scores, judge=judge)
     return pairs, scores
 
@@ -171,7 +173,7 @@ def test_scores_report_prompt_column_is_human_readable(tmp_path):
         ),
     )
     synth.synthesize_pairs([t], d, [g])
-    pairs, scores = d / "pairs.jsonl", tmp_path / "scores.jsonl"
+    pairs, scores = corpus_file(d, tmp_path / "pairs.jsonl"), tmp_path / "scores.jsonl"
     ev.score_pairs_file(pairs, scores)
     p = tmp_path / "r.html"
     report.render_scores_report(scores, pairs, p)
