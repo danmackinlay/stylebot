@@ -1121,26 +1121,33 @@ different head, and `compare_scores` refuses a verdict spanning two heads; both
 have an override flag, and the second flags the result `cross_detector`.
 
 **The defect.** One classifier is the best-of-N reranker, the do-no-harm guard
-*and* the verdict metric, and it is refit every time the corpus grows. Run 4a's
-promotion note admits the detector was refit the same day as the verdict it
-produced. Rows recorded `name` and `embed_model` only — constant across every
-refit this project will ever do; they identified the *recipe*, not the artifact.
-A refit alone moves the metric by about two thirds of what that promotion claimed
+*and* the verdict metric, refit every time the corpus grows; run 4a's promotion
+note admits it was refit the same day as the verdict it produced. Rows recorded
+`name` and `embed_model` only, which identify the *recipe*, not the artifact —
+and a refit alone moves the metric by two thirds of what that promotion claimed
 (`findings.md` "eval_v2 — applied 2026-09-03").
 
-**Why the refusal is at the resume, not only at the compare.** `scores.jsonl` is
-append-only and resumes by pair id, which says nothing about what scored it. A
-refit head plus a resumed run silently yields one file whose means blend two
-instruments — worse than a cross-file comparison, because nothing downstream can
-see it happened. *Alternatives*: a header line records only the first writer,
-precisely the writer a refit run is not; probing the head with a canary string
-costs an embed per guard call, on a path meant to be free.
-Chunk scale and div policy ride on `name` too: two policies are two instruments (D54, F12d).
+**Why the refusal is at the resume, not only at the compare.** Resume says
+nothing about what scored a row, so a refit head plus a resumed run silently
+blends two instruments into one file's means — worse than a cross-file
+comparison, because nothing downstream can see it. *Alternatives*: a header line
+records only the first writer, precisely the writer a refit run is not; a canary
+probe costs an embed per guard call, on a path meant to be free. Chunk scale and
+div policy ride on `name` too: two policies are two instruments (D54, F12d).
 
 **Deciding constraint**: an unconfigured (`null`) detector must never trip the
-guard — a keyless re-run adds no detector scores, so it cannot blend anything.
-**Re-evaluate if** the detector gains a calibration layer versioned separately
-from the head, or artifacts carry a semantic version.
+guard. **Re-evaluate if** the detector gains a calibration layer versioned
+separately from the head, or artifacts carry a semantic version.
+
+**Amended 2026-09-05 (W4 step 5 item 5).** A row is one
+`(record_id, field, signal)`, appended, never rewritten (D84); `load_scores`
+folds them — and an old whole-record file, via `explode_score_row` — back to the
+shape readers take, resume skips a *key*, and the guard precedes the prune, so
+`--judge` on a detector-scored file appends judge rows and touches no other. On
+`record_id`, not `draw_id`: 83 of the live 270 rows name no draw (`findings.md`
+"The live scores file's join keys"), and a `draw_id` column can follow without a
+re-score. The file stays beside the corpus, `scoring.scores_filename` naming the
+head that needs its own — in a view, a policy change deletes rows that cost.
 
 ## D40: the eval interval clusters by post, and the headline is the real facet
 

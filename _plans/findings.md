@@ -1014,3 +1014,24 @@ untouched. The 7 duplicates were backfill artefacts — it keyed a real draw on
 paragraph collided; the live capture path keys on `pairs.record_id`
 (`capture_id:chunk_index`) and never did. `policy_sha` moved twice: once when
 `ViewPolicy` gained the field, once when the blog filled it. Decided: D84.
+
+## The live scores file's join keys — 2026-09-05 (W4 step 5 item 5)
+
+`uv run python` over a scratch **copy** of `~/Source/livingthing/_training_pairs/scores.jsonl`
+(270 lines, untracked — the blog's `.gitignore:91`) and the live
+`_training_pairs/draws/*.jsonl` (14,579 distinct `draw_id`). Read-only, no spend.
+
+| | rows | judge verdicts |
+|---|---|---|
+| whole-record rows in the file | 270 | 0 |
+| whose `id` matches a `draw_id` | 187 | 0 |
+| whose `id` does not (`<capture_id>:<chunk_index>`, e.g. `35f4ae46:6`) | 83 | 0 |
+| the same file exploded to `(record_id, field, signal)` rows | 1,080 | 0 |
+
+Keying on `draw_id` would strand the 83: real captures that the retired backfill
+keyed on the span rather than the draw. Every row carries `record_id` and always
+has, so `(record_id, field, signal)` joins all 270 and strands none. **The file
+holds no judge verdicts at all** — nor do the three run-local score files under
+`runs/docscale-2026090[34]/` (34 rows each, 0 judge), which corrects the premise
+that the 83 carried paid verdicts: what the key protects is 1,080 vale and
+detector rows. Decided: D39.

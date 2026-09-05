@@ -174,7 +174,7 @@ notify downstream.
 | the view (`views/pairs-<policy_sha>/`) | `build_view` under a `ViewPolicy` | Phase 3, eval, `status` | chat-completion JSONL, `{messages:[system,user,assistant], meta:{...}}`, `pairs/`-shaped shards plus a `VIEW.json` naming `policy_sha` and `draws_sha256`; schema, types and `record_id` uniqueness enforced by `stylebot.pairs.validate_pairs_file`; built on first use, never committed; a manifest pins both shas (D84); mechanics in `_training_pairs/README.md` |
 | trained adapter | Phase 3 | Phase 4, eval | LoRA weights (Tinker-trained → HF export; Fireworks-hosted or local MLX) |
 | candidate text | Phase 4 | eval harness | plain prose in, plain prose out |
-| `scores.jsonl` | eval harness | humans, Phase 3/4 | id-keyed (`synth_key`/`capture_id:idx`) per-pair `{meta, scores:{field:{vale,judge,detector}}}` plus the detector identity that produced them (D39); joins back to the corpus |
+| `scores.jsonl` | eval harness | humans, Phase 3/4 | one appended row per `(record_id, field, signal)` — `{id, meta, field, signal, text_chars, value}`, the detector identity riding on its own rows (D39); `scoring.load_scores` folds them (and any pre-D39 whole-record file) back to `{meta, scores:{field:{vale,judge,detector}}}`; beside the corpus, joins back to it |
 
 The crucial deliberate choice: **Phase 1 and Phase 2 emit the *same* record
 schema**, chunked the same way, so training data from real edits and synthetic

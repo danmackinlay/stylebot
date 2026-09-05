@@ -499,6 +499,11 @@ prunes the **corpus**, not its scores.
 **Re-evaluate if:** score rows ever carry the corpus hash they were computed
 against, which would let a mismatch be detected rather than silently repaired.
 
+**Amended 2026-09-05 (W4 step 5 item 5, D39).** One stranded record is now one
+row per `(record_id, field, signal)`, so the returned count — and the line
+`run_eval` prints — is **rows, not records**. The join key and the read-time
+placement are unchanged.
+
 ## D64: `STYLE_SYSTEM` is frozen text with an author slot; a re-stamp is a rebuild
 
 **Decision (2026-08-04, recorded 2026-09-04).** The frozen system prompt dropped
