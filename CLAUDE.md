@@ -71,8 +71,8 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
     code, and the entry names the number it clears (P2's size, or D56's measured
     win). "Kept out of caution" is not a justification.
   - Measure before deleting, measure before building, write the number once (P1).
-  - A merge gate wants an **empty index** in both main checkouts, not only a
-    working tree free of `.env*`/`pairs.jsonl` — `_plans/ship-shape-2026-09.md`.
+  - A main checkout's index is the owner's: a merge gate that finds it dirty
+    **stops and asks**, and never stages or restores — `ship-shape-2026-09.md`.
   - Nothing is pushed by an agent.
 
 ## Architecture rules (don't violate without updating the plan)

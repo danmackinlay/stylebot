@@ -29,10 +29,10 @@ promotion).
   check `git status` in its worktree and send a finisher into that same worktree;
 - a cross-repo slice's two commits are not independently green, so the repo that
   lands first stays red until its partner lands;
-- something in the swarm left Dan's uncommitted prose **staged** in the blog main
-  checkout. The content was intact and no commit carried it, but the merge gate
-  checked the working tree for secrets and never checked that the index was
-  empty. CLAUDE.md P8 now says it does.
+- the master found staged prose in the blog main checkout, inferred a slice had
+  done it, and un-staged it. It was Dan, mid-commit, in his own terminal. A main
+  checkout's index belongs to the owner: a master reads it and stops, never
+  writes it. CLAUDE.md P8 now says so.
 
 **What stayed open.** The 55 dated out-of-scope reports are §8 of
 `git show 6fcee88:_plans/ship-shape-2026-09.md`; the ones that are still live
