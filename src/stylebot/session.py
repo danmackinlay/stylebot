@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from stylebot import capture, config, corpus, draws
+from stylebot import capture, config, draws
 from stylebot.errors import ConfigError, RunError
 
 __all__ = [
@@ -120,12 +120,6 @@ class SessionStore:
     def draws_dir(self) -> Path:
         """`<data_dir>/draws`, where a save lands (D84); may not exist yet."""
         return config.draws_path(self.data_dir)
-
-    @property
-    def corpus_path(self) -> Path:
-        """What `read_pairs` reads: the draws when there are any, else the
-        pair corpus (the old layout, until W4 step 5)."""
-        return self.draws_dir if self.draws_dir.is_dir() else self.pairs_path
 
     def snapshot_path(self, source: Path | str) -> Path:
         """Where the snapshot for `source` lives: the source path mirrored under
@@ -280,10 +274,10 @@ def canonical_source(value: Path | None, *, cwd: Path | None = None) -> Path | N
 
 def read_pairs(store: SessionStore) -> list[dict]:
     """The live pair records: the identity view of the draws (superseded
-    saves excluded, D84), or the pair corpus under the old layout; [] if absent."""
-    if store.draws_dir.is_dir():
-        return list(draws.view_records(draws.iter_draws(store.draws_dir), draws.ViewPolicy()))
-    return corpus.read_records(store.pairs_path)
+    saves excluded, D84); [] while nothing has been saved."""
+    if not store.draws_dir.is_dir():
+        return []
+    return list(draws.view_records(draws.iter_draws(store.draws_dir), draws.ViewPolicy()))
 
 
 @dataclass(frozen=True)
@@ -301,7 +295,7 @@ def corpus_summary(store: SessionStore) -> CorpusSummary:
     with_ctx = sum(
         1 for r in pairs if isinstance(r, dict) and (r.get("meta", {}).get("context") or "").strip()
     )
-    return CorpusSummary(path=store.corpus_path, pairs=len(pairs), with_context=with_ctx)
+    return CorpusSummary(path=store.draws_dir, pairs=len(pairs), with_context=with_ctx)
 
 
 # ---- Sessions -------------------------------------------------------------
@@ -536,8 +530,7 @@ def save_session(
     pairs from the *same* session (matching `meta.snapped_at`) are superseded,
     being interim `keep_open` saves that should not stack, while earlier
     sessions' pairs are kept as legitimate prior rewrites. `"replace-all"`
-    supersedes cross-session pairs too; `"append"` supersedes nothing. Under
-    the old layout (no `draws/`) nothing is superseded and the pairs stack.
+    supersedes cross-session pairs too; `"append"` supersedes nothing.
 
     `redo` reopens the last closed session first, so a corrected rewrite is
     re-diffed against the SAME base and lands in the same session. `notify`
@@ -696,7 +689,7 @@ def summarize_state(store: SessionStore) -> StateSummary:
         by_source.append(SourceSummary(source=src, pairs=len(recs), saves=len(capture_ids)))
 
     return StateSummary(
-        pairs_path=store.corpus_path,
+        pairs_path=store.draws_dir,
         pair_count=len(records),
         by_source=by_source,
         open_sessions=load_snapshots(store.snapshots_dir),

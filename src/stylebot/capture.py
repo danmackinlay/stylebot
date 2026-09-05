@@ -362,7 +362,7 @@ def _land(
     """Land a capture's records as draws (D84): `draw_from_pair`-shaped, no
     blog sha (the tree is dirty by definition), `span` into `before.md`.
 
-    `draws/` is the only landing site (W4 step 5). An absent one is created,
+    `draws/` is the only landing site. An absent one is created,
     not refused: `ai-style log` has a default data dir, so a fresh corpus is
     an ordinary first save. `draws.append` would otherwise write a *file*.
     """

@@ -471,7 +471,7 @@ def test_corpus_summary_counts_heading_context(store, post):
     summary = session.corpus_summary(store)
     assert summary.pairs == 2
     assert summary.with_context == 1
-    assert summary.path == store.draws_dir == store.corpus_path
+    assert summary.path == store.draws_dir
 
 
 # ---- age rendering --------------------------------------------------------

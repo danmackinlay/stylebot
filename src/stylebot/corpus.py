@@ -69,19 +69,6 @@ def shard_of(record: dict) -> str:
     return f"synth-{match.group(1) if match else 'undated'}.jsonl"
 
 
-def shard_path_for(corpus: str | Path, record: dict) -> Path:
-    """The concrete file `record` should be appended to.
-
-    For a single-file corpus that is the file itself: the routing rule only
-    applies once a corpus has been sharded, so an unsharded install keeps
-    writing exactly where it always did.
-    """
-    path = Path(corpus)
-    if not path.is_dir():
-        return path
-    return path / shard_of(record)
-
-
 def iter_records(corpus: str | Path) -> Iterator[dict]:
     """Yield every record in a corpus, shard by shard in `shard_paths` order."""
     for shard in shard_paths(corpus):
