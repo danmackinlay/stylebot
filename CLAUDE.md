@@ -71,6 +71,8 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
     code, and the entry names the number it clears (P2's size, or D56's measured
     win). "Kept out of caution" is not a justification.
   - Measure before deleting, measure before building, write the number once (P1).
+  - A merge gate wants an **empty index** in both main checkouts, not only a
+    working tree free of `.env*`/`pairs.jsonl` — `_plans/ship-shape-2026-09.md`.
   - Nothing is pushed by an agent.
 
 ## Architecture rules (don't violate without updating the plan)
@@ -114,9 +116,8 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
   only blog-specific code allowed is the bundled selector example. Don't
   reintroduce the blog-build cruft removed 2026-06-29 — OVERVIEW draws the line.
 - **One segmenter: `stylebot.markdown`.** Everything asking "is this line prose?"
-  asks there — five divergent copies are why. Its docstring states the
-  **protection principle** and the corollary that a container is not protected
-  merely for being one (div-class policy enters via `div_is_prose`); D26–D29 argue it.
+  asks there — five divergent copies are why. Its docstring holds the
+  **protection principle**; div-class policy enters via `div_is_prose` (D26–D29).
 
 ## Never commit
 
@@ -137,8 +138,7 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
   `.`-prefixed) are already in the `gather_qmd_files` skip-list.
 - `automation:` is an int frontmatter level of how much AI touched a post; `0`
   is the slop-free target prose, and matches `is_human_authored`'s defaults.
-- The corpus is `_training_pairs/` there — committed `draws/`, built `views/`,
-  `pairs/` until its retirement (step 5) — via `STYLEBOT_DATA_DIR`/`--data-dir`.
+- The corpus there is `_training_pairs/` — committed `draws/`, built `views/`.
 
 ## Current status
 
