@@ -500,3 +500,72 @@ reports below this line, dated, one line each.
 - 2026-09-05 (S4b): `stylebot.draws.view_options()` takes no `defaults=`/`exclude=`, so the blog reaches into `__click_params__` to re-pin `--draws` and drop `--policy`; `train`'s manifest home now follows `--blog-root`; `train-clf --dry-run` reports 265 posts / 3,550 pairs where `status` reports 286 / 4,009 (the classifier's own gating, pre-existing).
 - 2026-09-05 (S4c): `Draw.supersedes` is a tuple (a `--replace` save supersedes several sessions); a real draw's `span` is the before-chunk's offset in the archived `before.md`; with no `draws/` in a data dir `capture_pairs` still appends to `pairs/` (the old-layout branch step 5 removes); the design's done-line pattern `rg "def rewrite|corpus_lock"` matches the styler's `rewrite_*` functions and needs the corpus-specific form; the eval `scores.jsonl` prune stays (D63).
 - 2026-09-05 (step 5, held for the owner): retire `pairs/` from git and flip `view_policy(keep_superseded=False)` — both move the corpus sha by design; the re-stamp with `SourcePolicy` and an author slot (D36/D64 amended, `meta.system_sha` dropped); `PairsWriter` draws-only; `build-view --pairs`'s `exists=True`; the 7 duplicate real `draw_id`s want `capture_id` in a real draw's key first, and the ninth interim session (`d89d26a4` → `f608a742`) wants a `SUPERSEDED_CAPTURES` row.
+
+## 9. Hand-off — for the next master (written 2026-09-05, after wave 4 step 4)
+
+**Read first, in order:** `CLAUDE.md` (P1–P8 bind you), this file (§0 roles, §5 wave 4, §6
+decisions, §8 reports), D84/D74 in `_plans/decisions.md`, the blog's
+`_plans/corpus-draws-and-views-2026-09.md`. Everything below is verifiable from the trees.
+
+**State.** stylebot `main` `d842d69` (ahead 74; `uv run pytest -q` → 728 passed, 2 deselected).
+Blog `master` `671e237579` (ahead 33; 755 passed). `cd ~/Source/livingthing && uv run dan-style
+status` shows `policy_sha=42c1ceefe1fd0e4c`, `content_sha256=d49ba7ad60774ea6`, serving
+`20260817-170037`. Nothing is pushed; only Dan pushes. Dan's tree has uncommitted prose
+(`friends.qmd`, `notebook/hyperscaling_coase.qmd`, `topic_map.json`): never stage it.
+
+**Your job.** Wave 4 step 5, in this order, one slice agent per item, each in its own worktree:
+
+1. **Real-draw key.** stylebot: `draws.draw_id` takes `capture_id` for a real draw (today two
+   saves of one paragraph collide: 7 duplicates, see §8). Blog: add `"d89d26a4": "f608a742"`
+   to `training_targets.SUPERSEDED_CAPTURES`; re-run nothing — the backfill is deleted; write
+   the two draws' ids by a one-off `uv run python` over `_training_pairs/draws/captures.jsonl`
+   only if the key change needs the file re-keyed (it will: re-key in place is forbidden by D84,
+   so append successor draws that `supersedes` the old ones instead). Done: `duplicate draw ids`
+   is 0 when you count `draw_id`s over `iter_draws`; the view sha is unchanged.
+2. **Flip the view.** Blog: `view_policy()` drops `keep_superseded=True`. This changes the corpus
+   sha **by design** (11 superseded real records leave the view). Record the new sha in
+   `findings.md` as a P4 row; `dan-style status` is the instrument. Done: the step 1 test's
+   pairs-lifted assertion is deleted in the same commit with the body saying why; the
+   `view_pairs_path()` test asserts the new sha.
+3. **Retire `pairs/`.** Blog: `git rm -r _training_pairs/pairs` (git holds it), `.gitignore`
+   lines 68–95 about `pairs.bak`/`*.bak`. stylebot: `PairsWriter` writes draws only;
+   `capture.capture_pairs` loses its "no draws dir → append to pairs" branch; `build-view
+   --pairs` loses `exists=True`; `ai-style check-splits` gains `--draws` (it takes only `--pairs`);
+   RUNBOOK §2's `check-splits --pairs` line. Done: `rg -n "pairs/" src/stylebot | grep -v
+   views` names only the view layout; both suites green; `dan-style status` reports the view.
+4. **The re-stamp.** stylebot: `SourcePolicy(glob, meta_field, max_level)` and an author slot in
+   `ai_core.STYLE_SYSTEM` (D64 amended: the second change ever; D36 amended: `meta.system_sha`
+   dropped — the view carries the system sha, the draw carries none). The view rebuild is the
+   restamp (D84's rule); no migration. Done: `rg -n system_sha src/stylebot` names only
+   `pairs.system_sha()` and the view sidecar; the blog passes its policy and author.
+5. **Score views keyed on signal** (§8, S4a's design): `views/pairs-<policy_sha>/scores-
+   <instrument>.jsonl`, rows keyed `(draw_id, field, signal)`, `eval` upserts by key, the D39
+   guard runs before any write. ~60 lines in `scoring.py`. Done: adding `--judge` to a
+   detector-scored view appends judge rows and touches no detector row.
+6. A view clause for the old eval-role prune (`prune-stale --no-orphans` had no successor;
+   §8 S5-docs item 1): `ViewPolicy.role_rule` already carries the splits sha — add the clause
+   that drops synthetic draws on eval-role posts, and say in `findings.md` what it excludes.
+
+**How to run a slice (the mechanics that cost time when skipped).**
+- Worktrees: stylebot `git -C ~/Source/stylebot worktree add ../stylebot-wt-<X> -b <X> main`
+  then `uv sync --all-extras` there (without `--all-extras` ten tests skip). Blog:
+  `git -C ~/Source/livingthing worktree add ../livingthing-wt-<X> -b <X> master` then `uv sync`
+  (2 s; it resolves stylebot from `../stylebot` = the main checkout, so a stylebot change is
+  live in the blog only after it merges — cross-repo slices land stylebot first, and a blog
+  agent tests an unmerged stylebot branch with `uv run --with-editable ../stylebot-wt-<X> pytest`).
+- Always `git -C <path>` or an explicit `cd` per command: a bare `cd ../x && …` in a chained
+  shell line silently ran three merges in the wrong directory once. The Bash tool is zsh: never
+  write `echo ===` (the `=cmd` expansion errors).
+- Every brief carries: inputs, the change, a done-line with expected output, a budget note (P8),
+  the file list, and the rules block (uv only; named pathspecs; subject ≤ 72 chars by `wc -m`;
+  body ≤ 12 lines; no push/rebase/merge; `git status` free of `.env*`, `pairs.jsonl`; no
+  allowlist number rises; tests first, paste them failing). Agents that end with "waiting on the
+  suite" have stopped: check `git status` in their worktree and send a finisher into it.
+- Merge only after: `git -C <wt> rebase main` clean; `git diff main..<X> --stat` names the
+  slice's files only; suite green in the worktree; then `git -C ~/Source/stylebot merge
+  --ff-only <X>`, suite in main, `git worktree remove`. Blog: the same with `master`.
+- After each item: append the agent's "Out of scope" lines to §8 (one dated line each), run
+  §7, and post: commit ranges, done-lines with actual output, suite tails, `dan-style status`.
+
+**Not yours.** `.claude/worktrees/*` (Dan's), the 49 slice branches (the reviewer's), pushing,
+and anything in §8 you were not sent to fix.
