@@ -51,7 +51,7 @@ from stylebot.cli_options import (
     click_emitter,
 )
 from stylebot.errors import RunError
-from stylebot.lib import is_human_authored
+from stylebot.lib import SourcePolicy
 
 
 @click.group(
@@ -91,7 +91,7 @@ main.add_command(_log, name="log")
     "--field",
     default="automation",
     show_default=True,
-    help="Frontmatter field the default selector reads.",
+    help="Frontmatter field the default selector reads (`lib.SourcePolicy`).",
 )
 @click.option(
     "--max-level",
@@ -114,7 +114,8 @@ def synth_cmd(
     """Manufacture synthetic (slop -> Dan) pairs from Dan's own prose.
 
     Provide targets one of two ways: a pre-selected FILES list, or --blog-root
-    plus a selector (default: is_human_authored, i.e. automation: 0). Writes the
+    plus a source policy (default: `automation: 0` posts under `**/*.qmd`, and
+    --glob/--field/--max-level retarget it at another blog). Writes the
     Phase-1 pairs.jsonl schema with meta.synthetic / meta.generator. Idempotent
     and resumable — re-running never duplicates.
 
@@ -126,7 +127,7 @@ def synth_cmd(
             "provide either FILES (pre-selected) or --blog-root, not both/neither"
         )
 
-    selector = partial(is_human_authored, field=field, max_level=max_level)
+    source_policy = SourcePolicy(glob=glob, meta_field=field, max_level=max_level)
 
     # The shared surface arrives as **kw; fold it back into its option bundles.
     opts = synth_cli.pop_bundles(kw)
@@ -146,8 +147,7 @@ def synth_cmd(
     targets = synth.iter_targets(
         files=list(files) or None,
         blog_root=blog_root,
-        selector=selector,
-        glob=glob,
+        source_policy=source_policy,
         policy=opts.pop("chunk"),
     )
 

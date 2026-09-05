@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
@@ -153,7 +154,7 @@ def is_human_authored(meta: dict, *, field: str = "automation", max_level: int =
     The **one** blog-specific seam stylebot is allowed to carry
     (`_plans/OVERVIEW.md`): Dan's blog records an ``automation`` level per post
     and ``0`` means no AI. Another blog retargets it with its own ``field`` /
-    ``max_level``. Conservative by design — clean posts are *marked*, so a
+    ``max_level`` — as a `SourcePolicy`, which holds those two beside the glob. Conservative by design — clean posts are *marked*, so a
     missing or unparseable field means "unknown" and returns False.
     """
     raw = meta.get(field)
@@ -163,6 +164,40 @@ def is_human_authored(meta: dict, *, field: str = "automation", max_level: int =
         return int(raw) <= max_level
     except (TypeError, ValueError):
         return False
+
+
+@dataclass(frozen=True)
+class SourcePolicy:
+    """Which files hold source prose, and which frontmatter marks it human.
+
+    Every blog-shaped literal stylebot carries, in one object: the walk's
+    `glob`, the frontmatter `meta_field` a selector reads, and the `max_level`
+    it keeps. The defaults are Dan's blog, so a caller that passes nothing
+    moves nothing; another blog passes one policy instead of retargeting three
+    call sites (`_plans/OVERVIEW.md`; D84 rides it in at W4 step 4).
+    """
+
+    glob: str = "**/*.qmd"
+    meta_field: str = "automation"
+    max_level: int = 0
+
+    def selects(self, meta: dict) -> bool:
+        """`is_human_authored` under this policy — `iter_targets`'s default selector."""
+        return is_human_authored(meta, field=self.meta_field, max_level=self.max_level)
+
+    def level_of(self, meta: dict | None) -> int | None:
+        """The policy field's level, or None when absent or not an int.
+
+        A record says what the selector was looking at when it was cut, because
+        the post is editable and the corpus is frozen. Selecting on another
+        field gets None here, not a number that means something else.
+        """
+        value = (meta or {}).get(self.meta_field)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+#: The blog's own policy: what every default in this package resolves to.
+DEFAULT_SOURCE = SourcePolicy()
 
 
 def is_modified_after(

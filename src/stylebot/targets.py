@@ -23,9 +23,10 @@ import click
 
 from stylebot.cli_options import opt
 from stylebot.lib import (
+    DEFAULT_SOURCE,
+    SourcePolicy,
     editable_prose,
     gather_qmd_files,
-    is_human_authored,
     read_w_frontmatter_text,
     segment_for_edit,
     split_paragraphs,
@@ -73,9 +74,8 @@ class Target:
     chunk_mode: str | None = None
     # Provenance carried from the cut, stamped into `meta.provenance` (D36).
     # `automation` is the post's frontmatter level AS READ AT CUT TIME — the
-    # corpus is a frozen record and the post is not — under the key
-    # `lib.is_human_authored` defaults to; a caller selecting on another field
-    # gets None rather than a wrong number.
+    # corpus is a frozen record and the post is not — read under the cut's
+    # `lib.SourcePolicy` (`level_of`), so another field's value never lands here.
     automation: int | None = None
     policy_digest: str | None = None
 
@@ -385,7 +385,8 @@ def _pack(units: Sequence[str], *, merge_max_chars: int) -> list[str]:
 
 
 def _post_targets(
-    body: str, source: str, policy: ChunkPolicy, *, meta: dict | None = None
+    body: str, source: str, policy: ChunkPolicy, *, meta: dict | None = None,
+    source_policy: SourcePolicy = DEFAULT_SOURCE,
 ) -> list[Target]:
     """Chunk one post's **already-loaded** body into targets.
 
@@ -394,9 +395,9 @@ def _post_targets(
     `selector`, and re-reading here would parse the same file twice (and warn
     twice about an unparseable one).
 
-    `meta` is that same frontmatter, carried onto each `Target` (see
-    `Target.automation`) so the pair record can say what the selector was
-    looking at when the target was cut.
+    `meta` is that same frontmatter, read under `source_policy` and carried
+    onto each `Target` (see `Target.automation`) so the pair record can say
+    what the selector was looking at when the target was cut.
     """
     # Cut trailing dump sections (e.g. "## Incoming") before anything else.
     body = _truncate_at_headers(body, policy.stop_at_headers)
@@ -463,7 +464,6 @@ def _post_targets(
     total = len(chunks)
     scale = policy.merge_max_chars if policy.merge else None
     mode = "cross-heading" if cross else None
-    automation = (meta or {}).get("automation")
     digest = policy_digest(policy)
     return [
         Target(
@@ -474,7 +474,7 @@ def _post_targets(
             context=c,
             merge_max_chars=scale,
             chunk_mode=mode,
-            automation=automation if isinstance(automation, int) else None,
+            automation=source_policy.level_of(meta),
             policy_digest=digest,
         )
         for i, (t, c) in enumerate(chunks)
@@ -494,21 +494,22 @@ def iter_targets(
     *,
     files: Sequence[Path | str] | None = None,
     blog_root: Path | str | None = None,
-    selector: Callable[[dict], bool] = is_human_authored,
-    glob: str = "**/*.qmd",
+    source_policy: SourcePolicy = DEFAULT_SOURCE,
+    selector: Callable[[dict], bool] | None = None,
+    glob: str | None = None,
     policy: ChunkPolicy | None = None,
     **chunk_kw,
 ) -> list[Target]:
     """Collect prose chunks to use as synthesis targets.
 
     `blog_root` supplies the label root and the selector; `files` replaces only
-    the walk (D80). Alone, `blog_root` walks for `glob` and keeps posts where
-    `selector(meta)` is true, and `files` is taken as-is, unselected; together
-    the caller's list is gated by the selector and labelled blog-relative.
+    the walk (D80). Alone, `blog_root` walks for `source_policy.glob` and keeps
+    posts where `selector(meta)` is true (default `source_policy.selects`), and
+    `files` is taken as-is, unselected; together the caller's list is gated by
+    the selector and labelled blog-relative.
 
     The chunk knobs arrive as a ready `policy=ChunkPolicy(...)` or as loose
-    keywords forwarded to its constructor — `iter_targets(blog_root=r,
-    merge=True)`. **`ChunkPolicy` documents every knob and owns every default.**
+    keywords for its constructor. **`ChunkPolicy` owns every knob and default.**
 
     Returns a flat list of `Target`s in document order, post by post. There is
     no ordering knob — arms are assigned by content hash, so order cannot change
@@ -525,16 +526,18 @@ def iter_targets(
     targets: list[Target] = []
     root = Path(blog_root) if blog_root is not None else None
     policy = policy if policy is not None else ChunkPolicy(**chunk_kw)
+    keep = selector if selector is not None else source_policy.selects
 
     if files is not None:
         paths = (p for p in map(Path, files) if p.is_file())
     else:
-        paths = gather_qmd_files([], base=root, default_glob=glob)
+        paths = gather_qmd_files([], base=root, default_glob=glob or source_policy.glob)
     for path in paths:
         meta, body = _load_meta_body(path)
-        if root is not None and not selector(meta):
+        if root is not None and not keep(meta):
             continue
-        targets.extend(_post_targets(body, _source_label(path, root), policy, meta=meta))
+        label = _source_label(path, root)
+        targets.extend(_post_targets(body, label, policy, meta=meta, source_policy=source_policy))
 
     return targets
 

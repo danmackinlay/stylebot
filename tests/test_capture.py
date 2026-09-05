@@ -379,3 +379,18 @@ def test_capture_pairs_creates_a_draws_dir_that_is_not_there_yet(tmp_path):
     assert (data_dir / "draws").is_dir()
     assert not pairs_path.exists()
     assert [d.record for d in draws.iter_draws(data_dir / "draws")] == written
+
+
+def test_capture_reads_the_level_through_its_source_policy(tmp_path):
+    """W4 step 5: which frontmatter field says "human" is policy, not a literal."""
+    from stylebot.lib import SourcePolicy
+
+    written = capture.capture_pairs(
+        "---\ntitle: T\nai_level: 1\n---\n\nIt is worth noting the rich tapestry.",
+        "---\ntitle: T\nai_level: 1\n---\n\nWe dig in.",
+        pairs_path=tmp_path / "pairs.jsonl",
+        source="post/foo.md",
+        snapped_at="2026-09-05T00:00:00+00:00",
+        source_policy=SourcePolicy(meta_field="ai_level"),
+    )
+    assert written[0]["meta"]["provenance"]["source_automation"] == 1

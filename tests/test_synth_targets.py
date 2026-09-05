@@ -9,6 +9,7 @@ from __future__ import annotations
 from conftest import HUMAN_POST
 
 from stylebot import synth
+from stylebot.lib import SourcePolicy
 from stylebot.targets import iter_targets
 
 
@@ -205,3 +206,22 @@ def test_iter_targets_files_with_blog_root_labels_and_selects(tmp_path):
     targets = synth.iter_targets(files=files, blog_root=root)
     assert targets
     assert {t.source for t in targets} == {"notebook/y.qmd"}
+
+
+def test_a_source_policy_retargets_the_walk_and_the_selector(tmp_path):
+    """W4 step 5: another blog's suffix and frontmatter field, no code change."""
+    root = tmp_path / "blog"
+    (root / "post").mkdir(parents=True)
+    body = (
+        "Prose long enough to clear the chunk floor, about abstraction and the "
+        "way a corpus is cut into passages worth learning a voice from."
+    )
+    (root / "post" / "keep.md").write_text(f"---\nai_level: 1\n---\n\n{body}\n", encoding="utf-8")
+    (root / "post" / "drop.md").write_text(f"---\nai_level: 5\n---\n\n{body}\n", encoding="utf-8")
+    (root / "post" / "other.qmd").write_text(f"---\nai_level: 1\n---\n\n{body}\n", encoding="utf-8")
+
+    policy = SourcePolicy(glob="**/*.md", meta_field="ai_level", max_level=2)
+    targets = iter_targets(blog_root=root, source_policy=policy)
+    assert {t.source for t in targets} == {"post/keep.md"}
+    assert [t.automation for t in targets] == [1]
+    assert iter_targets(blog_root=root) == [], "the default policy sees no .qmd it may keep"

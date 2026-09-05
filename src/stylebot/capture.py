@@ -20,7 +20,7 @@ from pathlib import Path
 from stylebot import config, draws
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.errors import RunError
-from stylebot.lib import read_w_frontmatter_text, split_paragraphs
+from stylebot.lib import DEFAULT_SOURCE, SourcePolicy, read_w_frontmatter_text, split_paragraphs
 from stylebot.markdown import is_heading_line
 from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content
 from stylebot.provenance import (  # `ai-style log` binds capture.now_iso
@@ -48,19 +48,6 @@ def split_frontmatter_meta(text: str) -> tuple[dict, str]:
         return (meta or {}), body
     except Exception:
         return {}, text
-
-
-def _automation_of(meta: dict | None) -> int | None:
-    """The frontmatter `automation` level, or None if absent/not an int.
-
-    The one blog-shaped key stylebot already names generically — it is
-    `lib.is_human_authored`'s default field, and the pair record needs to say
-    what the selector was looking at, because the post is editable and the
-    corpus is frozen. A caller selecting on some other field gets None here
-    rather than a number that means something else.
-    """
-    value = (meta or {}).get("automation")
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 # ---- Paragraph-level diffing ----
@@ -269,6 +256,7 @@ def capture_pairs(
     max_chars: int | None = None,
     blog_root: Path | str | None = None,
     supersedes: Sequence[str] = (),
+    source_policy: SourcePolicy = DEFAULT_SOURCE,
 ) -> list[dict]:
     """Strip frontmatter, diff, archive the texts and land one draw per chunk.
 
@@ -278,8 +266,9 @@ def capture_pairs(
     texts are archived beside the corpus (`<data_dir>/captures/<capture_id>/`)
     and each record becomes an accepted draw under `<data_dir>/draws/` naming
     the `capture_id`s it `supersedes` (D84, `_land`). Every record carries
-    `meta.provenance` (D36); a capture's "policy" is its cut knobs, so
-    `policy_digest`s compare within a producer and not across one.
+    `meta.provenance` (D36), whose `source_automation` is read under
+    `source_policy`; a capture's "policy" is its cut knobs, so `policy_digest`s
+    compare within a producer and not across one.
     """
     before_meta, before_body = split_frontmatter_meta(before_text)
     after_meta, after_body = split_frontmatter_meta(after_text)
@@ -293,7 +282,7 @@ def capture_pairs(
     provenance = pair_provenance(
         repo_provenance(blog_root if blog_root is not None else pairs_path.parent),
         policy_digest=policy_digest({"producer": "capture", **knobs}),
-        source_automation=_automation_of(after_meta) or _automation_of(before_meta),
+        source_automation=source_policy.level_of(after_meta) or source_policy.level_of(before_meta),
     )
     chunk_pairs = _chunk_pairs(before_body, after_body, **knobs)
 

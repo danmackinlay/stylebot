@@ -12,6 +12,7 @@ import pytest
 from ruamel.yaml import YAMLError
 
 from stylebot.lib import (
+    SourcePolicy,
     gather_qmd_files,
     is_valid_qmd_file,
     read_w_frontmatter_text,
@@ -144,3 +145,23 @@ def test_gather_qmd_files_explicit_list_filters_missing_and_invalid(tmp_path):
     draft.write_text("x", encoding="utf-8")
     found = gather_qmd_files([str(keep), str(draft), str(tmp_path / "missing.qmd")])
     assert found == [keep]
+
+
+# --- SourcePolicy: the blog-shaped literals in one object (W4 step 5) --------
+
+
+def test_source_policy_defaults_are_the_blogs_literals():
+    policy = SourcePolicy()
+    assert (policy.glob, policy.meta_field, policy.max_level) == ("**/*.qmd", "automation", 0)
+    assert policy.selects({"automation": 0})
+    assert not policy.selects({"automation": 1}) and not policy.selects({})
+    assert policy.level_of({"automation": 2}) == 2
+    assert policy.level_of({}) is None and policy.level_of(None) is None
+    assert policy.level_of({"automation": True}) is None  # bool is not a level
+
+
+def test_source_policy_retargets_the_glob_field_and_level():
+    policy = SourcePolicy(glob="**/*.md", meta_field="ai_level", max_level=2)
+    assert policy.selects({"ai_level": 2}) and not policy.selects({"ai_level": 3})
+    assert not policy.selects({"automation": 0}), "another blog's field means nothing here"
+    assert policy.level_of({"ai_level": 1, "automation": 9}) == 1
