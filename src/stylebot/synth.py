@@ -672,11 +672,7 @@ def _gate_verdict(slop: str, target_text: str, st: _RunState) -> tuple[str, str]
                 f"generator wrote {ratio:.2f}x the target length, over {st.max_length_ratio}",
             )
     if st.drop_invented_anchors and (invented := invented_anchors(slop, target_text)):
-        # The generator dropped a link while "improving" the passage, and the
-        # reverse-edit swap turns that into an example reading *given text
-        # without links, produce text with these links*. The most-taught failure
-        # in the corpus and the one nothing checked before 0.3.0
-        # (D32).
+        # Reversed, a deleted link is a lesson in inventing one (D32).
         uniq = sorted(set(invented))
         shown = ", ".join(uniq[:2]) + ("…" if len(uniq) > 2 else "")
         return (
@@ -737,8 +733,8 @@ def _record_lost_draw(
 ) -> None:
     """Append one draw that produced no pair to `<data-dir>/lost_draws.jsonl`.
 
-    One file for `kind="gate"` and `kind="error"`, the denominator for an arm's
-    rejection rate and its discarded spend (D32) until step 4 folds it into draws.
+    One file for `kind="gate"` and `kind="error"`: an arm's rejection rate and its
+    discarded spend (D32). `attempt` is the draw's index within its cell's redraws.
     """
     append_jsonl(
         data_dir / "lost_draws.jsonl",
@@ -902,23 +898,27 @@ async def _draw_past_gates(
     Raises when `_draw` gives up, on a redraw as on the first draw: the caller's
     error path is the one place a lost draw is recorded (C14).
     """
-    slop, gen_meta, call = await _draw(call, gen, turn, history, st)
-    verdict = _gate_verdict(slop, turn.target.text, st)
     redraws = 0
-    while verdict is not None and redraws < st.gate_retries:
-        _record_gate_drop(st, turn, gen, gen_meta, slop, verdict, attempt=redraws, redrawn=True)
-        redraws += 1
-        logger.info(
-            "gate redraw %d/%d: %s %s (%s)",
-            redraws,
-            st.gate_retries,
-            gen.name,
-            verdict[1],
-            turn.key,
-        )
+    try:
         slop, gen_meta, call = await _draw(call, gen, turn, history, st)
-        st.result.gate_redraws += 1  # a paid redraw: counted once it was drawn
         verdict = _gate_verdict(slop, turn.target.text, st)
+        while verdict is not None and redraws < st.gate_retries:
+            _record_gate_drop(st, turn, gen, gen_meta, slop, verdict, attempt=redraws, redrawn=True)
+            redraws += 1
+            logger.info(
+                "gate redraw %d/%d: %s %s (%s)",
+                redraws,
+                st.gate_retries,
+                gen.name,
+                verdict[1],
+                turn.key,
+            )
+            slop, gen_meta, call = await _draw(call, gen, turn, history, st)
+            st.result.gate_redraws += 1  # a paid redraw: counted once it was drawn
+            verdict = _gate_verdict(slop, turn.target.text, st)
+    except Exception as exc:
+        exc.redraws = redraws  # the error row's `attempt`, the index a gate row carries
+        raise
     if redraws:
         st.result.redrawn_cells += 1
         if verdict is None:
@@ -977,7 +977,7 @@ async def _run_session(sess: _Session, st: _RunState) -> list[_Turn]:
                 {},
                 kind="error",
                 reason=f"{type(exc).__name__}: {exc}",
-                attempt=st.gen_retries,
+                attempt=getattr(exc, "redraws", 0),
                 redrawn=False,
             )
             _record_draw(st, turn, gen, {}, None, f"error:{type(exc).__name__}")

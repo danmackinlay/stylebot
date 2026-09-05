@@ -677,6 +677,8 @@ def test_gate_redraw_failure_does_not_cost_the_session(tmp_path):
     # The gated draw is recorded once (it was paid for), the failed redraw once.
     rows = [json.loads(x) for x in (data_dir / "lost_draws.jsonl").read_text().splitlines()]
     assert [(r["kind"], r["redrawn"]) for r in rows] == [("gate", True), ("error", False)]
+    # `attempt` means one thing on both rows: the draw's index within its cell.
+    assert [r["attempt"] for r in rows] == [0, 1]
     assert result.drops_by_generator == {"flaky": 1}
     assert result.model_stats["flaky"]["cost"] == pytest.approx(0.004)  # charged once
 
