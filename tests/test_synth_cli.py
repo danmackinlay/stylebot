@@ -653,4 +653,3 @@ def test_synth_role_eval_is_the_deliberate_opt_in(tmp_path, make_blog):
     )
     assert result is not None and result.written == len(targets)
     assert "eval guard" not in _lines(sink)
-

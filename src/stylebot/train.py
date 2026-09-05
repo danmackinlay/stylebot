@@ -740,7 +740,8 @@ def run_training(
         selector=selector,
         per_passage=per_passage,
         pair_weight=pair_weight,
-        val_frac=val_frac, seed=hp.seed,
+        val_frac=val_frac,
+        seed=hp.seed,
         system_prompt=policy.system_prompt if policy else None,
     )
     if corpus.n_train == 0:

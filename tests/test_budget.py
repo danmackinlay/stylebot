@@ -81,11 +81,11 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "functions": {"run_synth": 259, "_report_result": 123},
         "docstrings": (16,),
     },
-    "targets.py": {"functions": {"_post_targets": 95}},
+    "targets.py": {"functions": {"_post_targets": 99}},
     "train.py": {
-        "lines": 995,
+        "lines": 996,
         "functions": {
-            "run_training": 97,
+            "run_training": 98,
             "_tinker_runner": 95,
             "assemble_training_corpus": 90,
             "build_manifest": 87,
@@ -156,9 +156,7 @@ def measure(path: Path) -> dict[str, object]:
     return {
         "lines": len(lines),
         "functions": {q: sorted(s, reverse=True) for q, s in functions.items()},
-        "docstrings": sorted(
-            (n for n in docstrings if n > DOCSTRING_LINES), reverse=True
-        ),
+        "docstrings": sorted((n for n in docstrings if n > DOCSTRING_LINES), reverse=True),
         "module_docstring": module_docstring,
         "prose": len(docstring_lines) + comment,
         "code": code,

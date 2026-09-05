@@ -59,8 +59,9 @@ def test_serving_diet_falls_back_when_a_manifest_predates_chunk_scale():
 
 
 def test_serving_diet_reads_a_mixed_scale_manifest():
-    m = _manifest({"1500": 2400, "3000": 1200, "4500": 900, "None": 451},
-                  {"cross-heading": 4500, "None": 451})
+    m = _manifest(
+        {"1500": 2400, "3000": 1200, "4500": 900, "None": 451}, {"cross-heading": 4500, "None": 451}
+    )
     assert backends.serving_diet(m) == (4500, True)
 
 
@@ -104,8 +105,11 @@ def test_opts_from_manifest_fills_the_checkpoint_and_the_diet():
 
 def test_explicit_flags_beat_the_manifest():
     pinned = BackendOpts(
-        backend="tinker", sampler_path="tinker://mine", max_chunk_chars=1500,
-        inline_headings=False, max_tokens=99,
+        backend="tinker",
+        sampler_path="tinker://mine",
+        max_chunk_chars=1500,
+        inline_headings=False,
+        max_tokens=99,
     )
     opts = backends.opts_from_manifest(_RUN, pinned)
     assert opts.sampler_path == "tinker://mine"
@@ -120,9 +124,12 @@ def test_renderer_falls_back_to_the_hyperparameter_when_the_run_left_none():
     renderer only under `hyperparameters`. Filling from `result` alone left the
     field None, so serving fell through to the cookbook recommendation for the
     base model rather than the renderer the run actually pinned."""
-    dry = _manifest({"1500": 10}, {"None": 10},
-                    hyperparameters={"renderer_name": "qwen3_5_disable_thinking"},
-                    result={})
+    dry = _manifest(
+        {"1500": 10},
+        {"None": 10},
+        hyperparameters={"renderer_name": "qwen3_5_disable_thinking"},
+        result={},
+    )
     assert backends.manifest_renderer(dry) == "qwen3_5_disable_thinking"
     assert backends.opts_from_manifest(dry).renderer_name == "qwen3_5_disable_thinking"
 
@@ -177,9 +184,7 @@ def test_an_openai_backend_warns_that_the_renderer_pin_is_uncheckable():
     assert "qwen3_disable_thinking" in notes[0] and "local-q4" in notes[0]
 
     # Not a second complaint on top of a real mismatch, and never on tinker.
-    both = backends.manifest_mismatches(
-        _RUN, BackendOpts(backend="openai", renderer_name="llama3")
-    )
+    both = backends.manifest_mismatches(_RUN, BackendOpts(backend="openai", renderer_name="llama3"))
     assert [n for n in both if "renderer" in n] == [n for n in both if "renderer mismatch" in n]
     assert backends.manifest_mismatches(_RUN, BackendOpts(backend="tinker")) == []
 
@@ -366,8 +371,14 @@ def test_rewrite_document_takes_the_rewrite_hook_and_the_anchor_log(tmp_path):
 
 def test_format_rewrite_summary_breaks_rejections_out_by_cause():
     r = infer.RewriteResult(
-        text="", n_chunks=3, n_candidates=12, n_kept_input=1,
-        n_anchor_rejected=2, n_anchor_lost=1, n_anchor_invented=2, n_truncated=1,
+        text="",
+        n_chunks=3,
+        n_candidates=12,
+        n_kept_input=1,
+        n_anchor_rejected=2,
+        n_anchor_lost=1,
+        n_anchor_invented=2,
+        n_truncated=1,
     )
     assert backends.format_rewrite_summary(r) == (
         "[3 chunk(s), 12 sample(s), 1 kept as input, 2 sample(s) rejected for anchor damage "

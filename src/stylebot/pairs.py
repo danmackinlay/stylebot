@@ -331,8 +331,7 @@ def _check_meta_types(meta: dict, prompt: str) -> list[str]:
             )
             if not ok:
                 errors.append(
-                    f"meta.provenance.{key} must be {_type_name(types)}, "
-                    f"got {type(value).__name__}"
+                    f"meta.provenance.{key} must be {_type_name(types)}, got {type(value).__name__}"
                 )
     return errors
 

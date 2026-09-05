@@ -811,4 +811,3 @@ def test_a_cell_claimed_mid_run_by_another_writer_is_not_duplicated(tmp_path, ma
     # consumers already assume.
     assert all(r["messages"][1]["content"].startswith("[rival]") for r in recs)
     assert validate_pairs_file(corpus_file(data_dir, tmp_path / "p.jsonl")) == []
-

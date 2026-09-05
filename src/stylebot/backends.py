@@ -256,8 +256,9 @@ def manifest_renderer(manifest: Mapping[str, Any] | None) -> str | None:
     cannot drift between the filler and the checker below.
     """
     manifest = manifest or {}
-    return ((manifest.get("result") or {}).get("renderer_name")
-            or (manifest.get("hyperparameters") or {}).get("renderer_name"))
+    return (manifest.get("result") or {}).get("renderer_name") or (
+        manifest.get("hyperparameters") or {}
+    ).get("renderer_name")
 
 
 def manifest_mismatches(

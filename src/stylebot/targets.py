@@ -385,7 +385,11 @@ def _pack(units: Sequence[str], *, merge_max_chars: int) -> list[str]:
 
 
 def _post_targets(
-    body: str, source: str, policy: ChunkPolicy, *, meta: dict | None = None,
+    body: str,
+    source: str,
+    policy: ChunkPolicy,
+    *,
+    meta: dict | None = None,
     source_policy: SourcePolicy = DEFAULT_SOURCE,
 ) -> list[Target]:
     """Chunk one post's **already-loaded** body into targets.

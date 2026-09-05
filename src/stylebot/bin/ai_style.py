@@ -54,9 +54,7 @@ from stylebot.errors import RunError
 from stylebot.lib import SourcePolicy
 
 
-@click.group(
-    cls=ErrorTranslatingGroup, context_settings={"help_option_names": ["-h", "--help"]}
-)
+@click.group(cls=ErrorTranslatingGroup, context_settings={"help_option_names": ["-h", "--help"]})
 def main() -> None:
     """stylebot tooling — capture, synthetic pairs, training, eval (subcommands)."""
 
@@ -496,8 +494,7 @@ def check_splits_cmd(
         f"splits_sha256={sp.splits_sha256(splits_path)}"
     )
     click.echo(
-        f"eval posts on disk: {len(spellings) - len(missing)}/{len(spellings)} "
-        f"(under {blog_root})"
+        f"eval posts on disk: {len(spellings) - len(missing)}/{len(spellings)} (under {blog_root})"
     )
     for canonical, paths in spellings.items():
         mark = "MISSING" if canonical in missing else "ok"

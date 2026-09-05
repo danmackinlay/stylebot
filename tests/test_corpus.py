@@ -333,4 +333,3 @@ def test_run_pairs_mode_rewrites_every_shards_records(sharded, tmp_path):
     assert {r["id"] if "id" in r else record_id(r) for r in read_jsonl(out)} == {
         record_id(r) for r in before
     }
-

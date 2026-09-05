@@ -199,9 +199,7 @@ def _remind_open_sessions(ctx: click.Context) -> None:
     )
 
 
-@click.group(
-    cls=ErrorTranslatingGroup, context_settings={"help_option_names": ["-h", "--help"]}
-)
+@click.group(cls=ErrorTranslatingGroup, context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--quiet",
     "-q",

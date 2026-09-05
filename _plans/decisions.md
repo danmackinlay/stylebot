@@ -56,6 +56,7 @@ keep their numbers — the second index below is how you find them.
 | D83 | the synth flag audit closed 2026-08-13 — four retired, four kept, one deferred | live |
 | D84 | the corpus is append-only draws plus derived views | live |
 | D85 | the blog's literals are a `SourcePolicy` parameter, not a fork | live |
+| D86 | `ruff format` is the formatter of record; D58's ceilings re-baseline once | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D48)
 
@@ -1111,3 +1112,27 @@ moment the corpus could absorb it — a view rebuild, not a migration (D84).
 serving. It does not today: `infer`'s two chat builds and `capture`'s draw record still emit
 the module-level `STYLE_SYSTEM`, so a non-default author can be trained but would be *served*
 under Dan's prompt.
+
+## D86: `ruff format` is the formatter of record; D58's ceilings re-baseline once
+
+**Decision (2026-09-05 by Dan; landed the same day, round-2 R1).** Run `ruff format` over the tree and adopt its output as the
+canonical shape. It touched 11 of 82 files and 92 lines, all cosmetic — no behaviour, no
+public name. Three D58 numbers moved with it and are re-recorded at the formatted size:
+`targets.py::_post_targets` 95 → 99, `train.py` 995 → 996, `train.py::run_training` 97 → 98.
+All three grew for one reason: a hand-compressed argument list the formatter puts back on one
+line per parameter. This is the only re-baseline; from here P2's ratchet runs as written.
+
+**Alternatives.** *Hand-compress the three signatures back under their old numbers* — the code
+would read as it did, but the compressed form is exactly what the next `ruff format` undoes,
+so the ratchet would be measuring the formatter, not the complexity. *Shave unrelated lines
+from `run_training` until it fits* — the gaming P2 exists to stop. *Leave the 11 files
+unformatted* — the state that had `--check` reported red across four waves and never actioned.
+
+**Deciding constraint.** P2's ratchet is a proxy for complexity, and a formatter changes line
+counts without changing any. A proxy that a mechanical, idempotent tool can move is only
+honest if it is re-measured against that tool's output, once, in the open.
+
+**Re-evaluate if** `line-length` or the `[tool.ruff]` style config changes — that is a second
+re-baseline and needs its own entry. Nothing enforces the formatter yet: `ruff format --check`
+is in the round-2 acceptance list but in no gate `pytest` runs, so the 11 files can drift
+back; wiring it in is the rest of that plan's R1, not this entry.
