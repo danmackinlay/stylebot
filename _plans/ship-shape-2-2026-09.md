@@ -326,3 +326,11 @@ Appended by the master, dated, one line each.
   after C13 (synth reads `anchor_delta` directly); a deletion for R7 or later.
 - 2026-09-05 (R4): `splits.missing_eval_posts` is now a thin special case of
   `missing_sources` with two callers (`status.py`, `check-splits`' table).
+- 2026-09-05 (R7): `classify_train.py`'s `C_GRID` comment holds a why recorded
+  nowhere else (the grid's top was extended past 10.0 because a refit chose
+  10.0 in all eight folds); kept as two undated lines. Wants a findings row and
+  a D-amendment (D7 is archived).
+- 2026-09-05 (R7): `train.build_manifest` cited the four manifest pins to D38;
+  they are D42's. The code now cites D42; nothing else names D38 for them.
+- 2026-09-05 (R7): `lib.py:157` `is_modified_after(after="2021-01-01")` is a
+  dated code default the §6b `rg` matches; not prose, left.
