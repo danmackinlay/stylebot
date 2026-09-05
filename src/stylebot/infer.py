@@ -421,10 +421,10 @@ def detector_scorer(detector: Callable[[str], dict]) -> Callable[[str], float]:
     return score
 
 
-def reranker_identity(scorer: object, best_of: int) -> dict | None:
+def reranker_identity(scorer: object) -> dict | None:
     """`meta.reranker` for an output row: the instrument that chose the output
-    among `best_of` samples (D39), None when nothing chose (`best_of == 1`)."""
-    return detector_identity(scorer) if best_of > 1 and scorer is not None else None
+    (D39). A scorer chooses at any `best_of`; None means nothing chose."""
+    return detector_identity(scorer) if scorer is not None else None
 
 
 def rewrite_candidates(
@@ -732,7 +732,7 @@ def rewrite_pairs_file(
             break
 
     written = 0
-    reranker = reranker_identity(scorer, best_of)
+    reranker = reranker_identity(scorer)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("a", encoding="utf-8") as fp:
         for i, rec in enumerate(todo):

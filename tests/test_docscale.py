@@ -1,8 +1,9 @@
 """`stylebot.docscale` — a document row says which instrument chose its output.
 
 `rewrite_documents_file` hands `best_of` and `scorer` through to the rewrite;
-the row it writes stamps `meta.reranker` with the scorer's D39 identity when
-`best_of > 1`, and `null` otherwise (C5).
+the row it writes stamps `meta.reranker` with the scorer's D39 identity whenever
+a scorer was armed — at `best_of == 1` it still picks input-vs-sample under the
+D20 guard — and `null` when nothing chose (C5).
 """
 
 from __future__ import annotations
@@ -95,6 +96,13 @@ def test_a_best_of_3_document_row_carries_the_reranker_identity(tmp_path):
     rec = _one_document(tmp_path, best_of=3, scorer=scorer)
     assert rec["meta"]["reranker"] == _fake_detector.identity
     assert rec["meta"]["scale"] == "document"
+
+
+def test_a_best_of_1_row_with_a_scorer_still_names_the_reranker(tmp_path):
+    """One sample is still a choice: the scorer decides input vs sample (D20)."""
+    scorer = infer.detector_scorer(_fake_detector)
+    rec = _one_document(tmp_path, best_of=1, scorer=scorer)
+    assert rec["meta"]["reranker"] == _fake_detector.identity
 
 
 # --- `document_pass`: the `eval --documents` half as a library (D78) --------

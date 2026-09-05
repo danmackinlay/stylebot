@@ -112,7 +112,7 @@ def rewrite_documents_file(
     if rewrite is None:
         from stylebot.infer import rewrite_text as rewrite
     system = system or style_system()
-    reranker = reranker_identity(rewrite_kwargs.get("scorer"), rewrite_kwargs.get("best_of", 1))
+    reranker = reranker_identity(rewrite_kwargs.get("scorer"))
 
     out_path = Path(out_path)
     done = {record_id(rec) for rec in iter_pairs(out_path) if rec.get("messages")}

@@ -995,9 +995,9 @@ def _shrinking_styler(messages, num_samples=1):
 def test_detector_scorer_carries_the_reranker_identity():
     scorer = infer.detector_scorer(_identified_detector)
     assert scorer.identity == _identified_detector.identity
-    assert infer.reranker_identity(scorer, best_of=1) is None
-    assert infer.reranker_identity(None, best_of=3) is None
-    assert infer.reranker_identity(scorer, best_of=3) == _identified_detector.identity
+    assert infer.reranker_identity(None) is None
+    # A scorer chooses at any best_of: one sample still competes with the input.
+    assert infer.reranker_identity(scorer) == _identified_detector.identity
 
 
 def test_rewrite_pairs_file_stamps_reranker_null_at_best_of_1(tmp_path):
