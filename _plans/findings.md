@@ -434,8 +434,8 @@ unclosed opener yields no span at all" stays as it is (D76).
 stylebot's `iter_targets` predicate and the blog's `gather_qmd_files` agree on
 all **1,757** `.qmd` in the live tree: the two skip-lists are disjoint, and no
 `.qmd` has ever lived under `renv`/`packrat`/`rsconnect`/`node_modules`. Exactly
-one file ever fell in the gap (`tests/fixtures/segmenter_conformance.qmd`) and
-`make_selector` rejected it anyway. Asserted by `tests/test_qmd_walker.py`. D46.
+one file ever fell in the gap (`tests/fixtures/segmenter_conformance.qmd`, since
+moved under `fixtures/hard/`) and `make_selector` rejected it anyway. Asserted by `tests/test_qmd_walker.py`. D46.
 
 ### `scores.jsonl` orphan rot — 2026-09-03 (W6 audit)
 
@@ -1012,8 +1012,8 @@ the synthetic counts do not move and `test_corpus_stability`'s floors are
 untouched. The 7 duplicates were backfill artefacts — it keyed a real draw on
 `(source, blog_sha, span)`, so an interim save and its successor editing one
 paragraph collided; the live capture path keys on `pairs.record_id`
-(`capture_id:chunk_index`) and never did. `policy_sha` moved twice: once when
-`ViewPolicy` gained the field, once when the blog filled it. Decided: D84.
+(`capture_id:chunk_index`) and never did. The live `policy_sha` is
+`dan-style status`'s to print (D52). Decided: D84.
 
 ## The live scores file's join keys — 2026-09-05 (W4 step 5 item 5)
 
