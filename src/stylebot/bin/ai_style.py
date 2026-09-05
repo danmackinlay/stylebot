@@ -442,13 +442,7 @@ def make_splits_cmd(
     )
     sp.save_splits(splits_doc, out_path)
 
-    roles = sp.summarize_roles(splits_doc, ds)
-    for role in sp.ROLES:
-        entry = roles[role]
-        click.echo(
-            f"{role:>8}: {entry['posts']} post(s), {entry['pairs']} pair(s) "
-            f"({entry['pairs_real']} real / {entry['pairs_synthetic']} synthetic)"
-        )
+    click.echo("\n".join(sp.role_lines(splits_doc, ds)))
     for warning in sp.check_splits(splits_doc, ds):
         click.secho(f"WARNING: {warning}", fg="yellow", err=True)
     click.echo(f"wrote splits -> {out_path} (seed {seed}; eval frozen, rest by hash rule)")
@@ -476,15 +470,24 @@ def make_splits_cmd(
     default=None,
     help="Also print the per-role post/pair table for this corpus, and the danger report.",
 )
-def check_splits_cmd(splits_path: Path, blog_root: Path, pairs_path: Path | None) -> None:
+@draws.view_options()
+def check_splits_cmd(
+    splits_path: Path,
+    blog_root: Path,
+    pairs_path: Path | None,
+    draws_dir: Path | None,
+    policy_path: Path | None,
+) -> None:
     """Health-check the splits contract: eval posts present, strata big enough.
 
     The read-only counterpart of `make-splits`, and the thing to run after any
     `post-op move`: a renamed post silently changes role, which is how two
     frozen-eval posts leaked into the styler/detector pools (2026-09-03). Exits
     non-zero when a pinned eval post is no longer on disk under --blog-root;
-    small-stratum findings stay warnings.
+    small-stratum findings stay warnings. The table reads --pairs, or the view
+    --draws builds — what `train --draws` would train on (D84).
     """
+    pairs_path = draws.corpus_or_view(pairs_path, draws_dir, policy_path)
     splits_doc = sp.load_splits(splits_path)
     spellings = sp.eval_post_spellings(splits_doc)
     missing = set(sp.missing_eval_posts(splits_doc, blog_root))
@@ -504,18 +507,7 @@ def check_splits_cmd(splits_path: Path, blog_root: Path, pairs_path: Path | None
 
     if pairs_path is not None:
         ds = ct.assemble_dataset(pairs_path)
-        roles = sp.summarize_roles(splits_doc, ds)
-        for role in sp.ROLES:
-            entry = roles[role]
-            top = (
-                f"; top post {entry['top_post']} {entry['top_post_share']:.0%}"
-                if entry["top_post"]
-                else ""
-            )
-            click.echo(
-                f"{role:>8}: {entry['posts']} post(s), {entry['pairs']} pair(s) "
-                f"({entry['pairs_real']} real / {entry['pairs_synthetic']} synthetic){top}"
-            )
+        click.echo("\n".join(sp.role_lines(splits_doc, ds, top=True)))
         report = sp.check_splits(splits_doc, ds, blog_root=blog_root)
     else:
         # No corpus, no danger report — the on-disk contract is checkable alone.

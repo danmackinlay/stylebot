@@ -215,17 +215,27 @@ def test_make_splits_accepts_a_directory(sharded, tmp_path):
     assert _role_totals(res.output) == (4, len(before))
 
 
-def test_check_splits_accepts_a_directory(sharded, tmp_path):
-    data_dir, _ = sharded
-    out = tmp_path / "splits.json"
-    CliRunner().invoke(
-        ai_style,
-        ["make-splits", "--pairs", str(data_dir / "pairs"), "--out", str(out), "--seed", "1"],
-    )
+def _blog(tmp_path):
+    """A tree holding the four posts `sharded` names, for `--blog-root`."""
     blog = tmp_path / "blog"
     (blog / "post").mkdir(parents=True)
     for i in range(4):
         (blog / "post" / f"p{i}.qmd").write_text("---\ntitle: p\n---\n\nx\n", encoding="utf-8")
+    return blog
+
+
+def _splits(data_dir, out):
+    CliRunner().invoke(
+        ai_style,
+        ["make-splits", "--pairs", str(data_dir / "pairs"), "--out", str(out), "--seed", "1"],
+    )
+    return out
+
+
+def test_check_splits_accepts_a_directory(sharded, tmp_path):
+    data_dir, _ = sharded
+    out = _splits(data_dir, tmp_path / "splits.json")
+    blog = _blog(tmp_path)
     res = CliRunner().invoke(
         ai_style,
         [
@@ -240,6 +250,27 @@ def test_check_splits_accepts_a_directory(sharded, tmp_path):
     )
     assert res.exit_code == 0, res.output
     assert _role_totals(res.output) == (4, 8)  # the whole corpus, not one shard
+
+
+def test_check_splits_reads_a_view_of_draws(sharded, tmp_path):
+    """`--draws` health-checks the append-only layer with no `pairs/` in the
+    picture (D84, W4 step 5); naming both flags is refused."""
+    data_dir, before = sharded
+    out = _splits(data_dir, tmp_path / "splits.json")
+    draws_dir = data_dir / "draws"
+    for draw in draws.draws_from_pairs(data_dir / "pairs"):
+        draws.append(draws_dir, draw)
+    args = ["check-splits", "--splits", str(out), "--blog-root", str(_blog(tmp_path))]
+
+    res = CliRunner().invoke(ai_style, [*args, "--draws", str(draws_dir)])
+    assert res.exit_code == 0, res.output
+    assert _role_totals(res.output) == (4, len(before))
+
+    both = CliRunner().invoke(
+        ai_style, [*args, "--draws", str(draws_dir), "--pairs", str(data_dir / "pairs")]
+    )
+    assert both.exit_code != 0
+    assert "--pairs" in both.output and "--draws" in both.output
 
 
 def test_train_dry_run_assembles_the_whole_sharded_corpus(sharded, tmp_path):

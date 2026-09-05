@@ -400,6 +400,22 @@ def training_view(draws_dir: str | Path, policy: ViewPolicy | None) -> tuple[Pat
     return view, {"policy_sha": policy_sha(policy), "draws_sha256": content_sha256(draws_dir)}
 
 
+def corpus_or_view(
+    pairs_path: Path | None, draws_dir: Path | None, policy_path: Path | None
+) -> Path | None:
+    """The corpus a `--pairs` / `--draws` pair names, for a command taking both.
+
+    `--draws` builds (or reuses) its view and returns that, so a reader needs
+    no `pairs/`; naming both is a refusal, since only one of them can be the
+    corpus a report is about (D84).
+    """
+    if pairs_path is not None and draws_dir is not None:
+        raise ConfigError("pass --pairs or --draws, not both")
+    if draws_dir is None:
+        return pairs_path
+    return training_view(draws_dir, load_policy(policy_path))[0]
+
+
 def load_policy(path: str | Path | None) -> ViewPolicy:
     """A `ViewPolicy` from a JSON object of its fields (lists become tuples);
     `None` is the identity policy. The blog builds its policy from constants

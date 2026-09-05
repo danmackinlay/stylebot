@@ -387,6 +387,27 @@ def summarize_roles(splits: dict, ds) -> dict:
     return out
 
 
+def role_lines(splits: dict, ds, *, top: bool = False) -> list[str]:
+    """The per-role post/pair table `make-splits` and `check-splits` print.
+
+    `top` appends each stratum's dominant post and its share — the
+    concentration `check_splits` warns on, which `make-splits` (cutting the
+    partition, not auditing it) does not report.
+    """
+    roles = summarize_roles(splits, ds)
+    lines = []
+    for role in ROLES:
+        e = roles[role]
+        share = ""
+        if top and e["top_post"]:
+            share = f"; top post {e['top_post']} {e['top_post_share']:.0%}"
+        lines.append(
+            f"{role:>8}: {e['posts']} post(s), {e['pairs']} pair(s) "
+            f"({e['pairs_real']} real / {e['pairs_synthetic']} synthetic){share}"
+        )
+    return lines
+
+
 def check_splits(splits: dict, ds, *, blog_root: str | Path | None = None) -> list[str]:
     """The danger report: warnings for strata too small (or too synthetic) to trust.
 
