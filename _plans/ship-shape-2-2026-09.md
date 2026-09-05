@@ -227,6 +227,13 @@ Done: `uv run python -c` shows `train_styler.train_cmd`'s body ≤ 20 lines;
 `REPINNED` in `test_dan_style_cli.py` has three fewer rows; suite green three
 runs in a row, 0 skipped.
 
+**Landed `f099962..85a1198`, blog `078097be64..5d159351b4`.** Deviation: `REPINNED`
+stayed at 27 rows — the three B4 shadows are one spelling each, but every
+`--blog-root` row is a genuine policy re-pin and serve's `--backend` is the
+blog's real default (a bare `dan-style serve` must arm a styler), so the rows
+were respelled, not removed. `run_training_pass` takes a `confirm` hook (the
+pre-spend prompt is the CLI's) and a missing corpus is `ConfigError` (exit 2).
+
 ## 6. R6 — doc drift (both repos, docs only, one agent)
 
 stylebot: `infer.py:319` `content_anchors` docstring copies "6.4% → 19.1%" (P1;
@@ -334,3 +341,11 @@ Appended by the master, dated, one line each.
   they are D42's. The code now cites D42; nothing else names D38 for them.
 - 2026-09-05 (R7): `lib.py:157` `is_modified_after(after="2021-01-01")` is a
   dated code default the §6b `rg` matches; not prose, left.
+- 2026-09-05 (R5): the blog's `styler.py` carries `# noqa: F401` re-imports of
+  `BACKEND_PARAMS`/`bundles_from_kwargs` that `style_file.py` imports from
+  stylebot directly; probably another dead re-export block.
+- 2026-09-05 (R4 finish): the D34 gate fires twice on a paid `train` — in the
+  mandatory preview (`dry_run=True`) and again in the paid call — and each
+  `corpus_sources` pass walks the whole corpus; C7's shape, cheap but doubled.
+- 2026-09-05 (R4 finish): the blog's gate is `ruff check src tests` (clean);
+  §8's R1 count of 43 is repo-wide (`bin/anchor-check/`, `scripts/`).
