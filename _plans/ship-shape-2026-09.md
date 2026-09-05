@@ -16,7 +16,7 @@ gate. Four waves plus a cull; every cross-repo slice two commits, stylebot first
 | 2 and the cull — independent fixes, X1–X5 | `fae4053..2359469` | `93d3b62c88..8a59e037a6` |
 | 3 — seam consolidation | `3261ba6..1aba2c6` | `8a59e037a6..22d257ef96` |
 | 4 steps 1–4 — draws and views | `7b1a236..d9a25f3` | `22d257ef96..5975e421e2` |
-| 4 step 5 — the re-stamp, `pairs/` retired | `4c67d7c..6fcee88` | `671e237579..90b7e9a8e9` |
+| 4 step 5 — the re-stamp, `pairs/` retired | `4c67d7c..ae5dfb6` | `671e237579..90b7e9a8e9` |
 
 **What it decided**, and where the argument lives: D58 (the budgets and layers
 this runbook was written under), D84 (draws and views), D85 (the `SourcePolicy`),
