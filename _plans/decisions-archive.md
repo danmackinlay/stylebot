@@ -1026,30 +1026,30 @@ it rather than infer the diet from training-time histograms.
 `meta.system_sha` and a five-key `meta.provenance` (`blog_sha`, `blog_dirty`,
 `stylebot_sha`, `policy_digest`, `source_automation`) from both producers.
 `record_id` uniqueness moves into `validate_pairs_file`, where the whole file is
-visible; `dedupe_pairs_file` keeps the **first** occurrence, and `PairsWriter`
-makes appends safe under two concurrent writers.
+visible, and `PairsWriter` makes appends safe under two concurrent writers.
 
 **Three sub-decisions worth naming.** *The chunk policy rides in on the `Target`*
-— `iter_targets` is the one construction site and already holds the composed
-`ChunkPolicy`; `policy_digest` takes the object, and a `div_is_prose` predicate
+— `iter_targets` is the one construction site, and a `div_is_prose` predicate
 hashes as `module.qualname` because `repr()` carries a memory address. *First
-writer wins* — the duplicates were two draws for one cell, and the first is what
-every committed `scores.jsonl` row already joined to. *`source_automation` is
-read at cut time*, because the corpus is frozen and the post is not.
+writer wins*: of two draws for one cell, the first is what every committed
+`scores.jsonl` row joined to. *`source_automation` is read at cut time.*
 
 **Alternatives.** A lock around the whole run — serialises two synth runs.
-Re-read `seen` per write — O(corpus); `PairsWriter` tail-reads from a byte offset
-under the same lock. Key `synth_key` on the provenance — resume restarts every
-commit. A closed whitelist of `meta` keys — the schema is open by design, so it
-turns every experiment's covariate into a validation failure. Bump
-`schema_version` — absent *is* version 0.
+Re-read `seen` per write — O(corpus). Key `synth_key` on the provenance — resume
+restarts every commit. A closed whitelist of `meta` keys — the schema is open by
+design. Bump `schema_version` — absent *is* version 0.
 
 **Deciding constraint**: `validate_pair_record` had been per-record since Phase
-1, so the one defect it structurally could not see is the one that reached the
-corpus — duplicate `record_id`s from two runs that each loaded
-`existing_synth_keys` before the other appended; eval resumes score the first and
-skip the second while training takes both. **Re-evaluate if** the corpus is
-sharded (D50 — "first" then needs an order between shards).
+1, so the defect it could not structurally see is the one that reached the corpus
+— duplicate `record_id`s from two runs that each loaded `existing_synth_keys`
+before the other appended, read differently by eval and by training.
+
+**Amended 2026-09-05 (W4 step 5, D64/D84).** `meta.system_sha` is no longer
+written: the prompt claim is the view's — `ViewPolicy.system_prompt` stamps
+`messages[0]` and `training_view` pins its sha — and validation takes the prompt
+as an argument. The 9 records carrying the field keep it; nothing rewrites a draw.
+
+**Re-evaluate if** the corpus is sharded (D50 — "first" needs a shard order).
 
 ## D37: the corpus-stability guard belongs to whoever owns the corpus
 

@@ -392,6 +392,7 @@ def assemble_training_corpus(
     val_frac: float = DEFAULT_VAL_FRAC,
     seed: int = 0,
     validate: bool = True,
+    system_prompt: str | None = None,
 ) -> TrainCorpus:
     """Validate, filter, weight, and split the corpus for styler training.
 
@@ -402,10 +403,9 @@ def assemble_training_corpus(
       note this deliberately KEEPS near-copy pairs (see module docstring).
     - `per_passage`: multiplicity hook. Every pair covering one stretch of prose
       is passed as a list in corpus order (`passage_groups` — containment, not
-      string equality); the hook returns the subset to keep. Named `per_target`
-      until 2026-09-03, when the grouping stopped being per *target*; the rename
-      is deliberate, so a caller written against the old meaning fails loudly
-      instead of silently grouping 3.6× too finely (D43).
+      string equality); the hook returns the subset to keep (renamed from
+      `per_target` on 2026-09-03, D43).
+    - `system_prompt`: the prompt records are validated against (D64).
     - `pair_weight`: record -> positive int, stamped onto `meta.weight` and
       honoured as integer replication in the TRAIN file only. Default None
       leaves every record at 1, which is what every run to date did implicitly.
@@ -415,7 +415,7 @@ def assemble_training_corpus(
     """
     pairs_path = Path(pairs_path)
     if validate:
-        errors = validate_pairs_file(pairs_path)
+        errors = validate_pairs_file(pairs_path, system_prompt=system_prompt)
         if errors:
             lineno, msgs = errors[0]
             raise RunError(
@@ -592,10 +592,8 @@ def build_manifest(
             "n_synthetic": corpus.n_synthetic,
             "dropped": corpus.dropped,
             "splits_path": str(splits_path) if splits_path else None,
-            # Which frozen system prompt the pairs behind this run were built
-            # against — the digest every record carries as `meta.system_sha`.
-            # `backends.manifest_mismatches` warns when a served adapter's
-            # manifest disagrees with the live STYLE_SYSTEM.
+            # Which system prompt the pairs behind this run were built against;
+            # a view's own is merged in over this from `draws.training_view`.
             "style_system_sha": system_sha(),
             "splits_sha256": _splits_sha256(splits_path),
             "eval_version": (splits or {}).get("eval_version"),
@@ -710,13 +708,13 @@ def run_training(
 ) -> TrainResult:
     """Assemble → manifest → (unless dry-run) train on Tinker → export adapter.
 
-    Data: `pairs_path`, or the view of `draws_dir` under `policy`
-    (`draws.training_view`, which the manifest pins as `policy_sha` and
-    `draws_sha256`). `hp` is the fit; `val_frac` shapes the split, recorded as
-    `data.val_posts`. `blog_root` + `splits_path` refuse a run whose pinned eval
-    posts left the tree (D34). A dry run writes nothing and returns the
-    manifest it would write; the paid run writes it pre-run and with `result`.
-    `runner` is the seam `(corpus, manifest, work_dir, hp, *, download_adapter)`.
+    Data: `pairs_path`, or the view of `draws_dir` under `policy`, which the
+    manifest pins as `policy_sha`, `draws_sha256` and `style_system_sha`
+    (`draws.training_view`). `hp` is the fit; `val_frac` shapes the split as
+    `data.val_posts`; `blog_root` + `splits_path` refuse a run whose pinned eval
+    posts left the tree (D34). A dry run writes nothing and returns the manifest
+    it would write; the paid run writes it pre-run and with `result`. `runner`
+    is the seam `(corpus, manifest, work_dir, hp, *, download_adapter)`.
     """
     view_pins: dict = {}
     if draws_dir is not None:
@@ -742,8 +740,8 @@ def run_training(
         selector=selector,
         per_passage=per_passage,
         pair_weight=pair_weight,
-        val_frac=val_frac,
-        seed=hp.seed,
+        val_frac=val_frac, seed=hp.seed,
+        system_prompt=policy.system_prompt if policy else None,
     )
     if corpus.n_train == 0:
         raise ConfigError(f"no training pairs left after filtering {pairs_path}")

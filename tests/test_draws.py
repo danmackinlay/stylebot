@@ -16,7 +16,7 @@ from pathlib import Path
 import conftest
 import pytest
 
-from stylebot import config, corpus, draws, pairs
+from stylebot import ai_core, config, corpus, draws, pairs
 from stylebot.errors import ConfigError
 
 SWEEP_ENV = conftest.SWEEP_ENV
@@ -246,13 +246,13 @@ def test_new_draws_of_one_source_are_keyed_by_chunk_until_spans_exist():
 def test_policy_sha_ignores_order_and_notices_every_field():
     a = draws.ViewPolicy(
         retired_arms=("x", "y"),
-        system_sha="s",
+        system_prompt="p",
         excluded_draw_ids=("1", "2"),
         superseded_captures=("c1", "c2"),
     )
     b = draws.ViewPolicy(
         excluded_draw_ids=("2", "1"),
-        system_sha="s",
+        system_prompt="p",
         superseded_captures=("c2", "c1"),
         retired_arms=("y", "x"),
     )
@@ -266,7 +266,7 @@ def test_policy_sha_ignores_order_and_notices_every_field():
         "retired_arms": ("qwen/qwen3-8b",),
         "anchor_rule": "drop-invented",
         "role_rule": "splits:abcd",
-        "system_sha": "ffff",
+        "system_prompt": "you rewrite prose",
         "keep_superseded": True,
         "excluded_draw_ids": ("cap0000:0",),
         "superseded_captures": ("cap0000",),
@@ -362,3 +362,56 @@ def test_the_view_reproduces_the_blog_corpus(tmp_path):
     assert report.excluded == {} and set(report.by_outcome) == {draws.ACCEPTED}
     assert _ids(tmp_path / "view") == _ids(src)
     assert len(_ids(src)) == report.records
+
+
+# --- the view carries the system prompt (W4 step 5) ---------------------------
+
+
+def test_the_view_stamps_the_policys_system_prompt(pairs_dir, tmp_path):
+    prompt = ai_core.style_system("Ada Lovelace")
+    policy = draws.ViewPolicy(system_prompt=prompt)
+    lifted = list(draws.draws_from_pairs(pairs_dir))
+    view = tmp_path / "view"
+    draws.build_view(lifted, policy, out=view)
+
+    stamped = corpus.read_records(view)
+    assert {r["messages"][0]["content"] for r in stamped} == {prompt}
+    assert pairs.validate_pairs_file(view, system_prompt=prompt) == []
+    # Nothing edits a draw: its stored record keeps the turn it was drawn under.
+    assert {d.record["messages"][0]["content"] for d in lifted} == {ai_core.STYLE_SYSTEM}
+    assert [r["meta"] for r in stamped] == [d.record["meta"] for d in lifted]
+    assert [r["messages"][1:] for r in stamped] == [d.record["messages"][1:] for d in lifted]
+
+
+def test_stamping_the_prompt_the_draws_already_carry_moves_no_bytes(pairs_dir, tmp_path):
+    policy = draws.ViewPolicy(system_prompt=ai_core.STYLE_SYSTEM)
+    report = draws.build_view(draws.draws_from_pairs(pairs_dir), policy, out=tmp_path / "view")
+    assert report.content_sha256 == corpus.content_sha256(pairs_dir)
+    assert corpus.read_records(tmp_path / "view") == corpus.read_records(pairs_dir)
+    unstamped = list(draws.view_records(draws.draws_from_pairs(pairs_dir), draws.ViewPolicy()))
+    assert list(draws.view_records(draws.draws_from_pairs(pairs_dir), policy)) == unstamped
+
+
+def test_policy_system_sha_is_derived_from_the_prompt():
+    assert draws.ViewPolicy().system_sha is None
+    policy = draws.ViewPolicy(system_prompt=ai_core.STYLE_SYSTEM)
+    assert policy.system_sha == pairs.system_sha() == pairs.system_sha(ai_core.STYLE_SYSTEM)
+    other = draws.ViewPolicy(system_prompt=ai_core.style_system("Ada Lovelace"))
+    assert other.system_sha == pairs.system_sha(other.system_prompt) != policy.system_sha
+
+
+def test_load_policy_takes_a_prompt_and_refuses_a_supplied_sha(tmp_path):
+    doc = tmp_path / "policy.json"
+    doc.write_text(json.dumps({"system_prompt": "you rewrite prose"}), encoding="utf-8")
+    assert draws.load_policy(doc).system_prompt == "you rewrite prose"
+    doc.write_text(json.dumps({"system_sha": "deadbeefdeadbeef"}), encoding="utf-8")
+    with pytest.raises(ConfigError):
+        draws.load_policy(doc)
+
+
+def test_training_view_pins_the_prompt_the_view_was_stamped_with(draws_dir):
+    prompt = ai_core.style_system("Ada Lovelace")
+    _view, pins = draws.training_view(draws_dir, draws.ViewPolicy(system_prompt=prompt))
+    assert pins["style_system_sha"] == pairs.system_sha(prompt)
+    _view, pins = draws.training_view(draws_dir, draws.ViewPolicy())
+    assert pins["style_system_sha"] == pairs.system_sha()

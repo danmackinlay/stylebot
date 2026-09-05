@@ -229,11 +229,12 @@ class ViewPolicy:
     """Every input whose change should name a different view (D84).
 
     Each field is optional so the blog's `view_policy()` fills what it has;
-    all of them enter `policy_sha`. Only `keep_superseded`,
-    `excluded_draw_ids` and `superseded_captures` (the capture ids this
-    policy declares superseded) are applied as clauses so far: the gates
-    already ran on today's draws and their raw output is not kept, so
-    re-applying a threshold waits for draws that carry one.
+    all of them enter `policy_sha`. `system_prompt` is applied as a *stamp*
+    (`_stamped`) and `keep_superseded`, `excluded_draw_ids` and
+    `superseded_captures` (the capture ids this policy declares superseded)
+    as clauses; the rest are named-only so far, because the gates already ran
+    on today's draws and re-applying a threshold waits for draws that carry
+    their raw output.
     """
 
     chunk_policy_digest: str | None = None
@@ -242,10 +243,19 @@ class ViewPolicy:
     retired_arms: tuple[str, ...] | None = None
     anchor_rule: str | None = None
     role_rule: str | None = None
-    system_sha: str | None = None
+    system_prompt: str | None = None
     keep_superseded: bool = False
     excluded_draw_ids: tuple[str, ...] = ()
     superseded_captures: tuple[str, ...] | None = None
+
+    @property
+    def system_sha(self) -> str | None:
+        """`pairs.system_sha` of `system_prompt`; None when the draws' own stands.
+
+        Derived, never supplied: a stored sha could name a prompt other than the
+        one the view emits, and only one of the two could be true (D64).
+        """
+        return pairs.system_sha(self.system_prompt) if self.system_prompt else None
 
 
 def policy_sha(policy: ViewPolicy) -> str:
@@ -294,6 +304,22 @@ def _clauses(policy: ViewPolicy, draws: Sequence[Draw]) -> list[Clause]:
     return out
 
 
+def _stamped(record: dict, policy: ViewPolicy) -> dict:
+    """The record a view emits: `messages[0]` is the policy's system turn (D64).
+
+    The draw keeps whatever turn it was drawn under — history nothing reads —
+    so moving a corpus to another prompt is this policy field plus a rebuild,
+    never an edit to a draw (D84). No `system_prompt`, or one the draw already
+    carries, returns the record itself, so a view moves no bytes it need not.
+    """
+    msgs = record.get("messages")
+    if not policy.system_prompt or not isinstance(msgs, list) or not msgs:
+        return record
+    if msgs[0].get("content") == policy.system_prompt:
+        return record
+    return {**record, "messages": [{**msgs[0], "content": policy.system_prompt}, *msgs[1:]]}
+
+
 def view_records(draws: Iterable[Draw], policy: ViewPolicy) -> Iterator[dict]:
     """The records the view of `draws` under `policy` holds, in draw order;
     what `ai-style log` reads back as the live corpus (W4 step 4)."""
@@ -302,7 +328,7 @@ def view_records(draws: Iterable[Draw], policy: ViewPolicy) -> Iterator[dict]:
     for draw in draws:
         if not any(hit(draw) for _name, hit in clauses):
             assert draw.record is not None
-            yield draw.record
+            yield _stamped(draw.record, policy)
 
 
 def _bump(counts: dict[str, int], key: str) -> None:
@@ -337,7 +363,8 @@ def build_view(
             _bump(report.excluded, clause)
             continue
         assert draw.record is not None
-        buckets.setdefault(corpus.shard_of(draw.record), []).append(corpus.line_of(draw.record))
+        record = _stamped(draw.record, policy)
+        buckets.setdefault(corpus.shard_of(record), []).append(corpus.line_of(record))
         report.records += 1
     digests: list[tuple[str, str]] = []
     for name, lines in sorted(buckets.items()):
@@ -392,12 +419,17 @@ def ensure_view(draws_dir: str | Path, policy: ViewPolicy, *, views_root: str | 
 
 def training_view(draws_dir: str | Path, policy: ViewPolicy | None) -> tuple[Path, dict]:
     """The view a training run reads, built beside its draws, and the manifest
-    keys that name it: `policy_sha` and `draws_sha256` sit next to
-    `pairs_sha256`, which is then the view's own content hash (W4 step 4)."""
+    keys that name it: `policy_sha`, `draws_sha256` and the `style_system_sha`
+    the view was stamped with sit next to `pairs_sha256`, which is then the
+    view's own content hash (W4 steps 4 and 5)."""
     draws_dir = Path(draws_dir)
     policy = policy or ViewPolicy()
     view = ensure_view(draws_dir, policy, views_root=config.views_root(draws_dir.parent))
-    return view, {"policy_sha": policy_sha(policy), "draws_sha256": content_sha256(draws_dir)}
+    return view, {
+        "policy_sha": policy_sha(policy),
+        "draws_sha256": content_sha256(draws_dir),
+        "style_system_sha": policy.system_sha or pairs.system_sha(),
+    }
 
 
 def corpus_or_view(

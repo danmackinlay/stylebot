@@ -38,7 +38,7 @@ from stylebot.generators import (
 )
 from stylebot.infer import invented_anchors
 from stylebot.jsonl import append_jsonl, dumps_line, iter_jsonl
-from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content, system_sha
+from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content
 from stylebot.provenance import now_iso, pair_provenance, repo_provenance
 from stylebot.targets import Target
 
@@ -229,7 +229,6 @@ def _build_record(
 ) -> dict:
     meta = {
         "schema_version": PAIR_SCHEMA_VERSION,
-        "system_sha": system_sha(),
         "source": target.source,
         "captured_at": now_iso(),
         "capture_id": _capture_id(target.source, generator_name, strategy),

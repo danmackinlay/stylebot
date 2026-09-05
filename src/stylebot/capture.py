@@ -22,7 +22,7 @@ from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.errors import RunError
 from stylebot.lib import read_w_frontmatter_text, split_paragraphs
 from stylebot.markdown import is_heading_line
-from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content, system_sha
+from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content
 from stylebot.provenance import (  # `ai-style log` binds capture.now_iso
     now_iso,
     pair_provenance,
@@ -218,7 +218,6 @@ def build_pair_record(
     """
     meta: dict = {
         "schema_version": PAIR_SCHEMA_VERSION,
-        "system_sha": system_sha(),
         "source": source,
         "captured_at": captured_at or now_iso(),
         "capture_id": capture_id,

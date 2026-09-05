@@ -284,7 +284,7 @@ def test_iter_archives_refuses_legacy_json(tmp_path):
 def test_captured_records_carry_provenance(tmp_path):
     """W8: a real capture stamps the same five keys a synthetic pair does, and
     reads `source_automation` off the frontmatter it was handed."""
-    from stylebot.pairs import PAIR_SCHEMA_VERSION, system_sha
+    from stylebot.pairs import PAIR_SCHEMA_VERSION
     from stylebot.provenance import PROVENANCE_KEYS
 
     pairs_path = tmp_path / "pairs.jsonl"
@@ -297,7 +297,8 @@ def test_captured_records_carry_provenance(tmp_path):
     )
     meta = written[0]["meta"]
     assert meta["schema_version"] == PAIR_SCHEMA_VERSION
-    assert meta["system_sha"] == system_sha()
+    # The prompt claim is the view's, not the draw's (D36, W4 step 5).
+    assert "system_sha" not in meta
     assert sorted(meta["provenance"]) == sorted(PROVENANCE_KEYS)
     assert meta["provenance"]["source_automation"] == 0
     assert meta["provenance"]["policy_digest"]

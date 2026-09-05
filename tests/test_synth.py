@@ -717,7 +717,7 @@ def test_written_records_carry_the_five_provenance_keys(tmp_path, make_blog):
     """W8: every record written after 2026-09 says which trees and which cut
     produced it, and what the source frontmatter said AT THAT MOMENT."""
 
-    from stylebot.pairs import PAIR_SCHEMA_VERSION, system_sha
+    from stylebot.pairs import PAIR_SCHEMA_VERSION
     from stylebot.provenance import PROVENANCE_KEYS, policy_digest
     from stylebot.targets import ChunkPolicy
 
@@ -732,7 +732,8 @@ def test_written_records_carry_the_five_provenance_keys(tmp_path, make_blog):
     for r in recs:
         meta = r["meta"]
         assert meta["schema_version"] == PAIR_SCHEMA_VERSION
-        assert meta["system_sha"] == system_sha()
+        # The prompt claim is the view's, not the draw's (D36, W4 step 5).
+        assert "system_sha" not in meta
         prov = meta["provenance"]
         assert sorted(prov) == sorted(PROVENANCE_KEYS)
         # The blog fixture is not a git checkout, so the tree fields degrade to

@@ -243,7 +243,7 @@ def test_collect_over_a_draws_dir_reports_the_view_it_would_build(tmp_path):
         draws.append(draws_dir, draw)
     draws.append(draws_dir, draws.Draw(draw_id="lost", outcome="gate:length"))
 
-    policy = draws.ViewPolicy(system_sha="s")
+    policy = draws.ViewPolicy(system_prompt="p")
     report = st.collect(draws_dir=draws_dir, policy=policy)
     view = report.view
     assert view is not None and view.exists and view.path == draws_dir
@@ -292,11 +292,11 @@ def test_ai_style_status_draws_reports_the_view(tmp_path):
     for draw in draws.draws_from_pairs(_write_flat(tmp_path)):
         draws.append(draws_dir, draw)
     policy_file = tmp_path / "policy.json"
-    policy_file.write_text(json.dumps({"system_sha": "s"}), encoding="utf-8")
+    policy_file.write_text(json.dumps({"system_prompt": "p"}), encoding="utf-8")
     args = ["status", "--draws", str(draws_dir), "--policy", str(policy_file)]
     result = CliRunner().invoke(ai_style, args + ["--data-dir", str(tmp_path / "data")])
     assert result.exit_code == 0, result.output
-    assert draws.policy_sha(draws.ViewPolicy(system_sha="s")) in result.output
+    assert draws.policy_sha(draws.ViewPolicy(system_prompt="p")) in result.output
     assert "view       " in result.output and "1 record" in result.output
 
 

@@ -72,7 +72,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "module_docstring": 32,
     },
     "synth.py": {
-        "lines": 1198,
+        "lines": 1197,
         "functions": {"synthesize_pairs": 128, "_run_session": 118},
         "docstrings": (26,),
     },
@@ -83,12 +83,12 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     },
     "targets.py": {"functions": {"_post_targets": 95}},
     "train.py": {
-        "lines": 997,
+        "lines": 995,
         "functions": {
             "run_training": 97,
             "_tinker_runner": 95,
             "assemble_training_corpus": 90,
-            "build_manifest": 89,
+            "build_manifest": 87,
         },
         "docstrings": (26, 23, 20, 18, 17, 17),
         "module_docstring": 35,
