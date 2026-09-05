@@ -387,15 +387,16 @@ pays for all of them; review misses that, a line count does not. The allowlist
 is a ratchet, not a cliff, and a deleted entry is the only progress it records.
 
 **Re-evaluate if** an allowlist entry must *grow* for a plainly right change: the
-budget is then wrong; write the new budget, not the exception. The package-wide
-check is a count *or* a pinned ratio, either sufficient (F16c): the count alone
-taxes a documented helper elsewhere; the ratio alone fails the F2/F8 code diet.
+budget is then wrong; write the new budget, not the exception.
 
 **Amended 2026-09-04 (M1b, M1c)**: a module that comes under budget still fails
-the test; the allowlist edit rides in the commit that earns it (P5). Rejected:
-hint-not-fail — an unread hint is how the allowlist stops shrinking. (M1c):
-`findings.md` is gated the same way — `FINDINGS_ALLOWLIST` in
-`tests/test_budget.py`, prose after the table ≤ 12, rows only shrink.
+the test; the allowlist edit rides in the commit that earns it (P5); rejected
+hint-not-fail, since an unread hint is how the allowlist stops shrinking.
+`findings.md` is gated the same way (`FINDINGS_ALLOWLIST`, prose ≤ 12 after the table).
+
+**Amended 2026-09-05 (R0)**: the ratio is retired; it failed the suite on a
+five-line de-duplication (`_post_targets`), pricing out the diet it guarded.
+`PROSE_CEILING` is a count that only falls; lowering prose must lower it (`PROSE_SLACK`).
 
 ## D59: one mechanism in the scoring path — the judge awaits, everything else batches
 

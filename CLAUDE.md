@@ -38,11 +38,11 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
   docstring may cite `D57` and may not restate it. **Violation test: if a
   sentence could be pasted into two of the four layers, it is in the wrong one.**
 - **P2. Size budgets, enforced by `tests/test_budget.py`.** Module ≤ 800 lines,
-  function ≤ 80, docstring ≤ 15, module docstring ≤ 30, package-wide
-  (docstring + comment) / code ≤ 0.40. Everything over budget today is
-  allowlisted at its exact size; a recorded number may only be lowered, and the
-  entry is deleted when its module comes under budget. **A new allowlist entry
-  needs a D-entry.** The blog runs the same test over `src/livingthing`.
+  function ≤ 80, docstring ≤ 15, module docstring ≤ 30, package-wide docstring +
+  comment lines ≤ `PROSE_CEILING`, which only falls. Everything over budget today
+  is allowlisted at its exact size; a recorded number may only be lowered, and
+  the entry is deleted when its module comes under budget. **A new allowlist
+  entry needs a D-entry.** The blog runs the same test over `src/livingthing`.
 - **P3. A `decisions.md` entry is ≤ 30 lines in the D26 shape** — decision,
   alternatives one line each, deciding constraint, re-evaluate-if. Numbers are a
   citation into `findings.md`, never a copy. A superseded entry collapses to

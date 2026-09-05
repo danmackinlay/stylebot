@@ -1,7 +1,8 @@
 """Size budgets for `src/stylebot`, enforced with a shrinking allowlist (D58).
 
 Budgets: a module <= 800 lines, a function <= 80, a docstring <= 15, a module
-docstring <= 30, and package-wide (docstring + comment) / code <= 0.40.
+docstring <= 30, and package-wide docstring + comment lines <= `PROSE_CEILING`,
+an absolute count that only ever falls.
 
 Everything over budget on 2026-09-04 is recorded in `ALLOWLIST` at its exact
 current size. A recorded number is a ceiling that may only ever be lowered: the
@@ -30,15 +31,12 @@ MODULE_LINES = 800
 FUNCTION_LINES = 80
 DOCSTRING_LINES = 15
 MODULE_DOCSTRING_LINES = 30
-RATIO_BUDGET = 0.40
 
-# Two high-water marks, and satisfying EITHER satisfies the rule. Neither works
-# alone: the count alone makes one documented helper cost a docstring deleted
-# elsewhere, and the ratio alone fails an honest code diet, which is why the
-# count was picked first. Together they fail only prose grown with no code to
-# explain. Only ever lower them; set both to None once RATIO_BUDGET is met.
-PROSE_CEILING: int | None = None
-RATIO_PIN: float | None = None
+#: Package-wide docstring + comment lines, measured by `_modules()` at the commit
+#: that set it. It only falls: a commit that lowers prose lowers it (D58).
+PROSE_CEILING = 4407
+#: How far under the ceiling prose may sit before the test demands it be lowered.
+PROSE_SLACK = 50
 
 # module -> the budgets it is over today, at their exact current size.
 # "functions" maps each over-budget function's qualified name (`Class.method`,
@@ -276,23 +274,15 @@ def test_allowlist_names_real_modules() -> None:
     assert not stale, f"allowlist names modules that no longer exist: {stale}"
 
 
-def test_prose_does_not_outgrow_the_code_it_explains() -> None:
-    modules = _modules()
-    prose = sum(m["prose"] for _, m in modules)
-    code = sum(m["code"] for _, m in modules)
-    ratio = prose / code
-    if PROSE_CEILING is None:
-        assert ratio <= RATIO_BUDGET, f"(docstring+comment)/code is {ratio:.4f}"
-        return
-    assert prose <= PROSE_CEILING or ratio <= RATIO_PIN, (
-        f"docstring+comment lines grew {PROSE_CEILING} -> {prose} AND the ratio "
-        f"{RATIO_PIN} -> {ratio:.4f} (budget {RATIO_BUDGET}). New code pays for "
-        "its own prose at the pinned ratio; past that, say it once, in the layer "
-        "that owns it (D58/P1)."
+def test_prose_stays_under_its_ceiling() -> None:
+    prose = sum(m["prose"] for _, m in _modules())
+    assert prose <= PROSE_CEILING, (
+        f"docstring+comment lines grew {PROSE_CEILING} -> {prose}; say it once, in "
+        "the layer that owns it (D58/P1). The ceiling only falls."
     )
-    assert ratio > RATIO_BUDGET, (
-        f"the package now meets the {RATIO_BUDGET} ratio ({ratio:.4f}) — "
-        "set PROSE_CEILING and RATIO_PIN = None"
+    assert prose > PROSE_CEILING - PROSE_SLACK, (
+        f"prose is {prose}, more than {PROSE_SLACK} under the ceiling: lower "
+        f"PROSE_CEILING to {prose} in this commit (D58)"
     )
 
 
