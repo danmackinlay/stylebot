@@ -55,6 +55,7 @@ keep their numbers — the second index below is how you find them.
 | D82 | the scale arms are nested — three honest analyses, and the stamp is not a facet | live |
 | D83 | the synth flag audit closed 2026-08-13 — four retired, four kept, one deferred | live |
 | D84 | the corpus is append-only draws plus derived views | live |
+| D85 | the blog's literals are a `SourcePolicy` parameter, not a fork | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D48)
 
@@ -1085,3 +1086,28 @@ and an absent `draws/` is created. `findings.md` "The view drops the superseded 
 
 **Re-evaluate if** a draw shard passes a few hundred MB (finer shards, not a database) or a
 view is needed offline more often than it is rebuilt.
+
+## D85: the blog's literals are a `SourcePolicy` parameter, not a fork
+
+**Decision (2026-09-04 by Dan; landed 2026-09-05, W4 step 4).** The blog-shaped literals
+stylebot carried become one object: `stylebot.lib.SourcePolicy(glob, meta_field, max_level)`,
+with `selects()` and `level_of()`. `DEFAULT_SOURCE` renders today's literals, so no existing
+caller moves; the blog states its own `SOURCE` and hands it to the walk, to the selector and to
+`iter_targets`. It went in `lib.py` — the generic frontmatter layer that already owned the two
+functions whose *defaults* were those literals — and not in a new module (P8: a seam this small
+does not earn a file). The author slot of the same re-stamp is D64's.
+
+**Alternatives.** *Write "danbot's engine, split out for hygiene" into OVERVIEW and stop paying
+the generality tax* — the real contender, put to Dan as the either/or; he chose the parameter.
+*Leave the literals as keyword defaults* — what was already there, and it hid
+`field="automation"` from a caller that believed it had passed its policy: the blog's
+`make_selector` passed `max_level` and took the field from stylebot's default.
+
+**Deciding constraint.** stylebot has exactly one editable-path consumer, so generality was
+unpaid-for until something forced the seam to be *named*; the step-4 re-stamp was the one
+moment the corpus could absorb it — a view rebuild, not a migration (D84).
+
+**Re-evaluate if** a second consumer appears, or the author slot has to reach inference and
+serving. It does not today: `infer`'s two chat builds and `capture`'s draw record still emit
+the module-level `STYLE_SYSTEM`, so a non-default author can be trained but would be *served*
+under Dan's prompt.
