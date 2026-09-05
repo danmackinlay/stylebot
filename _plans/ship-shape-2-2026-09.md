@@ -297,3 +297,16 @@ Appended by the master, dated, one line each.
   5 I001, 3 UP035, 2 UP032; 34 auto-fixable) and `ruff format` would touch 207
   of 462 files; the blog is lint-only by its own CLAUDE.md and warn-only at
   commit, so this is a blog slice for another round, not R1's.
+- 2026-09-05 (R6): the blog's `.githooks/pre-commit` excludes `tests/fixtures/*.qmd`
+  and says `segmenter_conformance.qmd` is sha-pinned against stylebot; the blog
+  has no `tests/fixtures/` (the fixture is stylebot's `tests/fixtures/hard/`) — a
+  dead pathspec and a stale comment in a hook.
+- 2026-09-05 (R6): stylebot CLAUDE.md "Setup & verify" says `uv sync`, but a fresh
+  env fails collection at `tests/test_export.py` without `--all-extras`
+  (`safetensors`, X4's module-scope import); one line, 158/160.
+- 2026-09-05 (R6): `tests/test_synth.py:482` docstring copies "876 pairs, 19.1%" —
+  the same P1 drift as §6's two named sites.
+- 2026-09-05 (R6): `bin/dan_style.py`'s docstring says `build-view` is blog-only
+  "until ai-style grows one"; stale once R3 lands.
+- 2026-09-05 (R6): `_training_pairs/scores.jsonl` (270 rows, 2026-08-12,
+  gitignored) is still in the main blog checkout — Dan's to delete.
