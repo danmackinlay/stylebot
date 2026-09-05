@@ -1,14 +1,10 @@
-"""The verdict — a paired comparison of two scored runs, clustered by post.
+"""The verdict — a paired comparison of two scored runs, clustered by post (D40).
 
-`compare_scores` joins two `scores.jsonl` files on the pair id and reports the
-paired difference with a cluster bootstrap over posts; `paired_delta` is that
-interval on bare sequences. `EvalOpts` / `VerdictOpts` / `DocumentOpts` declare
-the flags both CLIs offer, `format_summary` / `format_verdict` render for both,
-and `report_eval` is the tail of the `eval` pass (`scoring.run_eval`, D78).
-
-Why posts and not chunks, and why the real facet is the headline: D40. Why a
-cross-detector comparison is refused, and a detector verdict on rows that
-detector reranked (`meta.reranker`): D39.
+`compare_scores` joins two `scores.jsonl` on the pair id with a cluster
+bootstrap over posts; `paired_delta` is that interval on bare sequences. The
+option bundles and `format_*` renderers serve both CLIs; `report_eval` is
+the tail of the `eval` pass (D78). Cross-detector and circular verdicts are
+refused (D39).
 """
 
 from __future__ import annotations
@@ -34,9 +30,8 @@ from stylebot.scoring import (
     load_scores,
 )
 
-#: How to pull one scalar out of a scored field. Vale reports `null` when the
-#: binary is absent rather than 0, so an unavailable run drops out of the
-#: comparison instead of scoring perfect.
+#: How to pull one scalar out of a scored field; an unavailable Vale is `null`,
+#: not 0, so it drops out rather than scoring perfect.
 SIGNAL_EXTRACTORS: dict[str, Callable[[dict], float | None]] = {
     "detector": lambda signals: (signals.get("detector") or {}).get("score"),
     "judge": lambda signals: (signals.get("judge") or {}).get("score"),
@@ -57,16 +52,11 @@ def paired_delta(
     seed: int = 0,
     alpha: float = 0.05,
 ) -> dict | None:
-    """Mean of `a - b` with a confidence interval; clustered when asked (D40).
+    """Mean of `a - b` with a percentile bootstrap interval over `clusters` (D40).
 
-    `a`, `b` and `clusters` are aligned; a position where either value is None
-    drops out. With `clusters`, whole clusters are resampled with replacement
-    `n_boot` times and the interval is the percentile interval of the resampled
-    means; without them every observation is its own cluster, which is the
-    ordinary paired bootstrap.
-
-    Returns None when fewer than two usable differences remain; the interval is
-    None when they all fall in one cluster — one post is not an interval.
+    Aligned sequences; a None on either side drops out. Returns None with
+    fewer than two usable differences; the interval is None when they all fall
+    in one cluster.
     """
     clustered = clusters is not None
     if clusters is None:
@@ -118,10 +108,7 @@ def paired_delta(
 
 @dataclass(frozen=True)
 class EvalOpts:
-    """The scoring surface of `eval` — what `scoring.run_eval` takes (D78).
-
-    Every default is the constant the library function behind it uses.
-    """
+    """The scoring surface of `eval` — what `scoring.run_eval` takes (D78)."""
 
     cli_section = "Scoring"
 
@@ -250,11 +237,7 @@ class EvalOpts:
 
 @dataclass(frozen=True)
 class VerdictOpts:
-    """The comparison surface, declared once for every CLI that offers it.
-
-    A `cli_options` bundle because `ai-style eval` and the blog's `dan-style
-    eval` mirror each other flag for flag, pinned by the blog's mirror test.
-    """
+    """The comparison surface, declared once for every CLI that offers it (D78)."""
 
     cli_section = "Verdict / comparison"
 
@@ -304,13 +287,9 @@ class VerdictOpts:
 
 @dataclass(frozen=True)
 class DocumentOpts:
-    """The document-scale eval surface — `rewrite_documents_file`'s flags.
-
-    Deliberately only four: the styler is configured entirely by the training
-    manifest (`backends.opts_from_manifest`), because the whole point of
-    document-scale eval is to exercise the diet the manifest records. A flag
-    soup here would let you score a diet no adapter was trained on.
-    """
+    """The document-scale eval surface — `rewrite_documents_file`'s flags. Only
+    four: the styler is configured by the manifest, so the diet it records is
+    the one scored (D54)."""
 
     cli_section = "Document-scale eval"
 
@@ -351,12 +330,8 @@ EVAL_PARAMS: dict[str, type] = {"eval": EvalOpts, **VERDICT_PARAMS, "view": View
 
 
 def verdict_options(**kw):
-    """The shared verdict/comparison + document-scale flags, one decorator.
-
-    Both bundles at once: a surface split across two decorators is two chances
-    to add a flag to one CLI and forget the other. `defaults=`/`exclude=` as
-    elsewhere.
-    """
+    """The shared verdict/comparison + document-scale flags, one decorator;
+    `defaults=`/`exclude=` as elsewhere."""
     from stylebot.cli_options import bundle_options
 
     return bundle_options([VerdictOpts, DocumentOpts], **kw)
@@ -406,11 +381,8 @@ def report_eval(
 
 
 def format_summary(summary: dict) -> list[str]:
-    """The aggregate as printable lines, **real facet first** (D40).
-
-    A renderer, not a printer, so `ai-style eval` and the blog's mirror show the
-    same thing without either owning the layout.
-    """
+    """The aggregate as printable lines, real facet first (D40); a renderer,
+    so both CLIs show the same thing."""
     lines: list[str] = []
 
     def block(prefix: str, fields: dict) -> None:
@@ -505,17 +477,13 @@ def compare_scores(
     seed: int = 0,
     allow_cross_detector: bool = False,
 ) -> dict:
-    """Paired verdict between two scored runs over the same ids.
+    """Paired verdict between two scored runs over the ids both carry.
 
-    Joins on the score `id`, keeps the ids both files carry, and reports the
-    paired difference with a bootstrap clustered on `meta[cluster_by]` — the
-    post, by default. `provenance` restricts the comparison to one facet,
-    `"real"` by default; pass None for all rows (D40). A row one side has no
-    `signal` value for (a judge refusal) is dropped and counted in ``n_unscored``.
-
-    **Refuses a cross-detector comparison** (D39): both files must have been
-    written by the same detector artifact. `allow_cross_detector=True` says you
-    mean it, and the returned dict records that you did.
+    Bootstrap clustered on `meta[cluster_by]`, the post by default; `provenance`
+    restricts to one facet, `"real"` by default, None for all (D40). A row with
+    no `signal` value on one side is dropped into ``n_unscored``. Refuses a
+    cross-detector comparison unless `allow_cross_detector` (D39), which the
+    returned dict records.
     """
     if signal not in SIGNAL_EXTRACTORS:
         raise ConfigError(f"unknown signal {signal!r}; known: {sorted(SIGNAL_EXTRACTORS)}")

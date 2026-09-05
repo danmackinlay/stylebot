@@ -1,24 +1,13 @@
-"""The eval harness's four signals, and one-passage scoring over them.
+"""The eval harness's four signals, and one-passage scoring over them (D7).
 
-Offline ground truth: it scores candidate output and is not wired into the
-trainer, not baked into the served adapter. Library-first — typed functions
-over prose strings — and it never imports a CLI, nor `livingthing`.
-
-The four signals (the detector's choice is D7): **Vale** (mechanical
-slop, shelled out to the binary, degrades gracefully if it is absent), an **LLM
-judge** (injectable `Judge`; `openrouter_judge` builds a real one), a
-**statistical detector** (pluggable `Detector`, `null_detector` by default), and
-**Dan's eyeball** (the non-automatable veto channel, carried as a string).
-
-Guardrail (D7): this harness is **not** a
-slop-detection evader. A styler should lower its detector score only as a
-*consequence* of writing more like Dan. The judge and eyeball exist to catch
-reward-hacking; a movement in the detector alone is never the success criterion.
-
-Networked imports (`openai`) are lazy, so importing this module requires no SDK
-and no key. Corpus-scale scoring is `stylebot.scoring`, the paired verdict
-`stylebot.verdict`, document-scale rewriting `stylebot.docscale`, the tidy CSV
-`stylebot.covariates` — all re-exported here for compatibility (D62).
+Offline ground truth over prose strings, never wired into the trainer: Vale
+(mechanical slop, degrades gracefully when absent), an LLM judge (injectable
+`Judge`; `openrouter_judge` builds one), a statistical detector (pluggable
+`Detector`, `null_detector` by default) and the eyeball (a human note). A
+detector movement alone is never the success criterion (D7). Networked
+imports are lazy. Corpus-scale scoring is `stylebot.scoring`, the verdict
+`stylebot.verdict`, document scale `stylebot.docscale`, the tidy CSV
+`stylebot.covariates`, all re-exported here (D62).
 """
 
 from __future__ import annotations
@@ -32,8 +21,7 @@ from pathlib import Path
 from statistics import mean, stdev
 from typing import Protocol
 
-# `classify` is ML-dependency-free at import, so taking the detector-identity
-# contract from it keeps one definition of "which head scored this".
+# One definition of "which head scored this"; `classify` is import-light.
 from stylebot.classify import DETECTOR_IDENTITY_KEYS
 
 #: 3 -> 4 when a judge refusal became `None` and `n_unscored` joined the summary (D87).
@@ -47,10 +35,8 @@ DEFAULT_JUDGE_MODEL = "anthropic/claude-opus-4-8"
 # ---------------------------------------------------------------------------
 
 
-# Files handed to a single `vale` invocation. Vale takes many paths at once and
-# returns one {filename: [alerts]} map, so batching turns "one process per scored
-# text" into "one process per this many". Capped rather than unbounded: the paths
-# all land on one argv, and ARG_MAX is the wall.
+# Files handed to a single `vale` invocation; the paths share one argv, and
+# ARG_MAX is the wall.
 _VALE_FILES_PER_RUN = 256
 
 
@@ -80,13 +66,8 @@ def _vale_summarize(alerts: list[dict]) -> dict:
 
 
 def _basename(key: str) -> str:
-    """Last path segment of a vale JSON key, whichever separator it used.
-
-    Vale keys its output map by the path it was *handed*: absolute when we pass
-    absolute paths, relative when relative. We always pass absolute paths inside
-    one temp directory whose filenames are unique by construction, so the last
-    segment is an unambiguous join key either way.
-    """
+    """Last path segment of a vale JSON key, whichever separator it used; the
+    scratch filenames are unique, so it is the join key."""
     return str(key).replace("\\", "/").rsplit("/", 1)[-1]
 
 
@@ -96,9 +77,7 @@ def _vale_run(texts: Sequence[str], *, config_path: str | Path | None) -> list[d
     if config_path is not None:
         cmd.append(f"--config={Path(config_path)}")
 
-    # Index-derived filenames inside one scratch directory: unique by
-    # construction, so no two texts can collide on a key even if two carry
-    # identical prose.
+    # Index-derived filenames: unique even when two texts carry identical prose.
     names = [f"{i:08d}.md" for i in range(len(texts))]
     try:
         with tempfile.TemporaryDirectory(
@@ -129,9 +108,7 @@ def _vale_run(texts: Sequence[str], *, config_path: str | Path | None) -> list[d
     except json.JSONDecodeError:
         return [_vale_unavailable("vale output was not JSON") for _ in texts]
 
-    # Vale emits a runtime-error *object* (e.g. E100 "no config file found")
-    # instead of the normal {filename: [alerts]} map. Treat that as unavailable —
-    # it is a whole-run failure, so every text in the batch degrades.
+    # A runtime-error object (e.g. E100) instead of the map: the whole batch degrades.
     if isinstance(parsed, dict) and parsed.get("Code"):
         reason = str(parsed.get("Text", parsed["Code"])).strip()
         return [_vale_unavailable(reason) for _ in texts]
@@ -143,25 +120,17 @@ def _vale_run(texts: Sequence[str], *, config_path: str | Path | None) -> list[d
                 by_name.setdefault(_basename(key), []).extend(
                     a for a in file_alerts if isinstance(a, dict)
                 )
-    # A clean file is OMITTED from vale's map, not present with an empty list —
-    # so a missing key means zero alerts, not a missing result.
+    # A clean file is omitted from vale's map: a missing key is zero alerts.
     return [_vale_summarize(by_name.get(name, [])) for name in names]
 
 
 def vale_score_many(texts: Sequence[str], *, config_path: str | Path | None = None) -> list[dict]:
     """Score many texts with as few `vale` processes as possible.
 
-    The batch form of `vale_score`, and the one the corpus scorer uses: process
-    startup dominates a per-text shell-out. The batch is written into one
-    scratch directory under index-derived ``*.md`` names — unique by
-    construction, so no two texts collide on a key in vale's
-    ``{filename: [alerts]}`` map — and chunked across invocations of at most
-    `_VALE_FILES_PER_RUN` files.
-
-    One dict per input text, **in input order**, shaped as `vale_score` returns.
-    Never raises: a whole-run failure (vale absent, unexecutable, silent,
-    non-JSON, or reporting its own ``E100``) degrades every text in that chunk
-    to ``{"available": False, "reason": …}``.
+    The batch form of `vale_score`: one scratch directory, at most
+    `_VALE_FILES_PER_RUN` files per invocation. Returns one dict per text, in
+    input order, shaped as `vale_score` returns. Never raises: a whole-run
+    failure degrades every text in that chunk to ``{"available": False, …}``.
     """
     texts = list(texts)
     if not texts:
@@ -178,20 +147,12 @@ def vale_score_many(texts: Sequence[str], *, config_path: str | Path | None = No
 
 
 def vale_score(text: str, *, config_path: str | Path | None = None) -> dict:
-    """Score `text` with the `vale` binary; return a JSON-able alert summary.
+    """Score `text` with the `vale` binary; a batch of one over `vale_score_many`.
 
-    Shells out to ``vale --output=JSON`` over the text written to a temporary
-    ``*.md`` file, **not stdin**: vale scopes styles by matching the *filename*,
-    and its synthetic stdin name matches no glob, so a config like
-    ``[*.{md,qmd}] BasedOnStyles = …`` silently returns 0 alerts for everything.
-    `config_path` is an explicit parameter — never a hardcoded blog ruleset.
-
-    Returns ``{"available", "alerts", "by_severity", "raw"}``; `alerts` is the
-    total (0 when unavailable) and `raw` is vale's per-alert objects. Never
-    raises: no binary or no usable config gives ``available: False``.
-
-    A batch of one over `vale_score_many`, which is what you want for more than
-    one text — this costs a whole process.
+    The text goes through a temporary ``*.md`` file, not stdin: vale scopes
+    styles by filename, and stdin matches no glob. Returns ``{"available",
+    "alerts", "by_severity", "raw"}``; never raises — no binary or no usable
+    config gives ``available: False``.
     """
     return vale_score_many([text], config_path=config_path)[0]
 
@@ -200,9 +161,8 @@ def vale_score(text: str, *, config_path: str | Path | None = None) -> dict:
 # Signal 2 — LLM-as-judge ("is this Dan-shaped / free of AI-slop tells")
 # ---------------------------------------------------------------------------
 
-# Callable contract: prose -> {"score": int, "rationale": str}. Injectable so
-# tests pass a fake (no API). `openrouter_judge` builds the blocking one and
-# `openrouter_judge_async` the awaited one, which a corpus pass takes (D59).
+# Callable contract: prose -> {"score": int, "rationale": str}; a corpus pass
+# takes the awaited form (D59).
 Judge = Callable[[str], dict]
 AsyncJudge = Callable[[str], Awaitable[dict]]
 
@@ -226,9 +186,8 @@ def parse_judge_reply(reply: str) -> dict:
     """Extract ``{"score": int, "rationale": str}`` from a model reply.
 
     Tolerates prose around the JSON object and clamps the score into 1-5. A
-    reply with no JSON object carrying a numeric ``score`` — a refusal, a hedge,
-    a paragraph count — is ``{"score": None, "parse_error": True, "rationale":
-    reply}``: unscored, never a digit fished out of the prose (ship-shape C4).
+    reply with no numeric ``score`` is ``{"score": None, "parse_error": True,
+    "rationale": reply}``: unscored, never a digit fished out of the prose.
     """
     obj = _first_json_object(reply)
     try:
@@ -269,11 +228,8 @@ def _first_json_object(text: str) -> dict | None:
 
 
 def _openrouter_client_kwargs(api_key: str | None, base_url: str | None) -> dict:
-    """Key + endpoint for either OpenRouter client, resolved via `stylebot.config`.
-
-    `OPENROUTER_API_KEY` is required (`config.require_key`);
-    `OPENROUTER_BASE_URL` overrides the default endpoint. Nothing prints a key.
-    """
+    """Key + endpoint for either OpenRouter client, via `stylebot.config`;
+    nothing prints a key."""
     from stylebot import config
 
     return {
@@ -292,10 +248,7 @@ def _judge_request(model: str, system: str, max_tokens: int, prose: str) -> dict
             {"role": "system", "content": system},
             {"role": "user", "content": prose},
         ],
-        # OpenRouter returns the billed cost on the usage object when asked for
-        # it. Without this the judge is the one signal whose price is unknowable
-        # after the fact — the detector and Vale are free and local. Per call
-        # rather than aggregated: a per-call figure is what sizes a subsample.
+        # Billed cost per call, so the judge's price is knowable after the fact.
         "extra_body": {"usage": {"include": True}},
     }
 
@@ -308,9 +261,8 @@ def _judge_verdict(resp, model: str) -> dict:
         verdict["usage"] = {
             "prompt_tokens": getattr(usage, "prompt_tokens", None),
             "completion_tokens": getattr(usage, "completion_tokens", None),
-            # Absent on providers that do not report it, and — per the blog's
-            # BYOK note — potentially the 5% fee rather than list price when the
-            # arm bills to a bring-your-own key. Treat as an indication.
+            # Absent on providers that do not report it; the BYOK fee, not
+            # list price, on a bring-your-own key (D66). An indication.
             "cost": getattr(usage, "cost", None),
         }
     return verdict
@@ -324,12 +276,8 @@ def openrouter_judge(
     system: str = JUDGE_SYSTEM,
     max_tokens: int = 256,
 ) -> Judge:
-    """Build a blocking `Judge` backed by OpenRouter (OpenAI-compatible SDK).
-
-    For single-passage callers (`score_candidate`). A corpus pass wants
-    `openrouter_judge_async`, which is the same request awaited: `score_pairs_file`
-    takes a sync judge only at `max_workers=1`, one call at a time (D59).
-    """
+    """Build a blocking `Judge` backed by OpenRouter, for single-passage callers;
+    a corpus pass wants `openrouter_judge_async` (D59)."""
     import openai
 
     client = openai.OpenAI(**_openrouter_client_kwargs(api_key, base_url))
@@ -349,12 +297,8 @@ def openrouter_judge_async(
     system: str = JUDGE_SYSTEM,
     max_tokens: int = 256,
 ) -> AsyncJudge:
-    """`openrouter_judge` on `openai.AsyncOpenAI` — the judge a corpus pass takes.
-
-    `score_pairs_file` overlaps these awaits `max_workers` at a time, the
-    harness's only concurrency. The client is built on the first await, so it
-    binds that loop, and `judge.aclose()` releases it when the pass ends.
-    """
+    """`openrouter_judge` on `openai.AsyncOpenAI` — the judge a corpus pass takes
+    (D59). The client binds the loop of its first await; `aclose()` releases it."""
     import openai
 
     kwargs = _openrouter_client_kwargs(api_key, base_url)
@@ -384,19 +328,14 @@ def openrouter_judge_async(
 # ---------------------------------------------------------------------------
 
 
-# Callable contract: prose -> {"score": float|None, "name": str, ...}, where a
-# higher score means *more AI-like*. The default `null_detector` is unconfigured.
+# Callable contract: prose -> {"score": float|None, "name": str, ...}; higher
+# is more AI-like.
 class Detector(Protocol):
     def __call__(self, prose: str) -> dict: ...
 
 
 def null_detector(prose: str) -> dict:
-    """The default detector: scores nothing, signals it is unconfigured.
-
-    Returns ``score=None`` so the rest of the harness composes cleanly without
-    pretending to a signal it does not have. Wiring a real one is the operator's
-    call — see D7.
-    """
+    """The default detector: ``score=None``, signalling it is unconfigured (D7)."""
     return {"score": None, "name": "null", "configured": False}
 
 
@@ -404,13 +343,9 @@ null_detector.identity = {key: None for key in DETECTOR_IDENTITY_KEYS} | {"name"
 
 
 def detector_identity(detector: Detector) -> dict:
-    """Which head is this — `DETECTOR_IDENTITY_KEYS`, without spending an embed.
-
-    Reads the ``.identity`` attribute `classify.embedding_classifier_detector`
-    attaches. A detector that carries none (a test stub, a hand-rolled
-    callable) answers all-None with its ``__name__`` for `name`, so callers get
-    a comparable shape from anything satisfying the protocol.
-    """
+    """Which head is this — `DETECTOR_IDENTITY_KEYS` from the ``.identity``
+    attribute, without spending an embed; a bare callable answers all-None
+    with its ``__name__``."""
     identity = getattr(detector, "identity", None)
     if isinstance(identity, dict):
         return {key: identity.get(key) for key in DETECTOR_IDENTITY_KEYS}
@@ -422,12 +357,8 @@ def detector_identity(detector: Detector) -> dict:
 def _chunked_name(
     identity: dict, max_chunk_chars: int, inline_headings: bool, div_is_prose=None
 ) -> str:
-    """How a chunk-wise detector names the scale and div policy it ran under.
-
-    Scale, and a `div_is_prose` saying what is prose at all, each make a second
-    instrument from one artifact; `DETECTOR_IDENTITY_KEYS` has a field for
-    neither, so both ride on `name` — the policy as `_canonical` writes it.
-    """
+    """How a chunk-wise detector names the scale and div policy it ran under:
+    each makes a second instrument from one artifact, so both ride on `name`."""
     from stylebot.provenance import _canonical
 
     suffix = f"/chunked:{max_chunk_chars}" + (":inline-headings" if inline_headings else "")
@@ -443,18 +374,12 @@ def chunked_detector(
     inline_headings: bool = False,
     div_is_prose=None,
 ) -> Detector:
-    """Score a WHOLE DOCUMENT at the scale the head was fit on, and aggregate.
+    """Score a whole document at the scale the head was fit on, and aggregate (D54).
 
-    Wraps any `Detector`: a passage is segmented the way serving segments it
-    (`infer.prose_chunks` — same budget, diet and protected blocks), each prose
-    chunk is scored alone, and the passage's score is the **unweighted mean over
-    its chunks**, with ``n_chunks`` and ``sd`` (the within-passage sample
-    standard deviation) beside it. Chunks are **not** aligned across `slop` /
-    `target` / `output`, so a comparison is between two unaligned means. A
-    passage with no prose chunks scores ``None``, the convention every other
-    absent signal follows. The identity is the wrapped head's, with the scale
-    and any `div_is_prose` appended to ``name``, so D39's mixing guard refuses
-    to blend two instruments' readings into one mean. Why all of that: D54.
+    Segments as serving does (`infer.prose_chunks`), scores each prose chunk,
+    and returns the unweighted mean with ``n_chunks`` and ``sd``; no prose
+    chunks scores ``None``. The identity is the wrapped head's with the scale
+    and any `div_is_prose` appended to ``name`` (D39).
     """
     from stylebot.infer import prose_chunks
 
@@ -499,9 +424,7 @@ def chunked_detector(
     detect.identity = dict(identity)
 
     if inner_batch is not None:
-        # One passage is ~17 embeds, so this is the wrapper that most needs a
-        # batch path: flatten, one encode, regroup through the same aggregation
-        # the per-passage path uses, so the two agree by construction.
+        # Flatten, one encode, regroup through the per-passage aggregation.
         def batch_detect(passages: Sequence[str]) -> list[dict]:
             cut = [_cut(p) for p in passages]
             flat = [chunk for chunks in cut for chunk in chunks]
@@ -535,15 +458,9 @@ def score_candidate(
 ) -> dict:
     """Score one candidate passage across the available signals.
 
-    `judge=None` skips the LLM signal (the harness then runs with no API key);
-    its field comes back ``None``. `eyeball` is an optional human note carried
-    verbatim into the record.
-
-    Each signal has an injection slot for an already-computed result (`vale`,
-    `detector_result`, `judge_result`), how `scoring` feeds a slice's pre-passes
-    back in; left `None`, this computes the signal itself, one passage at a time.
-
-    Returns a stable, JSON-able record keyed
+    `judge=None` skips the LLM signal (its field is ``None``); `eyeball` is a
+    human note carried verbatim. `vale`, `detector_result` and `judge_result`
+    inject a pre-computed result. Returns a JSON-able record keyed
     ``text_chars`` / ``vale`` / ``judge`` / ``detector`` / ``eyeball``.
     """
     if judge_result is None and judge is not None:
@@ -563,11 +480,8 @@ def _mean_or_none(values: Iterable[float]) -> float | None:
 
 
 def _aggregate(records: list[dict]) -> dict:
-    """Per-group aggregates over a list of `score_candidate` records.
-
-    ``n_unscored``: judge replies with no score (a refusal), kept out of the
-    mean; a keyless run (judge ``None``) is unjudged, not unscored.
-    """
+    """Per-group aggregates over `score_candidate` records; ``n_unscored`` is
+    judge refusals, kept out of the mean (a keyless run is unjudged, not unscored)."""
     judged = [r["judge"] for r in records if isinstance(r.get("judge"), dict)]
     judge_scores = [j["score"] for j in judged if j.get("score") is not None]
     vale_alerts = [r["vale"]["alerts"] for r in records if (r.get("vale") or {}).get("available")]
@@ -585,9 +499,8 @@ def _aggregate(records: list[dict]) -> dict:
     }
 
 
-# --- compatibility re-exports for the modules this one split into (D62) ------
-# They import from here, so this direction is lazy or it is a cycle. New code
-# imports the owner; this keeps `stylebot.eval.X` working for the blog mirror.
+# --- compatibility re-exports for the modules this one split into (D62); lazy
+# because they import from here.
 
 _SPLIT_OUT = {
     "stylebot.scoring": (

@@ -38,8 +38,7 @@ if TYPE_CHECKING:
     from stylebot.docscale import DocumentPass
     from stylebot.verdict import EvalOpts, VerdictOpts
 
-# meta keys carried onto each score record, so scores group / filter / join
-# downstream without re-reading the corpus.
+# meta keys carried onto each score record, for grouping without the corpus.
 _CARRIED_META = (
     "source",
     "synthetic",
@@ -49,9 +48,8 @@ _CARRIED_META = (
     "transform_sim",
     "reranker",
 )
-# Generation covariates nested under `meta.gen` (synthetic pairs only), carried
-# onto each row so `summarize_scores(by=…)` facets by them. Real pairs lack
-# `meta.gen` and omit these (null bucket).
+# `meta.gen` covariates (synthetic pairs only) carried onto each row for
+# `summarize_scores(by=…)`; real pairs omit them.
 _CARRIED_GEN = GEN_FACET_KEYS
 
 #: Judge calls in flight (D59); `verdict.EvalOpts.max_workers` shares it.
@@ -64,11 +62,8 @@ SCORE_SIGNALS = ("vale", "judge", "detector", "eyeball")
 
 
 def explode_score_row(rec: dict) -> list[dict]:
-    """A whole-record score row -> its `(id, field, signal)` rows; pure.
-
-    Also the reader for the pre-D39 shape: an existing file seeds the keyed
-    layout, buying nothing twice. No result, no row; a keyed row passes through.
-    """
+    """A whole-record score row -> its `(id, field, signal)` rows; pure. Also
+    reads the pre-D39 shape. No result, no row; a keyed row passes through."""
     if "signal" in rec or "scores" not in rec:
         return [rec]
     base = {"id": rec.get("id"), "meta": rec.get("meta") or {}}
@@ -82,10 +77,8 @@ def explode_score_row(rec: dict) -> list[dict]:
 
 
 def _fold_score_rows(rows: Iterable[dict]) -> list[dict]:
-    """Rows -> one record per id, first-seen order; last write wins per key.
-
-    Which is what makes an append an upsert (D39).
-    """
+    """Rows -> one record per id, first-seen order; last write wins per key,
+    which makes an append an upsert (D39)."""
     folded: dict[str, dict] = {}
     for row in rows:
         rid, name, signal = row.get("id"), row.get("field"), row.get("signal")
@@ -114,16 +107,10 @@ def live_record_ids(pairs_path: str | Path) -> set[str]:
 
 
 def prune_orphan_scores(pairs_path: str | Path, out_path: str | Path) -> int:
-    """Drop score rows whose pair is gone from the corpus; return the row count.
+    """Drop score rows whose pair is gone from the corpus; return the row count (D63).
 
-    `scores.jsonl` joins on `record_id` and nothing checks the join, so a
-    re-cut's stranded row inflates every `summarize_scores` mean and lands in a
-    committed `covariate_table`.
-
-    Undecodable lines are round-tripped verbatim (`jsonl.write_jsonl_atomic`);
-    a decodable row with no `id` has no join key and is pruned. One stranded
-    record is one row per signal, so the count is rows (D63). Rewritten
-    atomically, and only when something is dropped.
+    Undecodable lines round-trip verbatim; a decodable row with no `id` is
+    pruned. Rewritten atomically, and only when something is dropped.
     """
     records = read_jsonl(out_path, keep_undecodable=True)
     if not records:
@@ -146,10 +133,7 @@ def prune_orphan_scores(pairs_path: str | Path, out_path: str | Path) -> int:
 
 def _scores_detector(detector: Detector) -> bool:
     """Does this head produce detector rows, or is it the null default (D39)?
-
-    A stub row would make a later real head read as already-scored. A
-    chunk-wise wrapper suffixes its scale (D54), so the head precedes the `/`.
-    """
+    A chunk-wise wrapper suffixes its scale (D54), so the head precedes the `/`."""
     name = detector_identity(detector).get("name")
     return str(name or "null").split("/")[0] != "null"
 
@@ -166,11 +150,8 @@ def scores_filename(detector: Detector) -> str:
 
 
 def _identity_of_row(scores: dict) -> tuple | None:
-    """The detector identity recorded on one score record, as a hashable tuple.
-
-    None when the row carries no *configured* detector: an unconfigured or
-    pre-contract row is not evidence of another instrument (D39).
-    """
+    """The detector identity recorded on one score record, as a hashable tuple;
+    None when it carries no configured detector (D39)."""
     for signals in (scores or {}).values():
         detector = (signals or {}).get("detector") or {}
         if detector.get("configured") and detector.get("score") is not None:
@@ -179,12 +160,8 @@ def _identity_of_row(scores: dict) -> tuple | None:
 
 
 def detector_identities(scores: str | Path | Iterable[dict]) -> list[dict]:
-    """Every distinct detector identity present in a `scores.jsonl`.
-
-    More than one means the file mixes instruments: some rows were scored by a
-    head that no longer exists, and any mean over the file is a blend. Order is
-    first-seen, so the head of the list is the file's original instrument.
-    """
+    """Every distinct detector identity in a `scores.jsonl`, first-seen order;
+    more than one means any mean over the file is a blend (D39)."""
     seen: dict[tuple, dict] = {}
     for rec in load_scores(scores):
         key = _identity_of_row(rec.get("scores") or {})
@@ -203,11 +180,8 @@ def _identity_label(identity: dict) -> str:
 def assert_single_detector(
     scores: str | Path | Iterable[dict], *, allow_mixed: bool = False
 ) -> list[dict]:
-    """Refuse a scores file written by more than one detector; return what it has.
-
-    Everything that *compares* numbers comes through here first (D39).
-    `allow_mixed=True` returns them all, for a migration or a diagnostic.
-    """
+    """Refuse a scores file written by more than one detector (D39); return what
+    it has. `allow_mixed=True` returns them all."""
     identities = detector_identities(scores)
     if len(identities) > 1 and not allow_mixed:
         labels = "; ".join(_identity_label(i) for i in identities)
@@ -230,8 +204,7 @@ def _guard_detector_continuity(
     if incoming.get("name") is None and all(v is None for v in incoming.values()):
         return  # an unidentifiable detector cannot be shown to differ
     existing = identities[0]
-    # An unconfigured (null) detector adds no detector scores at all, so it can
-    # never blend the file's means; only a *scoring* head has to match.
+    # A null detector adds no detector rows, so only a scoring head has to match.
     if incoming == existing or not _scores_detector(detector):
         return
     fresh = Path(out_path).parent / scores_filename(detector)
@@ -253,9 +226,8 @@ class ScoreResult:
     errors: list[tuple[str, str]] = field(default_factory=list)  # (id, message)
 
 
-# Records per slice: one pre-pass per signal each, so this is the granularity at
-# which results reach the file. Bigger amortises `vale` startup and the judge's
-# concurrency; smaller loses less to a crash. `fields` multiplies it into texts.
+# Records per slice, the granularity at which results reach the file: bigger
+# amortises `vale` startup, smaller loses less to a crash.
 _SCORE_BATCH_RECORDS = 128
 
 
@@ -272,10 +244,9 @@ def _score_record(
 ) -> dict:
     """Score the requested fields of one pair record -> a whole-record row.
 
-    The `*_by_field` maps carry the slice's pre-pass results. A field missing
-    from the Vale or detector map is scored inline; missing from the judge map
-    it raises, since the inline call would store an async judge's coroutine. A
-    judge call that raised is re-raised here, against that record alone.
+    The `*_by_field` maps carry the slice's pre-pass results; a field missing
+    from the judge map raises (an inline call would store a coroutine). A judge
+    call that raised is re-raised here, against that record alone.
     """
     meta = record.get("meta") or {}
     scores: dict[str, dict] = {}
@@ -307,11 +278,8 @@ def _score_record(
 def _slice_texts(
     records: Sequence[dict], fields: Sequence[str]
 ) -> tuple[list[str], list[tuple[int, str]]]:
-    """Every (record, field) text in a slice, plus the slot each came from.
-
-    An extraction that blows up is left out: `_score_record` hits the same
-    error and `ScoreResult` captures it per record — a pre-pass never fails a run.
-    """
+    """Every (record, field) text in a slice, plus the slot each came from; an
+    extraction that raises is left for `_score_record` to capture per record."""
     texts: list[str] = []
     slots: list[tuple[int, str]] = []
     for i, record in enumerate(records):
@@ -331,12 +299,8 @@ def _vale_prepass(
     fields: Sequence[str],
     vale_config: str | Path | None,
 ) -> list[dict[str, dict]]:
-    """Batch-score every (record, field) text with Vale -> per-record results.
-
-    Returns one ``{field: vale_record}`` dict per input record, aligned to
-    `records`. Never raises and never fails a record; a Vale batch failure
-    degrades the affected texts to ``available: False``.
-    """
+    """Batch-score every (record, field) text with Vale -> one ``{field:
+    vale_record}`` per record, aligned. Never raises; a batch failure degrades."""
     texts, slots = _slice_texts(records, fields)
     per_record: list[dict[str, dict]] = [{} for _ in records]
     if not texts:
@@ -366,11 +330,8 @@ def _detector_prepass(
     fields: Sequence[str],
     detector: Detector,
 ) -> list[dict[str, dict]]:
-    """Score every (record, field) text with the detector, Vale-style (D59).
-
-    One `classify.detect_many` call per slice; a failing batch retries per text
-    on this task, then records the error in the field. One dict per record.
-    """
+    """Score every (record, field) text with the detector, Vale-style (D59): one
+    `detect_many` per slice, a failing batch retried per text. One dict per record."""
     per_record: list[dict[str, dict]] = [{} for _ in records]
     texts, slots = _slice_texts(records, fields)
     if not texts:
@@ -396,12 +357,8 @@ async def _judge_prepass(
     judge: Judge | AsyncJudge | None,
     max_workers: int,
 ) -> list[dict[str, dict | BaseException]]:
-    """Judge every (record, field) text, `max_workers` calls in flight (D59).
-
-    An async judge is awaited under an `asyncio.Semaphore`; a sync one is serial,
-    so the entry points take it only at `max_workers=1`. A call that raised is
-    carried back as its exception, re-raised against that record alone.
-    """
+    """Judge every (record, field) text, `max_workers` calls in flight (D59); a
+    sync judge is serial. A call that raised is carried back as its exception."""
     per_record: list[dict[str, dict | BaseException]] = [{} for _ in records]
     if judge is None:
         return per_record
@@ -455,9 +412,8 @@ async def _aclose_judge(judge: Judge | AsyncJudge | None) -> None:
 
 
 def score_pairs_file(pairs_path: str | Path, out_path: str | Path, **kwargs) -> ScoreResult:
-    """The sync entry point: owns an event loop (`asyncio.run`) for the judge
-    pass, and takes `score_pairs_file_async`'s keywords, where they are typed
-    and documented. Call that one from inside a running loop instead."""
+    """The sync entry point: `asyncio.run` over `score_pairs_file_async`, whose
+    keywords it takes."""
     _guard_no_running_loop()
     return asyncio.run(score_pairs_file_async(pairs_path, out_path, **kwargs))
 
@@ -509,12 +465,9 @@ async def _score_slice(
     max_workers: int,
     progress: Callable[[], None] | None = None,
 ) -> None:
-    """One pre-pass per signal over the slice, then the rows the file still owes.
-
-    A row is written only for a `signals` this run produces and only when `keys`
-    lacks it, so a pass adding a signal leaves the earlier rows as it found them. A
-    record that raises or will not serialise lands in `result.errors`, nothing written.
-    """
+    """One pre-pass per signal over the slice, then the rows the file still owes:
+    a `signals` this run produces that `keys` lacks. A record that raises or will
+    not serialise lands in `result.errors`, nothing written."""
     vale_results = _vale_prepass(batch, fields=fields, vale_config=vale_config)
     det_results = _detector_prepass(batch, fields=fields, detector=detector)
     judge_results = await _judge_prepass(batch, fields=fields, judge=judge, max_workers=max_workers)
@@ -564,18 +517,12 @@ async def score_pairs_file_async(
 ) -> ScoreResult:
     """Score a corpus -> a signal-keyed `scores.jsonl`, batched and resumable.
 
-    For each pair, score the named `fields` and append one row per
-    `(record_id, field, signal)`; keys already in `out_path` are skipped, so a
-    run is idempotent, resumable, and adds a signal without re-buying one. Per
-    slice (`_SCORE_BATCH_RECORDS`) the Vale and detector pre-passes block the
-    loop — by design, D59 — then `max_workers` judge calls go in flight.
-
-    The rows' detector identity must match this run's unless
-    `allow_mixed_detector` (D39), checked before anything writes, the prune
-    included. `out_path` is then pruned of rows whose pair is gone
-    (`prune_orphan_scores`; `ScoreResult.pruned_orphans` — surface it, it
-    rewrites a file the caller may have committed) against the WHOLE corpus,
-    `limit` notwithstanding; `prune_orphans=False` for another corpus.
+    One row per `(record_id, field, signal)`; keys already in `out_path` are
+    skipped, so a run adds a signal without re-buying one. Per slice the Vale
+    and detector pre-passes block the loop, then `max_workers` judge calls go
+    in flight (D59). The rows' detector identity must match this run's unless
+    `allow_mixed_detector` (D39), checked before anything writes; `out_path` is
+    then pruned against the whole corpus (`prune_orphans=False` for another).
     """
     pairs_path = Path(pairs_path)
     out_path = Path(out_path)
@@ -585,8 +532,8 @@ async def score_pairs_file_async(
         raise ConfigError(f"unknown field(s) {unknown}; known: {sorted(FIELD_EXTRACTORS)}")
     _guard_judge_concurrency(judge, max_workers)
 
-    # The guard first: a refused run must not have rewritten anything, and the
-    # prune is one. Then prune before `keys`, or an orphan counts as scored.
+    # Guard, then prune, then `keys`: a refused run rewrites nothing, and an
+    # orphan must not count as scored.
     _guard_detector_continuity(out_path, detector, allow_mixed=allow_mixed_detector)
     pruned = prune_orphan_scores(pairs_path, out_path) if prune_orphans else 0
 
@@ -630,12 +577,8 @@ async def score_pairs_file_async(
 
 
 def load_scores(scores: str | Path | Iterable[dict]) -> list[dict]:
-    """Load a `scores.jsonl` (or in-memory rows) folded to one record per id.
-
-    Either shape goes in — keyed rows, or pre-D39 whole-record rows — and the
-    nesting `verdict`, `report` and `covariates` expect comes out. Tolerant
-    (`stylebot.jsonl`: blank/undecodable lines skipped, missing file → empty).
-    """
+    """Load a `scores.jsonl` (or in-memory rows, keyed or pre-D39 whole-record)
+    folded to one record per id; tolerant of a missing file."""
     raw = read_jsonl(scores) if isinstance(scores, (str, Path)) else list(scores)
     return _fold_score_rows(row for rec in raw for row in explode_score_row(rec))
 
@@ -656,11 +599,7 @@ def _aggregate_fields(records: list[dict]) -> dict:
 
 
 def split_by_provenance(records: Sequence[dict]) -> dict[str, list[dict]]:
-    """Score records split `real` / `synthetic` on `meta.synthetic`.
-
-    The headline number comes from the real facet; the synthetic one is
-    reported separately, never folded in. Why: D40.
-    """
+    """Score records split `real` / `synthetic` on `meta.synthetic` (D40)."""
     facets: dict[str, list[dict]] = {"real": [], "synthetic": []}
     for rec in records:
         facets["synthetic" if (rec.get("meta") or {}).get("synthetic") else "real"].append(rec)
@@ -675,11 +614,9 @@ def summarize_scores(
 ) -> dict:
     """Aggregate a `scores.jsonl` (path or records) per field, optionally faceted.
 
-    Fields-across-rows are the "groups" the styler is judged by movement across
-    (slop vs target vs output). `by` facets on a carried `meta` key —
-    `by="slop_strategy"` gives per-strategy means. `facet_provenance` (default
-    on) adds `by_provenance.real` / `.synthetic` and names `headline_facet:
-    "real"` (D40); the detector identities always ride beside it (D39).
+    `by` facets on a carried `meta` key; `facet_provenance` adds
+    `by_provenance.real` / `.synthetic` with `headline_facet: "real"` (D40);
+    the detector identities ride beside it (D39).
     """
     records = load_scores(scores)
     summary: dict = {
@@ -748,8 +685,7 @@ def run_eval(
         allow_mixed_detector=verdict.allow_mixed_detector,
         on_progress=progress,
     )
-    # Loud: the prune REWROTE a file the operator may have committed, and a big
-    # count usually means --out belongs to another corpus.
+    # Loud: the prune rewrote a file the operator may have committed.
     if result.pruned_orphans:
         emit(
             f"pruned {result.pruned_orphans} orphan score row(s) from {out} "
