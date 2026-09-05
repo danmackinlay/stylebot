@@ -1,21 +1,13 @@
 """The corpus as append-only draws plus derived views (D84).
 
-Layer 1, **draws**: one record per generator call or human edit, keyed on what
-it *was* — source, blog SHA, span, generator, strategy, prompt, effort,
-replicate — with the raw generator output kept and an `outcome` of
-`accepted | gate:<name> | error:<class>`. Draws live under `draws/` in
-`pairs/`'s shard layout and are only ever appended to.
-
-Layer 2, **views**: a function of the draws and a `ViewPolicy`, materialised
-in exactly `pairs/`'s shard layout so every `corpus.iter_records` reader keeps
-working. Data flows draws -> views, never back; a prune is a policy clause
-plus a rebuild.
-
-`draws_from_pairs` lifts a pair record into an accepted draw, and `build_view`
-under an identity policy reproduces `pairs/` byte-for-byte (`findings.md` "The
-view reproduces the corpus"); `new_draw` is the native draw `synth` appends per
-generator call; a capture's draw is `capture.capture_pairs`'s. Nothing here
-writes to `pairs/`; there is no lock, thread or process (P8).
+A draw is one generator call or human edit, keyed on what it was, with the
+raw output kept and an `outcome` of `accepted | gate:<name> | error:<class>`;
+draws live under `draws/` in `pairs/`'s shard layout and are only appended.
+A view is a function of the draws and a `ViewPolicy`, materialised in the
+same layout so every `corpus.iter_records` reader keeps working; a prune is
+a policy clause plus a rebuild. `build_view` under an identity policy
+reproduces `pairs/` byte-for-byte (`findings.md` "The view reproduces the
+corpus"). No lock, thread or process (P8).
 """
 
 from __future__ import annotations
@@ -51,11 +43,10 @@ _MONTH_RE = re.compile(r"^(\d{4}-\d{2})")
 class Draw:
     """One generator call or human edit, as it happened (D84).
 
-    `record` is the pair record a view emits for an accepted draw, kept whole
-    so a lifted draw round-trips byte-for-byte. A draw is never edited, so a
-    later save of the same session names what it replaced: `supersedes` holds
-    the prior `capture_id`s (W4 step 4); `superseded_by` is the backfill's
-    forward pointer on a draw that predates it. `build_view` honours both.
+    `record` is the pair record a view emits for an accepted draw, kept whole.
+    A draw is never edited: a later save names what it replaced in
+    `supersedes` (prior `capture_id`s); `superseded_by` is the backfill's
+    forward pointer on an older draw. `build_view` honours both.
     """
 
     draw_id: str
@@ -107,12 +98,8 @@ def draw_id(
     *,
     chunk_index: int | None = None,
 ) -> str:
-    """16 hex of the design cell: what was drawn, from where, by whom (D84).
-
-    The place is the `span` when one is known; until the cutter records
-    offsets, `chunk_index` stands in for it (W4 step 4), so two chunks of one
-    source under one arm are two cells. A backfilled draw has its span.
-    """
+    """16 hex of the design cell: what was drawn, from where, by whom (D84);
+    `chunk_index` stands in for a `span` the cutter does not record."""
     where = list(span) if span else chunk_index
     cell = [source, blog_sha, where, generator, strategy, prompt_id, reasoning_effort, replicate]
     return hashlib.sha256(json.dumps(cell).encode("utf-8")).hexdigest()[:16]
@@ -122,8 +109,8 @@ def draw_id(
 
 
 def draw_shard_of(draw: Draw) -> str:
-    """`corpus.shard_of` its record, so a backfill keeps corpus order (W4 step 3);
-    a tombstone goes to `synth-<YYYY-MM>.jsonl` by `drawn_at`, else `-undated`."""
+    """`corpus.shard_of` its record, so a backfill keeps corpus order; a
+    tombstone goes to `synth-<YYYY-MM>.jsonl` by `drawn_at`, else `-undated`."""
     if draw.record is not None:
         return corpus.shard_of(draw.record)
     match = _MONTH_RE.match(draw.drawn_at) if isinstance(draw.drawn_at, str) else None
@@ -145,12 +132,8 @@ def iter_draws(draws_dir: str | Path) -> Iterator[Draw]:
 
 
 def draw_from_pair(record: dict) -> Draw:
-    """A pair record lifted into an accepted draw (W4 step 1).
-
-    No span and no SHA yet — step 3 backfills them — so the `draw_id` is
-    `pairs.record_id`, the key scores already join on. A synthetic pair's
-    user turn is the generator's post-gate output, the only copy kept.
-    """
+    """A pair record lifted into an accepted draw: no span or SHA, so the
+    `draw_id` is `pairs.record_id`, the key scores already join on."""
     meta = record.get("meta") or {}
     synthetic = bool(meta.get("synthetic"))
     return Draw(
@@ -178,14 +161,9 @@ def new_draw(
     record: dict | None = None,
     replicate: int | str = 0,
 ) -> Draw:
-    """A native draw for one generator call, as `synth` makes it (W4 step 2).
-
-    `draw_id` is the cell — `arm` supplies generator, strategy, prompt and
-    effort; `repo_prov` the blog SHA (`provenance.repo_provenance`); the
-    target's `chunk_index` stands in for a span the cutter does not record.
-    A `reasoning_text` in `gen` is dropped: traces are diagnostics, not corpus
-    (`synth`'s sidecar keeps them).
-    """
+    """A native draw for one generator call, as `synth` makes it: `arm`
+    supplies generator, strategy, prompt and effort, `repo_prov` the blog SHA.
+    A `reasoning_text` in `gen` is dropped (the sidecar keeps traces)."""
     prov = repo_prov or {}
     sha = prov.get("blog_sha")
     cell = (target.source, sha, None, arm.name, arm.strategy, arm.prompt_id, arm.reasoning_effort)
@@ -218,8 +196,7 @@ def capture_id_of(draw: Draw) -> str | None:
 
 
 def content_sha256(draws_dir: str | Path) -> str | None:
-    """16 hex over the draw shards, in `corpus.content_sha256`'s shape, so a
-    manifest's `draws_sha256` reads like its `pairs_sha256` (W4 step 4)."""
+    """16 hex over the draw shards, in `corpus.content_sha256`'s shape."""
     return corpus.content_sha256(draws_dir)
 
 
@@ -230,13 +207,10 @@ def content_sha256(draws_dir: str | Path) -> str | None:
 class ViewPolicy:
     """Every input whose change should name a different view (D84).
 
-    Each field is optional so the blog's `view_policy()` fills what it has;
-    all of them enter `policy_sha`. `system_prompt` is applied as a *stamp*
-    (`_stamped`) and `keep_superseded`, `excluded_draw_ids`, `superseded_captures`
-    (the captures this policy declares superseded) and `eval_sources` (the
-    eval-role posts, data so the sha covers them) as clauses; the rest are
-    named-only, because the gates already ran on today's draws and re-applying
-    a threshold waits for draws that carry their raw output.
+    Every field is optional and enters `policy_sha`. `system_prompt` is a
+    stamp (`_stamped`); `keep_superseded`, `excluded_draw_ids`,
+    `superseded_captures` and `eval_sources` are clauses; the rest are
+    named-only until draws carry their raw output.
     """
 
     chunk_policy_digest: str | None = None
@@ -254,10 +228,7 @@ class ViewPolicy:
     @property
     def system_sha(self) -> str | None:
         """`pairs.system_sha` of `system_prompt`; None when the draws' own stands.
-
-        Derived, never supplied: a stored sha could name a prompt other than the
-        one the view emits, and only one of the two could be true (D64).
-        """
+        Derived, never supplied (D64)."""
         return pairs.system_sha(self.system_prompt) if self.system_prompt else None
 
     def dump(self) -> dict:
@@ -300,14 +271,11 @@ Clause = tuple[str, Callable[[Draw], bool]]
 
 
 def _clauses(policy: ViewPolicy, draws: Sequence[Draw]) -> list[Clause]:
-    """The exclusion clauses a policy applies, first match wins.
+    """The exclusion clauses a policy applies, first match wins (D84).
 
-    A draw is superseded when it says so (`superseded_by`, the backfill's),
-    when any draw names its `capture_id` in `supersedes` (a later save's), or
-    when the policy names that capture in `superseded_captures` (D84).
-    `eval_sources` keeps that stratum synthetic-free — a draw on one of those
-    posts that is no real capture is out, after `outcome` so a gate-dropped one
-    is still counted as the reject it is.
+    A draw is superseded by its own `superseded_by`, by any draw's
+    `supersedes`, or by the policy's `superseded_captures`; `eval_sources`
+    keeps that stratum synthetic-free, checked after `outcome`.
     """
     excluded = frozenset(policy.excluded_draw_ids or ())
     named = (cid for cid in (policy.superseded_captures or ()) if cid)
@@ -327,13 +295,9 @@ def _clauses(policy: ViewPolicy, draws: Sequence[Draw]) -> list[Clause]:
 
 
 def _stamped(record: dict, policy: ViewPolicy) -> dict:
-    """The record a view emits: `messages[0]` is the policy's system turn (D64).
-
-    The draw keeps whatever turn it was drawn under — history nothing reads —
-    so moving a corpus to another prompt is this policy field plus a rebuild,
-    never an edit to a draw (D84). No `system_prompt`, or one the draw already
-    carries, returns the record itself, so a view moves no bytes it need not.
-    """
+    """The record a view emits: `messages[0]` is the policy's system turn (D64,
+    D84). No `system_prompt`, or one the draw already carries, returns the
+    record itself."""
     msgs = record.get("messages")
     if not policy.system_prompt or not isinstance(msgs, list) or not msgs:
         return record
@@ -343,8 +307,7 @@ def _stamped(record: dict, policy: ViewPolicy) -> dict:
 
 
 def view_records(draws: Iterable[Draw], policy: ViewPolicy) -> Iterator[dict]:
-    """The records the view of `draws` under `policy` holds, in draw order;
-    what `ai-style log` reads back as the live corpus (W4 step 4)."""
+    """The records the view of `draws` under `policy` holds, in draw order."""
     draws = list(draws)
     clauses = _clauses(policy, draws)
     for draw in draws:
@@ -362,12 +325,10 @@ def build_view(
 ) -> ViewReport:
     """Materialise the view of `draws` under `policy` as a `pairs/`-shaped dir.
 
-    Records route by `corpus.shard_of` and keep their read order within a
-    shard, so an identity policy over `draws_from_pairs(p)` reproduces `p`'s
-    `content_sha256`. `out` must not already hold `*.jsonl`: a view is
-    rebuilt into a fresh directory, never edited (D84). Without `out` nothing
-    is written and the report says what would be: the counts, and the
-    `content_sha256` the view would have (`status` prints it, W4 step 4).
+    Records route by `corpus.shard_of` in read order, so an identity policy
+    reproduces the source's `content_sha256`. `out` must not already hold
+    `*.jsonl` (D84); without `out` nothing is written and the report says what
+    would be.
     """
     if out is not None:
         out = Path(out)
@@ -409,14 +370,10 @@ def read_sidecar(view_dir: str | Path) -> dict | None:
 
 
 def ensure_view(draws_dir: str | Path, policy: ViewPolicy, *, views_root: str | Path) -> Path:
-    """The view of `draws_dir` under `policy`, at `views_root/pairs-<policy_sha>`.
-
-    Built when absent; rebuilt when its sidecar names another policy or other
-    draws (`content_sha256`), since a view is derived and never edited (D84).
-    Every other view under `views_root` is deleted for the same reason: one
-    `(policy_sha, draws_sha)` pair is current, the rest are disposable.
-    Returns the path a `pairs/` reader can be pointed at.
-    """
+    """The view of `draws_dir` under `policy`, at `views_root/pairs-<policy_sha>`:
+    built when absent, rebuilt from scratch when its sidecar names another
+    policy or other draws (D84); every other view under `views_root` is
+    deleted, since one is current. Returns the path a `pairs/` reader takes."""
     draws_dir = Path(draws_dir)
     if not draws_dir.is_dir():
         raise ConfigError(f"no draws under {draws_dir}")

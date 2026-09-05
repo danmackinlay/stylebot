@@ -1,12 +1,9 @@
 """Generators — the slop producers: strategy prompts + provider factories.
 
-The slop-prompt registry (`STRATEGIES`, `resolve_strategy`, `prompt_id_of`), the
-`Generator`/`GenOutput` contract, and the provider factories (`openai_generator`
-and `openrouter_generator`, built on it) with their wire-level helpers.
-`stylebot.synth` re-exports the subset the CLI kit reaches through it — not
-everything here. Import from this module directly unless you specifically need
-`synth.<name>` attribute lookup (which is how `stylebot.synth_cli` resolves the
-generator factories, and therefore how tests monkeypatch them).
+The slop-prompt registry (`STRATEGIES`, `resolve_strategy`, `prompt_id_of`),
+the `Generator`/`GenOutput` contract, and the provider factories
+(`openai_generator`, `openrouter_generator`). Import from here unless you
+need the `synth.<name>` attribute lookup tests monkeypatch.
 """
 
 from __future__ import annotations
@@ -32,12 +29,9 @@ _SLOP_PRESERVE = (
     "Return only the rewritten passage, nothing else."
 )
 
-# Named slop strategies: label -> the system prompt producing that flavour. These
-# are GENERIC AI-prose flavours; an author's own catalogue is injected as a custom
-# prompt (`--slop-system-file` / `system=`), keeping stylebot free of any one
-# author's slop definition. When writing a new one, DESCRIBE THE TEXTURE, never
-# quote the tics: samplers converge hard on quoted tokens, so a prompt listing
-# stock phrases makes every output open identically and the slop go cartoonish.
+# Named slop strategies: generic AI-prose flavours (an author's own catalogue
+# is a custom prompt). Describe the texture, never quote the tics: samplers
+# converge on quoted tokens (D9).
 SLOP_SYSTEM = (  # "polish": the neutral baseline (clearer / more professional)
     "You are a writing assistant that polishes prose. Rewrite the user's "
     "passage to be clearer, more professional, and more engaging. " + _SLOP_PRESERVE
@@ -84,23 +78,15 @@ SLOP_SYSTEM_VERBOSE = (  # "verbose": moderate inflation — the compression-tra
     "expansion live in the texture of full explanation, not in filler "
     "phrases — no generic openers, no summarising sign-off. " + _SLOP_PRESERVE
 )
-# "verbose" exists because real human rewrites *compress*: the styler needs
-# deliberately inflated slop to learn compression from, bounded by max_length_ratio.
-#
-# "linkedin" bans emoji/hashtags despite them being the format's loudest tell:
-# they are lexical giveaways, so the classifier would learn "emoji -> slop" and
-# stop reading the prose — a shortcut that inflates the detector's score while
-# teaching the styler nothing. The target is the rhetorical move (payoff-first,
-# hedges stripped, lesson-ised, reader instructed).
+# "verbose" gives the styler inflated slop to learn compression from;
+# "linkedin" bans emoji/hashtags because a lexical giveaway would let the
+# classifier stop reading the prose.
 
 
 @dataclass(frozen=True)
 class SlopStrategy:
-    """A named slop-prompt flavour: a human label, the system prompt, a version.
-
-    `version` is bumped by hand; the `prompt_id` content hash is what actually
-    identifies a prompt, so editing the text changes its id either way.
-    """
+    """A named slop-prompt flavour: label, system prompt, hand-bumped version;
+    the `prompt_id` content hash is what identifies it."""
 
     label: str
     system: str
@@ -117,29 +103,19 @@ STRATEGIES: dict[str, SlopStrategy] = {
 }
 DEFAULT_STRATEGY = "polish"
 
-# Reasoning is a recorded *covariate*, not a silent default. `off` because a
-# measured sweep found the detector gap indistinguishable between `off` and
-# `medium` for ~3x the wall clock: raising it costs money and buys nothing unless
-# a model proves effort-sensitive. Providers may ignore the request entirely
-# (some models reason at `off` anyway), so what is recorded is what was *asked*.
+# Reasoning effort is a recorded covariate; `off` by default (D10). What is
+# recorded is what was asked, since providers may ignore it.
 DEFAULT_REASONING_EFFORT = "off"
 
 
 def prompt_id_of(system_text: str) -> str:
-    """Stable content id for ANY slop system prompt (registry or custom file).
-
-    Hashing the text means a custom `--slop-system-file` is faceted and deduped
-    like a registry strategy, and editing a prompt changes its id.
-    """
+    """Stable content id for any slop system prompt, registry or custom file."""
     return hashlib.sha256(system_text.encode("utf-8")).hexdigest()[:12]
 
 
 class ResolvedStrategy(NamedTuple):
-    """A slop strategy resolved to its prompt-content identity.
-
-    A NamedTuple, so callers may unpack or read attributes. ``prompt_id``
-    (content hash) and ``version`` feed ``synth_key`` / ``meta.gen``.
-    """
+    """A slop strategy resolved to its prompt-content identity; ``prompt_id``
+    and ``version`` feed ``synth_key`` / ``meta.gen``."""
 
     label: str
     system: str
@@ -148,12 +124,8 @@ class ResolvedStrategy(NamedTuple):
 
 
 def resolve_strategy(name: str, system: str | None = None) -> ResolvedStrategy:
-    """Resolve a strategy name to a `ResolvedStrategy`.
-
-    An explicit ``system`` overrides the registry, letting a caller inject a
-    custom slop prompt under any label (version 0, identified by content hash).
-    An unknown name is an error *unless* ``system`` is supplied.
-    """
+    """Resolve a strategy name to a `ResolvedStrategy`; an explicit ``system``
+    overrides the registry (version 0), and an unknown name without one raises."""
     if system is not None:
         return ResolvedStrategy(name, system, 0, prompt_id_of(system))
     try:
@@ -167,9 +139,7 @@ def resolve_strategy(name: str, system: str | None = None) -> ResolvedStrategy:
     return ResolvedStrategy(strat.label, strat.system, strat.version, prompt_id_of(strat.system))
 
 
-# Slop is an *expansion* of the target (AI prose runs 1.5-3x longer), so the cap
-# must comfortably exceed the target's own token count: targets cap at
-# MAX_CHUNK_CHARS (~2k tokens), leaving room for 3-4x.
+# Slop expands the target, so the cap leaves room for 3-4x its tokens.
 DEFAULT_SLOP_MAX_TOKENS = 8192
 # Per-request HTTP timeout. Without one the openai SDK waits 600s per attempt
 # (times its retries), so a bad upstream stalls a run for half an hour in silence.
@@ -178,12 +148,8 @@ DEFAULT_GEN_TIMEOUT = 300.0
 
 @dataclass(frozen=True)
 class GenOutput:
-    """A generator's output: the slop text plus per-call generation covariates.
-
-    `generate` may return a bare ``str`` (test fakes, simple callables) or a
-    ``GenOutput`` whose ``meta`` carries the recorded covariates;
-    `_normalize_gen_output` coerces either.
-    """
+    """A generator's output: the slop text plus per-call covariates.
+    `generate` may return a bare ``str`` instead; `_normalize_gen_output` coerces."""
 
     text: str
     meta: dict = field(default_factory=dict)
@@ -200,18 +166,11 @@ def _normalize_gen_output(out: str | GenOutput) -> tuple[str, dict]:
 class Generator:
     """A named slop producer.
 
-    `name` becomes `meta.generator`, `strategy` becomes `meta.slop_strategy`;
-    both, plus `reasoning_effort` and `prompt_id`, feed the `synth_key`.
-
-    `generate` may be sync or async and may return a bare `str` or a `GenOutput`.
-    A plain 1-arg callable is fine for stateless (`session_turns=1`) runs;
-    multi-turn sessions pass a `history` kwarg, so a session-capable callable
-    must accept `(text, history=None)`.
-
-    `session_budget` optionally overrides the global per-session prompt-token
-    budget (window × `SESSION_WINDOW_FILL_CAP` still caps it). `begin_session`,
-    when set, returns a fresh generate-callable holding per-session state —
-    openrouter uses it for sticky provider routing.
+    `name`, `strategy`, `reasoning_effort` and `prompt_id` feed the
+    `synth_key`. `generate` may be sync or async, returning `str` or
+    `GenOutput`; a session-capable callable accepts `(text, history=None)`.
+    `session_budget` overrides the per-session token budget; `begin_session`
+    returns a fresh callable holding per-session state.
     """
 
     name: str
@@ -220,8 +179,7 @@ class Generator:
     reasoning_effort: str = DEFAULT_REASONING_EFFORT
     prompt_id: str = ""
     prompt_version: int = 0
-    # Full system-prompt text; synthesize_pairs archives it to prompts.jsonl so
-    # a prompt_id is always resolvable to the prompt that produced the pairs.
+    # Full system-prompt text; `synthesize_pairs` archives it to prompts.jsonl.
     prompt_system: str = ""
     session_budget: int | None = None
     begin_session: Callable[[], Callable[..., str | GenOutput]] | None = None
@@ -241,13 +199,9 @@ _REASONING_BUDGET_FAMILIES = ("google/", "qwen/", "nvidia/", "deepseek/")
 
 
 def _reasoning_extra_body(model: str, effort: str) -> dict | None:
-    """Map a requested reasoning effort to OpenRouter's `reasoning` request field.
-
-    `off` disables reasoning; budget-style families get a token budget; everyone
-    else gets the effort enum. The *requested* effort is recorded regardless of
-    what the provider honors — `finish_reason` and `completion_tokens` are how
-    you detect a model that reasoned anyway.
-    """
+    """Map a requested reasoning effort to OpenRouter's `reasoning` request
+    field: `off` disables, budget-style families get a token budget, the rest
+    the effort enum."""
     if effort == "off":
         return {"reasoning": {"enabled": False}}
     if model.startswith(_REASONING_BUDGET_FAMILIES):
@@ -259,12 +213,8 @@ _CONTEXT_WINDOWS_CACHE: dict[str, dict[str, int]] = {}
 
 
 def openrouter_context_windows(base_url: str | None = None) -> dict[str, int]:
-    """Fetch ``{model_id: context_length}`` from the OpenRouter models registry.
-
-    Ground truth for per-model window sizes; hand-annotating them would go stale.
-    Keyless, one GET per base_url per process. Raises URLError/HTTPError on
-    network failure — the caller decides whether windows are required.
-    """
+    """Fetch ``{model_id: context_length}`` from the OpenRouter models registry:
+    keyless, one GET per base_url per process; raises on network failure."""
     from urllib.request import urlopen
 
     base = (base_url or "https://openrouter.ai/api/v1").rstrip("/")
@@ -280,11 +230,8 @@ def openrouter_context_windows(base_url: str | None = None) -> dict[str, int]:
 
 
 def _reasoning_text_of(message) -> str | None:
-    """The reasoning/thinking trace of a response message, if the provider sent one.
-
-    Most models normalize to `message.reasoning` (a plain string); some providers
-    return `message.reasoning_details` (typed blocks). None when neither exists.
-    """
+    """The reasoning trace of a response message (`reasoning`, else
+    `reasoning_details` blocks), None when the provider sent none."""
     text = getattr(message, "reasoning", None)
     if text:
         return text
@@ -319,21 +266,16 @@ def openai_generator(
 ) -> Generator:
     """OpenAI-compatible slop generator (`openai` SDK; key `OPENAI_API_KEY`).
 
-    `base_url` repoints at any OpenAI-compatible endpoint — the seam
-    `openrouter_generator` uses; `extra_body` passes provider-specific knobs
-    through. `generate` returns a `GenOutput` of covariates plus token usage.
-
-    `model` is required, and deliberately has no default: the only thing one
-    ever did was let a caller who forgot the argument silently bill a model they
-    did not choose.
+    `base_url` repoints at any compatible endpoint; `extra_body` passes
+    provider knobs through. `model` has no default: a forgotten argument must
+    not silently bill a model nobody chose.
     """
     import openai
 
     from stylebot import config
 
     label, system, prompt_version, prompt_id = resolve_strategy(strategy, system)
-    # Async client: synthesize_pairs runs sessions concurrently on an event loop
-    # (no threads, no locks) and keeps a sync surface via its own asyncio.run.
+    # Async client: `synthesize_pairs` runs sessions on one event loop (D56).
     client = openai.AsyncOpenAI(
         api_key=api_key or config.require_key("OPENAI_API_KEY"),
         base_url=base_url,
@@ -349,9 +291,7 @@ def openai_generator(
             ]
             if cache_breakpoints and history:
                 # Anthropic prompt caching: one moving breakpoint on the last
-                # history message marks system+history as the reusable prefix.
-                # The API ignores breakpoints under its ~1024-token minimum, so
-                # this is inert early in a session.
+                # history message; inert under the API's token minimum.
                 last = dict(messages[-2])
                 last["content"] = [
                     {
@@ -370,9 +310,7 @@ def openai_generator(
                 kwargs["top_p"] = top_p
             body = dict(extra_body) if extra_body else {}
             if pin_state is not None and pin_state.get("provider"):
-                # Session-sticky routing: after turn 1 stay on the provider that
-                # served it, so its prefix cache stays hot and the serving stack
-                # (quantization etc.) is constant within the session.
+                # Session-sticky routing: stay on the provider that served turn 1.
                 body["provider"] = {"order": [pin_state["provider"]], "allow_fallbacks": False}
             if body:
                 kwargs["extra_body"] = body
@@ -384,9 +322,8 @@ def openai_generator(
             if not resp.choices:
                 raise RunError(f"{model}: provider returned no choices (upstream error?)")
             choice = resp.choices[0]
-            # A truncated slop (finish_reason "length") is a broken pair — fail loudly,
-            # and say where the tokens went: reasoning eating the whole budget wants
-            # a lower --reasoning-effort, an actually-long answer wants --max-tokens.
+            # A truncated slop is a broken pair: fail loudly and say where the
+            # tokens went, since reasoning and a long answer want different fixes.
             if choice.finish_reason == "length":
                 trunc_usage = getattr(resp, "usage", None)
                 trunc_details = getattr(trunc_usage, "completion_tokens_details", None)
@@ -404,10 +341,8 @@ def openai_generator(
             if pin_state is not None and served_provider:
                 pin_state.setdefault("provider", served_provider)  # pin to turn 1's provider
             usage = getattr(resp, "usage", None)
-            # Reasoning tokens are split out of completion_tokens here (None when
-            # unreported). With gen_seconds this diagnoses a slow run from the
-            # corpus alone: blowout shows as reasoning_tokens ~ budget, a slow
-            # upstream as low completion_tokens / gen_seconds.
+            # Reasoning tokens split out of completion_tokens (None when
+            # unreported), so a slow run is diagnosable from the corpus alone.
             details = getattr(usage, "completion_tokens_details", None)
             prompt_details = getattr(usage, "prompt_tokens_details", None)
             gen_meta = {
@@ -420,9 +355,7 @@ def openai_generator(
                 "prompt_tokens": getattr(usage, "prompt_tokens", None),
                 "completion_tokens": getattr(usage, "completion_tokens", None),
                 "reasoning_tokens": getattr(details, "reasoning_tokens", None),
-                # Billing ground truth (OpenRouter, when usage.include is on):
-                # credits actually charged, and the prefix billed at the cache-read
-                # discount. Sum these rather than trusting token arithmetic.
+                # Billing ground truth: credits charged, and the cached prefix.
                 "cached_tokens": getattr(prompt_details, "cached_tokens", None),
                 "cost": getattr(usage, "cost", None),
                 "gen_seconds": round(gen_seconds, 2),
@@ -451,9 +384,7 @@ def openai_generator(
         prompt_id=prompt_id,
         prompt_version=prompt_version,
         prompt_system=system,
-        # Multi-turn sessions get a per-session closure whose pin_state makes
-        # routing sticky after turn 1. Off by default: a plain OpenAI endpoint
-        # has no provider routing to pin.
+        # Per-session closure with sticky routing; off for a plain OpenAI endpoint.
         begin_session=(lambda: _make_generate({})) if sticky_provider else None,
     )
 
@@ -475,17 +406,9 @@ def openrouter_generator(
     prompt_cache: bool = True,
     capture_reasoning: bool = False,
 ) -> Generator:
-    """OpenRouter slop generator — one key, many upstream models.
-
-    OpenRouter is OpenAI-compatible, so this is `openai_generator` pointed at the
-    OpenRouter endpoint; pairs are tagged ``openrouter/<model>`` in
-    `meta.generator`. Reads `OPENROUTER_API_KEY` (required) and optional
-    `OPENROUTER_BASE_URL` from the environment.
-
-    Many models reason by default, which on a paraphrase burns the token budget
-    and truncates the output (D10); `_reasoning_extra_body` maps
-    `reasoning_effort` per model family.
-    """
+    """OpenRouter slop generator — `openai_generator` at the OpenRouter endpoint,
+    tagged ``openrouter/<model>``; reads `OPENROUTER_API_KEY` and optional
+    `OPENROUTER_BASE_URL`. `reasoning_effort` maps per model family (D10)."""
     from stylebot import config
 
     base_url = base_url or config.get_key("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
@@ -509,9 +432,8 @@ def openrouter_generator(
         extra_body=extra_body,
         extra_meta={"provider_sort": provider_sort} if provider_sort else None,
         timeout=timeout,
-        # Session cost/covariate hygiene: pin each session to the provider that
-        # served its first turn, and let Anthropic models cache session history
-        # via a moving breakpoint (other families cache automatically or not).
+        # Pin each session to its first provider; Anthropic models cache via a
+        # moving breakpoint.
         sticky_provider=sticky_provider,
         cache_breakpoints=prompt_cache and model.startswith("anthropic/"),
         capture_reasoning=capture_reasoning,

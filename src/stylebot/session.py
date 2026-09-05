@@ -1,15 +1,11 @@
 """Rewrite-session state for `ai-style log`, as a library (D35).
 
-`stylebot.capture` owns the capture *mechanism* — paragraph diffing, the pair
-record, the archive, the draw. This module owns everything around it: where
-session state lives (`SessionStore`); snapshot persistence — a directory of
-the base text plus a `meta.json` sidecar, *archived* rather than deleted on
-close, which is what makes `reopen` / `save --redo` possible; symlink
-canonicalisation (`canonical_source`), so the blog's `_focus/` harness cannot
-key a session under a scratch tree that gets wiped; and `save`'s disposition
-rule. Everything takes explicit paths; `bin/ai_style_log.py` is the click
-shell. `SessionError` (a `RunError`) means the world is not ready, a
-`ValueError` that the arguments contradict (D47). Nothing here prints or exits.
+`stylebot.capture` owns the capture mechanism; this module owns what
+surrounds it: where state lives (`SessionStore`), snapshot persistence
+(archived on close, so `reopen` / `save --redo` work), symlink
+canonicalisation, and `save`'s disposition rule. `SessionError` (a
+`RunError`) means the world is not ready, a `ValueError` that the arguments
+contradict (D47). Nothing here prints or exits.
 """
 
 from __future__ import annotations
@@ -83,12 +79,8 @@ class SessionError(RunError):
 
 @dataclass(frozen=True)
 class SessionStore:
-    """The on-disk home of session state and the corpus, under one data dir.
-
-    Resolved per invocation, not baked into module constants: an import-time
-    constant freezes the environment at first import, which in 2026-08 had
-    `log` writing to a cwd-relative `_training_pairs/` instead of the corpus.
-    """
+    """The on-disk home of session state and the corpus, under one data dir;
+    resolved per invocation, never an import-time constant (D45)."""
 
     data_dir: Path
 
@@ -150,12 +142,8 @@ class Snapshot:
 
 @dataclass(frozen=True)
 class SnapshotEntry:
-    """One snapshot directory, loaded or not.
-
-    Listings must tolerate an unreadable snapshot (a half-written sidecar, a
-    directory someone poked at) rather than aborting the whole command, so the
-    failure is carried as data.
-    """
+    """One snapshot directory, loaded or not: a listing carries an unreadable
+    snapshot's failure as data rather than aborting."""
 
     path: Path
     snapshot: Snapshot | None = None
@@ -203,12 +191,8 @@ def move_snapshot(src: Path, dst: Path) -> None:
 
 
 def snapshot_dirs(root: Path) -> list[Path]:
-    """Every snapshot directory under `root`, sorted; `[]` if it doesn't exist.
-
-    A snapshot is identified by its sidecar, so this globs for `meta.json` and
-    takes the parent — the open-session reminder and `list` both need it, for
-    both the open and the closed tree.
-    """
+    """Every snapshot directory under `root` (identified by its `meta.json`),
+    sorted; `[]` if it doesn't exist."""
     return sorted(p.parent for p in root.rglob(SNAPSHOT_META)) if root.exists() else []
 
 
@@ -248,18 +232,10 @@ def humanize_age(iso_ts: str) -> str:
 
 
 def canonical_source(value: Path | None, *, cwd: Path | None = None) -> Path | None:
-    """Normalize a symlinked FILE to the path it points at.
-
-    A session key *is* the source path as given, so a second path to the same
-    file opens a second, parallel session. The blog's `_focus/` harness creates
-    exactly that: it symlinks a post into a scratch project that is wiped on
-    every invocation, so a session keyed there loses its file and a `save` writes
-    a transient path into the committed corpus.
-
-    Only symlinks are rewritten, so no existing session key can move. `cwd` is
-    the tree the result is made relative to; a target outside it comes back
-    absolute.
-    """
+    """Normalize a symlinked FILE to the path it points at, so a scratch-tree
+    symlink (the blog's `_focus/`) cannot open a parallel session or write a
+    transient path into the corpus. Only symlinks are rewritten; `cwd` is the
+    tree the result is made relative to."""
     if value is None or not value.is_symlink():
         return value
     target = value.resolve()
@@ -324,24 +300,14 @@ def open_session(store: SessionStore, source: Path) -> Snapshot:
 
 
 def close_session(store: SessionStore, source: Path) -> None:
-    """Close a session by archiving its snapshot rather than deleting it.
-
-    Retaining the base text is what makes `reopen` / `save --redo` possible: the
-    pairs themselves cannot reconstruct it, since in chunk mode they hold only
-    the changed regions. The archive keeps the original `snapped_at`, so a
-    re-save after `reopen` lands in the same session and `save`'s smart
-    disposition REPLACES the earlier pairs instead of stacking a near-duplicate
-    onto the corpus.
-    """
+    """Close a session by archiving its snapshot, keeping the base text and the
+    original `snapped_at`, so a re-save after `reopen` lands in the same session."""
     move_snapshot(store.snapshot_path(source), store.closed_snapshot_path(source))
 
 
 def restore_snapshot(store: SessionStore, source: Path) -> Snapshot:
-    """Restore `source`'s archived session to the live snapshot path.
-
-    Raises `FileNotFoundError` when there is no archive to restore. Preserves
-    `snapped_at` verbatim — see `close_session` for why that is load-bearing.
-    """
+    """Restore `source`'s archived session to the live snapshot path,
+    `snapped_at` preserved; raises `FileNotFoundError` with no archive."""
     closed = store.closed_snapshot_path(source)
     if not closed.exists():
         raise FileNotFoundError(closed)
@@ -525,16 +491,10 @@ def save_session(
 ) -> SaveResult:
     """Diff `source` against its session snapshot and land the pair(s) as draws.
 
-    Nothing is rewritten (D84): prior pairs are *superseded* — the new draws
-    name their `capture_id`s and a view drops them. **Smart by default**:
-    pairs from the *same* session (matching `meta.snapped_at`) are superseded,
-    being interim `keep_open` saves that should not stack, while earlier
-    sessions' pairs are kept as legitimate prior rewrites. `"replace-all"`
-    supersedes cross-session pairs too; `"append"` supersedes nothing.
-
-    `redo` reopens the last closed session first, so a corrected rewrite is
-    re-diffed against the SAME base and lands in the same session. `notify`
-    receives the lines describing work done *before* the capture.
+    Prior pairs are superseded, never rewritten (D84): by default the same
+    session's (interim `keep_open` saves); `"replace-all"` earlier sessions'
+    too; `"append"` none. `redo` reopens the last closed session first so the
+    re-diff is against the same base. `notify` receives the pre-capture lines.
     """
     say = notify or (lambda _line: None)
     if disposition not in ("append", "replace-all", "smart"):  # pragma: no cover
@@ -613,13 +573,8 @@ def capture_pair(
     heading_context: bool = True,
     notify: Callable[[str], None] | None = None,
 ) -> PairResult:
-    """One-shot pair capture from two texts, with no session dance.
-
-    Unlike `save_session`, this APPENDS by default: the typical use is a one-off
-    pair from a clipboard or a script. `replace` supersedes every prior pair
-    for `source` (D84), and requires one. `notify` is `save_session`'s
-    pre-capture progress channel.
-    """
+    """One-shot pair capture from two texts, no session: appends by default;
+    `replace` supersedes every prior pair for `source` (D84), and requires one."""
     say = notify or (lambda _line: None)
     if before_text == after_text:
         raise SessionError("before and after are identical; refusing to log")

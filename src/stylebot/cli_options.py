@@ -1,10 +1,8 @@
-"""Dataclass-driven CLI option bundles — generic machinery, no app specifics.
+"""Dataclass-driven CLI option bundles — generic machinery, no app specifics (D78).
 
-A *bundle* is a frozen dataclass whose fields are a command's options. `opt()`
-marks a field as also being a CLI flag, carrying the click declaration on the
-field's metadata, so each default is written exactly once — the dataclass is
-the single source of truth. A field declared WITHOUT `opt()` is library-only:
-it gets no flag and is set by callers in code.
+A bundle is a frozen dataclass whose fields are a command's options; `opt()`
+marks a field as also a CLI flag, so each default is written once, and a
+field without it is library-only:
 
     @dataclass(frozen=True)
     class GenOpts:
@@ -12,19 +10,11 @@ it gets no flag and is set by callers in code.
         max_tokens: int = opt(800, "--max-tokens", type=int, help="...")
         budgets: Mapping[str, int] | None = None    # library-only, no flag
 
-`bundle_options(bundles, defaults=…, exclude=…)` builds the click decorator,
-`bundles_from_kwargs()` folds a callback's `**kw` back into instances, and
-`SectionedCommand` groups `--help` by bundle. A downstream repo extends a
-surface with `bundle_options([*SOME_BUNDLES, MyOpts], defaults=[GenOpts(...)])`.
-
-`Emitter` / `click_emitter()` are the other half of the same seam, for output
-rather than input: a library takes an emitter and defaults it to silence, the
-CLI hands it `click_emitter()`. One adapter, so two front-ends (here and
-livingthing's `dan-style`) cannot drift in how they render the same run.
-
-`translate_errors()` / `ErrorTranslatingGroup` are the third: the libraries
-raise `stylebot.errors`' two classes and never exit, and this is where those
-become click exceptions and exit codes.
+`bundle_options(bundles, defaults=…, exclude=…)` builds the decorator,
+`bundles_from_kwargs()` folds a callback's `**kw` back, `SectionedCommand`
+groups `--help` by bundle. `Emitter` / `click_emitter()` are the output half
+of the seam; `translate_errors()` / `ErrorTranslatingGroup` are where
+`stylebot.errors` become exit codes (D47).
 """
 
 from __future__ import annotations
@@ -42,16 +32,8 @@ from stylebot.errors import ConfigError, RunError
 CLI = "cli"
 
 
-# ---------------------------------------------------------------------------
-# The output sink.
-#
-# A library entry point must not decide where its lines go — a non-CLI caller
-# cannot capture or silence a `click.echo` — so it takes an *emitter*
-# defaulting to `silent`, and the CLI passes `click_emitter()`. A level names a
-# (stream, emphasis) pair, not a syslog severity: `note` is yellow on *stdout*
-# because a hygiene-drop count is part of the run's report. `status` and `error`
-# render identically today and stay apart because they differ in meaning.
-# ---------------------------------------------------------------------------
+# --- the output sink: a library takes an emitter defaulting to `silent`; a
+# level names a (stream, emphasis) pair, not a syslog severity.
 
 
 class Emitter(Protocol):
@@ -95,12 +77,8 @@ def click_emitter() -> Emitter:
 
 
 def opt(default: Any, /, *decls: str, **click_kw: Any) -> Any:
-    """A bundle field that is also a CLI flag.
-
-    `default` is the field default AND the flag default (never pass `default=`
-    in `click_kw` — that is the duplication this exists to remove); `decls` and
-    `click_kw` are handed to `click.option` verbatim.
-    """
+    """A bundle field that is also a CLI flag: `default` is both defaults
+    (never pass `default=` in `click_kw`); the rest goes to `click.option`."""
     if "default" in click_kw:
         raise ValueError(
             f"opt({decls}) got default= in its click kwargs; the first positional "
@@ -117,12 +95,8 @@ def cli_fields(bundle: type) -> list[tuple[Field, tuple[str, ...], dict]]:
 
 
 def field_owners(bundles: Sequence[type], *, reserved: Iterable[str] = ()) -> dict[str, type]:
-    """field name -> owning bundle.
-
-    Raises if two bundles claim one name, or if a name collides with `reserved`
-    (the consuming function's own parameter names) — either way the field could
-    not be routed unambiguously.
-    """
+    """field name -> owning bundle; raises on a name two bundles claim or one
+    in `reserved` (the consuming function's own parameters)."""
     owners: dict[str, type] = {}
     for bundle in bundles:
         for f in fields(bundle):
@@ -179,14 +153,9 @@ def bundle_options(
     defaults: Iterable[Any] = (),
     exclude: Iterable[str] = (),
 ):
-    """Click decorator applying every flag-bearing field of `bundles`.
-
-    `defaults` re-pins flag defaults, given as bundle *instances* — a typo'd
-    field name fails in the dataclass constructor. `exclude` drops flags the
-    wrapper pins as policy constants (its callback then never sees them, and it
-    sets those fields on the bundle itself). `--help` order is bundle order,
-    then field order within each bundle.
-    """
+    """Click decorator applying every flag-bearing field of `bundles`;
+    `defaults` re-pins flag defaults as bundle instances, `exclude` drops flags
+    the wrapper pins itself. `--help` order is bundle order, then field order."""
     bundles = tuple(bundles)
     field_owners(bundles)  # refuse an ambiguous surface before declaring flags
     exclude = set(exclude)
@@ -232,11 +201,8 @@ def bundles_from_kwargs(kw: dict, bundles: Mapping[str, type]) -> dict[str, Any]
 
 
 class SectionedCommand(click.Command):
-    """A command whose `--help` groups options under their bundle's heading.
-
-    Options carry `help_section` (set by `bundle_options`); anything without one
-    — the command's own flags, `--help` — lands in a leading "Options" block.
-    """
+    """A command whose `--help` groups options under their bundle's
+    `help_section`; anything without one lands in a leading "Options" block."""
 
     def format_options(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         sections: dict[str, list[tuple[str, str]]] = {}
@@ -250,26 +216,14 @@ class SectionedCommand(click.Command):
                 formatter.write_dl(records)
 
 
-# ---------------------------------------------------------------------------
-# The error boundary (D47). Every library module raises `stylebot.errors`'
-# vocabulary and never exits; this is where the process consequences are
-# decided. On the *group* rather than each callback, so a subcommand added
-# tomorrow inherits the contract — `tests/test_errors.py` walks the tree.
-# ---------------------------------------------------------------------------
+# --- the error boundary (D47), on the group so every subcommand inherits it.
 
 
 @contextmanager
 def translate_errors():
-    """Turn `stylebot.errors` into click exceptions: config 2, run 1.
-
-    A `ConfigError` carrying `param_hint` becomes `click.BadParameter` so the
-    offending flag is named; without one it is a plain `UsageError`. A
-    `RunError` becomes `click.ClickException` — except a `quiet` one, which has
-    already printed everything it has to say and only needs the exit code.
-
-    Anything else propagates untouched: a bare `ValueError` from a violated
-    internal contract is a bug, and click's traceback is the right report.
-    """
+    """Turn `stylebot.errors` into click exceptions: config 2 (`BadParameter`
+    with a `param_hint`, else `UsageError`), run 1 (`ClickException`, or a bare
+    exit for a `quiet` one). Anything else propagates: a bug wants a traceback."""
     try:
         yield
     except ConfigError as exc:
@@ -283,12 +237,8 @@ def translate_errors():
 
 
 class ErrorTranslatingGroup(click.Group):
-    """A `click.Group` that applies `translate_errors` to its whole subtree.
-
-    `Group.invoke` is the funnel every descendant command's body passes
-    through, so one `try` here covers subgroups (`ai-style log`, `ai-style
-    data`) and any command added later, at any depth.
-    """
+    """A `click.Group` that applies `translate_errors` to its whole subtree
+    through `Group.invoke`, the funnel every descendant passes through."""
 
     def invoke(self, ctx: click.Context):
         with translate_errors():

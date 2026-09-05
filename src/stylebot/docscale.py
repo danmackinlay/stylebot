@@ -1,13 +1,7 @@
-"""Document-scale eval — whole capture archives through `infer.rewrite_text`.
-
-Chunk-scale scoring hands the styler `messages[:2]` verbatim, so segmentation,
-protected blocks, the heading-context rule and the chunk diet are never
-exercised by a verdict computed on pre-cut chunks: a diet switch cannot move
-the number that decides whether to promote it. `rewrite_documents_file` closes
-that gap by rewriting a capture's whole `before.md` and emitting a pair-shaped
-record `stylebot.scoring` scores unchanged. Why the resulting reading is a mean
-over serving-scale chunks rather than one whole-document embedding: D54.
-"""
+"""Document-scale eval — whole capture archives through `infer.rewrite_text`
+(D54), so segmentation, protected blocks and the chunk diet are exercised by
+the verdict. `rewrite_documents_file` emits pair-shaped records
+`stylebot.scoring` scores unchanged."""
 
 from __future__ import annotations
 
@@ -93,16 +87,10 @@ def rewrite_documents_file(
 ) -> DocumentRewriteResult:
     """Rewrite whole eval-stratum documents; emit a scorable output JSONL.
 
-    Each record is pair-shaped — `messages` = (`system`, before, after) plus a
-    top-level `output` — so `score_pairs_file(fields=("slop", "target",
-    "output"))` scores it unchanged. `meta.capture_id` is prefixed `doc:` so a
-    document row's `record_id` cannot collide with the chunk-level pair cut
-    from the same capture.
-
-    `rewrite` is the seam onto `infer.rewrite_text`, lazily imported and stubbed
-    by tests so the path runs with no sampling spend; `system` (the served
-    prompt; the default author's when None) and the diet keywords pass straight
-    through, which is where a diet switch gets exercised.
+    Each record is pair-shaped plus a top-level `output`, its `capture_id`
+    prefixed `doc:` so it cannot collide with the chunk-level cut. `rewrite`
+    is the seam onto `infer.rewrite_text`; `system` (the served prompt; the
+    default author's when None) and the diet keywords pass through.
 
     Resumable by record id; score the output with `prune_orphans=False`.
     """
@@ -169,14 +157,8 @@ def document_pass(
     emit: Emitter = silent,
 ) -> DocumentPass:
     """`eval --documents` (D78): rewrite whole documents, say what to score.
-
-    The styler and its diet come from `manifest` alone (`DocumentOpts`); the
-    caller resolves that and `splits`. The output JSONL is a different corpus
-    from `pairs_path`, so pruning is off and `output` joins the fields; the
-    one `chunk_scale` serves the rewrite and, through `eval.chunked_detector`,
-    the scoring (D54) — `div_is_prose` included, or the verdict is computed on
-    a diet serving does not use.
-    """
+    The styler and its diet come from `manifest` alone; the one `chunk_scale`
+    serves the rewrite and, through `eval.chunked_detector`, the scoring (D54)."""
     from stylebot import backends
 
     role = None if doc_opts.documents_role == "all" else doc_opts.documents_role

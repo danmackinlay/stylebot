@@ -1,28 +1,14 @@
-"""Read-only HTML inspection of the corpus — get a *feel* for it, with no spend.
+"""Read-only HTML inspection of the corpus, with no spend.
 
-Two reports, one machinery:
+Two reports over one scaffold: targets (`render_targets_report`, which prose
+was selected for synthesis) and scores (`render_scores_report`, `scores.jsonl`
+joined to the corpus by `record_id`, fields side by side). Each is one
+self-contained HTML file, stdlib only; `format_sample` /
+`format_scores_sample` are the stdout equivalents.
 
-- **targets** (`render_targets_report`) — which prose was selected for
-  synthesis: a length histogram, summary stats, and a searchable / sortable /
-  randomly sampleable table of every target.
-- **scores** (`render_scores_report`) — the eval sibling: joins `scores.jsonl`
-  to the corpus by `record_id` and lays each field's text, judge score,
-  detector P(slop) and Vale count side by side, sorted by the slop→Dan delta.
-
-Both write ONE self-contained HTML file (no server, no network, no external
-assets, no deps beyond the stdlib) out of the shared scaffolding in the first
-section below — `_CSS`, `_JS`, `_page`, `_stat_cards`, `_chip`, `_cap_note`,
-`_histogram_svg`. Where the two differ they differ in *data* (which cards,
-which columns), not in a second copy of the markup. `sample_targets` /
-`format_sample` / `format_scores_sample` are the stdout equivalents.
-
-**Escaping discipline — a security property, not a style preference.** Every
-piece of corpus text (body prose, source paths, headings, judge rationales,
-facet values, `title=` tooltips) goes through `html.escape`, with `quote=True`
-wherever it lands inside an attribute. The embedded JS only reads `data-*`
-attributes and toggles `style.display` on pre-rendered, pre-escaped rows; it
-never `innerHTML`s report text. A target containing markup therefore renders as
-markup-looking prose and can never execute.
+Escaping is a security property: every piece of corpus text goes through
+`html.escape` (`quote=True` inside an attribute), and the embedded JS reads
+only `data-*` attributes and toggles `style.display`, never `innerHTML`.
 """
 
 from __future__ import annotations
@@ -45,10 +31,8 @@ DEFAULT_FACET_BY = "slop_strategy"
 # Shared scaffolding — what both reports are assembled from
 # ---------------------------------------------------------------------------
 
-# Layout colours are `:root` variables so the dark block at the bottom can flip
-# them wholesale. The score chips stay literal: they are a semantic palette
-# (slop-red / Dan-green / neutral-grey) that wants a hand-picked pair per theme,
-# not one hue mechanically darkened.
+# Layout colours are `:root` variables so the dark block can flip them; the
+# score chips are a hand-picked semantic palette per theme.
 _CSS = """
 :root{--bar:#4c8bf5;--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#e3e3e3}
 *{box-sizing:border-box}
@@ -98,11 +82,9 @@ th{cursor:pointer;user-select:none;position:sticky;top:0;background:var(--bg)}
 }
 """
 
-# One behaviour script for both reports. It reads only `data-*` attributes and
-# writes only `style.display` / `dataset.hit`, never markup, so whatever a given
-# report does not wire up is inert. `#rows` is load-bearing, not decoration: the
-# scores page's headline table comes FIRST, so a bare `querySelector('tbody')`
-# would silently bind every control to it.
+# One behaviour script for both reports; reads `data-*`, writes
+# `style.display` / `dataset.hit`, never markup. `#rows` is load-bearing: the
+# scores page's headline table comes first.
 _JS = """
 const tbody=document.querySelector('#rows tbody');
 const rows=()=>Array.from(tbody.querySelectorAll('tr'));
@@ -151,13 +133,9 @@ def _page(
     table: str,
     sort: str = "",
 ) -> str:
-    """The one HTML scaffold both reports share.
-
-    Head, `<h1>`, the stat-card row, the report's own `blocks` (histogram /
-    headline table), the control strip, the row-count note, the table, and the
-    shared behaviour script. `sort` names a `data-*` key to sort numerically on
-    load. Deliberately a function, not a builder class — two fixed reports.
-    """
+    """The one HTML scaffold both reports share: head, stat cards, the
+    report's `blocks`, controls, the table, the behaviour script. `sort` names
+    a `data-*` key to sort numerically on load."""
     body = "\n".join(blocks)
     return f"""<!doctype html>
 <html lang=en><head><meta charset=utf-8>
@@ -320,12 +298,8 @@ def render_targets_report(
     max_rows: int | None = DEFAULT_MAX_ROWS,
     histogram_bins: int = 30,
 ) -> Path:
-    """Write a self-contained HTML report of `targets`. Returns the path.
-
-    Stats and the histogram cover ALL targets; `max_rows` caps how many rows are
-    embedded in the table (None = all). Each target text cell is HTML-escaped and
-    truncated for display (full text in an escaped `title=` tooltip).
-    """
+    """Write a self-contained HTML report of `targets`; returns the path.
+    `max_rows` caps the table only (None = all); the stats cover every target."""
     path = Path(path)
     s = _summary_stats(targets)
     cards = [(s["count"], "targets"), (s["median"], "median chars"), (s["p90"], "p90 chars")]
@@ -344,19 +318,13 @@ def render_targets_report(
 
 
 # ---------------------------------------------------------------------------
-# Scores report — join pairs.jsonl + scores.jsonl, compare slop ↔ Dan by eye
+# Scores report — join pairs.jsonl + scores.jsonl, compare fields by eye
 # ---------------------------------------------------------------------------
-#
-# The eval sibling of the targets report: read-only, self-contained HTML, joined
-# to the corpus by `record_id` and generic over score *fields*.
 
 
 def _signal(field_scores: object, signal: str, key: str = "score"):
-    """One eval signal's value for one field — `judge`, `detector` or `vale`.
-
-    `None` whenever the signal is unconfigured, absent or malformed; every
-    caller renders that as an em dash rather than failing the whole report.
-    """
+    """One eval signal's value for one field — `judge`, `detector` or `vale`;
+    `None` when unconfigured, absent or malformed (rendered as an em dash)."""
     s = field_scores.get(signal) if isinstance(field_scores, dict) else None
     return s.get(key) if isinstance(s, dict) else None
 
@@ -617,14 +585,9 @@ def render_scores_report(
     histogram_bins: int = 5,
     facet_by: str = DEFAULT_FACET_BY,
 ) -> Path:
-    """Write a self-contained HTML scores report. Returns the path.
-
-    Joins `scores` (a `scores.jsonl` path or in-memory records) to `pairs_path`
-    by `record_id`, then renders, per pair, each `field`'s body text + judge score
-    + rationale side by side (plus a muted generation-covariate sub-line), sortable
-    by the slop→Dan delta and filterable by strategy, under a headline grouped by
-    `facet_by` (any carried meta covariate).
-    """
+    """Write a self-contained HTML scores report; returns the path. Joins
+    `scores` (path or records) to `pairs_path` by `record_id` and renders each
+    `field` side by side under a headline grouped by `facet_by`."""
     out_path = Path(out_path)
     records, rows = _load_scores_rows(scores, pairs_path, fields)
 

@@ -34,7 +34,7 @@ MODULE_DOCSTRING_LINES = 30
 
 #: Package-wide docstring + comment lines, measured by `_modules()` at the commit
 #: that set it. It only falls: a commit that lowers prose lowers it (D58).
-PROSE_CEILING = 3368
+PROSE_CEILING = 2276
 #: How far under the ceiling prose may sit before the test demands it be lowered.
 PROSE_SLACK = 50
 
@@ -48,17 +48,13 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     "classify_train.py": {"lines": 839},
     "generators.py": {
         "functions": {
-            "openai_generator": 158,
-            "openai_generator._make_generate": 102,
-            "openai_generator._make_generate.generate": 99,
+            "openai_generator": 142,
+            "openai_generator._make_generate": 93,
+            "openai_generator._make_generate.generate": 90,
         },
     },
     "infer.py": {"functions": {"rewrite_text": 163, "rewrite_candidates": 81}},
-    "splits.py": {
-        "functions": {"apply_eval_extension": 112},
-        "docstrings": (19,),
-        "module_docstring": 32,
-    },
+    "splits.py": {"functions": {"apply_eval_extension": 107}},
     "synth.py": {
         "lines": 1083,
         "functions": {"synthesize_pairs": 115, "_run_session": 114},
@@ -67,7 +63,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "lines": 937,
         "functions": {"run_synth": 233, "_report_result": 109},
     },
-    "targets.py": {"functions": {"_post_targets": 94}},
+    "targets.py": {"functions": {"_post_targets": 82}},
     "train.py": {
         "lines": 986,
         "functions": {"run_training": 97, "_tinker_runner": 87, "assemble_training_corpus": 82},

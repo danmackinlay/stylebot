@@ -1,18 +1,6 @@
-"""Central config + secrets access for stylebot.
-
-The one place that resolves the corpus location and reads secrets, so every
-phase shares one contract instead of reinventing `os.environ` reads:
-
-    from stylebot import config
-
-    key = config.require_key("TOGETHER_API_KEY")   # raises if unset
-    corpus = config.resolve_data_dir()             # $STYLEBOT_DATA_DIR or default
-
-There is no dotenv loader (D24): everything reads the *process environment*, so
-getting keys in there is the caller's job — Dan's way is direnv,
-``direnv exec ~/Source/livingthing uv run ai-style <args>``. Nothing here ever
-prints or logs a key value.
-"""
+"""Central config + secrets access: the one place that resolves the corpus
+location (D45) and reads keys from the process environment — no dotenv
+loader (D24). Nothing here prints or logs a key value."""
 
 from __future__ import annotations
 
@@ -23,20 +11,12 @@ from stylebot import corpus
 from stylebot.errors import RunError
 
 #: The corpus directory's name under a project root, when nothing else says.
-#: Named rather than spelled inline so a caller that has a *root* rather than a
-#: data dir (livingthing's `training_targets.data_dir`, whose default is
-#: `<blog-root>/_training_pairs`) composes the same name this module defaults to.
 DEFAULT_DATA_DIR_NAME = "_training_pairs"
 
 
 def resolve_data_dir(flag: str | os.PathLike | None = None) -> Path:
     """Resolve the corpus directory: ``flag`` > ``$STYLEBOT_DATA_DIR`` > the
-    cwd-relative default ``_training_pairs``.
-
-    Convenience commands take the env/default; expensive, stateful ones make
-    ``--data-dir`` required, so a run cannot silently target the wrong corpus
-    (D45).
-    """
+    cwd-relative default ``_training_pairs`` (D45)."""
     if flag is not None:
         return Path(flag)
     return Path(os.environ.get("STYLEBOT_DATA_DIR", DEFAULT_DATA_DIR_NAME))
@@ -46,19 +26,9 @@ DEFAULT_PAIRS_NAME = "pairs.jsonl"
 
 
 def pairs_path(data_dir: str | os.PathLike | None = None) -> Path:
-    """Where the corpus itself lives inside a corpus directory.
-
-    The `splits_path` treatment for `<data-dir>/pairs.jsonl`, and for the same
-    reason (D45): a join spelled out at eight sites across two repos let
-    `$STYLEBOT_DATA_DIR` redirect some of them and not others. Returned whether
-    or not it exists.
-
-    **A corpus is one file or a directory of shards** (D50), and this is the one
-    place that decides which: `<data-dir>/pairs/` when that directory is there,
-    `<data-dir>/pairs.jsonl` otherwise. Sharding is opt-in by existing, so an
-    install that never migrates keeps the single file. The directory is named so
-    that `pairs_path().parent` is the data dir under BOTH shapes.
-    """
+    """Where the corpus lives inside a corpus directory: `<data-dir>/pairs/`
+    when that directory exists, else `<data-dir>/pairs.jsonl` (D45, D50).
+    Returned whether or not it exists."""
     root = resolve_data_dir(data_dir)
     sharded = root / corpus.PAIRS_DIR_NAME
     if sharded.is_dir():
@@ -70,14 +40,7 @@ DEFAULT_SPLITS_NAME = "splits.json"
 
 
 def splits_path(data_dir: str | os.PathLike | None = None) -> Path:
-    """Where the by-post splits contract lives inside a corpus directory.
-
-    One spelling of `<data-dir>/splits.json`, so the guards that consult it
-    (synth's frozen-eval refusal, `log save`'s notice) find the same file
-    `ai-style make-splits --out` is pointed at. The path is returned whether or
-    not it exists; callers that treat an absent file as "no contract" test for
-    themselves.
-    """
+    """`<data-dir>/splits.json`, the one spelling; returned whether or not it exists."""
     return resolve_data_dir(data_dir) / DEFAULT_SPLITS_NAME
 
 

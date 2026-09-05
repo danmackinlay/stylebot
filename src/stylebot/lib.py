@@ -48,17 +48,8 @@ def read_w_frontmatter_text(text: str) -> tuple[dict, str]:
 
 
 def split_paragraphs(text: str) -> list[str]:
-    """Split prose into paragraphs on blank-line boundaries.
-
-    A "paragraph" is a run of non-blank lines with no internal blank line, so
-    list items, headings, and code-fence blocks each become their own block;
-    trailing newlines inside a block are stripped.
-
-    This is the **shared** chunk shape for the corpus: Phase 1 (`ai-style log`)
-    diffs against it and Phase 2 (`stylebot.synth`) samples it, so real edit
-    pairs and synthetic paraphrase pairs are the same granularity and mixable.
-    Keep both producers calling this one splitter.
-    """
+    """Split prose into paragraphs on blank-line boundaries: the shared chunk
+    shape every producer uses, so real and synthetic pairs are mixable."""
     paras: list[str] = []
     current: list[str] = []
     for line in text.splitlines(keepends=True):
@@ -73,26 +64,15 @@ def split_paragraphs(text: str) -> list[str]:
     return paras
 
 
-# --- Markdown prose/structure segmentation -------------------------------
-#
-# The primitives now live in `stylebot.markdown` (one segmentation, shared by
-# every phase). These names stay here because they are PUBLIC API: livingthing
-# imports them, and the VS Code marker's parity fixture is asserted against
-# them. Re-export, don't relocate.
+# --- Markdown segmentation: the primitives are `stylebot.markdown`'s; these
+# names stay because livingthing imports them. Re-export, don't relocate.
 
 
 def segment_for_edit(
     content: str, *, div_is_prose: markdown.DivIsProse | None = None
 ) -> list[tuple[str, bool]]:
-    """Split markdown into ``(text, editable)`` spans, losslessly.
-
-    ``editable`` is False for protected blocks — fenced code, display math,
-    ``:::`` divs/callouts, and blockquotes — which must pass through verbatim.
-    Concatenating every ``text`` reproduces ``content`` exactly.
-
-    ``div_is_prose`` is the caller's policy for which div classes wrap prose
-    (see `stylebot.markdown`); the default protects every div wholesale.
-    """
+    """Split markdown into ``(text, editable)`` spans, losslessly;
+    ``div_is_prose`` is the caller's div policy (`stylebot.markdown`, D29)."""
     return markdown.segment_spans(content, div_is_prose=div_is_prose)
 
 
@@ -103,26 +83,15 @@ def editable_prose(content: str, *, div_is_prose: markdown.DivIsProse | None = N
     )
 
 
-# Directories Quarto itself never treats as project inputs. This set mirrors
-# upstream rather than inventing policy — which is the whole of what belongs
-# here: a *project's* own exclusions are the caller's (the blog composes
-# `LOCAL_SKIP_DIRS` over this predicate).
+# Directories Quarto itself never treats as project inputs; a project's own
+# exclusions are the caller's.
 QUARTO_SKIP_DIRS = frozenset({"renv", "packrat", "rsconnect", "node_modules"})
 
 
 def is_valid_qmd_file(path: Path, base: Path | None = None) -> bool:
-    """Return True if this path qualifies as a valid .qmd file.
-
-    The `_`/`.` rule runs over **every** path segment, not just the filename,
-    and that failure is silent: a segment-blind check walks `_tmp/scratch.qmd`
-    and offers a scratch copy of a post to `synth` as a target, after which the
-    pair is indistinguishable from a real one (livingthing
-    `_plans/qmd-walker-2026-08.md`).
-
-    Every rule is about *project-relative* structure, so pass `base` when you
-    have one; without it an absolute path is judged whole. Suffix is deliberately
-    not checked — the walk's glob is caller policy.
-    """
+    """True if this path qualifies as a valid .qmd file: the `_`/`.` rule runs
+    over every project-relative segment (pass `base`), so a scratch copy under
+    `_tmp/` is never a target. Suffix is the walk's glob's business."""
     # A path not under `base` is judged as given, same as with no `base` at all.
     parts = path.relative_to(base).parts if base and path.is_relative_to(base) else path.parts
     if any(part.startswith((".", "_")) for part in parts):
@@ -150,13 +119,9 @@ def gather_qmd_files(
 
 
 def is_human_authored(meta: dict, *, field: str = "automation", max_level: int = 0) -> bool:
-    """True if frontmatter marks this content as human-written (no/low AI).
-
-    The bundled selector example (`_plans/OVERVIEW.md`): Dan's blog records an ``automation``
-    level per post and ``0`` means no AI. Another blog passes its own ``field`` / ``max_level``
-    as the `SourcePolicy` that holds them beside the glob (D85). Conservative by design — clean
-    posts are *marked*, so a missing or unparseable field means "unknown" and returns False.
-    """
+    """True if frontmatter marks this content as human-written: ``field`` at or
+    under ``max_level`` (a `SourcePolicy`, D85). A missing or unparseable field
+    is "unknown" and returns False."""
     raw = meta.get(field)
     if raw is None:
         return False
@@ -168,14 +133,8 @@ def is_human_authored(meta: dict, *, field: str = "automation", max_level: int =
 
 @dataclass(frozen=True)
 class SourcePolicy:
-    """Which files hold source prose, and which frontmatter marks it human.
-
-    Every blog-shaped literal stylebot carries, in one object: the walk's
-    `glob`, the frontmatter `meta_field` a selector reads, the `max_level` it
-    keeps, and the `author` whose voice the prompt names (D85). The defaults
-    are Dan's blog, so a caller that passes nothing moves nothing; another
-    blog passes one policy instead of retargeting four call sites.
-    """
+    """Which files hold source prose, and which frontmatter marks it human:
+    every blog-shaped literal in one object (D85). The defaults are Dan's blog."""
 
     glob: str = "**/*.qmd"
     meta_field: str = "automation"
@@ -192,12 +151,7 @@ class SourcePolicy:
         return is_human_authored(meta, field=self.meta_field, max_level=self.max_level)
 
     def level_of(self, meta: dict | None) -> int | None:
-        """The policy field's level, or None when absent or not an int.
-
-        A record says what the selector was looking at when it was cut, because
-        the post is editable and the corpus is frozen. Selecting on another
-        field gets None here, not a number that means something else.
-        """
+        """The policy field's level, or None when absent or not an int."""
         value = (meta or {}).get(self.meta_field)
         return value if isinstance(value, int) and not isinstance(value, bool) else None
 
@@ -209,15 +163,8 @@ DEFAULT_SOURCE = SourcePolicy()
 def is_modified_after(
     meta: dict, *, field: str = "date-modified", after: str = "2021-01-01"
 ) -> bool:
-    """True if ``meta[field]`` is a date on or after ``after`` (ISO ``YYYY-MM-DD``).
-
-    A generic frontmatter-date gate, parallel to `is_human_authored`: the caller
-    supplies the field name and threshold as policy. Robust to the value being a
-    YAML ``date``/``datetime`` object or an ISO-8601 string — ISO dates sort
-    lexicographically, so the ``YYYY-MM-DD`` prefix is compared. Conservative: a
-    missing or malformed date is treated as NOT recent (excluded), matching
-    `is_human_authored`'s "unknown means exclude".
-    """
+    """True if ``meta[field]`` is a date on or after ``after`` (ISO ``YYYY-MM-DD``),
+    as a YAML date or a string; a missing or malformed date is excluded."""
     raw = meta.get(field)
     if raw is None:
         return False

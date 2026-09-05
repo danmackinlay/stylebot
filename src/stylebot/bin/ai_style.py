@@ -1,22 +1,10 @@
-"""ai-style: the one-entry-point CLI (subcommands), thin over the libraries.
+"""ai-style: the one-entry-point CLI (subcommands), thin over the libraries (D38).
 
-Per OVERVIEW "Interfaces": one command, subcommands — not a scatter of loose
-scripts. Each subcommand is a thin `click` wrapper that parses flags and calls a
-typed library function: `log` (Phase 1 capture), `synth` (Phase 2),
-`make-splits` / `check-splits` / `extend-eval` (the by-post splits contract),
-`train-clf` (the voice classifier), `train` (Phase 3 LoRA SFT), `promote`
-(which run serves, D74), `run` (Phase 4 inference), `eval` (the offline
-scorer), `export-table` (scores -> tidy CSV), `merge-adapter`
-(`stylebot.export`), `serve` (the NDJSON editor sidecar), `validate-pairs` (the
-record contract on demand), `build-view` (the view of a draws dir, D84) and
-`status` (`stylebot.status`: what the corpus holds, which run serves, which
-detector scored it, where they disagree — the numbers docs may not carry, D52).
-
-**Exit codes are not written here.** The libraries raise `stylebot.errors`'
-two classes and `ErrorTranslatingGroup` (on `main`, so the whole subtree
-inherits it) turns them into 2 and 1 (D47). What is still written here is what
-click alone can know: flag *combinations* (`--pairs` with a FILE, `--best-of`
-without a detector), which are `click.UsageError` at the point of parsing.
+Each subcommand parses flags and calls a typed library function; the phase
+map is OVERVIEW's. Exit codes are not written here: the libraries raise
+`stylebot.errors`' two classes and `ErrorTranslatingGroup` on `main` turns
+them into 2 and 1 (D47). What stays here is what click alone can know — flag
+combinations, which are `click.UsageError` at parse time.
 """
 
 from __future__ import annotations
@@ -28,10 +16,8 @@ from pathlib import Path
 
 import click
 
-# Library modules are imported at module scope so click can own their defaults
-# and option decorators directly (`default=tr.DEFAULT_LORA_RANK`,
-# `synth_options()`); all import free. `infer` stays lazy — it owns no default
-# declared here. D49 has the `--help` numbers.
+# Library modules import at module scope so click can own their defaults; all
+# import free. `infer` stays lazy (D49).
 from stylebot import backends, config, draws, pairs, synth, synth_cli
 from stylebot import classify_cli as cc
 from stylebot import classify_train as ct
@@ -55,15 +41,12 @@ def main() -> None:
     """stylebot tooling — capture, synthetic pairs, training, eval (subcommands)."""
 
 
-# Phase 1 capture (bin/ai_style_log.py), mounted here as its entry point. The
-# hidden `data` group of one-off migrations emptied on 2026-09-05 (D38).
+# Phase 1 capture (bin/ai_style_log.py), mounted here as its entry point.
 main.add_command(_log, name="log")
 
 
-# The styler backend (`run`, `serve`) is one surface, `stylebot.backends`, a
-# LIBRARY — its docstring says why. What stays per-command is deliberate:
-# `run` defaults --backend to tinker, `serve` runs hotter and requires
-# --detector-model (it IS the service) where run's only feeds --best-of.
+# The styler backend (`run`, `serve`) is `stylebot.backends` (D35); per
+# command, `run` defaults --backend to tinker and `serve` requires --detector-model.
 
 
 @main.command("synth", cls=synth_cli.SectionedCommand)
@@ -105,16 +88,11 @@ def synth_cmd(
     glob: str,
     **kw,
 ) -> None:
-    """Manufacture synthetic (slop -> Dan) pairs from Dan's own prose.
+    """Manufacture synthetic (slop -> author) pairs from human-authored prose.
 
-    Provide targets one of two ways: a pre-selected FILES list, or --blog-root
-    plus a source policy (default: `automation: 0` posts under `**/*.qmd`, and
-    --glob/--field/--max-level retarget it at another blog). Writes the
-    Phase-1 pairs.jsonl schema with meta.synthetic / meta.generator. Idempotent
-    and resumable — re-running never duplicates.
-
-    To take every post regardless of the frontmatter field, raise --max-level
-    above every value it holds; to bypass selection entirely, pass FILES.
+    Targets are a pre-selected FILES list, or --blog-root plus a source policy
+    (--glob/--field/--max-level; raise --max-level above every value to take
+    every post). Appends draws; idempotent and resumable.
     """
     if bool(files) == bool(blog_root):
         raise click.UsageError(
@@ -123,12 +101,11 @@ def synth_cmd(
 
     source_policy = SourcePolicy(glob=glob, meta_field=field, max_level=max_level)
 
-    # The shared surface arrives as **kw; fold it back into its option bundles.
+    # Fold the shared surface back into its option bundles.
     opts = synth_cli.pop_bundles(kw)
 
     def _data_dir(*, required: bool) -> Path | None:
-        # Resolve the corpus location: explicit flag > $STYLEBOT_DATA_DIR. Refuse the
-        # bare cwd default — synth costs money and grows the corpus; be explicit.
+        # Explicit flag > $STYLEBOT_DATA_DIR; no cwd default where money is spent.
         if data_dir is None and not config.get_key("STYLEBOT_DATA_DIR"):
             if not required:
                 return None  # inspection: nothing to write, nothing to resolve
@@ -145,22 +122,14 @@ def synth_cmd(
         policy=opts.pop("chunk"),
     )
 
-    # The read-only inspection modes (--sample/--report) exit before generation:
-    # they write nothing, so they need no corpus location. Deciding that HERE —
-    # above the resolution — is what keeps `run_synth`'s data_dir a plain path
-    # while this command keeps its own tailored refusal message.
+    # The inspection modes (--sample/--report) write nothing and need no corpus
+    # location; deciding that here keeps `run_synth`'s data_dir a plain path.
     inspection = opts["inspection"]
     inspecting = inspection.sample_n is not None or inspection.report_path is not None
 
-    # Still resolved for inspection runs when it IS available, so the inspection
-    # hints can name the real pairs path.
-    # `run_synth` is silent unless handed a sink — this is the CLI, so it
-    # gets the click one (stream + colour routing lives in
-    # `cli_options.EMIT_LEVELS`, shared with livingthing's `dan-style synth`
-    # so the two front-ends cannot render a run differently).
-    # No `extra_tags=` here: provenance tagging is a library parameter
-    # (`run_synth(extra_tags=…)`), which is how the one tag on the live
-    # corpus was ever set. A wrapper that wants tags passes them in code.
+    # Still resolved for inspection runs, so the hints can name the real path.
+    # `run_synth` is silent unless handed a sink; the CLI hands it the click
+    # one. Provenance tags are a library parameter (`extra_tags=`), not a flag.
     synth_cli.run_synth(
         targets,
         data_dir=_data_dir(required=not inspecting),
@@ -238,13 +207,9 @@ def eval_cmd(**kw) -> None:
 def export_table_cmd(
     scores_path: Path, out_path: Path, note: str | None, config_path: Path | None
 ) -> None:
-    """Project a scores.jsonl to a committable tidy CSV (+ provenance sidecar).
-
-    One row per pair, no prose text: small enough to version next to a write-up,
-    and sufficient to redraw every figure — including re-cuts nobody planned at
-    run time. The sidecar records the hoisted run-constants, a digest of the
-    source scores file and the experiment config, so a later reader can tell
-    whether a re-run is comparable or merely similar.
+    """Project a scores.jsonl to a committable tidy CSV (+ provenance sidecar):
+    one row per pair, no prose text; the sidecar records the hoisted
+    run-constants and a digest of the source file.
 
         ai-style export-table --scores sweep/scores.jsonl --out notebook/data/sweep.csv
     """
@@ -269,8 +234,7 @@ def export_table_cmd(
 
 
 @main.command("serve", cls=SectionedCommand)
-# --detector-model is excluded from the shared bundle and redeclared here: for
-# `serve` it is the service itself, not run's optional --best-of reranker.
+# --detector-model is redeclared here: for `serve` it is the service itself.
 @click.option(
     "--detector-model",
     "detector_model",
@@ -302,13 +266,9 @@ def serve_cmd(
 ) -> None:
     """Score texts over stdin/stdout NDJSON (long-lived editor sidecar).
 
-    Loads the detector once (the embedding model is the slow part), then serves
-    {"id", "op": "score", "texts": [...]} -> {"id", "scores": [P(slop), ...]}
-    one JSON object per line until EOF. {"op": "info"} returns the artifact's
-    meta.json and doubles as the client's ready handshake. With a --backend,
-    the 'rewrite' op returns best-of candidates for one prose chunk (scored,
-    anchor-flagged, none auto-chosen); with --preferences, the 'prefer' op
-    records the client's choice. Protocol details: stylebot.serve.
+    Loads the detector once, then serves one JSON object per line until EOF;
+    with a --backend the 'rewrite' op returns best-of candidates, with
+    --preferences the 'prefer' op records the choice. Protocol: stylebot.serve.
     """
     from stylebot import classify, serve
 
@@ -395,13 +355,9 @@ def make_splits_cmd(
     force: bool,
     **kw,
 ) -> None:
-    """Create the shared by-POST splits contract (eval / styler / detector).
-
-    Pins a frozen eval post list and a deterministic hash rule that routes every
-    other post, future ones included, to the styler or detector role; every
-    consumer (`train-clf --splits`, `train`, the frozen eval) reads this one
-    file. Prints the role table and the danger report. Needs no ML deps.
-    """
+    """Create the shared by-post splits contract (eval / styler / detector):
+    a frozen eval list plus a hash rule for every other post, present and
+    future. Prints the role table and the danger report. Needs no ML deps."""
     view = bundles_from_kwargs(kw, {"view": draws.ViewOpts})["view"]
     pairs_path = view.corpus_or_view(pairs_path, required=True)
     if out_path.exists() and not force:
@@ -459,16 +415,9 @@ def check_splits_cmd(**kw) -> None:
 def extend_eval_cmd(**kw) -> None:
     """Grow the frozen eval stratum: `eval_v(n+1) = eval_v(n) u posts`.
 
-    Add-only and dry-run by default. Posts named here move OUT of the styler /
-    detector pools and INTO the frozen eval — the safe direction, since prose
-    only ever leaves training. It bumps `eval_version`, appends an
-    `eval_history` entry, and needs no migration of existing pairs: role is
-    derived from each record's `meta.source` at read time.
-
-    Shrinking the stratum is not expressible: dropping a post out of eval would
-    retroactively license training on prose an existing verdict was computed
-    over. Anything already trained under the old stratum (the detector head
-    above all) must be refit afterwards.
+    Add-only and dry-run by default; bumps `eval_version` and appends an
+    `eval_history` entry. Shrinking is not expressible (D42). Anything trained
+    under the old stratum, the detector head above all, must be refit.
     """
     opts = bundles_from_kwargs(kw, {"opts": sp.ExtendEvalOpts})["opts"]
     sp.apply_eval_extension(opts, emit=click_emitter())
@@ -477,13 +426,9 @@ def extend_eval_cmd(**kw) -> None:
 @main.command("train-clf", cls=SectionedCommand)
 @cc.train_clf_options()
 def train_clf_cmd(**kw) -> None:
-    """Train a voice classifier (linear head over a style embedding).
-
-    Slop-vs-author over a content-matched corpus: embeds both sides, fits a
-    logistic regression, evaluates by POST (C by nested group-CV) and writes
-    the head.json + meta.json artifact `--detector-model`/`serve` consume.
-    Needs the `classifier` extra; extra positives are a library argument.
-    """
+    """Train a voice classifier (linear head over a style embedding): fit by
+    post-split nested group-CV, written as the head.json + meta.json artifact
+    that `--detector-model` / `serve` consume. Needs the `classifier` extra."""
     parsed = bundles_from_kwargs(kw, cc.TRAIN_CLF_PARAMS)
     opts = parsed["opts"]
     opts = replace(opts, pairs_path=parsed["view"].corpus_or_view(opts.pairs_path, required=True))
@@ -567,21 +512,10 @@ def merge_adapter_cmd(
     base_model: str | None,
     work_dir: Path | None,
 ) -> None:
-    """Merge a trained LoRA adapter into its base weights (stylebot.export).
-
-    The step between `train` and serving the styler off somebody else's
-    computer: emits one merged HF checkpoint that a local runtime takes from
-    there — `mlx_lm.convert` to quantize for MLX, llama.cpp, vLLM, or plain
-    transformers.
-
-    It exists because the adapter `train --download-adapter` writes is in
-    SERVING key format while the cookbook's merge expects RAW Tinker keys, so
-    feeding stylebot's own export to its own next step fails; this inverts the
-    keys first. Quantization, config surgery and chat-template edits are
-    deliberately not here — they are per-runtime policy, so wrap this.
-
-    Needs the `trainer` extra. Idempotent: an existing --out is left alone.
-    """
+    """Merge a trained LoRA adapter into its base weights (stylebot.export, D31):
+    one merged HF checkpoint a local runtime takes from there. Quantization,
+    config surgery and chat-template edits are per-runtime policy, not here.
+    Needs the `trainer` extra. Idempotent: an existing --out is left alone."""
     from stylebot import export
 
     if base_model is None:
@@ -613,24 +547,16 @@ def merge_adapter_cmd(
 def run_cmd(file: Path | None, **kw) -> None:
     """Phase 4: rewrite FILE (or stdin) through the trained styler.
 
-    Chunks prose at training granularity (frontmatter and code fences
-    protected, original whitespace reassembled verbatim), sends each chunk
-    under the manifest's system prompt, and prints the rewrite to stdout (--write
-    edits in place with a backup). See `stylebot.infer` for the library seam.
-
-    With --pairs/--out it runs in **corpus mode** instead: the styler rewrites
-    each pair's slop side and the result lands as a top-level "output" field,
-    which `ai-style eval --field output` scores beside the same corpus's slop
-    and Dan sides. That is the shape the eval harness has always documented and
-    nothing produced — the missing half of comparing two adapters.
+    Chunks prose at training granularity and prints the rewrite to stdout
+    (--write edits in place with a backup). With --pairs/--out it runs in
+    corpus mode: each pair's slop side is rewritten into a top-level "output"
+    field, which `ai-style eval --field output` scores.
     """
     from stylebot import infer
 
     parsed = bundles_from_kwargs(kw, backends.RUN_PARAMS)
     run: backends.RunOpts = parsed["run"]
-    # The manifest is the committed reproducibility record: it carries the
-    # checkpoint, the base model, the renderer AND the chunk diet the adapter
-    # was trained on. Explicit flags still win over every one of them.
+    # The manifest supplies checkpoint, base model, renderer and diet; flags win.
     opts = backends.opts_from_manifest(backends.load_manifest(run.manifest_path), parsed["opts"])
     corpus = backends.corpus_mode(run, source=file)
     styler = backends.build_styler(opts)
@@ -709,7 +635,8 @@ def status_cmd(
     as_json: bool,
     **kw,
 ) -> None:
-    """Where this pipeline stands: corpus (or view), splits, promoted run, detector.
+    """Where this pipeline stands: corpus (or view), splits, promoted run,
+    detector, and the cross-checks between them (D52). Read-only and keyless.
 
     The command the documentation points at instead of carrying numbers (D52).
     Nothing is discovered: an artifact no flag names is "not given", and only
@@ -759,7 +686,7 @@ def build_view_cmd(**kw) -> None:
 @click.option("--limit", type=int, default=20, show_default=True, help="Problem lines to print.")
 @draws.view_options()
 def validate_pairs_cmd(pairs_file: Path | None, limit: int, **kw) -> None:
-    """Check a corpus against the record contract. Read-only (D84).
+    """Check a corpus against the record contract. Read-only (D36, D84).
 
     The gate `train` runs on its input: the message triple and the frozen
     system prompt, meta types and domains, and `record_id` uniqueness across

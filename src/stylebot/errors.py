@@ -10,14 +10,10 @@ turns into an exit code:
 | `RunError` | the arguments are fine, the world is not ready | 1 |
 | `MissingExtra` | a `RunError` whose unready world is an uninstalled install extra | 1 |
 
-`stylebot.cli_options.translate_errors` is the one place those become click
-exceptions, and `ErrorTranslatingGroup` installs it over a whole command tree so
-a new subcommand cannot miss the contract.
-
-**What does not belong here:** a violated contract between stylebot's own
-functions stays a bare `ValueError`/`RuntimeError`. The line is *can the person
-at the terminal act on the message?* Every class here subclasses the builtin it
-replaces, so introducing them could not break an existing `except ValueError:`.
+`stylebot.cli_options.translate_errors` is where those become click
+exceptions. A violated contract between stylebot's own functions stays a
+bare `ValueError`/`RuntimeError`: the line is whether the person at the
+terminal can act on the message.
 """
 
 from __future__ import annotations
@@ -31,12 +27,8 @@ class StylebotError(Exception):
 
 
 class ConfigError(StylebotError, ValueError):
-    """The arguments are wrong or incoherent — the caller must change them.
-
-    `param_hint`, when set, names the flag a CLI wrapper should blame (it
-    becomes `click.BadParameter`'s hint). Either way: **exit 2**. Emptiness
-    produced by the caller's own filters counts here, not as an unready world.
-    """
+    """The arguments are wrong or incoherent — the caller must change them;
+    exit 2. `param_hint` names the flag to blame."""
 
     def __init__(self, message: str, *, param_hint: str | None = None) -> None:
         super().__init__(message)
@@ -44,12 +36,8 @@ class ConfigError(StylebotError, ValueError):
 
 
 class RunError(StylebotError, RuntimeError):
-    """The configuration is fine but the world isn't. **Exit 1**.
-
-    A missing API key, an unreachable registry, no open capture session, a
-    corpus that fails the record contract. `quiet=True` means the failure has
-    already reported itself in full, so the CLI exits 1 without re-rendering it.
-    """
+    """The configuration is fine but the world isn't; exit 1. `quiet=True`
+    means the failure has already reported itself in full."""
 
     def __init__(self, message: str, *, quiet: bool = False) -> None:
         super().__init__(message)
@@ -57,9 +45,5 @@ class RunError(StylebotError, RuntimeError):
 
 
 class MissingExtra(RunError, ImportError):
-    """An optional dependency is not installed: `uv add 'stylebot[trainer]'`.
-
-    A `RunError` (exit 1) because the invocation is fine — the install is what
-    is short — and an `ImportError` so a caller guarding a heavyweight path with
-    `except ImportError` keeps working.
-    """
+    """An optional dependency is not installed: a `RunError` (exit 1) and an
+    `ImportError`, so an `except ImportError` guard keeps working."""

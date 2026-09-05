@@ -1,13 +1,9 @@
 """Targets — human-authored prose chunks, the assistant side of each pair.
 
-Turning posts into synthesis targets: the frontmatter/selector walk, prose-only
-extraction, section-aware splitting and merge-packing, and the chunk-hygiene
-gates. All generic — policy arrives via the caller's `selector`, markers and
-header names.
-
-`stylebot.synth` re-exports the subset its CLI kit needs (`iter_targets`, the
-chunk-size constants); this module is the implementation home and the import
-site to prefer.
+The frontmatter/selector walk, prose-only extraction, section-aware splitting
+and merge-packing, and the chunk-hygiene gates; policy arrives via the
+caller's `selector`, markers and header names. Import from here, not the
+`stylebot.synth` re-exports.
 """
 
 from __future__ import annotations
@@ -43,10 +39,8 @@ MIN_CHUNK_CHARS = 80  # drop chunks shorter than this
 MAX_CHUNK_CHARS = 8000  # drop chunks longer than this (truncating would corrupt the target)
 MERGE_MAX_CHUNK_CHARS = 1500  # soft budget per packed passage in merge mode
 
-# Link-LIST detection by *prose residual*, not link-char density: strip the
-# `[text](url)` spans and measure the prose left as a fraction of the chunk.
-# Density mis-fires on link-dense prose because URLs are long; the residual is
-# URL- and size-immune.
+# Link-list detection by prose residual, not link-char density, which
+# mis-fires on link-dense prose because URLs are long.
 LINK_LIST_MIN_PROSE_FRACTION = 0.2
 
 _LINK_RE = re.compile(r"\[[^\]]*\]\([^)]*\)")
@@ -54,41 +48,28 @@ _LINK_RE = re.compile(r"\[[^\]]*\]\([^)]*\)")
 
 @dataclass(frozen=True)
 class Target:
-    """One paragraph-chunk (or merged passage) of human-authored prose.
-
-    `context` is the section heading this passage sits under (verbatim, possibly
-    empty), prepended identically to both sides of the pair at synthesis time.
-    See `_plans/decisions.md` D14.
-    """
+    """One paragraph-chunk (or merged passage) of human-authored prose;
+    `context` is its section heading, prepended to both sides (D14)."""
 
     text: str
     source: str  # path of the post it came from (relative to blog-root if known)
     chunk_index: int
     chunk_total: int
     context: str = ""
-    # Chunk-scale facet, stamped into pair meta so a corpus mixing diets stays
-    # ablatable by scale: the merge budget (None = unmerged), and how the chunk
-    # was cut — None = within one section (heading carried as `context`),
-    # "cross-heading" = heading lines packed in as content.
+    # Chunk-scale facet (D82): the merge budget (None = unmerged) and the cut
+    # (None = section-bounded, "cross-heading" = headings packed as content).
     merge_max_chars: int | None = None
     chunk_mode: str | None = None
-    # Provenance carried from the cut, stamped into `meta.provenance` (D36).
-    # `automation` is the post's frontmatter level AS READ AT CUT TIME — the
-    # corpus is a frozen record and the post is not — read under the cut's
-    # `lib.SourcePolicy` (`level_of`), so another field's value never lands here.
+    # Provenance carried from the cut (D36); `automation` is the frontmatter
+    # level as read at cut time under the cut's `lib.SourcePolicy`.
     automation: int | None = None
     policy_digest: str | None = None
 
 
 @dataclass(frozen=True)
 class ChunkPolicy:
-    """The chunk-hygiene knobs — WHAT counts as a target. One declaration.
-
-    Each field carries its own click flag via `cli_options.opt()`, so `ai-style
-    synth` and the blog's mirror declare the surface once and re-pin what differs
-    with `synth_options(defaults=[ChunkPolicy(...)])`. A field WITHOUT `opt()` is
-    library-only: no flag, set by a caller in code.
-    """
+    """The chunk-hygiene knobs — what counts as a target — as a `cli_options`
+    bundle (D78); a field without `opt()` is library-only."""
 
     cli_section = "Chunking / hygiene (selection)"
 
@@ -168,20 +149,14 @@ class ChunkPolicy:
         help="Pack across section boundaries with headings as chunk content (needs --merge; "
         "overrides --heading-context). This, not --merge-max-chars, is what buys chunk length.",
     )
-    # Library-only, and the one field here that is a *train/serve contract*
-    # rather than a hygiene knob: `_prose_for_chunking` for what it does, D27 for
-    # why it defaults to the behaviour that does NOT match inference.
+    # Library-only, and a train/serve contract rather than a hygiene knob (D27).
     pack_across_protected: bool = True
-    # Library-only for a different reason: a predicate is not expressible on a
-    # command line, and *which* `:::` classes wrap prose is caller policy (D29).
+    # Library-only: a predicate is not a flag, and div policy is the caller's (D29).
     div_is_prose: DivIsProse | None = None
 
     def __post_init__(self) -> None:
-        # `--max-chars 0` is the CLI's spelling of "uncapped", and the library's
-        # is None. Reconciling them HERE makes the sentinel a property of the
-        # type rather than of one translation helper every caller had to
-        # remember: a 0 that slipped past would drop every chunk, since
-        # `_keep_chunk` compares `len(s) > max_chars`.
+        # `--max-chars 0` is the CLI's "uncapped", the library's is None; a 0
+        # that slipped past would drop every chunk.
         if self.max_chars == 0:
             object.__setattr__(self, "max_chars", None)
 
@@ -318,21 +293,9 @@ PROTECTED_MARK = "\x00stylebot:protected\x00"
 
 
 def _prose_for_chunking(body: str, policy: ChunkPolicy) -> str:
-    """The text `_post_targets` chunks — protected blocks gone, one way or another.
-
-    Two spellings of "gone", and the difference is the train/serve packing
-    contract (D27):
-
-    - `pack_across_protected=True` (the default, and what the live corpus was cut
-      under): `editable_prose` deletes every protected span and **joins** the
-      remnants, so paragraphs either side of a figure pack into one target — a
-      passage the document does not contain and `infer._segment` cannot present.
-    - `pack_across_protected=False`: each span becomes `PROTECTED_MARK`, its own
-      paragraph, which flushes the packer, giving inference's boundaries.
-
-    A mark rather than a list of runs, because `_split_sections` and
-    `Target.context` need the heading structure of the *whole* body.
-    """
+    """The text `_post_targets` chunks — protected blocks gone (D27): under
+    `pack_across_protected` the remnants are joined, else each span becomes a
+    `PROTECTED_MARK` paragraph that flushes the packer at inference's boundaries."""
     if not policy.prose_only:
         return body
     if policy.pack_across_protected:
@@ -366,12 +329,7 @@ def _pack_paragraphs(paras: Sequence[str], *, merge_max_chars: int) -> list[str]
 
 
 def _pack(units: Sequence[str], *, merge_max_chars: int) -> list[str]:
-    """`_pack_paragraphs`, flushing at every `PROTECTED_MARK`.
-
-    Identical to `_pack_paragraphs` when no mark is present, which is every call
-    under the default policy — `_prose_for_chunking` only emits marks when
-    `pack_across_protected` is off.
-    """
+    """`_pack_paragraphs`, flushing at every `PROTECTED_MARK`."""
     blocks: list[str] = []
     group: list[str] = []
     for unit in units:
@@ -392,17 +350,8 @@ def _post_targets(
     meta: dict | None = None,
     source_policy: SourcePolicy = DEFAULT_SOURCE,
 ) -> list[Target]:
-    """Chunk one post's **already-loaded** body into targets.
-
-    Takes the body rather than a path so every caller loads and YAML-parses a
-    post exactly once: the `blog_root` walk needs the frontmatter for its
-    `selector`, and re-reading here would parse the same file twice (and warn
-    twice about an unparseable one).
-
-    `meta` is that same frontmatter, read under `source_policy` and carried
-    onto each `Target` (see `Target.automation`) so the pair record can say
-    what the selector was looking at when the target was cut.
-    """
+    """Chunk one post's already-loaded body into targets; `meta` is its
+    frontmatter, read under `source_policy` and carried onto each `Target`."""
     # Cut trailing dump sections (e.g. "## Incoming") before anything else.
     body = _truncate_at_headers(body, policy.stop_at_headers)
     # Drop protected blocks before splitting, so they never become targets and
@@ -418,17 +367,14 @@ def _post_targets(
         drop_list_items=policy.drop_list_items,
     )
     keep_kw = dict(min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw)
-    # Junk gate per-paragraph BEFORE packing, with no min/max floor: short prose
-    # survives to be rescued by its neighbours, while tables/lists/link dumps are
-    # dropped so they never pollute a packed block.
+    # Junk gate per paragraph before packing, no size floor: short prose is
+    # rescued by its neighbours.
     prepack_kw = dict(min_chars=1, max_chars=None, **gate_kw)
 
     chunks: list[tuple[str, str]] = []  # (text, context)
     if cross:
-        # Flatten to one ordered unit stream — each heading line followed by its
-        # surviving paragraphs — and pack across section boundaries. Headings
-        # bypass the junk gate: alone a heading is too short to clear it, but as
-        # a packed block's first line it is the structure the styler must carry.
+        # One ordered stream of heading lines and surviving paragraphs, packed
+        # across sections; headings bypass the junk gate.
         units: list[str] = []
         for heading, section in _split_sections(text):
             if heading:
@@ -501,18 +447,10 @@ def iter_targets(
 ) -> list[Target]:
     """Collect prose chunks to use as synthesis targets.
 
-    `blog_root` supplies the label root and the selector; `files` replaces only
-    the walk (D80). Alone, `blog_root` walks for `source_policy.glob` and keeps
-    posts where `selector(meta)` is true (default `source_policy.selects`), and
-    `files` is taken as-is, unselected; together the caller's list is gated by
-    the selector and labelled blog-relative.
-
-    The chunk knobs arrive as a ready `policy=ChunkPolicy(...)` or as loose
-    keywords for its constructor. **`ChunkPolicy` owns every knob and default.**
-
-    Returns a flat list of `Target`s in document order, post by post. There is
-    no ordering knob — arms are assigned by content hash, so order cannot change
-    the corpus (D43); a caller that wants one sorts the returned list.
+    `blog_root` supplies the label root and the selector; `files` replaces
+    only the walk (D80). Chunk knobs arrive as `policy=ChunkPolicy(...)` or as
+    its constructor keywords. Returns `Target`s in document order; there is no
+    ordering knob (D12).
     """
     if files is None and blog_root is None:
         raise ValueError("provide `files` (pre-selected list) or `blog_root` (walk)")
@@ -542,14 +480,8 @@ def iter_targets(
 
 
 def hash_unit(*parts: object, salt: str = "") -> float:
-    """A stable coordinate in [0, 1) for a tuple of identifiers.
-
-    Pure function of the identifiers — no RNG state, no ordering, no corpus size
-    — which is what lets a subsample stay put while the thing it is sampled from
-    grows underneath it. Shares the digest → [0, 1) conversion with the splits
-    hash rule but NOT the hashed input: each side's byte format is pinned by data
-    already on disk, so they must stay separate.
-    """
+    """A stable coordinate in [0, 1) for a tuple of identifiers: a pure
+    function of them, so a subsample stays put while the corpus grows."""
     blob = "\x00".join([str(salt), *(str(p) for p in parts)]).encode("utf-8")
     return unit_from_digest(hashlib.sha256(blob).digest())
 
@@ -562,20 +494,9 @@ def select_targets(
     sample_frac: float | None = None,
     sample_salt: str = "",
 ) -> list[Target]:
-    """Narrow a target list to an experiment's substrate: by splits role, then subsample.
-
-    Two independent filters, both deliberately *not* random:
-
-    - **`role`** keeps only chunks whose post carries that role under the by-post
-      splits contract, so an experiment measured with the voice classifier does
-      not draw from the classifier's own training pool (D17, D34).
-    - **`sample_frac`** keeps a fraction by `hash_unit(source, text)`, so
-      membership is a property of the chunk's *content*: a later run is a strict
-      **superset** of an earlier one, and two runs are comparable on the
-      intersection. `--limit` cannot do this.
-
-    `sample_salt` re-draws an independent subsample of the same size.
-    """
+    """Narrow a target list to an experiment's substrate: by splits `role`
+    (D17, D34), then a `sample_frac` subsample by `hash_unit(source, text)`,
+    so a later run is a superset of an earlier one. `sample_salt` re-draws."""
     out = list(targets)
     if role is not None:
         if splits is None:
@@ -592,13 +513,9 @@ def select_targets(
 def split_off_role(
     targets: Sequence[Target], *, splits: dict, role: str
 ) -> tuple[list[Target], list[Target]]:
-    """Partition targets into (those whose post holds `role`, everything else).
-
-    The two-sided form of `select_targets(role=...)`, for callers that must
-    *report* what they removed rather than quietly keep a subset — the
-    frozen-eval guard in `synth_cli` names the posts it refused, because silence
-    is how eval prose got cut as training targets in the first place.
-    """
+    """Partition targets into (those whose post holds `role`, everything else):
+    the two-sided `select_targets(role=...)`, for a caller that reports what it
+    removed (D34)."""
     if role not in ROLES:
         raise ValueError(f"split_off_role: unknown role {role!r}")
     matched, rest = [], []

@@ -1,29 +1,14 @@
-"""
-ai-style log: capture (slop -> Dan rewrite) training pairs for the fine-tune.
+"""ai-style log: capture (slop -> rewrite) training pairs, Phase 1.
 
-Phase 1 of `_plans/OVERVIEW.md`: every time Dan rewrites an AI draft, keep the
-(before, after). Deliberately manual — no automation, no git hook, no surprise
-side effects. One rewrite of one file per session:
+Deliberately manual — no hook, no surprise side effects. One rewrite of one
+file per session:
 
     uv run ai-style log open <file>    # record the current text as "before"
-    # ... user edits the file by hand, across one or more sittings ...
+    # ... edit the file by hand, across one or more sittings ...
     uv run ai-style log save <file>    # write pair(s) for what changed, close
 
-`save` diffs at paragraph granularity and emits one pair per changed region.
-Pairs land in the corpus in the chat-completion contract Phase 2 also writes and
-Phase 3 reads.
-
-This module is a **click shell**: it declares flags, resolves the store, calls
-`stylebot.session`, and prints. `stylebot.capture` does the diffing and the pair
-records; `stylebot.session` owns snapshot persistence, symlink canonicalisation and
-`save`'s disposition rule (D35). The user-facing workflow is
-`_training_pairs/README.md`.
-
-Errors follow the package idiom (D47): `ConfigError` for wrong flags (exit 2),
-`session.SessionError` — a `RunError` — for a world that is not ready (exit 1),
-translated by `ErrorTranslatingGroup` rather than per-command `except` clauses.
-What stays here is the `click.UsageError`s for flag *combinations*, which only
-click can see.
+A click shell over `stylebot.session` and `stylebot.capture` (D35); errors
+follow the package idiom (D47). The workflow is `_training_pairs/README.md`.
 """
 
 from __future__ import annotations
@@ -50,20 +35,8 @@ from stylebot.session import SessionStore, SnapshotEntry, humanize_age
 
 @dataclass(frozen=True)
 class CaptureOpts:
-    """The flags `save` and `pair` share — what a captured pair looks like.
-
-    Both commands land (before, after) as draws (D84) and differ only in
-    where the two texts come from: `save` diffs a file against its session
-    snapshot, `pair` takes two paths or stdin. *What the resulting record looks
-    like* is the same question for both, and these three answer it — so they are
-    declared once here rather than twice, which is how the help text for
-    `--heading-context` came to be a six-line block maintained in two places.
-
-    `--replace` is deliberately NOT here despite appearing on both: it means
-    "supersede prior pairs for this source" in `pair` and "supersede across
-    sessions, overriding the smart default" in `save`. One spelling, two
-    behaviours — sharing the declaration would imply a symmetry there isn't.
-    """
+    """The flags `save` and `pair` share — what a captured pair looks like (D78).
+    `--replace` is not here: it means different things on the two commands."""
 
     cli_section = "Capture"
 
@@ -94,27 +67,17 @@ def capture_options(**kw):
     return bundle_options([CaptureOpts], **kw)
 
 
-# Root for all logged state, resolved through `stylebot.config` — the one home
-# of the `--flag` > `$STYLEBOT_DATA_DIR` > cwd-relative ladder (D45). `ai-style
-# log` passes no flag: it is the command where a mistake is cheap, so it takes
-# the env/default. Resolved lazily, per command: an import-time constant freezes
-# whatever the environment looked like when the CLI entry point imported this
-# module, which is how `log` once wrote to a cwd-relative `_training_pairs/`.
+# Root for all logged state, resolved through `stylebot.config` per command,
+# never at import (D45); `log` takes the env/default because a mistake is cheap.
 def _store() -> SessionStore:
     """The session/corpus store for this invocation."""
     return SessionStore.resolve()
 
 
 def _warn_if_eval_post(store: SessionStore, source: Path) -> None:
-    """Say so — loudly, once — when a capture lands on a frozen-eval post.
-
-    Deliberately a NOTICE, not a refusal, and the asymmetry with `synth` is the
-    point: a real captured rewrite of an eval post is Dan's own editing work and
-    belongs in the corpus, where the splits contract keeps it out of every
-    training and fitting stage. What must not happen silently is that the eval
-    stratum shrinks — every capture here is prose the styler will never see and
-    the frozen eval will score, so the operator should know they just spent one.
-    """
+    """Say so, once, when a capture lands on a frozen-eval post: a notice, not
+    `synth`'s refusal (D34), since a real rewrite belongs in the corpus and the
+    splits contract keeps it out of training."""
     try:
         splits = splits_mod.load_corpus_splits(store.data_dir)
     except (OSError, ValueError) as exc:  # a broken splits.json must not block a capture
@@ -145,23 +108,13 @@ def _echo_snapshots(entries: list[SnapshotEntry], *, age: bool = False) -> None:
 
 
 def _canonical_source(ctx, param, value):
-    """click callback wrapping `session.canonical_source`.
-
-    A symlinked FILE is keyed by the path it points at, so the blog's `_focus/`
-    harness cannot open a second, parallel session under a scratch tree that
-    gets wiped. See the library function for the full reasoning.
-    """
+    """click callback wrapping `session.canonical_source`."""
     return session.canonical_source(value)
 
 
 def _corpus_confirmation(store: SessionStore) -> str:
-    """One-line 'it landed where training reads' confirmation for write commands.
-
-    Resolves the data-dir to an ABSOLUTE path (a relative default like
-    ``_training_pairs/`` otherwise hides *where* pairs went) and reports the
-    running corpus size plus heading-context coverage, so each save visibly
-    accumulates in the corpus you expect rather than a stray cwd dir.
-    """
+    """One-line confirmation for write commands: the absolute data dir, the
+    running corpus size and heading-context coverage."""
     summary = session.corpus_summary(store)
     return (
         f"corpus now: {summary.pairs} pair(s) ({summary.with_context} with heading context) "
@@ -170,12 +123,8 @@ def _corpus_confirmation(store: SessionStore) -> str:
 
 
 def _remind_open_sessions(ctx: click.Context) -> None:
-    """Print a short reminder of currently-open sessions unless --quiet.
-
-    Called at the end of every command except `list` (which already
-    prints the full state). The reminder makes stale sessions visible
-    so they don't accumulate silently.
-    """
+    """Print a short reminder of currently-open sessions unless --quiet, at the
+    end of every command except `list`."""
     if ctx.obj and ctx.obj.get("quiet"):
         return
     entries = session.load_snapshots(_store().snapshots_dir)
@@ -221,13 +170,9 @@ def main(ctx: click.Context, quiet: bool):
 )
 @click.pass_context
 def open_session(ctx: click.Context, file: Path):
-    """Open a rewrite session on FILE: record its current content as the 'before' state.
-
-    Run this *before* you start rewriting an AI-generated draft. The
-    session is sticky — `open` refuses to overwrite an existing one so
-    the original (worst) state is preserved across editing sittings.
-    A later `save` diffs the current contents against this recorded state.
-    """
+    """Open a rewrite session on FILE: record its current content as the 'before'
+    state. Sticky: refuses to overwrite an existing session, so the original
+    state survives across sittings."""
     store = _store()
     snapshot = session.open_session(store, file)
     click.echo(f"opened session for {file} ({snapshot.chars} chars) -> {store.snapshot_path(file)}")
@@ -242,18 +187,11 @@ def open_session(ctx: click.Context, file: Path):
 )
 @click.pass_context
 def reopen_session(ctx: click.Context, file: Path):
-    """Reopen FILE's last closed session, restoring its original 'before' state.
-
-    For the do-over case: you saved, then spotted a typo in the rewrite. Fix
-    the file, `reopen`, then `save` again — the re-save diffs against the same
-    base and replaces the previous pairs rather than logging a near-duplicate.
-    `save --redo` does both steps in one.
-
-    Also recovers an accidental `drop`.
-    """
+    """Reopen FILE's last closed session, restoring its 'before' state, so a
+    corrected `save` re-diffs against the same base and replaces the previous
+    pairs (`save --redo` does both). Also recovers an accidental `drop`."""
     snapshot = session.reopen_session(_store(), file)
-    # Surface the age: resurrecting a weeks-old base against a much-changed
-    # file produces a huge, unrepresentative diff, and that should be visible.
+    # Surface the age: a weeks-old base gives a huge, unrepresentative diff.
     click.echo(
         f"reopened session for {file} "
         f"({snapshot.chars} chars, originally opened {humanize_age(snapshot.snapped_at)})"
@@ -309,15 +247,9 @@ def save_session(
 ):
     """Save FILE's rewrite as draws (D84), then close the session.
 
-    By default emits one pair per changed paragraph region (use --whole for
-    one whole-file pair). Nothing is rewritten: a prior pair is *superseded*
-    and a view drops it.
-
-    Disposition of prior pairs for this source is **smart by default**: pairs
-    from the *same* session (matching `meta.snapped_at`) are superseded, since
-    those are interim `--keep-open` saves that should not stack, while pairs
-    from earlier sessions are kept as legitimate prior rewrites. Override with
-    --replace (supersede cross-session pairs too) or --append (keep everything).
+    One pair per changed paragraph region (--whole for one pair). Prior pairs
+    from the same session are superseded by default; --replace supersedes
+    earlier sessions' too, --append keeps everything.
     """
     if force_replace and force_append:
         raise click.UsageError("--replace and --append are mutually exclusive")
@@ -351,8 +283,7 @@ def save_session(
     # Post-save reporting of preserved cross-session / appended pairs
     prior = result.prior
     if result.disposition == "smart" and prior.other_session:
-        # Pairs logged outside a session (`log pair`, `synth`) carry snapped_at=None;
-        # they have no session timestamp to sort or age, so count them separately.
+        # Pairs logged outside a session carry snapped_at=None: counted apart.
         stamps = prior.earlier_session_stamps
         parts = []
         if stamps:
@@ -406,10 +337,8 @@ def list_state():
         click.echo(
             f"{len(state.closed_sessions)} closed session(s), redoable via `reopen` / `save --redo`"
         )
-        # Relative age for closed sessions: an absolute stamp answers "which
-        # session was this" for one still open, but for a closed one the live
-        # question is whether the base is stale enough that a `--redo` would
-        # diff against prose that has moved on.
+        # Relative age for closed sessions: the live question is whether a
+        # `--redo` would diff against prose that has moved on.
         _echo_snapshots(state.closed_sessions, age=True)
 
 
@@ -456,13 +385,8 @@ def pair(
     replace: bool,
     **kw,
 ):
-    """One-shot pair capture from files or stdin (no session dance).
-
-    Unlike `save`, `pair` defaults to APPEND. The typical use is logging
-    one-off pairs from clipboard or scripts, where you usually want to add
-    to the corpus rather than overwrite. Pass --replace (with --source) to
-    supersede prior pairs for that source.
-    """
+    """One-shot pair capture from files or stdin, no session. Appends by
+    default; --replace (with --source) supersedes prior pairs for that source."""
     cap: CaptureOpts = bundles_from_kwargs(kw, {"capture": CaptureOpts})["capture"]
     if before_spec == "-" and after_spec == "-":
         raise click.UsageError("only one of --before/--after may be '-'")

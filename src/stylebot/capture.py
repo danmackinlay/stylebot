@@ -1,11 +1,6 @@
-"""Phase-1 capture mechanism: paragraph diffing + pair-record I/O, as a library.
-
-The `ai-style log` CLI is a thin wrapper keeping the path policy and the
-interactive session-snapshot workflow. Everything here takes explicit paths and
-strings, so a non-CLI producer can capture pairs without the logger's globals.
-Records follow the shared `pairs.jsonl` contract
-(`stylebot.pairs.validate_pair_record`); see `_plans/decisions.md` D14.
-"""
+"""Phase-1 capture mechanism: paragraph diffing + pair-record I/O, as a
+library over explicit paths and strings (D14, D35). Records follow
+`stylebot.pairs.validate_pair_record`."""
 
 from __future__ import annotations
 
@@ -36,12 +31,8 @@ def new_capture_id() -> str:
 
 
 def split_frontmatter_meta(text: str) -> tuple[dict, str]:
-    """Best-effort split into (parsed YAML frontmatter, body).
-
-    ``({}, text)`` for non-.qmd or plain prose. The `_meta` suffix is
-    load-bearing: `stylebot.infer.split_frontmatter` splits the same text into
-    ``(raw frontmatter string, body)``, and the two are not interchangeable.
-    """
+    """Best-effort split into (parsed YAML frontmatter, body); ``({}, text)``
+    for plain prose. Not `infer.split_frontmatter`, which returns the raw string."""
     try:
         meta, body = read_w_frontmatter_text(text)
         return (meta or {}), body
@@ -53,12 +44,8 @@ def split_frontmatter_meta(text: str) -> tuple[dict, str]:
 
 
 def _is_heading_paragraph(para: str) -> bool:
-    """True if `para` is a standalone ATX header paragraph.
-
-    Only the first line is inspected. A header glued to body text in the same
-    paragraph (no blank line between, e.g. `## H\\ntext`) is NOT a heading here:
-    it is already inside that chunk, so adding it as context would duplicate it.
-    """
+    """True if `para` is a standalone ATX header paragraph; a header glued to
+    body text is already inside its chunk and is not one."""
     if not para:
         return False
     first_line = para.splitlines()[0] if "\n" in para else para
@@ -66,12 +53,8 @@ def _is_heading_paragraph(para: str) -> bool:
 
 
 def _nearest_heading(paras: list[str], idx: int) -> str:
-    """Return the nearest preceding heading paragraph's text (immediate depth).
-
-    Scans backwards from `idx - 1`, returning the heading stripped, or "" when
-    the region is in the preamble before any heading (valid, not an error).
-    Depth is IMMEDIATE: the single nearest heading, never a breadcrumb.
-    """
+    """The nearest preceding heading paragraph's text, stripped — the single
+    nearest, never a breadcrumb — or "" in the preamble."""
     for k in range(idx - 1, -1, -1):
         if _is_heading_paragraph(paras[k]):
             return paras[k].strip()
@@ -85,17 +68,8 @@ def _coalesce_regions(
     gap_paras: int,
     gap_chars: int,
 ) -> list[tuple[int, int, int, int]]:
-    """Merge changed regions separated by only a short unchanged run.
-
-    Each region is `(i1, i2, j1, j2)` — before-span and after-span. Two adjacent
-    regions merge when the untouched paragraphs between them are within BOTH
-    tolerances, absorbing that gap into the merged pair.
-
-    Bridging rather than a fixed-width window, because untouched prose is text
-    the author did not get to, not text they endorsed: a capture's before-side is
-    slop-bearing, so padding pairs out with untouched neighbours would teach the
-    styler to leave slop alone (D81).
-    """
+    """Merge changed regions `(i1, i2, j1, j2)` separated by an unchanged run
+    within both tolerances (D81)."""
     if not regions or (gap_paras <= 0 and gap_chars <= 0):
         return regions
     out = [list(regions[0])]
@@ -122,17 +96,11 @@ def diff_chunks(
 ) -> list[tuple[str, str, str]]:
     """Return (before_chunk, after_chunk, context) triples per changed region.
 
-    Split both texts on blank lines (Phase 2's chunk shape, so real and
-    synthetic pairs are mixable), run SequenceMatcher on the paragraph lists,
-    and emit a pair per contiguous changed region; `equal`, `insert` and
-    `delete` opcodes are skipped, having nothing to learn from.
-
-    `coalesce_gap_paras` / `coalesce_gap_chars` extend coalescing across *short
-    unchanged runs*, so an edit with a left-alone paragraph in the middle stays
-    ONE pair; both default to 0, a merged region over `max_chars` falls back to
-    its parts, and untouched text is only bridged between two changed regions
-    (`_coalesce_regions`). With `heading_context`, each `context` is the nearest
-    preceding heading among the AFTER paragraphs; preamble regions get `""`.
+    Paragraph-split both texts, run SequenceMatcher, emit a pair per contiguous
+    `replace` region. `coalesce_gap_paras` / `coalesce_gap_chars` bridge short
+    unchanged runs (D81); a merged region over `max_chars` falls back to its
+    parts. With `heading_context`, `context` is the nearest preceding heading
+    among the after paragraphs, `""` in the preamble.
     """
     before_paras = split_paragraphs(before)
     after_paras = split_paragraphs(after)
@@ -161,9 +129,7 @@ def diff_chunks(
         ):
             triples.append(emitted)
             continue
-        # Oversized (or empty) after coalescing — fall back to the uncoalesced
-        # regions inside this span, so a long merge degrades to the finer cut
-        # instead of silently dropping a real edit.
+        # Oversized after coalescing: fall back to the finer cut inside this span.
         for part in raw:
             if part[2] >= span[2] and part[3] <= span[3]:
                 emitted = _emit(part)
@@ -192,17 +158,10 @@ def build_pair_record(
     provenance: dict | None = None,
     captured_at: str | None = None,
 ) -> dict:
-    """Build a chat-completion JSONL record from pre-stripped body strings.
-
-    `system` is `messages[0]`, the producer's policy prompt (D85). A non-empty
-    `context` is prepended *verbatim and identically* to both message bodies;
-    `before_chars`/`after_chars` count the BODY only, unchanged by context.
-
-    `provenance` is the caller's `provenance.pair_provenance(...)` dict — which
-    trees and which cut policy produced the record. Omitted rather than
-    null-filled when the caller has none, so an unstamped record stays
-    distinguishable from one whose producer could not answer.
-    """
+    """Build a chat-completion JSONL record from pre-stripped body strings;
+    `system` is `messages[0]`, the producer's policy prompt (D85); `context` is
+    prepended to both (D14) while `before_chars`/`after_chars` count the body
+    only. `provenance` is omitted, not null-filled, when absent."""
     meta: dict = {
         "schema_version": PAIR_SCHEMA_VERSION,
         "source": source,
@@ -261,16 +220,12 @@ def capture_pairs(
 ) -> list[dict]:
     """Strip frontmatter, diff, archive the texts and land one draw per chunk.
 
-    Returns the records written, one per chunk-pair; raises if nothing changed
-    worth capturing. `whole` mode spans many headings, so it carries no
-    context; the gap/`max_chars` args pass through to `diff_chunks`. The full
-    texts are archived beside the corpus (`<data_dir>/captures/<capture_id>/`)
-    and each record becomes an accepted draw under `<data_dir>/draws/` naming
-    the `capture_id`s it `supersedes` (D84, `_land`). Every record carries
-    `meta.provenance` (D36), whose `source_automation` is read under
-    `source_policy` — whose prompt is `messages[0]` unless `system_prompt` says
-    otherwise; a capture's "policy" is its cut knobs, so `policy_digest`s
-    compare within a producer and not across one.
+    Returns the records written; raises if nothing changed worth capturing.
+    `whole` mode carries no context. The texts are archived under
+    `<data_dir>/captures/<capture_id>/` and each record becomes an accepted
+    draw naming the `capture_id`s it `supersedes` (D84), carrying
+    `meta.provenance` (D36) read under `source_policy`, whose prompt is
+    `messages[0]` unless `system_prompt` says otherwise.
     """
     before_meta, before_body = split_frontmatter_meta(before_text)
     after_meta, after_body = split_frontmatter_meta(after_text)
@@ -360,12 +315,8 @@ def _land(
     supersedes: tuple[str, ...] | None,
 ) -> list[dict]:
     """Land a capture's records as draws (D84): `draw_from_pair`-shaped, no
-    blog sha (the tree is dirty by definition), `span` into `before.md`.
-
-    `draws/` is the only landing site. An absent one is created,
-    not refused: `ai-style log` has a default data dir, so a fresh corpus is
-    an ordinary first save. `draws.append` would otherwise write a *file*.
-    """
+    blog sha (the tree is dirty by definition), `span` into `before.md`. An
+    absent `draws/` is created: a fresh corpus is an ordinary first save."""
     draws_dir = config.draws_path(pairs_path.parent)
     draws_dir.mkdir(parents=True, exist_ok=True)
     for record, span in zip(records, spans, strict=True):
@@ -379,12 +330,8 @@ def _land(
 #
 #     captures/<capture_id>/{before.md, after.md, meta.json}
 #
-# A DIRECTORY of ordinary files, not a JSON blob, so a capture can be read and
-# `diff`ed when it comes out wrong: the before->after diff IS the training
-# signal and must stay legible. `.md` and not `.qmd`, because every tool in the blog repo
-# keys on `*.qmd` — the pre-commit hook would reformat the verbatim record,
-# search would index captured slop as the author's, and `iter_targets` would
-# sample it as a target.
+# A directory of ordinary files so a capture can be `diff`ed; `.md` and not
+# `.qmd`, so no blog tool reformats, indexes or samples the verbatim record.
 
 ARCHIVE_BEFORE = "before.md"
 ARCHIVE_AFTER = "after.md"
@@ -402,13 +349,8 @@ def write_archive(
     after_text: str,
     captured_at: str | None = None,
 ) -> Path:
-    """Write one capture archive directory, atomically; `captured_at` is the
-    save time, so the order of one session's saves is checkable (W4 step 4).
-
-    Three separate files make a partial write possible, so build in a sibling
-    temp directory and `os.replace` it into place: an archive is either wholly
-    there or absent, never half-populated (which `iter_archives` would skip).
-    """
+    """Write one capture archive directory atomically (a sibling temp dir,
+    `os.replace`d into place); `captured_at` is the save time."""
     archive_dir.parent.mkdir(parents=True, exist_ok=True)
     tmp = archive_dir.with_name(archive_dir.name + ".tmp")
     if tmp.exists():
@@ -438,11 +380,8 @@ def write_archive(
 
 
 def read_archive(archive_dir: Path) -> dict | None:
-    """Load one archive directory into the flat dict the rest of the module uses.
-
-    None (rather than raising) for an unreadable or incomplete archive, matching
-    `iter_archives`' skip-and-continue contract.
-    """
+    """Load one archive directory into the module's flat dict; None for an
+    unreadable or incomplete archive."""
     try:
         meta = json.loads((archive_dir / ARCHIVE_META).read_text(encoding="utf-8"))
         return {
@@ -458,17 +397,9 @@ def read_archive(archive_dir: Path) -> dict | None:
 
 
 def iter_archives(pairs_path: Path):
-    """Yield each capture archive dict beside `pairs_path`, oldest first.
-
-    Sorted by `snapped_at` so a walk is deterministic, in `read_archive`'s
-    flat shape.
-
-    Directories only. Support for the superseded `captures/<capture_id>.json`
-    blobs was dropped in 0.3, but they are REFUSED rather than skipped: a silent
-    skip would look exactly like "that capture had no changed regions", so the
-    caller would never learn an archive had dropped out of the corpus. Their
-    migration is spent and gone (D38), so the message names no command.
-    """
+    """Yield each capture archive dict beside `pairs_path`, oldest first by
+    `snapped_at`. A legacy `captures/<capture_id>.json` blob is refused, not
+    skipped: a skip would read as "no changed regions" (D38)."""
     cap_dir = pairs_path.parent / "captures"
     if not cap_dir.is_dir():
         return

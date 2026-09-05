@@ -1,22 +1,10 @@
 """Merge a trained LoRA adapter back into its base weights (D31).
 
-The step between `ai-style train` and serving the styler off somebody else's
-computer: `train --download-adapter` writes a PEFT adapter, and this turns that
-plus the base model into one merged HF checkpoint a local runtime can take.
-
-**Why this is stylebot's problem.** The adapter `train.py` exports is in
-*serving* key format, while `tinker_cookbook.weights.build_hf_model` expects
-*raw* Tinker keys and applies the same remap itself — so stylebot emits an
-artifact its own documented next step cannot consume. `SERVING_TO_RAW` below is
-the inversion, and the reason this module exists.
-
-**What stays with the caller**: where artifacts live, what the merged model is
-named, and everything downstream of the merge — quantization, config surgery,
-chat-template edits are per-runtime policy, and baking one server's quirks in
-here is the blog/generic boundary CLAUDE.md warns about.
-
-Heavy imports (`safetensors`, `huggingface_hub`, `tinker_cookbook`) are lazy, so
-the key-inversion logic stays testable without the ``trainer`` extra.
+`train --download-adapter` writes a PEFT adapter in serving key format;
+`tinker_cookbook.weights.build_hf_model` expects raw Tinker keys, so
+`SERVING_TO_RAW` inverts them and the merge emits one HF checkpoint a local
+runtime takes from there. Quantization, config surgery and chat-template
+edits are per-runtime policy and stay with the caller. Heavy imports are lazy.
 """
 
 from __future__ import annotations
@@ -41,14 +29,8 @@ ADAPTER_WEIGHTS = "adapter_model.safetensors"
 ADAPTER_CONFIG = "adapter_config.json"
 
 #: Serving-format prefix -> raw-Tinker prefix, applied longest-match-first by
-#: `raw_adapter_key`. Inverts the remap `tinker_cookbook.weights` performs when
-#: it builds the serving adapter, so the merge planner sees the key convention
-#: it expects (`model.layers.*`, `model.unembed_tokens`).
-#:
-#: Safe because the planner validates every mapped key against the base state
-#: dict, and because `merge_adapter` refuses an adapter whose `lora_alpha != r`
-#: (`check_adapter_scaling`) — the one case where a rename could change what the
-#: merged weights mean rather than where they land.
+#: `raw_adapter_key`; safe because the planner validates every mapped key and
+#: `check_adapter_scaling` refuses the one case where a rename changes meaning.
 SERVING_TO_RAW: tuple[tuple[str, str], ...] = (
     ("base_model.model.model.language_model.", "base_model.model.model."),
     ("base_model.model.lm_head.", "base_model.model.model.unembed_tokens."),
@@ -61,11 +43,7 @@ SERVING_TO_RAW: tuple[tuple[str, str], ...] = (
 
 
 def raw_adapter_key(key: str) -> str:
-    """One adapter tensor key in raw-Tinker form; unchanged if already raw.
-
-    At most one prefix applies (they are disjoint), and the longest is tried
-    first so a future overlapping entry cannot silently half-match.
-    """
+    """One adapter tensor key in raw-Tinker form; unchanged if already raw."""
     for old, new in sorted(SERVING_TO_RAW, key=lambda pair: -len(pair[0])):
         if key.startswith(old):
             return new + key[len(old) :]
@@ -79,16 +57,8 @@ def is_serving_format(keys: Iterable[str]) -> bool:
 
 
 def check_adapter_scaling(config: dict) -> None:
-    """Refuse an adapter whose LoRA scaling the rename would misrepresent.
-
-    The inversion moves where a tensor lands, not what it means — provided
-    `lora_alpha == r`, so the scaling factor `alpha / r` is 1 and no value is
-    at stake. Every adapter `stylebot.train` produces satisfies that (the
-    cookbook's SFT recipe sets them equal), but an adapter from elsewhere need
-    not, and silently merging one at the wrong scale would produce a model that
-    is subtly, unfixably wrong rather than broken. So it is checked, not
-    assumed.
-    """
+    """Refuse an adapter whose `lora_alpha != r`: the rename moves where a
+    tensor lands, not what it means, only while the scaling factor is 1."""
     r, alpha = config.get("r"), config.get("lora_alpha")
     if r is None or alpha is None:
         raise RunError(
@@ -145,16 +115,9 @@ def normalize_adapter(adapter_dir: Path | str, out_dir: Path | str) -> Path:
 
 
 def resolve_base_model(base_model: str) -> str:
-    """The local HF-cache snapshot dir for `base_model`, else the hub name.
-
-    Load-bearing rather than an optimization: given a local directory,
-    `tinker_cookbook.weights` reads `config.json` itself and never consults
-    `transformers.AutoConfig`, which does not necessarily know a
-    just-released architecture and raises when it doesn't. The base weights are
-    normally already cached from the training export. Falls back to the hub
-    name with a warning, since that path does work for architectures
-    transformers knows.
-    """
+    """The local HF-cache snapshot dir for `base_model`, else the hub name with
+    a warning: a local directory bypasses `transformers.AutoConfig`, which may
+    not know a just-released architecture."""
     try:
         from huggingface_hub import snapshot_download
 
@@ -184,18 +147,9 @@ def merge_adapter(
     work_dir: Path | str | None = None,
     merge_fn: Callable[..., None] | None = None,
 ) -> Path:
-    """Merge the adapter into `base_model`, writing a merged HF checkpoint.
-
-    Idempotent in the way the rest of the pipeline is: the merge writes to a
-    sibling `.partial` directory and renames on success, so an interrupted run
-    leaves debris rather than a half-written model that looks finished. An
-    existing `out_dir` is returned untouched — delete it to force a re-merge.
-
-    `work_dir` holds the key-inverted adapter copy (default: beside `out_dir`).
-    `merge_fn` is the paid-execution seam, defaulting to
-    `tinker_cookbook.weights.build_hf_model`; tests inject a fake so the whole
-    path above is exercised without torch or a 9B download.
-    """
+    """Merge the adapter into `base_model`, writing a merged HF checkpoint via a
+    sibling `.partial` directory; an existing `out_dir` is returned untouched.
+    `work_dir` holds the key-inverted copy; `merge_fn` is the paid seam."""
     adapter_dir, out_dir = Path(adapter_dir), Path(out_dir)
     if (out_dir / "config.json").is_file():
         logger.info("%s already merged — nothing to do", out_dir)

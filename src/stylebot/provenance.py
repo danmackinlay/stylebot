@@ -19,13 +19,7 @@ from pathlib import Path
 
 
 def now_iso() -> str:
-    """UTC now as ISO-8601 with microseconds.
-
-    Microsecond precision so records stamped close together (e.g. two sessions
-    opened by a script) get distinct values — `ai-style log`'s `save` matches a
-    snapshot on ``snapped_at``, and at second resolution two adjacent `open`
-    calls are indistinguishable.
-    """
+    """UTC now as ISO-8601 with microseconds, so adjacent stamps stay distinct."""
     return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
@@ -78,29 +72,16 @@ def git_repo_root(path: str | Path | None) -> Path | None:
 
 
 def stylebot_sha() -> str | None:
-    """Short SHA of the stylebot checkout this package is imported from.
-
-    None for a wheel install: the SHA is only meaningful for a source checkout,
-    and `git_repo_root` walking out of `site-packages` into some unrelated
-    enclosing repo would be worse than no answer. The stamp says "which tooling
-    tree wrote this record"; the version string is not enough, since the corpus
-    changes shape between releases.
-    """
+    """Short SHA of the stylebot checkout this package is imported from; None
+    for a wheel install."""
     root = git_repo_root(Path(__file__).parent)
     return git_sha(root) if root is not None else None
 
 
 def _canonical(value: object) -> object:
-    """A JSON-encodable, order-stable view of a policy value.
-
-    Dataclasses become field dicts (so `ChunkPolicy` participates whole, and any
-    field a later composition adds is picked up without touching this module),
-    mappings and sequences recurse, and a **callable becomes its
-    `module.qualname`** — which is the point of the whole exercise: the one
-    policy field that has silently differed between training and inference is
-    `div_is_prose`, a predicate, and `repr()` of a function includes its memory
-    address, so it could never have been hashed stably.
-    """
+    """A JSON-encodable, order-stable view of a policy value: dataclasses
+    become field dicts, containers recurse, and a callable becomes its
+    `module.qualname` so a predicate like `div_is_prose` hashes stably."""
     if is_dataclass(value) and not isinstance(value, type):
         return {f.name: _canonical(getattr(value, f.name)) for f in fields(value)}
     if isinstance(value, Mapping):
@@ -118,13 +99,8 @@ def _canonical(value: object) -> object:
 
 
 def policy_digest(policy: object | None) -> str | None:
-    """A short, stable digest of a chunking policy — None for no policy.
-
-    **Hash whatever the producer actually holds** — a `targets.ChunkPolicy` for
-    synthetic pairs, the cut knobs for captures — so the digests are comparable
-    *within* a producer, which is the question anyone asks of them. Twelve hex
-    chars, printed next to `_recut_digest`'s eight.
-    """
+    """A short, stable digest of a chunking policy — whatever the producer
+    holds, so digests compare within a producer; None for no policy."""
     if policy is None:
         return None
     canon = json.dumps(
@@ -146,13 +122,9 @@ PROVENANCE_KEYS = (
 
 
 def repo_provenance(blog_root: str | Path | None = None) -> dict:
-    """The three tree-level provenance fields. Two `git` calls — cache per run.
-
-    `blog_root` may be any path inside the prose repo (its root, or the data
-    directory that lives in it); the work-tree root is resolved from it. None
-    means "not a checkout", and every value degrades to None rather than raising
-    — a pair record is worth writing even from a tarball.
-    """
+    """The three tree-level provenance fields; two `git` calls, so cache per
+    run. `blog_root` may be any path inside the prose repo; every value
+    degrades to None rather than raising."""
     root = git_repo_root(blog_root)
     return {
         "blog_sha": git_sha(root) if root is not None else None,

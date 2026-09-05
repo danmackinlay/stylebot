@@ -1,32 +1,13 @@
-"""What the pipeline actually holds right now — the answer docs used to carry.
+"""What the pipeline holds right now — the answer docs may not carry (D52).
 
-Prose cannot keep operational state true, so the documentation stops carrying it
-and points here (D52). `collect` is a read-only sweep over the five artifacts
-that answer "where is this pipeline?":
-
-1. the **corpus** — how many records, how they split real/synthetic, how they
-   are sharded (`stylebot.corpus`) — or, given a draws dir, the **view** of it
-   under the policy: counts by outcome and the content hash, computed without
-   building, plus whether that view is built on disk (`draws.read_sidecar`);
-2. the **splits contract** — eval stratum version and `splits_sha256`, whether
-   every pinned eval post is still on disk, the per-role table and the danger
-   report (`stylebot.splits`);
-3. the **runs** — every manifest with the artifacts it pinned, which are
-   completed, and which one serves (`promoted: true`, written by `promote` —
-   the one thing this module writes; the rule is `promoted_manifest`);
-4. the **detector** — the artifact's `git_sha`, when it was fit, and on how
-   many pairs (`stylebot.classify.load_artifact_meta`);
-5. the **cross-checks between them**, which is why this is one function rather
-   than four commands. A detector fit under eval_v1 and a `splits.json` now at
-   v2 are each internally consistent and jointly wrong; same for a promoted run
-   whose `splits_sha256` no longer matches. Those are the `warnings` list.
-
-**Everything is optional and nothing is discovered.** stylebot does not know
-where the blog is, so `collect` reports on exactly the paths it is handed and
-says "not given" for the rest — `ai-style status` takes them as flags,
-`dan-style status` fills them from `livingthing.training_targets`. A missing
-artifact is a reported absence, never an exception: status must run on a
-half-built pipeline, which is when it is most useful. Read-only and keyless.
+`collect` is a read-only, keyless sweep over the corpus (or the view a draws
+dir would build, built or not), the splits contract, the runs (which is
+completed, which serves — `promote` writes `promoted: true`, the one write
+here, D74), the detector artifact, and the cross-checks between them, which is
+why it is one function: a detector fit under one `splits_sha256` and a
+`splits.json` now at another are each consistent and jointly wrong. Nothing is
+discovered; a path not passed is "not given", a missing artifact a reported
+absence (D52).
 """
 
 from __future__ import annotations
@@ -42,12 +23,8 @@ from stylebot.errors import ConfigError
 
 
 def _run_time(doc: dict) -> float:
-    """When a manifest says it was made, as a POSIX timestamp; 0.0 if it doesn't.
-
-    `created_at` (a training run) or `produced_at` (a verdict, which records a
-    stamp per phase and takes the earliest). Parsed rather than compared as a
-    string, because the two shapes carry different UTC offsets.
-    """
+    """When a manifest says it was made (`created_at`, or a verdict's earliest
+    `produced_at`), as a POSIX timestamp; 0.0 if it doesn't."""
     stamps: list[str] = []
     for value in (doc.get("created_at"), doc.get("produced_at")):
         if isinstance(value, str):
@@ -63,13 +40,8 @@ def _run_time(doc: dict) -> float:
 
 
 def load_manifests(runs_dir: str | Path) -> list[tuple[Path, dict]]:
-    """Every readable `runs/*.json`, newest first. Unreadable ones are skipped.
-
-    Ordered by the manifest's own clock (`_run_time`) with the filename as the
-    tiebreak, so a run id that is not a timestamp — a verdict directory's
-    manifest — sorts by when it says it was made rather than by where its stem
-    falls in a filename sort (D74).
-    """
+    """Every readable `runs/*.json`, newest first by the manifest's own clock
+    (`_run_time`, filename as tiebreak; D74). Unreadable ones are skipped."""
     runs = Path(runs_dir)
     if not runs.is_dir():
         return []
@@ -85,18 +57,11 @@ def load_manifests(runs_dir: str | Path) -> list[tuple[Path, dict]]:
 
 
 def promoted_manifest(runs_dir: str | Path) -> dict | None:
-    """The newest completed run manifest marked `promoted: true`, or None.
+    """The newest completed run manifest marked `promoted: true`, or None (D74).
 
-    A manifest is *completed* when it carries a `result` block; it *serves*
-    only when `promote` has said so (D74 as amended, W4 step 4) — a completed
-    run with no `promoted` key is on record and not serving, and `"promoted":
-    false` is a nixed run, an ablation arm or a verdict manifest, all listed by
-    `run_entries`. The rule lives here rather than in either CLI so `status`
-    and serving cannot disagree: the blog's `styler.latest_manifest` is this
-    function plus an error.
-
-    Returns the manifest with `_path` added. None when no manifest qualifies —
-    an unbuilt or never-promoted pipeline, not an error.
+    Completed means it carries a `result` block; serving means `promote` said
+    so. The one rule for `status` and serving alike. Returns the manifest with
+    `_path` added; None is an unbuilt or never-promoted pipeline, not an error.
     """
     for path, manifest in load_manifests(runs_dir):
         if manifest.get("result") and manifest.get("promoted") is True:
@@ -284,10 +249,8 @@ def _splits_status(
     roles: dict[str, dict] = {}
     report: list[str] = []
     if corpus_path is not None and corpus_path.exists():
-        # `assemble_dataset` is the same reader `check-splits` and `train-clf`
-        # use, so the per-role counts here are the ones those commands act on
-        # — including its near-identity gate, which is why the eval stratum
-        # reads slightly smaller than a raw grep of the corpus would.
+        # The same reader `check-splits` and `train-clf` use, near-identity gate
+        # included, so the per-role counts match theirs.
         from stylebot import classify_train as ct
 
         ds = ct.assemble_dataset(corpus_path)
@@ -312,12 +275,8 @@ def _splits_status(
 
 
 def _run_pins(doc: dict) -> dict[str, str]:
-    """The artifacts a manifest pinned, in either shape it is written in.
-
-    A training run records them under `data` and `hyperparameters`; a verdict
-    records them under `pins`, and names the styler run it sampled from. Absent
-    pins are absent keys, so an old manifest reads as short rather than wrong.
-    """
+    """The artifacts a manifest pinned, in either shape: a training run's
+    `data`/`hyperparameters`, or a verdict's `pins`. Absent pins are absent keys."""
     pins = doc.get("pins") if isinstance(doc.get("pins"), dict) else {}
     data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
     hyper = doc.get("hyperparameters") if isinstance(doc.get("hyperparameters"), dict) else {}
@@ -338,7 +297,7 @@ def _run_pins(doc: dict) -> dict[str, str]:
 
 
 def _run_entries(manifests: list[tuple[Path, dict]], promoted: dict | None) -> list[RunEntry]:
-    """One row per manifest, newest first — F6's "list the run with its pins"."""
+    """One row per manifest, newest first, with its pins (D74)."""
     serving = (promoted or {}).get("_path")
     entries = []
     for path, doc in manifests:
@@ -434,14 +393,9 @@ def collect(
     policy=None,
     views_root: str | Path | None = None,
 ) -> Status:
-    """Sweep whichever of the five artifacts the caller names. Read-only, keyless.
-
-    Every argument is optional and none is discovered: what is not passed is
-    reported as "not given", never guessed at. A path that does not exist is
-    reported as absent rather than raised on — status is most useful on a
-    pipeline that is half built. `draws_dir` (+ `policy`, `views_root`) adds the
-    view block, which stands in for the corpus block when the draws are there.
-    """
+    """Sweep whichever of the five artifacts the caller names; read-only,
+    keyless, nothing discovered. `draws_dir` (+ `policy`, `views_root`) adds
+    the view block, which stands in for the corpus block when the draws are there."""
     from stylebot.provenance import now_iso, stylebot_sha
 
     pairs_path = Path(pairs) if pairs is not None else None

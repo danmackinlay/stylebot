@@ -1,34 +1,12 @@
-"""The shared by-POST splits contract — one partition, three roles, all stages.
+"""The shared by-post splits contract — one partition, three roles, all stages.
 
-The reward-safety rule (D17, D42) is
-that the detector must never train on the posts the styler trains on or that
-the frozen eval scores. This module is the single source of truth for that
-partition: a small committed `splits.json` mapping every POST — present and
-future — to one of three roles:
-
-- **eval**: the frozen final-eval posts. Pinned as an explicit list; no fitting
-  or selection decision may ever touch them.
-- **styler**: Phase-3 training posts for the slop-remover.
-- **detector**: the classifier pool. Hyperparameter selection (C, backbone)
-  happens by *nested group-CV inside this pool* — there is deliberately no
-  fourth materialised split; at blog-corpus scale it would be uselessly small.
-
-**Growth stability.** Only the eval list is materialised. Every non-eval post is
-assigned by a deterministic hash rule (`sha256(salt:source)` → uniform [0,1) →
-detector if below `detector_frac`, else styler), so a post's role never changes
-as the corpus grows, new posts flow to detector/styler in fixed proportion with
-no file churn, and the eval stratum cannot drift. Synthetic pairs inherit their
-source post's role via `meta.source`.
-
-**Renames.** A role is keyed on the post's *source path*, which is not stable:
-`post-op move` renames posts, and a renamed post silently changes role (a
-pinned eval post stops being pinned; a hash-assigned one re-hashes into the
-other pool). The optional `aliases` map fixes that — see `canonical_source`.
-
-Extra-free by design: Phase 3 and the eval harness import this without the
-`stylebot[classifier]` extra. The only non-stdlib import is `click`, an
-unconditional dependency, for the CLI option bundle at the bottom; the
-role-assignment core above it touches nothing but the standard library.
+The detector never trains on the posts the styler trains on or the frozen
+eval scores (D17, D42). A committed `splits.json` maps every post, present
+and future, to `eval` (a pinned list), `styler` or `detector` (the hash rule
+`sha256(salt:source)` -> uniform [0,1) -> detector below `detector_frac`),
+so a role never changes as the corpus grows; synthetic pairs inherit their
+source post's role. A role is keyed on the post's identity through the
+optional `aliases` map (`canonical_source`, D34). Stdlib plus `click` only.
 """
 
 from __future__ import annotations
@@ -40,10 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-# click is an unconditional dependency (never an extra), and `ExtendEvalOpts`
-# below is a `cli_options` bundle for the same reason `eval.VerdictOpts` is:
-# extending the frozen stratum has two CLIs — `ai-style extend-eval` and the
-# blog's `dan-style extend-eval` — and must have one declaration.
+# `ExtendEvalOpts` below is a `cli_options` bundle: two CLIs, one declaration (D78).
 import click
 
 from stylebot.cli_options import Emitter, opt, silent
@@ -55,30 +30,19 @@ ROLES = ("eval", "styler", "detector")
 DEFAULT_EVAL_FRAC = 0.2
 DEFAULT_DETECTOR_FRAC = 0.4
 
-# Danger-report thresholds: below these a role's metric/training is running on
-# fumes and every consumer should say so out loud.
+# Danger-report thresholds: below these every consumer says so out loud.
 MIN_POSTS_PER_ROLE = 5
 MIN_PAIRS_PER_ROLE = 20
 MIN_DETECTOR_POSTS_FOR_CV = 10
 
-# A stratum where one post supplies more than this share of the pairs is not the
-# n it claims to be: chunks inside a post share topic, register and whatever the
-# generator did to it, so a chunk-level confidence interval over such a stratum
-# is too narrow. Measured 2026-09-03: `notebook/automatic_coding.qmd` is 77 of
-# the 103 eval pairs (75%), which is what run 4a's "127 chunks, paired" CI
-# treated as 127 independent observations. Every comparison over the stratum
-# should cluster by post (`eval.paired_delta(clusters=…)`), and the stratum
-# itself should be extended (`extend_eval`) rather than merely bootstrapped.
+# A stratum where one post supplies more than this share of the pairs is not
+# the n it claims to be (D40): cluster by post, and extend the stratum.
 MAX_POST_SHARE_PER_ROLE = 0.5
 
-# The frozen eval stratum is versioned so a verdict can name the stratum it was
-# computed on. v1 is the original `make_splits` cut; extensions bump it.
+# The frozen eval stratum is versioned (D42); v1 is the `make_splits` cut.
 DEFAULT_EVAL_VERSION = 1
 
-# `check_splits` returns one flat list of report lines. Lines starting with this
-# prefix are *errors*, not warnings: a pinned eval post that is not on disk is a
-# broken contract (the post was renamed and its role has silently moved), and a
-# caller must fail on it rather than print it in yellow and carry on.
+# A `check_splits` line with this prefix is an error a caller must fail on (D34).
 ERROR_PREFIX = "MISSING:"
 
 
@@ -91,12 +55,8 @@ def make_splits(
     eval_candidates=None,
 ) -> dict:
     """Create the splits contract: a pinned eval list + the hash rule for the rest.
-
-    `posts` is the universe of POST sources known now (used only to size the
-    eval sample); `eval_candidates` restricts which posts are eligible for eval
-    — pass the real-capture posts so the frozen eval isn't made of our own
-    synthetic paraphrases. Deterministic in `seed`.
-    """
+    `posts` sizes the eval sample; `eval_candidates` restricts who is eligible
+    (pass the real-capture posts). Deterministic in `seed`."""
     if not 0 < eval_frac < 1:
         raise ConfigError(f"eval_frac must be in (0,1), got {eval_frac}")
     if not 0 < detector_frac < 1:
@@ -129,24 +89,12 @@ def eval_version(splits: dict) -> int:
 
 
 def extend_eval(splits: dict, posts, *, note: str | None = None) -> dict:
-    """`eval_v(n+1) = eval_v(n) ∪ posts` — add-only, and refuses anything else.
+    """`eval_v(n+1) = eval_v(n) ∪ posts` — add-only; shrinking is not
+    expressible (D42).
 
-    The frozen stratum may **grow** and may never shrink. Growing it re-roles
-    the added posts out of `styler`/`detector` and into `eval`, which is the
-    safe direction: prose leaves the training pools, it never enters them. The
-    opposite move (dropping a post out of eval) would retroactively license
-    training on prose an existing verdict was computed over, so it is not
-    expressible here at all — you would cut a new file with `make_splits`.
-
-    Returns a NEW splits dict with `eval_version` bumped and an `eval_history`
-    entry recording what was added, by whom (the note) and when. Adding nothing
-    new is a no-op that returns the input unchanged rather than churning the
-    version.
-
-    A post is pinned by *identity*: the path is canonicalised through `aliases`
-    first, so adding a renamed post under its new spelling pins the path its
-    pairs are already keyed under (D34). Nothing is renumbered or re-keyed —
-    role is derived from the recorded `meta.source` at read time.
+    Returns a new splits dict with `eval_version` bumped and an `eval_history`
+    entry; adding nothing new returns the input unchanged. A post is pinned by
+    identity through `aliases` (D34); nothing is re-keyed.
     """
     known = {canonical_source(p, splits) for p in splits["eval_posts"]}
     additions = sorted({canonical_source(p, splits) for p in posts} - known)
@@ -169,39 +117,25 @@ def extend_eval(splits: dict, posts, *, note: str | None = None) -> dict:
 
 
 def splits_sha256(path: str | Path) -> str:
-    """16-hex content hash of a `splits.json` — the manifest pin.
-
-    A run manifest already pins the corpus hash and both repos' SHAs but not the
-    partition, so "which posts were held out of this run" was answerable only by
-    trusting that the file had not moved since. It moves: D34 added `aliases`,
-    and `extend_eval` moves posts into the frozen stratum. Same 16-hex
-    convention as `provenance.file_sha256`, which this delegates to.
-    """
+    """16-hex content hash of a `splits.json` — the manifest pin (D42), by
+    `provenance.file_sha256`."""
     from stylebot.provenance import file_sha256
 
     return file_sha256(path)
 
 
 def unit_from_digest(digest: bytes) -> float:
-    """A sha256 digest → a uniform coordinate in [0, 1). The shared half of the rule.
-
-    `targets.hash_unit` draws its subsamples through this same conversion. Only
-    the *conversion* is shared — what goes into the hash stays each caller's
-    business, because the byte-level input here is a frozen contract (the
-    committed `splits.json` pins every post's role through `f"{salt}:{source}"`).
-    """
+    """A sha256 digest → a uniform coordinate in [0, 1); the conversion
+    `targets.hash_unit` shares, while the hash input stays each caller's."""
     return int.from_bytes(digest[:8], "big") / 2**64
 
 
 def canonical_source(source: str, splits: dict) -> str:
-    """Resolve a post path to the identity its role is keyed on.
+    """Resolve a post path to the identity its role is keyed on (D34).
 
     `splits["aliases"]` is an optional `{alias: canonical}` map, consulted
-    transitively. **The direction is the opposite of the obvious one**: an entry
-    reads new → old — "the path this post has *now* → the path its pairs are
-    *already keyed under*" — because pointing old at new would re-hash every
-    existing pair into a different role (D34). Absent the key this is the
-    identity function, so an old `splits.json` behaves as before; a cycle raises.
+    transitively, reading new path → the path its pairs are already keyed
+    under. Absent the key this is the identity; a cycle raises.
     """
     aliases = splits.get("aliases") or {}
     seen = {source}
@@ -214,20 +148,11 @@ def canonical_source(source: str, splits: dict) -> str:
 
 
 def role_of(source: str, splits: dict) -> str:
-    """The single role-assignment function: eval if pinned, else the hash rule.
-
-    Deterministic and open-world: any post, including ones that did not exist
-    when the file was created, gets a stable role. `source` is resolved through
-    `canonical_source` first, so a renamed post keeps the role — and therefore
-    the pairs — it had under its old path.
-    """
+    """The single role-assignment function: eval if pinned, else the hash rule;
+    open-world, and `source` is resolved through `canonical_source` first."""
     source = canonical_source(source, splits)
-    # BOTH sides go through `canonical_source`: a pin may be spelled with the
-    # post's new path while the query arrives under the old one, or the reverse,
-    # and only one of those matched a raw scan (D34). Rebuilt per call because a
-    # memoised set was tried and reverted (870d030) — a module-global cache made
-    # `role_of` non-reentrant and went stale on in-place edits to `eval_posts`,
-    # which `test_role_of_memo_does_not_leak_between_splits_docs` guards.
+    # Both sides go through `canonical_source` (D34). Rebuilt per call: a
+    # memoised set went stale on in-place edits to `eval_posts`.
     if source in {canonical_source(p, splits) for p in splits["eval_posts"]}:
         return "eval"
     rule = splits["rest_rule"]
@@ -265,12 +190,8 @@ def load_splits(path: str | Path) -> dict:
 
 
 def load_corpus_splits(data_dir: str | Path | None = None) -> dict | None:
-    """The splits contract sitting in a corpus dir, or None when there is none.
-
-    The guards that must not *require* a splits file — synth's frozen-eval
-    refusal, `log save`'s eval notice — go through here, so "this corpus has a
-    contract" is asked once and answered the same way everywhere.
-    """
+    """The splits contract sitting in a corpus dir, or None when there is none;
+    the one reader for guards that must not require one."""
     from stylebot import config
 
     path = config.splits_path(data_dir)
@@ -278,11 +199,8 @@ def load_corpus_splits(data_dir: str | Path | None = None) -> dict | None:
 
 
 def source_spellings(splits: dict, sources) -> dict[str, list[str]]:
-    """`{identity: every path that names it}` for a set of post paths.
-
-    By identity, not by string: a post listed under both spellings counts once,
-    and an alias of a listed post joins its group even when unlisted.
-    """
+    """`{identity: every path that names it}` for a set of post paths; a post
+    listed under both spellings counts once."""
     groups: dict[str, set[str]] = {}
     for post in sources:
         groups.setdefault(canonical_source(post, splits), set()).add(post)
@@ -343,17 +261,9 @@ def is_error(message: str) -> bool:
 
 
 def post_pair_counts(splits: dict, ds) -> dict[str, dict[str, int]]:
-    """`{canonical post: {pairs, pairs_real, pairs_synthetic}}` for a Dataset.
-
-    Counted by *identity*, not by spelling: a corpus holding pairs under both a
-    post's old and new path is one post. `ds` is a `classify_train.Dataset`
-    (duck-typed: needs `groups`, `pair_rows`, `pair_is_synthetic`); free
-    positives are ignored — roles govern pairs.
-
-    The per-post view `summarize_roles` aggregates and `apply_eval_extension`
-    prices a candidate post with, so "how many pairs does this post carry" is
-    answered once.
-    """
+    """`{canonical post: {pairs, pairs_real, pairs_synthetic}}` for a Dataset
+    (duck-typed: `groups`, `pair_rows`, `pair_is_synthetic`), counted by
+    identity; free positives are ignored."""
     counts: dict[str, dict[str, int]] = {}
     for k, (s_row, _) in enumerate(ds.pair_rows):
         post = canonical_source(ds.groups[s_row], splits)
@@ -387,8 +297,7 @@ def summarize_roles(splits: dict, ds) -> dict:
         out[role] = {
             **entry,
             "posts": len(entry["posts"]),
-            # The concentration diagnostic: what fraction of this stratum comes
-            # from its single largest post. See MAX_POST_SHARE_PER_ROLE.
+            # The share of this stratum from its largest post (MAX_POST_SHARE_PER_ROLE).
             "top_post": top_post,
             "top_post_pairs": top_pairs,
             "top_post_share": (top_pairs / entry["pairs"]) if entry["pairs"] else 0.0,
@@ -397,12 +306,8 @@ def summarize_roles(splits: dict, ds) -> dict:
 
 
 def role_lines(splits: dict, ds, *, top: bool = False) -> list[str]:
-    """The per-role post/pair table `make-splits` and `check-splits` print.
-
-    `top` appends each stratum's dominant post and its share — the
-    concentration `check_splits` warns on, which `make-splits` (cutting the
-    partition, not auditing it) does not report.
-    """
+    """The per-role post/pair table `make-splits` and `check-splits` print;
+    `top` appends each stratum's dominant post and its share."""
     roles = summarize_roles(splits, ds)
     lines = []
     for role in ROLES:
@@ -418,18 +323,10 @@ def role_lines(splits: dict, ds, *, top: bool = False) -> list[str]:
 
 
 def check_splits(splits: dict, ds, *, blog_root: str | Path | None = None) -> list[str]:
-    """The danger report: warnings for strata too small (or too synthetic) to trust.
-
-    Returns human-readable report strings; empty list = healthy. Consumers must
-    surface these (CLI echo) and record them (artifact `meta.split.warnings`) —
-    a metric computed on a dangerously small stratum should never travel without
-    its caveat.
-
-    With `blog_root`, also verifies that every pinned eval post, and every post
-    the corpus holds pairs for, still exists on disk. Those lines carry
-    `ERROR_PREFIX` and are **errors**: a caller should fail on `is_error(line)`
-    rather than print it and continue.
-    """
+    """The danger report: warnings for strata too small (or too synthetic) to
+    trust, as report lines (empty = healthy) a consumer surfaces and records.
+    With `blog_root`, missing pinned or corpus posts are `ERROR_PREFIX` lines
+    a caller must fail on (`is_error`)."""
     warnings: list[str] = []
     if blog_root is not None:
         warnings.extend(_missing_on_disk_lines(splits, ds, blog_root))
@@ -514,30 +411,13 @@ def _missing_on_disk_lines(splits: dict, ds, blog_root: str | Path) -> list[str]
     return lines
 
 
-# ---------------------------------------------------------------------------
-# Extending the frozen stratum — the CLI surface for `extend_eval`.
-#
-# `extend_eval` above is the pure add-only transform; this is the operation
-# around it: read the file, price what would move out of the training pools,
-# refuse a post that is not on disk, print the before/after, and only then
-# write. It is a *subcommand* rather than a flag on `make-splits` because the
-# two have opposite safety rules — `make-splits --force` re-cuts (and thereby
-# un-freezes) the partition, while this may only ever grow it — and putting
-# both behind one command would sit "never unfreeze eval" next to the one flag
-# that does. See stylebot CLAUDE.md: anything a user runs as part of the
-# pipeline is a subcommand.
-# ---------------------------------------------------------------------------
+# --- extending the frozen stratum: the operation around `extend_eval`, a
+# subcommand of its own because `make-splits --force` has the opposite safety rule.
 
 
 @dataclass(frozen=True)
 class ExtendEvalOpts:
-    """The eval-extension surface, declared once for both CLIs.
-
-    `ai-style extend-eval` and the blog's `dan-style extend-eval` (which pins
-    the corpus/blog paths) are the two, and the blog's mirror test asserts the
-    second carries every flag of the first — so this is a `cli_options` bundle
-    rather than eight `click.option` lines retyped in two repos.
-    """
+    """The eval-extension surface, declared once for both CLIs (D78)."""
 
     cli_section = "Eval stratum"
 
@@ -568,9 +448,7 @@ class ExtendEvalOpts:
         None,
         "--pairs",
         "pairs_path",
-        # A file OR a shard directory: `stylebot.corpus` makes both first-class
-        # and every reader comes through `pairs.iter_pairs`, so refusing a
-        # directory here would refuse the shape the blog's corpus now has.
+        # A file or a shard directory: both are first-class (D50).
         type=click.Path(exists=True, path_type=Path),
         help="Corpus to price the move against (a pairs.jsonl or a shard directory): per-post "
         "pair counts and the before/after role table + danger report. Strongly recommended — "
@@ -614,15 +492,10 @@ def extend_eval_options(**kw):
 def apply_eval_extension(opts: ExtendEvalOpts, *, emit: Emitter = silent) -> dict:
     """Preview (and with `opts.apply`, write) `eval_v(n+1) = eval_v(n) ∪ posts`.
 
-    The whole operation, so the two CLIs cannot drift in what they refuse or in
-    what they print before writing. Returns the report as data:
-    `additions` (each with the role it is leaving and its pair counts),
-    `already_eval`, `roles_before`/`roles_after` when a corpus was given, and
-    the eval version and file hash on each side.
-
-    Refuses: an empty post list; a post that is not on disk under `blog_root`.
-    Adding only posts that are already pinned is a no-op — it returns the report
-    with `applied: False` and does not churn `eval_version`.
+    Returns the report as data: `additions` (with the role each leaves and its
+    pair counts), `already_eval`, `roles_before`/`roles_after` when a corpus
+    was given, and the version and hash on each side. Refuses an empty list or
+    a post not on disk under `blog_root`; nothing new is `applied: False`.
     """
     splits_path = Path(opts.splits_path)
     splits = load_splits(splits_path)

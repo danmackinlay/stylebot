@@ -1,12 +1,8 @@
-"""Validation for the shared `pairs.jsonl` contract.
+"""Validation for the shared pair-record contract (D36).
 
-The corpus schema is the seam between Phase 1 (real edit pairs), Phase 2
-(synthetic pairs), and Phase 3 (training). Phase 2 should validate its output
-here as a done-criteria gate, and Phase 3 should validate its input before
-spending money on a training run.
-
-The schema is enforced by `validate_pair_record` below and produced by
-`stylebot.bin.ai_style_log`. Keep this in sync with that producer.
+The corpus schema is the seam between capture, synthesis and training;
+`validate_pair_record` enforces it and `validate_pairs_file` adds the
+corpus-level uniqueness rule.
 """
 
 from __future__ import annotations
@@ -20,21 +16,14 @@ from stylebot import corpus
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.provenance import PROVENANCE_KEYS
 
-#: The `meta.schema_version` stamped on every record written from now on.
-#:
-#: 1 is the shape as it stood on 2026-09-03: the message triple, the required
-#: meta keys below, and `meta.provenance`. A record with NO `schema_version` is
-#: exactly the pre-2026-09 corpus (D36). Bump only for a change a consumer must
-#: branch on: adding an optional meta key is not one, changing what an existing
-#: key MEANS is.
+#: The `meta.schema_version` stamped on every record written from now on. 1 is
+#: the message triple, the required meta keys below and `meta.provenance`; a
+#: record with none is the older corpus (D36). Bump only for a change a
+#: consumer must branch on.
 PAIR_SCHEMA_VERSION = 1
 
-# meta keys every well-formed pair record carries; tags/synthetic/generator are
-# optional provenance. Optional chunk-scale facets on synthetic pairs:
-# `merge_max_chars` is the pack budget and `chunk_mode` is how the chunk was cut
-# — None/"section" (heading carried as `context`) or "cross-heading" (headings
-# packed in as CONTENT, so no `context`, so the verbatim-prefix invariant below
-# does not apply).
+# meta keys every well-formed pair record carries; the rest are optional
+# provenance and the chunk-scale facets (`merge_max_chars`, `chunk_mode`).
 REQUIRED_META_KEYS = (
     "source",
     "captured_at",
@@ -43,14 +32,8 @@ REQUIRED_META_KEYS = (
     "chunk_total",
 )
 
-# --- meta.gen schema (synthetic pairs only) ----------------------------------
-# The generation covariates recorded under `meta.gen`, consumed by
-# `stylebot.scoring` (flattened onto score records) and `stylebot.report` (row
-# columns). Split by WHICH WRITER produces each group, which is what makes the
-# declaration checkable: the synth tests assert each group against a real record
-# from its writer in BOTH directions, so a key the writer stopped emitting
-# cannot sit here as a wish. Callers extend via a factory's `extra_meta`; those
-# keys belong in `GEN_EXTRA_KEYS`.
+# --- meta.gen schema (synthetic pairs only), split by which writer produces
+# each group so the synth tests can assert each against a real record.
 
 #: Written unconditionally by `generators.openai_generator` for every draw.
 GEN_BASE_KEYS = (
@@ -71,9 +54,7 @@ GEN_BASE_KEYS = (
     "prompt_version",
     "prompt_label",
 )
-#: Added through a factory's `extra_meta` — `openrouter_generator` sets
-#: `provider_sort` (the routing *request*, recorded next to the `provider` it
-#: actually produced).
+#: Added through a factory's `extra_meta` (`openrouter_generator`'s `provider_sort`).
 GEN_EXTRA_KEYS = ("provider_sort",)
 #: Added by `synth.synthesize_pairs`: the deliberate-resample label, folded into
 #: `synth_key`. Absent means the base corpus.
@@ -83,10 +64,8 @@ GEN_SESSION_KEYS = ("session_id", "session_turn", "context_window", "window_fill
 
 #: Everything that can appear under `meta.gen`, whatever wrote it.
 GEN_META_KEYS = GEN_BASE_KEYS + GEN_EXTRA_KEYS + GEN_REPLICATE_KEYS
-# The experiment-relevant subset flattened onto each score record. A
-# scores.jsonl outlives the pairs.jsonl it was scored from, so this keeps the
-# covariates that *explain* an outcome, not just the knobs that were set:
-# dropping one costs an answer no re-aggregation can recover.
+# The subset flattened onto each score record: a scores file outlives the
+# corpus it was scored from.
 GEN_FACET_KEYS = (
     "model",
     "reasoning_effort",
@@ -111,41 +90,22 @@ GEN_FACET_KEYS = (
 
 
 def system_sha(prompt: str | None = None) -> str:
-    """16-hex digest of a system prompt — `STYLE_SYSTEM` unless one is given.
-
-    What a *derived* artifact — a scores row, a run manifest, a training shard
-    that dropped `messages[0]` — carries to say which prompt the pairs behind
-    it were built against. The prompt is the view's, so a caller holding a
-    policy passes `policy.system_prompt` (D36, D64).
-    """
+    """16-hex digest of a system prompt — `STYLE_SYSTEM` unless one is given —
+    which a derived artifact carries to name the prompt behind it (D36, D64)."""
     return hashlib.sha256((prompt or STYLE_SYSTEM).encode("utf-8")).hexdigest()[:16]
 
 
 def build_pair_content(context: str, body: str) -> str:
-    """Assemble a pair message body: heading context (verbatim) + the prose body.
-
-    The **shared contract** between Phase 1 (`ai-style log`) and Phase 2
-    (`stylebot.synth`): `context` — a section heading the body sits under — is
-    prepended *identically* to both the user (slop) and assistant (target) sides
-    so the styler learns to preserve the heading and restyle only the body
-    beneath it. Empty context returns the body unchanged.
-
-    Both producers MUST build message content through this one function, and
-    record the same `context` under `meta.context`, so real and synthetic pairs
-    stay shape-compatible. See `_plans/decisions.md` D14.
-    """
+    """Assemble a pair message body: heading context (verbatim) + the prose body,
+    identically on both sides (D14); every producer builds content here."""
     context = (context or "").strip()
     body = body or ""
     return f"{context}\n\n{body}" if context else body
 
 
 def pair_body(content: str, context: str | None) -> str:
-    """The prose body of a pair message, with the heading-context prefix removed.
-
-    The inverse of `build_pair_content`, so a consumer sees the transform region
-    (the body), not the heading shared by both sides. No context (or content
-    lacking the prefix) returns unchanged.
-    """
+    """The prose body of a pair message, heading-context prefix removed — the
+    inverse of `build_pair_content`; content lacking the prefix returns unchanged."""
     if not context:
         return content
     prefix = f"{context}\n\n"
@@ -153,11 +113,7 @@ def pair_body(content: str, context: str | None) -> str:
 
 
 def extract_slop(record: dict) -> str:
-    """The slop-side body of a pair (messages[1], heading-context stripped).
-
-    Public API: the voice-classifier trainer (livingthing) assembles its training
-    texts through these extractors so eval and training read a pair identically.
-    """
+    """The slop-side body of a pair (messages[1], heading-context stripped)."""
     return pair_body(record["messages"][1]["content"], (record.get("meta") or {}).get("context"))
 
 
@@ -183,13 +139,8 @@ FIELD_EXTRACTORS: dict[str, Callable[[dict], str]] = {
 
 
 def _recut_digest(recut: object) -> str:
-    """A short, stable digest of one re-cut's gap policy (`meta.recut`).
-
-    Canonical JSON (sorted keys, no whitespace) so the digest keys off the
-    policy's VALUES, not off dict insertion order — and so any key a future
-    a re-cut added to the stamp participates automatically. Eight hex
-    chars discriminates a handful of hand-chosen cut policies with room to spare.
-    """
+    """A short, stable digest of one re-cut's gap policy (`meta.recut`), over
+    canonical JSON so it keys off values, not insertion order."""
     try:
         canon = json.dumps(recut, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     except TypeError:  # a stamp JSON can't encode — degrade to repr, never raise
@@ -198,17 +149,12 @@ def _recut_digest(recut: object) -> str:
 
 
 def record_id(record: dict) -> str:
-    """A stable join key linking a pair's score back to the corpus.
+    """A stable join key linking a pair's score back to the corpus (D36).
 
-    Prefers `meta.synth_key` (synthetic pairs); else `capture_id:chunk_index`
-    (real captures group by `capture_id`); else a hash of `source` + chunk index.
-
-    **A re-cut record folds its cut policy (`meta.recut`) into the key**, since
-    the re-cuts (retired, W4 step 4) reused the `capture_id` and renumbered — so
-    `<cap>:0` can name a merged pair where it named one paragraph, and a
-    resuming consumer would skip changed prose as done. The same policy re-run
-    gives a byte-identical id. Records with no `meta.recut` keep their key
-    byte-for-byte, so a committed `scores.jsonl` keeps joining (D36).
+    `meta.synth_key`; else `capture_id:chunk_index`; else a hash of `source` +
+    chunk index. A re-cut record folds `meta.recut` into the key, since a
+    re-cut reused the `capture_id` and renumbered; records without it keep
+    their key byte-for-byte.
     """
     meta = record.get("meta") or {}
     if meta.get("synth_key"):
@@ -226,13 +172,8 @@ def record_id(record: dict) -> str:
     return h.hexdigest()[:16]
 
 
-# --- meta types and domains --------------------------------------------------
-# Key -> (accepted types, optional predicate, predicate description). Checked
-# only when the key is PRESENT; `REQUIRED_META_KEYS` is the separate question of
-# which must be there at all. Anything absent from this table is unvalidated by
-# design — the schema is open, and a closed whitelist would make every
-# experiment's covariate a validation failure. NoneType is accepted where a
-# producer legitimately writes null.
+# --- meta types and domains: key -> (accepted types, optional predicate,
+# description), checked only when the key is present. The schema is open.
 _NoneType = type(None)
 _META_TYPES: dict[str, tuple] = {
     "source": (str, _NoneType),
@@ -337,18 +278,12 @@ def _check_meta_types(meta: dict, prompt: str) -> list[str]:
 
 
 def validate_pair_record(rec: object, *, system_prompt: str | None = None) -> list[str]:
-    """Return a list of human-readable problems with one pair record.
+    """Return a list of human-readable problems with one pair record; empty is valid.
 
-    Empty list == valid. Checks the message triple (system/user/assistant),
-    that `messages[0]` is `system_prompt` (the view's, defaulting to
-    `STYLE_SYSTEM`), that user/assistant content is non-empty, that the required
-    `meta` keys are present, and that every meta key it knows about carries the
-    right type and a value in range.
-
-    **Per-record by construction, which is the limit worth naming**: nothing
-    here can see that two records share a `record_id`, and for two years nothing
-    did — 21 duplicate cells reached the live corpus. `validate_pairs_file` is
-    where that check lives.
+    Checks the message triple, that `messages[0]` is `system_prompt` (default
+    `STYLE_SYSTEM`), non-empty content, the required `meta` keys and every
+    known key's type and domain. Per-record: `record_id` uniqueness is
+    `validate_pairs_file`'s (D36).
     """
     errors: list[str] = []
     prompt = system_prompt or STYLE_SYSTEM
@@ -383,10 +318,7 @@ def validate_pair_record(rec: object, *, system_prompt: str | None = None) -> li
                 errors.append(f"meta missing required key {key!r}")
         errors.extend(_check_meta_types(meta, prompt))
 
-        # Heading-context invariant: a declared meta.context must be the
-        # verbatim prefix of BOTH the user and assistant content — added as
-        # fixed context via build_pair_content, not paraphrased into the slop.
-        # Only enforced when context is present and the triple parsed cleanly.
+        # A declared meta.context must be the verbatim prefix of both sides (D14).
         context = meta.get("context")
         if context and isinstance(msgs, list) and len(msgs) == 3:
             for role_idx, label in ((1, "user"), (2, "assistant")):
@@ -406,16 +338,10 @@ def validate_pairs_file(
 ) -> list[tuple[int | str, list[str]]]:
     """Validate every line of a corpus, and the corpus-level uniqueness rule.
 
-    Returns `(location, errors)` per invalid line; empty means valid.
-    Unparseable JSON is one error for that line. `location` is a 1-based line
-    number for a single-file corpus and `"<shard>.jsonl:<line>"` for a sharded
-    one, which is a line somebody can open.
-
-    **`record_id` uniqueness is a property of the FILE, not of a record** (D36),
-    so it is checked here and nowhere else, across the whole corpus rather than
-    per shard (D50). A repeat is reported against the *later* line, the earlier
-    being what resuming consumers joined to. `check_duplicates=False` for a
-    partial file whose id space is shared with lines you are not looking at.
+    Returns `(location, errors)` per invalid line; `location` is a 1-based
+    line number, or `"<shard>.jsonl:<line>"` for a sharded corpus. `record_id`
+    uniqueness is checked across every shard (D36, D50), a repeat reported
+    against the later line; `check_duplicates=False` for a partial file.
     """
     shards = corpus.shard_paths(path)
     sharded = len(shards) > 1 or corpus.is_sharded(path)
@@ -450,15 +376,7 @@ def validate_pairs_file(
 
 
 def iter_pairs(path: str | Path) -> Iterator[dict]:
-    """Yield every pair record in a corpus, one per non-blank line.
-
-    `path` is a `pairs.jsonl` **or a shard directory** (`stylebot.corpus`); this
-    is the seam that makes every reader in the package sharding-agnostic, since
-    all of them come through here. Shards are read in `shard_paths` order.
-
-    Tolerant (`stylebot.jsonl` under the hood: UTF-8, blank / undecodable /
-    non-object lines skipped, missing file yields nothing). Yields the raw
-    parsed dict; callers validate with `validate_pair_record` if they need the
-    contract enforced.
-    """
+    """Yield every pair record in a corpus — a `pairs.jsonl` or a shard
+    directory (D50), in `shard_paths` order. Tolerant: undecodable lines are
+    skipped and a missing file yields nothing; records are not validated."""
     yield from corpus.iter_records(path)
