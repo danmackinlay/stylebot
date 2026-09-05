@@ -1058,32 +1058,30 @@ decided, not deferred.
 
 ## D84: the corpus is append-only draws plus derived views
 
-**Decision (2026-09-04, W4 step 1).** Two layers. *Draws* record what happened —
-one per generator call or human edit, keyed on its cell (`draws.draw_id`), raw
-generator output kept, `outcome` of `accepted | gate:<name> | error:<class>`;
-an interim save stays a draw and its successor names it (`supersedes`). *Views*
-are a function of the draws and a `ViewPolicy` whose sha names the file; built,
-never committed. Data flows draws → views, never back: a prune is a policy
-clause plus a rebuild, a recut a chunk-policy change plus a rebuild; nothing
-edits a draw. The five null-provenance cells are kept. `draws.py` is the one new
-module (≤ 800, P2; no thread, lock or process); readers are unchanged.
-`dan-style promote`, `SourcePolicy` and an author slot ride step 4 (D74, D36, D64).
+**Decision (2026-09-04, W4 step 1).** Two layers. *Draws* record what happened — one per
+generator call or human edit, keyed on its cell (`draws.draw_id`), raw output kept, `outcome`
+of `accepted | gate:<name> | error:<class>`; an interim save stays a draw and its successor
+names it (`supersedes`). *Views* are a function of the draws and a `ViewPolicy` whose sha names
+the file; built, never committed. Never the reverse: a prune is a policy clause plus a rebuild,
+a recut a chunk-policy change plus a rebuild, and nothing edits a draw. The five
+null-provenance cells are kept; `draws.py` is the one new module (≤ 800, P2; no thread, lock or
+process), and readers are unchanged.
 
-**Alternatives.** *Keep the store, add a draws side file for rejects only* —
-recovers the rejects but `synth_key` stays keyed on cut text, so a recut still
-orphans and the eight rewrite paths stay; step 2's shape, not the model.
-*SQLite* — rejected: versions worse in git than append-only text and cannot be
-hand-edited, which the RUNBOOK's repair relies on. *Span-based `synth_key` and
-stop* — fixes orphaning, every prune still rewrites. *Dedupe interim saves
-first* — no save order is recorded, so the "final" save is a guess.
+**Alternatives.** *A rejects-only side file* — a recut still orphans, and the eight rewrite
+paths stay. *SQLite* — versions worse in git, and the RUNBOOK repairs by hand. *Span-based
+`synth_key`* — every prune still rewrites. *Dedupe interim saves* — no order is recorded.
 
-**Deciding constraint.** The recut orphans every synthetic cell because
-`synth_key` hashes the cut text, and 6,429 rejected draws (45% of spend) are
-unrecoverable because only the pair was kept (`findings.md` "The view reproduces the corpus").
+**Deciding constraint.** The recut orphans every synthetic cell (`synth_key` hashes the cut
+text), and the rejects — near half the spend — are unrecoverable, the pair alone having been
+kept (`findings.md` "The view reproduces the corpus").
 
-**Amended 2026-09-05**: (step 3) `resolve` is the blog's `livingthing.corpus_provenance`
-(≤ 300 lines, D45); `keep_superseded` until step 5. (Step 4) `build_view` honours
-`superseded_by` and `supersedes`; D60's lock, the migrations and every rewrite go.
+**Amended 2026-09-05.** (Steps 3–4) `resolve` moved to the blog (D45); D60's lock, the
+migrations and every rewrite are gone. (Step 5) `keep_superseded` is off; a wrong draw is
+retired by a **policy clause**, not the successor draw the hand-off asked for — the body
+licenses both, but a clause writes nothing into the corpus and catches every later map row.
+`ViewPolicy` gained `superseded_captures`, `eval_sources` and the `system_prompt` the view
+stamps into `messages[0]` (D64). `pairs/` leaves git; `synth` and `capture` write draws only,
+and an absent `draws/` is created. `findings.md` "The view drops the superseded captures".
 
-**Re-evaluate if** a draw shard passes a few hundred MB (finer shards, not a
-database) or a view is needed offline more often than it is rebuilt.
+**Re-evaluate if** a draw shard passes a few hundred MB (finer shards, not a database) or a
+view is needed offline more often than it is rebuilt.
