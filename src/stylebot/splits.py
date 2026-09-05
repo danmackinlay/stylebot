@@ -313,18 +313,27 @@ def missing_eval_posts(splits: dict, blog_root: str | Path) -> list[str]:
     return list(missing_sources(splits, splits["eval_posts"], blog_root))
 
 
-def require_pinned_posts(splits: dict, blog_root: str | Path) -> None:
-    """`missing_eval_posts`, raised — the gate a run passes before it spends.
+def corpus_sources(pairs_path: str | Path) -> set[str]:
+    """Every `meta.source` a pairs corpus (file, shards or view) names."""
+    from stylebot.pairs import iter_pairs
 
-    `check_splits` reports the same fact, and nothing forces `check-splits`
-    before a paid run, so the training entry points call this instead (D34).
-    """
-    missing = missing_eval_posts(splits, blog_root)
+    return {s for rec in iter_pairs(pairs_path) if (s := (rec.get("meta") or {}).get("source"))}
+
+
+def require_sources_on_disk(splits: dict, sources, blog_root: str | Path) -> None:
+    """`missing_sources` over the pinned eval posts and `sources`, raised — the
+    gate a run passes before it spends, since nothing forces `check-splits`
+    first (D34). Names each identity by its role: pinned eval post or corpus source."""
+    missing = missing_sources(splits, set(splits["eval_posts"]) | set(sources), blog_root)
     if missing:
+        pinned = eval_post_spellings(splits)
+        named = ", ".join(
+            f"{'pinned eval post' if c in pinned else 'corpus source'} {c!r}" for c in missing
+        )
         raise ConfigError(
-            f"{len(missing)} pinned eval post(s) are not on disk under {blog_root}: "
-            f"{', '.join(missing)} — renamed or deleted, so the role has silently moved. "
-            f"Add the new path to 'aliases' in splits.json (`ai-style check-splits`)."
+            f"{len(missing)} missing source(s) under {blog_root}: {named} — renamed or "
+            f"deleted, so its role has silently moved. Add the new path to 'aliases' in "
+            f"splits.json (`ai-style check-splits`)."
         )
 
 

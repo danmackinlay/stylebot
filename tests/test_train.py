@@ -384,9 +384,13 @@ def test_blog_root_refuses_a_run_whose_eval_pins_left_the_tree(tmp_path, write_p
     # Without --blog-root the run is unchanged: the check is opt-in, so the blog
     # can adopt it in its own commit.
     assert run().manifest["data"]["splits_sha256"] == sp.splits_sha256(splits_path)
-    # And with the pinned posts on disk it passes.
+    # With the pins on disk it still refuses: every corpus source is gated (C12).
     for post in pinned:
         (blog_root / post).write_text("x", encoding="utf-8")
+    with pytest.raises(ConfigError, match="corpus source"):
+        run(blog_root=blog_root)
+    for i in range(6):
+        (blog_root / f"post/p{i}.qmd").write_text("x", encoding="utf-8")
     assert run(blog_root=blog_root).manifest["data"]["eval_version"] == 1
 
 
@@ -412,7 +416,7 @@ def test_train_cli_exits_2_on_a_missing_pin(tmp_path, write_pairs_corpus):
         + ["--work-dir", str(tmp_path / "w"), "--manifest-out", str(tmp_path / "m.json")],
     )
     assert result.exit_code == 2, result.output
-    assert "not on disk under" in result.output
+    assert "missing source(s) under" in result.output
 
 
 def test_train_cli_dry_run_prints_the_manifest_and_leaves_runs_untouched(

@@ -769,7 +769,7 @@ def _train_splits_mode(
 
     sp = splits_mod.load_splits(splits_path)
     if blog_root is not None:
-        splits_mod.require_pinned_posts(sp, blog_root)
+        splits_mod.require_sources_on_disk(sp, set(ds.groups), blog_root)
     warnings = splits_mod.check_splits(sp, ds)
     for w in warnings:
         logger.warning("splits: %s", w)
@@ -914,7 +914,7 @@ def train(
       **detector** pool only; the frozen **eval** posts are never embedded; the
       **styler** posts give a bonus unseen-posts metric (`styler_holdout`); role
       counts, warnings and the rest-rule land in `meta.split`. `blog_root` fails
-      the run on a pinned eval post that has left the tree (D34).
+      the run on a pinned eval post or corpus source that has left the tree (D34).
     """
     ds = assemble_dataset(pairs_path, extra_positives=extra_positives, pair_ok=pair_ok)
     if ds.n_pairs == 0:

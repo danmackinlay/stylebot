@@ -575,11 +575,11 @@ def run_training(
 
     splits = None
     if splits_path is not None:
-        from stylebot import splits as splits_mod
+        from stylebot import splits as sp
 
-        splits = splits_mod.load_splits(splits_path)
+        splits = sp.load_splits(splits_path)
         if blog_root is not None:
-            splits_mod.require_pinned_posts(splits, blog_root)
+            sp.require_sources_on_disk(splits, sp.corpus_sources(pairs_path), blog_root)
 
     corpus = assemble_training_corpus(
         pairs_path,

@@ -480,7 +480,7 @@ def check_splits_cmd(
     The read-only counterpart of `make-splits`, and the thing to run after any
     `post-op move`: a renamed post silently changes role, which is how two
     frozen-eval posts leaked into the styler/detector pools (2026-09-03). Exits
-    non-zero when a pinned eval post is no longer on disk under --blog-root;
+    non-zero when a pinned post or corpus source is no longer on disk under --blog-root;
     small-stratum findings stay warnings. The table reads --pairs, or the view
     --draws builds — what `train --draws` would train on (D84).
     """
@@ -519,7 +519,7 @@ def check_splits_cmd(
         else:
             click.secho(f"WARNING: {line}", fg="yellow", err=True)
     if errors:
-        raise click.ClickException(f"{len(errors)} pinned eval post(s) missing from {blog_root}")
+        raise click.ClickException(f"{len(errors)} missing source(s) under {blog_root}")
 
 
 @main.command("extend-eval", cls=SectionedCommand)

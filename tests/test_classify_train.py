@@ -457,5 +457,5 @@ def test_train_refuses_a_splits_file_whose_pins_left_the_tree(tmp_path, write_pa
     blog_root = tmp_path / "blog"
     (blog_root / "post").mkdir(parents=True)
 
-    with pytest.raises(ValueError, match="not on disk under"):
+    with pytest.raises(ValueError, match="missing source"):
         ct.train(corpus, tmp_path / "clf", splits_path=splits_path, blog_root=blog_root)

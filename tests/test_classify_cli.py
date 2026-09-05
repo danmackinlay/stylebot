@@ -79,6 +79,22 @@ def test_train_clf_dry_run_runs_the_pinned_post_gate(tmp_path, write_pairs_corpu
         cc.train_clf(opts)
 
 
+def test_train_clf_gate_covers_every_corpus_source(tmp_path, write_pairs_corpus):
+    """A corpus source off disk fails the gate as a pinned eval post does (C12, D34)."""
+    pairs = write_pairs_corpus(n_posts=4, chunks=1)
+    splits_path = _splits_file(tmp_path)
+    gone = next(p for p in POSTS if p not in sp.load_splits(splits_path)["eval_posts"])
+    blog_root = tmp_path / "blog"
+    (blog_root / "post").mkdir(parents=True)
+    for post in POSTS:
+        if post != gone:
+            (blog_root / post).write_text("x", encoding="utf-8")
+    opts = _opts(pairs, tmp_path, splits_path=splits_path, blog_root=blog_root, dry_run=True)
+    with pytest.raises(ConfigError, match="missing source") as info:
+        cc.train_clf(opts)
+    assert f"corpus source {gone!r}" in str(info.value)
+
+
 def test_train_clf_refuses_an_empty_corpus(tmp_path):
     pairs = tmp_path / "pairs.jsonl"
     pairs.write_text("", encoding="utf-8")

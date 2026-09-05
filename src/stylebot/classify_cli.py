@@ -204,7 +204,7 @@ def train_clf(
         if opts.splits_path is not None:
             splits_doc = sp.load_splits(opts.splits_path)
             if opts.blog_root is not None:
-                sp.require_pinned_posts(splits_doc, opts.blog_root)
+                sp.require_sources_on_disk(splits_doc, set(ds.groups), opts.blog_root)
             for role, entry in sp.summarize_roles(splits_doc, ds).items():
                 emit(
                     f"  {role:>8}: {entry['posts']} post(s), {entry['pairs']} pair(s) "
