@@ -360,3 +360,17 @@ Appended by the master, dated, one line each.
   docstring rewrap can trip an allowlisted row; a wrap is not a growth.
 - 2026-09-05 (R4 rebase): R5's D79 blog test made `post/` itself where the C12
   fixture now owns it; fixtures that own a directory should say so once.
+- 2026-09-05 (R3): one stylebot suite run on the rebased tree printed "1 failed,
+  774 passed" (the name lost to `tail -1`); three reruns were 775 ×3. An
+  intermittent stylebot test, unnamed, alongside the blog's from round 1.
+- 2026-09-05 (R3): `training_targets.view_pairs_path` still falls back to
+  `pairs_path()` when there is no `draws/`; the parity test's fixture (a
+  `pairs/` dir, no draws) leans on it.
+- 2026-09-05 (R3): `check_splits_pass`'s exit line says "pinned eval post(s)
+  missing" when the misses are corpus sources — C12's wording, carried over.
+- 2026-09-05 (R3): `dan-style eval`/`train-clf` show stylebot's `--pairs` help
+  ("the corpus itself is --draws") while excluding `--draws`; bundles have no
+  per-wrapper help override.
+- 2026-09-05 (R3): `TrainOpts` and `ViewOpts` both name `draws_dir`/`policy`;
+  correctness rests on `bundles_from_kwargs` dict order (commented in both
+  CLIs). A `TrainOpts.view` field would remove the coupling.
