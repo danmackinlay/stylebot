@@ -1,33 +1,15 @@
-"""Generic voice-classifier *training* — the other half of `stylebot.classify`.
+"""Voice-classifier training — the trainer behind `stylebot.classify` (D7).
 
-`classify.py` is the runtime seam; this module is the trainer that *produces*
-its artifact: assemble a dataset from a `pairs.jsonl` corpus, embed it with a
-style backbone, fit a logistic regression slop-vs-author, evaluate it
-leakage-safely (split by POST), and write `head.json` + `meta.json`. It is
-generic over authors by construction — every input and output is a stylebot
-contract, and the caller-specific choices (`pairs_path`, `embed_model`,
-`extra_positives`) are injected.
+Assemble a dataset from a pairs corpus, embed it with a style backbone, fit a
+logistic regression slop-vs-author, evaluate it split by post, and write
+`head.json` + `meta.json`. Generic over authors: the caller injects
+`pairs_path`, `embed_model`, `extra_positives` and `pair_ok`. Needs the
+``classifier`` extra; heavy imports are lazy.
 
-**Dependencies.** Needs the ``classifier`` extra —
-``uv add 'stylebot[classifier]'`` (scikit-learn, numpy, sentence-transformers).
-All heavy imports are lazy, so importing the module is free and
-`import stylebot.classify` stays ML-dep-free.
-
-**The methodology crux — train STYLE not TOPIC (leakage safety).** Use
-content-matched pairs (slop vs author of the *same* passage), split by POST
-(`GroupShuffleSplit` — never by paragraph), `class_weight='balanced'`. The
-headline metric is content-matched pairwise accuracy ("pick the author's version
-of the same passage") plus AUC. The three training modes are documented on
-`train`; the holdout ones are the leakage-safe ones when the detector is a
-*reward*.
-
-On a mixed corpus both modes facet the metric by provenance
-(`by_provenance.real` / `.synthetic`): synthetic pairs may augment the *fit*, but
-detecting our own paraphrase generator never masquerades as the honest number.
-
-Polarity: slop is the positive class (`LABEL_SLOP=1`), so
-`predict_proba[:, slop] = P(slop)` and the served detector's ``score = P(slop)``
-composes with `stylebot.eval.mean_detector_score`; `p_dan = 1 - score`.
+Train style, not topic: content-matched pairs, split by post, never by
+paragraph. The headline metric is content-matched pairwise accuracy plus AUC,
+faceted by provenance on a mixed corpus (D40). Slop is the positive class
+(`LABEL_SLOP=1`), so the served ``score = P(slop)`` and `p_dan = 1 - score`.
 """
 
 from __future__ import annotations
@@ -46,12 +28,8 @@ from stylebot.provenance import git_sha
 
 logger = logging.getLogger(__name__)
 
-# The default style backbone, chosen by a measured bake-off on a
-# content-matched corpus: content-independent style embeddings beat the
-# semantic baselines, whose topic-dominated geometry collapses on this task. A
-# different author should re-run that bake-off on their own pairs rather than
-# trust this default blindly; whatever wins is pinned into the artifact's
-# meta.json and enforced at serve time.
+# The default style backbone (D7); whatever an author's own bake-off picks is
+# pinned into the artifact's meta.json and enforced at serve time.
 DEFAULT_EMBED_MODEL = "StyleDistance/styledistance"
 NORMALIZE = True
 SCHEMA_VERSION = 1
@@ -66,15 +44,11 @@ DEFAULT_RANDOM_STATE = 0
 DEFAULT_HOLDOUT_FRAC = 0.0  # no ad-hoc by-POST holdout: CV metric, fit on all
 DEFAULT_HOLDOUT_SEED = 0
 
-# Regularization. C=None everywhere means "select by inner group-CV over C_GRID"
-# (nested: selection happens strictly inside each training side, so the reported
-# metric covers the tuning step). DEFAULT_C is only the fallback when the fit
-# pool has too few posts for an inner split.
+# Regularization. C=None means nested selection by inner group-CV over C_GRID;
+# DEFAULT_C is the fallback when the fit pool has too few posts for an inner split.
 DEFAULT_C = 1.0
-# Extended past 10.0 on 2026-08-17: the blog's refit on the 7,006-pair corpus selected 10.0
-# — the old top of the grid — in all eight folds, which is the signature of an optimum
-# sitting off the end rather than inside it. A grid whose boundary is chosen unanimously
-# has not been searched, it has been clipped.
+# The grid's top is above 10.0 because a refit once chose 10.0 in every fold:
+# a boundary chosen unanimously has been clipped, not searched.
 C_GRID = (0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0)
 MIN_POSTS_FOR_C_SELECTION = 4
 
@@ -103,12 +77,10 @@ def _np():
 class Dataset:
     """The assembled training matrix inputs, before embedding.
 
-    `texts[i]` has label `labels[i]` and belongs to POST `groups[i]`. `pair_rows`
-    lists `(slop_row, author_row)` index twins (the content-matched pairs) — the
-    only rows the headline metric scores. `pair_synth[k]` marks pair `k` as a
-    machine paraphrase rather than a real edit capture, so metrics can facet real
-    vs synthetic. `is_free[i]` marks free-standing positives; these augment the
-    *fit* but never the metric, so their topic signal can't inflate it.
+    `texts[i]` has label `labels[i]` and post `groups[i]`; `pair_rows` are the
+    `(slop_row, author_row)` twins the headline metric scores; `pair_synth[k]`
+    marks a synthetic pair; `is_free[i]` marks a free-standing positive, which
+    augments the fit but never the metric.
     """
 
     texts: list[str] = field(default_factory=list)
@@ -164,25 +136,11 @@ def assemble_dataset(
 ) -> Dataset:
     """Build the slop-vs-author dataset from a content-matched pairs corpus.
 
-    Each pair contributes its slop side (`messages[1]`, label slop) and its
-    author side (`messages[2]`, label author), heading-context stripped, grouped
-    by `meta.source` (the POST). `meta.synthetic` is carried into `pair_synth`
-    so metrics can facet by provenance. Pairs whose `meta.transform_sim` (the
-    copying ratio synth records) exceeds `max_transform_sim` are dropped: two
-    near-identical texts with opposite labels are label noise. Pairs without the
-    covariate are kept — `None` disables the gate.
-
-    `extra_positives` enriches the author class with free-standing prose the
-    *caller* selected — each item is a `synth.Target` (anything with `.text` and
-    `.source`) or a `(text, source)` tuple. They are flagged `is_free` and
-    excluded from the headline metric, because free positives reintroduce a
-    topic signal that would inflate it.
-
-    `pair_ok` is the **caller's** pair-level policy hook (record -> keep?),
-    mirroring `train.assemble_training_corpus`'s `selector`. Selection is never
-    hardcoded here: the case it exists for is "how AI-touched was the post this
-    Dan side came from" (`automation` frontmatter), which is a blog convention
-    stylebot must not know about. Dropped pairs are counted in the log line.
+    Each pair contributes both sides, heading-context stripped, grouped by
+    `meta.source`; a pair over `max_transform_sim` is dropped as label noise
+    (D18; None disables the gate). `extra_positives` (`synth.Target`s or
+    `(text, source)` tuples) are flagged `is_free` and kept out of the metric.
+    `pair_ok` is the caller's pair-level policy hook, never hardcoded (D85).
     """
     ds = Dataset()
     n_near_identity = 0
@@ -233,14 +191,9 @@ def assemble_dataset(
 
 
 def subset_dataset(ds: Dataset, keep_groups) -> tuple[Dataset, list[int]]:
-    """Restrict a Dataset to the rows whose POST is in `keep_groups`.
-
-    Returns `(sub, rows)` where `rows` are the kept original row indices in
-    original order — so an embedding matrix subsets in lockstep: `X[rows]`
-    aligns with `sub`. Twins always share a POST, so pairs survive whole. Used
-    for role filtering *before* embedding, so excluded posts (e.g. the frozen
-    eval stratum) are never even encoded.
-    """
+    """Restrict a Dataset to the rows whose post is in `keep_groups`; returns
+    `(sub, rows)` with `rows` the kept original indices, so `X[rows]` aligns.
+    Twins share a post, so pairs survive whole."""
     keep_groups = set(keep_groups)
     rows = [i for i, g in enumerate(ds.groups) if g in keep_groups]
     remap = {old: new for new, old in enumerate(rows)}
@@ -269,12 +222,8 @@ def embed_texts(
     normalize: bool = NORMALIZE,
     batch_size: int = 32,
 ):
-    """Batch-encode `texts` with the style backbone; returns an [N, D] float32 array.
-
-    Wraps `stylebot.classify.sentence_transformers_batch_embed_fn` — the ONE
-    encode call-site shared with serving, so normalize/encode semantics can't
-    drift between training and inference.
-    """
+    """Batch-encode `texts` with the style backbone -> [N, D] float32, through
+    the one encode call-site shared with serving."""
     np = _np()
     try:
         encode = classify.sentence_transformers_batch_embed_fn(model_id, normalize=normalize)
@@ -299,14 +248,9 @@ def _make_logreg(C: float = DEFAULT_C):
 
 
 def _pairwise_score(p_slop, pairs, test_set: set) -> tuple[float, float]:
-    """(correct, total) over the content-matched twins fully inside `test_set`.
-
-    Correct = P(slop|slop_side) > P(slop|author_side); ties score 0.5.
-
-    `p_slop` is indexed by ABSOLUTE row, but only at positions in `test_set` —
-    so callers may hand in a full-length vector scored on the test rows alone
-    (`select_C` does, to keep the grid search off the whole embedding matrix).
-    """
+    """(correct, total) over the content-matched twins fully inside `test_set`:
+    P(slop|slop_side) > P(slop|author_side), ties 0.5. `p_slop` is indexed by
+    absolute row but read only at `test_set` positions."""
     correct = total = 0.0
     for s_row, a_row in pairs:
         if s_row in test_set and a_row in test_set:
@@ -317,17 +261,10 @@ def _pairwise_score(p_slop, pairs, test_set: set) -> tuple[float, float]:
 
 
 def select_C(X, ds: Dataset, rows, *, grid=C_GRID, n_inner: int = 4) -> tuple[float, dict]:
-    """Pick C by inner GroupKFold over the posts within `rows` (the fit pool).
-
-    Scored by content-matched pairwise accuracy on the validation twins — the
-    same quantity as the headline metric. Ties break toward the smallest C.
-    With fewer than MIN_POSTS_FOR_C_SELECTION distinct posts an inner split is
-    meaningless: falls back to DEFAULT_C and says so in the returned info.
-
-    Call this strictly *inside* a training side (an outer fold's train posts, or
-    the detector pool for the shipped head) — never on rows the resulting metric
-    is reported over.
-    """
+    """Pick C by inner GroupKFold over the posts within `rows`, scored by
+    pairwise accuracy; ties to the smallest C. Under
+    MIN_POSTS_FOR_C_SELECTION posts, DEFAULT_C, and the info says so. Call it
+    strictly inside a training side."""
     np = _np()
     from sklearn.model_selection import GroupKFold
 
@@ -359,13 +296,8 @@ def select_C(X, ds: Dataset, rows, *, grid=C_GRID, n_inner: int = 4) -> tuple[fl
         for fit_rows, val_rows, val_set in folds:
             clf = _make_logreg(C)
             clf.fit(X[fit_rows], y[fit_rows])
-            # Score the VALIDATION rows only. `_pairwise_score` reads nothing
-            # else, and this loop runs |grid| x n_folds times per call (and once
-            # per outer fold in `evaluate`), so scoring the whole corpus here
-            # meant embedding-matrix-sized work per grid point for a slice's
-            # worth of answers. It still indexes by absolute row, so keep a
-            # full-length vector and populate only the positions it may read —
-            # the untouched NaNs are unreachable by construction.
+            # Score the validation rows only, into a full-length vector indexed
+            # by absolute row; the untouched NaNs are unreachable.
             p_slop = np.full(len(y), np.nan)
             p_slop[val_rows] = clf.predict_proba(X[val_rows])[
                 :, list(clf.classes_).index(LABEL_SLOP)
@@ -396,11 +328,8 @@ STRATA = ("real", "synthetic")
 
 
 def _provenance_strata(ds: Dataset) -> tuple[dict[str, list[int]], dict[int, str]]:
-    """`(stratum -> pair indices, matched row -> stratum)` for real/synthetic faceting.
-
-    The stratum dict is empty on a single-provenance corpus, where the facet
-    would just repeat the headline metric, so callers skip `by_provenance`.
-    """
+    """`(stratum -> pair indices, matched row -> stratum)` for real/synthetic
+    faceting; empty on a single-provenance corpus."""
     pair_idx = {name: [] for name in STRATA}
     row_stratum: dict[int, str] = {}
     for k, (s_row, a_row) in enumerate(ds.pair_rows):
@@ -420,13 +349,9 @@ def _stat(xs: list[float]) -> dict:
 
 
 def _fold_metrics(p_slop, y, ds: Dataset, test_rows: list[int], *, pair_idx, row_stratum) -> dict:
-    """Content-matched metrics for ONE evaluation split, from P(slop) scores.
-
-    The measurement core shared by `evaluate` and `evaluate_holdout`: pairwise
-    twin accuracy + AUC over the matched test rows (free positives excluded),
-    globally and per provenance stratum. Values are raw, unrounded
-    `(value_or_None, n)` tuples; callers own aggregation and formatting.
-    """
+    """Content-matched metrics for one evaluation split: pairwise twin accuracy
+    + AUC over the matched test rows, globally and per provenance stratum, as
+    raw `(value_or_None, n)` tuples."""
     from sklearn.metrics import roc_auc_score
 
     matched_rows = {r for pair in ds.pair_rows for r in pair}
@@ -464,19 +389,11 @@ def evaluate(
     C: float | None = None,
     random_state: int = DEFAULT_RANDOM_STATE,
 ) -> dict:
-    """POST-split content-matched pairwise accuracy + per-text AUC.
+    """Post-split content-matched pairwise accuracy + per-text AUC.
 
-    For each `GroupShuffleSplit` fold (grouped by POST, so no post appears in both
-    train and test), fit logreg on the train rows and, on the held-out side,
-    measure: (1) **pairwise accuracy** — for each content-matched twin whose POST
-    is in test, did `P(slop | slop_side) > P(slop | author_side)`; (2) **AUC**
-    over the matched test rows. Free positives never enter the metric.
-
-    `C=None` (the default) runs **nested CV**: each fold selects C by an inner
-    GroupKFold over its *train* posts only (`select_C`), so the reported metric
-    is honest about the tuning step. An explicit C skips selection. On a mixed
-    real/synthetic corpus the result gains `by_provenance` — the same two
-    metrics per stratum; the `real` facet is the honest number.
+    Per `GroupShuffleSplit` fold: fit on the train rows, measure `_fold_metrics`
+    on the held-out side. `C=None` runs nested CV (`select_C` over each fold's
+    train posts); an explicit C skips it. A mixed corpus gains `by_provenance`.
     """
     np = _np()
     from sklearn.model_selection import GroupShuffleSplit
@@ -542,14 +459,9 @@ def partition_posts(
     holdout_seed: int = DEFAULT_HOLDOUT_SEED,
     holdout_posts=None,
 ) -> tuple[set, set]:
-    """Split the distinct POSTs into `(train, holdout)` for the shared by-POST split.
-
-    The leakage-safe contract: the detector must NOT be trained on the posts the
-    styler trains on or that the final eval scores (D17, D42). An explicit
-    `holdout_posts` list pins the exact partition so all three stages can reuse
-    it; otherwise the holdout is derived deterministically from `holdout_frac` +
-    `holdout_seed`. `holdout_frac=0` and no list ⇒ no holdout.
-    """
+    """Split the distinct posts into `(train, holdout)` (D17, D42): an explicit
+    `holdout_posts` pins the partition, else it derives from `holdout_frac` +
+    `holdout_seed`; `holdout_frac=0` and no list is no holdout."""
     posts = sorted(set(sources))
     if holdout_posts:
         hold = set(holdout_posts) & set(posts)
@@ -566,12 +478,8 @@ def partition_posts(
 
 
 def evaluate_holdout(X, ds: Dataset, holdout: set, *, C: float | None = None) -> dict:
-    """Single by-POST holdout eval: fit on the train posts, score the holdout twins.
-
-    The "unseen posts" number for a head that ships fit on the train posts only.
-    Like `evaluate`, gains a `by_provenance` facet on a mixed corpus. `C=None`
-    selects C by inner group-CV over the *train* posts only, never the holdout.
-    """
+    """Single by-post holdout eval: fit on the train posts, score the holdout
+    twins. `C=None` selects over the train posts only."""
     np = _np()
 
     y = np.asarray(ds.labels)
@@ -614,13 +522,8 @@ def evaluate_holdout(X, ds: Dataset, holdout: set, *, C: float | None = None) ->
 
 
 def fit_head(X, ds: Dataset, *, C: float = DEFAULT_C, rows: list[int] | None = None):
-    """Fit the final logreg (optionally on a row subset) and return `(coef, intercept)`.
-
-    `coef`/`intercept` are extracted for the P(slop) class so the pure-Python
-    `stylebot.classify._logreg_p_slop` reproduces `clf.predict_proba[:, slop]`
-    exactly. `rows` restricts the fit to a subset of row indices — used by the
-    held-out split mode to ship a head that has NOT seen the holdout posts.
-    """
+    """Fit the final logreg (on `rows`, if given) and return `(coef, intercept)`
+    for the P(slop) class, which `classify._logreg_p_slop` reproduces exactly."""
     np = _np()
 
     if rows is None:
@@ -630,8 +533,7 @@ def fit_head(X, ds: Dataset, *, C: float = DEFAULT_C, rows: list[int] | None = N
     clf = _make_logreg(C)
     clf.fit(X_fit, y_fit)
     slop_col = list(clf.classes_).index(LABEL_SLOP)
-    # Binary logistic regression stores a single weight row for the positive
-    # class (classes_[1]); index defensively in case the row count ever differs.
+    # One weight row for the positive class (classes_[1]); index defensively.
     coef_row = clf.coef_[slop_col] if clf.coef_.shape[0] > 1 else clf.coef_[0]
     intercept = clf.intercept_[slop_col] if clf.intercept_.shape[0] > 1 else clf.intercept_[0]
     return [float(c) for c in coef_row], float(intercept)
@@ -658,14 +560,8 @@ def write_artifact(
     pair_ok_name: str | None = None,
     splits_sha256: str | None = None,
 ) -> Path:
-    """Write `head.json` (the runtime contract) + `meta.json`.
-
-    `head.json` is the plain-JSON linear head `stylebot.classify` serves with no
-    ML deps; `meta.json` pins the embedder + records the held-out metrics. The
-    fitted sklearn estimator itself is not persisted: the weights it carries are
-    exactly `head.json`, and a pickle of it would only add a version-fragile
-    binary that the dependency-free runtime cannot load anyway.
-    """
+    """Write `head.json` (the plain-JSON head `stylebot.classify` serves) +
+    `meta.json` (the embedder pin and the held-out metrics). No estimator pickle."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -687,9 +583,8 @@ def write_artifact(
         "n_pairs_synthetic": ds.n_pairs_synthetic,
         "n_posts": ds.n_posts,
         "n_free_positives": sum(ds.is_free),
-        # The caller's pair-level selector, by name — without it two artifacts
-        # fit under different data policies are indistinguishable in the file
-        # that is supposed to identify them.
+        # The caller's pair-level selector, by name, so two data policies are
+        # distinguishable.
         "pair_ok": pair_ok_name,
         "head_C": head_C,  # how the shipped head's regularization was chosen
         "splits_sha256": splits_sha256,
@@ -726,13 +621,8 @@ def _ship_head(
     split: dict | None,
     ship_kw: dict,
 ) -> tuple[Path, dict]:
-    """Fit the final head (optionally on a row subset) and write the artifact.
-
-    The shared tail of every train mode; `ship_kw` carries the artifact
-    plumbing (out_dir, embed_model, normalize, git_repo) that `train` resolves
-    once. C resolution stays with the mode (the rows it selects over differ,
-    and the splits mode reuses head_C mid-flight).
-    """
+    """Fit the final head (on `rows`, if given) and write the artifact: the
+    shared tail of every train mode. C resolution stays with the mode."""
     coef, intercept = fit_head(X, ds, C=head_C, rows=rows)
     out = write_artifact(
         coef=coef,
@@ -759,12 +649,8 @@ def _train_splits_mode(
     batch_size: int,
     ship_kw: dict,
 ) -> tuple[Path, dict]:
-    """The shared three-role contract: fit on the detector pool only.
-
-    Eval-role posts are excluded BEFORE embedding (the frozen stratum is never
-    touched, not even to encode it); the styler posts supply the bonus
-    unseen-posts metric, scored with the same C the shipped head uses.
-    """
+    """The three-role contract: fit on the detector pool only; eval posts are
+    excluded before embedding; styler posts supply the unseen-posts metric."""
     from stylebot import splits as splits_mod
 
     sp = splits_mod.load_splits(splits_path)
@@ -793,16 +679,13 @@ def _train_splits_mode(
     metrics = evaluate(X_det, det_ds, test_size=test_size, n_splits=n_splits, C=C)
     head_C, head_C_info = _resolve_head_C(X_det, det_ds, list(range(len(det_ds.texts))), C)
     if any(g in sty_groups for g in work_ds.groups):
-        # Bonus honest number: the detector-pool head scored on the styler's
-        # (unseen) posts — the deployment-relevant condition for reward use.
+        # The detector-pool head scored on the styler's (unseen) posts.
         metrics["styler_holdout"] = evaluate_holdout(X, work_ds, sty_groups, C=head_C)
     split = {
         "mode": "splits",
         "path": str(splits_path),
         "seed": sp.get("seed"),
-        # The partition this head was fit under, pinned by content and version:
-        # extending the stratum moves posts INTO it, so an artifact fit before
-        # the extension saw prose a later verdict treats as held out (D42).
+        # The partition this head was fit under, pinned by content and version (D42).
         "eval_version": sp.get("eval_version"),
         "rest_rule": sp["rest_rule"],
         "roles": splits_mod.summarize_roles(sp, ds),
@@ -901,20 +784,12 @@ def train(
 ) -> tuple[Path, dict]:
     """End-to-end: assemble → embed → evaluate → fit → write artifact.
 
-    Returns `(artifact_dir, metrics)`. `C=None` (default) selects the
-    regularization by inner group-CV everywhere (see `select_C`); an explicit C
-    is an override, recorded as such. Three modes:
-
-    - **default (no holdout):** cross-validated held-out metric over POST splits,
-      then ship the head fit on ALL posts. Honest for *measuring* an independent
-      styler; not for grading one trained on these posts.
-    - **holdout** (`holdout_frac`>0 or `holdout_posts`): hold out a set of POSTs,
-      report the single-split unseen-posts metric, ship the head fit on the rest.
-    - **splits** (`splits_path`): the shared three-role contract. Fit on the
-      **detector** pool only; the frozen **eval** posts are never embedded; the
-      **styler** posts give a bonus unseen-posts metric (`styler_holdout`); role
-      counts, warnings and the rest-rule land in `meta.split`. `blog_root` fails
-      the run on a pinned eval post or corpus source that has left the tree (D34).
+    Returns `(artifact_dir, metrics)`. `C=None` selects by inner group-CV;
+    an explicit C is recorded as an override. Modes: default (CV metric, head
+    fit on all posts); holdout (`holdout_frac`/`holdout_posts`: single-split
+    unseen-posts metric, head fit on the rest); splits (`splits_path`: the
+    three-role contract, `_train_splits_mode`). `blog_root` fails the run on a
+    pinned eval post or corpus source that has left the tree (D34).
     """
     ds = assemble_dataset(pairs_path, extra_positives=extra_positives, pair_ok=pair_ok)
     if ds.n_pairs == 0:

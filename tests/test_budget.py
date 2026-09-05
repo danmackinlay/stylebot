@@ -34,7 +34,7 @@ MODULE_DOCSTRING_LINES = 30
 
 #: Package-wide docstring + comment lines, measured by `_modules()` at the commit
 #: that set it. It only falls: a commit that lowers prose lowers it (D58).
-PROSE_CEILING = 3808
+PROSE_CEILING = 3618
 #: How far under the ceiling prose may sit before the test demands it be lowered.
 PROSE_SLACK = 50
 
@@ -45,12 +45,7 @@ PROSE_SLACK = 50
 # largest first. "docstrings" lists every over-budget span, largest first.
 # A failure names the exact number to lower an entry to, or the entry to delete.
 ALLOWLIST: dict[str, dict[str, object]] = {
-    "classify_train.py": {
-        "lines": 964,
-        "functions": {"train": 82},
-        "docstrings": (22, 17),
-        "module_docstring": 31,
-    },
+    "classify_train.py": {"lines": 839},
     "generators.py": {
         "functions": {
             "openai_generator": 158,
@@ -78,8 +73,8 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     },
     "targets.py": {"functions": {"_post_targets": 94}},
     "train.py": {
-        "lines": 995,
-        "functions": {"run_training": 97, "_tinker_runner": 88, "assemble_training_corpus": 82},
+        "lines": 986,
+        "functions": {"run_training": 97, "_tinker_runner": 87, "assemble_training_corpus": 82},
     },
 }
 

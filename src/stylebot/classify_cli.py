@@ -18,10 +18,7 @@ from stylebot.errors import ConfigError
 
 @dataclass(frozen=True)
 class TrainClfOpts:
-    """The `train-clf` surface — what `train_clf` takes (D78).
-
-    Every default is the constant `classify_train.train` uses.
-    """
+    """The `train-clf` surface — what `train_clf` takes (D78)."""
 
     cli_section = "Voice classifier"
 
@@ -276,8 +273,7 @@ def _fit_and_report(
         for line in format_clf_metrics(metrics["styler_holdout"], indent="  "):
             emit(line)
 
-    # The artifact is the source of truth for what shipped: surface its own
-    # record of the chosen C and any danger warnings.
+    # The artifact is the source of truth for what shipped.
     meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
     head_c = meta.get("head_C") or {}
     if head_c:

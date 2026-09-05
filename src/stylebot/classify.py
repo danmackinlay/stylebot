@@ -1,22 +1,11 @@
-"""Generic linear-head voice/style classifier — the runtime seam (mechanism).
+"""Linear-head voice classifier — the runtime seam (D7).
 
-The serving half of the trained voice classifier; the trainer that produces the
-artifact is `stylebot.classify_train` (behind the ``classifier`` extra). This
-module is deliberately **ML-dependency-free at import**: scoring a passage is a
-plain dot product of an embedding vector against a logistic-regression head
-stored as plain JSON (`head.json` = a `coef` list + an `intercept`). No numpy,
-no sklearn, no sentence-transformers needed to import or run the default path.
-
-Two entry points: `embedding_classifier_detector` (inject your own `embed_fn`)
-and `sklearn_detector` (rebuild the pinned embedder from an artifact dir). Every
-heavy import happens INSIDE a function, so importing this module stays
-dependency-free. stylebot never imports livingthing.
-
-**Polarity.** The detector returns ``score = P(slop)`` (higher = more AI-like),
-matching stylebot's detector convention (`eval.null_detector`,
-`mean_detector_score`) so it composes with the existing aggregation unchanged.
-It *also* returns ``p_dan = 1 - P(slop)`` explicitly, so reward callers
-(Phase-4 best-of-N, Phase-3 weighting) never have to flip a sign.
+Scoring is a dot product of an embedding against a logistic head stored as
+plain JSON (`head.json`: `coef` + `intercept`), so the module imports with no
+ML dependency; heavy imports live inside functions. Entry points:
+`embedding_classifier_detector` (inject an `embed_fn`) and `sklearn_detector`
+(rebuild the pinned embedder from an artifact dir). Polarity: ``score =
+P(slop)``, higher more AI-like; ``p_dan = 1 - P(slop)`` beside it.
 """
 
 from __future__ import annotations
@@ -28,14 +17,11 @@ from pathlib import Path
 
 from stylebot.errors import RunError
 
-# An embedder: maps a passage to a fixed-length vector. Injected, never imported
-# here — livingthing supplies a sentence-transformers one; tests supply a stub.
+# An embedder: passage -> fixed-length vector. Injected, never imported here.
 EmbedFn = Callable[[str], Sequence[float]]
 
-#: What identifies the *instrument* on a score, as opposed to the score itself
-#: (D39). One classifier is the reranker, the do-no-harm guard AND the verdict
-#: metric, and it is refit whenever the corpus grows; `git_sha` / `trained_at` /
-#: `n_pairs` are what distinguish two refits of the same recipe.
+#: What identifies the instrument on a score, as opposed to the score (D39);
+#: `git_sha` / `trained_at` / `n_pairs` distinguish two refits of one recipe.
 DETECTOR_IDENTITY_KEYS = ("name", "embed_model", "git_sha", "trained_at", "n_pairs")
 
 
@@ -48,25 +34,16 @@ def _sigmoid(z: float) -> float:
 
 
 def _logreg_p_slop(vec: Sequence[float], coef: Sequence[float], intercept: float) -> float:
-    """P(slop) for one embedding vector: ``sigmoid(intercept + coef · vec)``.
-
-    Pure stdlib — the load-bearing reason stylebot needs no numpy/sklearn to
-    *serve* the classifier.
-    """
-    # strict=False preserves today's truncate-on-mismatch; see B905 note in the
-    # lint sweep — tightening this to strict=True is a behaviour change.
+    """P(slop) for one embedding vector: ``sigmoid(intercept + coef · vec)``, stdlib."""
+    # strict=False preserves truncate-on-mismatch; strict=True is a behaviour change.
     z = intercept + math.fsum(v * c for v, c in zip(vec, coef, strict=False))
     return _sigmoid(z)
 
 
 def load_linear_head(path: str | Path) -> dict:
-    """Load a `head.json` and validate the linear-head contract.
-
-    Returns the parsed dict with at least ``coef`` (list[float]) and
-    ``intercept`` (float); an optional ``calibration`` block passes through
-    untouched. Raises ``ValueError`` on missing/malformed fields, so a broken
-    artifact fails loudly at load rather than silently scoring nonsense.
-    """
+    """Load a `head.json` and validate the linear-head contract: ``coef``
+    (list[float]) and ``intercept`` (float), ``calibration`` passed through.
+    Raises ``ValueError`` on a malformed field."""
     path = Path(path)
     with path.open(encoding="utf-8") as fp:
         head = json.load(fp)
@@ -91,17 +68,11 @@ def embedding_classifier_detector(
 ) -> Callable[[str], dict]:
     """Compose an embedder + a linear head into a `stylebot.eval.Detector`.
 
-    The returned callable embeds the passage, applies the logistic head, and
-    returns ``{"score": P(slop), "p_dan": 1 - P(slop), "configured"}`` plus every
-    `DETECTOR_IDENTITY_KEYS` field the artifact's `meta` could answer (D39). The
-    same dict minus the score is attached as ``.identity``, which is how
-    `eval.detector_identity` asks without spending an embed.
-
-    The embedding dimension MUST match ``len(head["coef"])``: a mismatch means
-    the wrong embedder was wired, so it raises ``ValueError`` rather than
-    scoring garbage. Given a `batch_embed_fn` the detector also carries
-    ``.batch_detect(texts) -> list[dict]``, scoring many passages through ONE
-    `encode` (1.56x; D59) — reach it through `detect_many`.
+    Returns ``{"score": P(slop), "p_dan", "configured"}`` plus every
+    `DETECTOR_IDENTITY_KEYS` field `meta` answers (D39); the identity is also
+    attached as ``.identity``. Raises ``ValueError`` when the embedding
+    dimension mismatches ``len(head["coef"])``. Given `batch_embed_fn` it
+    carries ``.batch_detect(texts)`` (D59), reached through `detect_many`.
     """
     coef = head["coef"]
     intercept = float(head["intercept"])
@@ -142,13 +113,8 @@ def embedding_classifier_detector(
 
 
 def detect_many(detector: Callable[[str], dict], texts: Sequence[str]) -> list[dict]:
-    """Score many passages with `detector`, batched when it can be.
-
-    A detector is ``detect(prose) -> dict`` by contract. Where it also carries
-    ``.batch_detect`` (every embedding-backed one does), this routes the whole
-    list through the backbone in one call; otherwise it is the obvious loop, so
-    the caller never has to ask which kind it holds.
-    """
+    """Score many passages with `detector`: through ``.batch_detect`` when it
+    carries one, else the obvious loop."""
     texts = list(texts)
     batch = getattr(detector, "batch_detect", None)
     if batch is None:
@@ -167,17 +133,11 @@ def load_artifact_meta(artifact_dir: str | Path) -> dict:
 
 
 def sentence_transformers_batch_embed_fn(model_id: str, *, normalize: bool = True):
-    """Build a batch encoder backed by a sentence-transformers model (LAZY import).
+    """Build a batch encoder backed by a sentence-transformers model (lazy import).
 
-    Returns ``encode(texts, batch_size=32) -> [N, D] numpy array``. The **one**
-    encode call-site for the classifier: the per-passage `embed_fn` below and
-    the training-time `classify_train.embed_texts` both wrap it, so
-    normalize/encode semantics can't drift between training and serving.
-
-    **Single-threaded by contract**, and unguarded because nothing in this
-    package drives it from more than one thread (D59). The forward pass and the
-    Rust tokenizer under it are not ours to make re-entrant: a caller that
-    introduces threads here must serialize them itself.
+    Returns ``encode(texts, batch_size=32) -> [N, D] numpy array``: the one
+    encode call-site, wrapped by serving and training alike. Single-threaded
+    by contract and unguarded (D59).
     """
     from sentence_transformers import SentenceTransformer
 
@@ -196,18 +156,13 @@ def sentence_transformers_batch_embed_fn(model_id: str, *, normalize: bool = Tru
 
 
 def sentence_transformers_embed_fn(model_id: str, *, normalize: bool = True) -> EmbedFn:
-    """A per-passage `embed_fn` over the shared batch encoder (LAZY import).
-
-    The model is loaded once and reused per call.
-    """
+    """A per-passage `embed_fn` over the shared batch encoder (lazy import)."""
     encode = sentence_transformers_batch_embed_fn(model_id, normalize=normalize)
 
     def embed(prose: str) -> list[float]:
         return encode([prose])[0].tolist()
 
-    # The batch encoder underneath, reachable by a caller that holds many texts
-    # (`sklearn_detector` -> `.batch_detect`). Without this seam every embed in
-    # the harness was a batch of one.
+    # The batch encoder underneath, for `sklearn_detector` -> `.batch_detect`.
     embed.batch = encode
     return embed
 
@@ -215,14 +170,8 @@ def sentence_transformers_embed_fn(model_id: str, *, normalize: bool = True) -> 
 def sklearn_detector(
     artifact_dir: str | Path, *, embed_fn: EmbedFn | None = None
 ) -> Callable[[str], dict]:
-    """Build a detector from a self-contained artifact directory (LAZY embedder).
-
-    Reads ``<artifact_dir>/meta.json`` + ``head.json``; if no `embed_fn` is
-    injected, rebuilds the pinned embedder from ``meta.embed_model`` /
-    ``meta.normalize`` via sentence-transformers. Named for the sklearn-trained
-    head it serves, though it needs no sklearn to serve it: the weights arrive
-    as the plain-JSON `head.json`, so no estimator pickle has to load here.
-    """
+    """Build a detector from an artifact directory: ``meta.json`` + ``head.json``,
+    the pinned embedder rebuilt lazily unless `embed_fn` is injected. No sklearn."""
     artifact_dir = Path(artifact_dir)
     meta = load_artifact_meta(artifact_dir)
     head = load_linear_head(artifact_dir / "head.json")
@@ -235,7 +184,6 @@ def sklearn_detector(
         head=head,
         name=meta.get("name", "voice-clf"),
         meta=meta,
-        # Present on the embedders this module builds; absent on an injected
-        # per-passage `embed_fn` (a test stub), which just means no batch path.
+        # Absent on an injected per-passage `embed_fn`: no batch path.
         batch_embed_fn=getattr(embed_fn, "batch", None),
     )

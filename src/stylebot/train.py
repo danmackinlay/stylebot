@@ -1,17 +1,17 @@
 """Phase 3: LoRA SFT of the styler — assembly, manifest, and the Tinker run.
 
-`assemble_training_corpus` is keyless (the record contract, the STYLER-role
-filter under `stylebot.splits`, the caller's policy hooks, a by-POST val
-split); `run_training` is the paid Tinker path; `run_training_pass` is the
-`train` surface both CLIs render over `TrainOpts` (D78). Every `tinker`
-import is lazy, so the module imports without the ``trainer`` extra.
+`assemble_training_corpus` is keyless: validate, filter to styler-role posts
+(`stylebot.splits`), apply the caller's policy hooks, cut a by-post val split
+(D17). `run_training` is the paid Tinker path; `run_training_pass` is the
+`train` surface both CLIs render over `TrainOpts` (D78). Every `tinker` import
+is lazy, so the module imports without the ``trainer`` extra.
 
-Data policy, pinned in D17/D18/D43 — do not "fix": near-copy pairs are KEPT
-(label noise for the detector, good styler data); records train exactly as
-stored, `STYLE_SYSTEM` verbatim as `messages[0]`; per-passage multiplicity is
-the `per_passage` hook over a TRUE grouping (`passage_groups`); weight is
-integer replication of the TRAIN file only. The manifest is the committed
-reproducibility record; weights and corpus never enter git.
+Data policy encoded here: near-copy pairs are kept (D18); records train as
+stored — `STYLE_SYSTEM` as `messages[0]`, heading context on both sides
+(D64); per-passage multiplicity is the caller's `per_passage` hook over a
+true grouping (`passage_groups`, D43); weight is integer replication of the
+train file only (D43). The manifest `write_manifest` writes is the committed
+reproducibility record (D42); a dry run writes nothing.
 """
 
 from __future__ import annotations
@@ -41,8 +41,7 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
-# Defaults follow the Tinker cookbook's supervised recipe, over a current-gen
-# small dense base model.
+# Defaults follow the Tinker cookbook's supervised recipe (D2, D5).
 DEFAULT_BASE_MODEL = "Qwen/Qwen3.5-9B"
 DEFAULT_LORA_RANK = 32
 DEFAULT_NUM_EPOCHS = 1
@@ -57,7 +56,7 @@ _CHARS_PER_TOKEN = 4
 
 @dataclass(frozen=True)
 class Hyperparameters:
-    """The LoRA-SFT knobs — one declaration, every consumer.
+    """The LoRA-SFT knobs — one declaration, every consumer (D78).
 
     `as_manifest()` is the manifest's `hyperparameters` block, so no knob can
     be set but unrecorded; each field is also its click flag (`cli_options.opt`),
@@ -196,9 +195,8 @@ class TrainCorpus:
 
     @property
     def passage_scale(self) -> dict:
-        """Per-passage multiplicity per split: `pairs_per_passage` is how many
-        gradient steps one passage buys under a one-epoch manifest (D43). Both
-        splits inflate alike, so val loss cannot see it."""
+        """Effective per-passage multiplicity, train and val separately (D43):
+        N pairs on one passage is N gradient steps under one claimed epoch."""
         out: dict = {}
         for name, records in (("train", self.train), ("val", self.val)):
             groups = passage_groups(records)
@@ -250,15 +248,13 @@ def pair_weight_of(rec: dict) -> int:
 
 
 def passage_groups(records: Sequence[dict]) -> list[list[dict]]:
-    """Group pair records by SOURCE POST and target-body containment.
+    """Group pair records by source post and target-body containment (D43).
 
-    A *passage* is a maximal stretch of prose: a record whose target body is a
-    substring of a longer target from the same post joins that target's group
-    (a 1500-char cut of some prose IS a substring of the 3000-char cut; exact
-    equality saw two unrelated targets — the measurement is D43). Groups and
-    their records keep corpus order, so the multiplicity hook sees a
-    deterministic list. Never merges across posts, so the O(spans²) search
-    stays per-post.
+    A passage is a maximal stretch of prose: a record whose target body is a
+    substring of a longer target from the same post joins that target's group.
+    Groups come back in first-appearance corpus order, records in corpus order.
+    Substring, not offsets, because a record stores its target as text; the
+    cost is O(spans²) per post and never crosses posts.
     """
     by_source: dict[str, dict[str, list[dict]]] = {}
     order: list[str] = []
@@ -307,14 +303,14 @@ def assemble_training_corpus(
 ) -> TrainCorpus:
     """Validate, filter, weight, and split the corpus for styler training.
 
-    `splits` keeps STYLER-role pairs only (None: every pair, for fixtures);
-    `selector` is the pair-level hook (default keep-all, near-copies included);
-    `per_passage` sees each passage's records in corpus order and returns the
-    subset to keep (D43); `pair_weight` stamps `meta.weight`, honoured as
-    integer replication in the TRAIN file only; `system_prompt` is what the
-    records are validated against (D64). The val split holds out `max(1,
-    round(n * val_frac))` of the kept POSTs under `random.Random(seed)` —
-    deterministic, disjoint by post. Raises `RunError` on a malformed corpus.
+    `splits` keeps styler-role pairs only (None: every pair). `selector` is
+    the pair-level hook, default keep-all (D18); `per_passage` sees each
+    `passage_groups` group in corpus order and returns the subset to keep
+    (D43); `system_prompt` is what records are validated against (D64);
+    `pair_weight` stamps `meta.weight`, replicated in the train file only.
+    The val split holds out `max(1, round(n * val_frac))` posts shuffled by
+    `random.Random(seed)` (0 with `val_frac=0`). Raises `RunError` on a
+    malformed corpus.
     """
     pairs_path = Path(pairs_path)
     if validate:
@@ -378,9 +374,8 @@ def assemble_training_corpus(
 
 
 def estimate_tokens(records: Sequence[dict]) -> int:
-    """Keyless ~4 chars/token estimate over every message, each record
-    `meta.weight` times (replication is what the train file does): the dry-run
-    cost preview only; the paid path counts real rendered tokens."""
+    """Keyless ~4 chars/token estimate over every message of every record,
+    `meta.weight` times each, for the dry-run cost preview only."""
     chars = sum(
         pair_weight_of(rec) * len(m.get("content") or "")
         for rec in records
@@ -390,7 +385,7 @@ def estimate_tokens(records: Sequence[dict]) -> int:
 
 
 #: Packages whose version changes what a run does; an absent one reads `None`,
-#: so "not installed" differs from "this manifest predates the pin" (D38).
+#: so "not installed" differs from "this manifest predates the pin" (D42).
 PINNED_DEPENDENCIES = ("stylebot", "tinker", "tinker-cookbook", "torch", "transformers", "datasets")
 
 
@@ -437,8 +432,8 @@ def build_manifest(
     selector_constants: dict | None = None,
     base_model_revision: str | None = None,
 ) -> dict:
-    """The pre-run manifest — everything reproducibility needs before any paid
-    call; `run_training` appends `result`. Which pins, and why each: D38."""
+    """The pre-run manifest: everything reproducibility needs before any paid
+    call (D42); `run_training` appends `result`."""
     est = estimate_tokens(corpus.train) * hp.num_epochs
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -464,7 +459,7 @@ def build_manifest(
             "style_system_sha": system_sha(),
             "splits_sha256": _splits_sha256(splits_path),
             "eval_version": (splits or {}).get("eval_version"),
-            # which RECORDS were kept: every filter runs after `pairs_sha256` (D38)
+            # which RECORDS were kept: every filter runs after `pairs_sha256` (D42)
             "record_ids_sha256": _record_ids_sha256(corpus),
             "n_train_posts": len(corpus.train_posts),
             "val_posts": corpus.val_posts,
@@ -810,11 +805,9 @@ def run_training_pass(
 
 
 def _write_conversations(records: Sequence[dict], path: Path, *, replicate: bool = True) -> int:
-    """Write records as bare `{"messages": ...}` JSONL for the run's work dir
-    (never committed); returns the row count. Weight is consumed HERE, as
-    `meta.weight` copies of the row — the only up-weighting the cookbook's
-    dataset can express (D18); `replicate=False` keeps the val file one row
-    per pair, so val loss stays comparable across runs."""
+    """Write records as bare `{"messages": ...}` JSONL for the run's work dir;
+    returns the row count. Meta is stripped, so `meta.weight` is consumed here
+    as `replicate` copies of the row (D43); `replicate=False` for the val file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = 0
     with path.open("w", encoding="utf-8") as fp:
@@ -829,10 +822,9 @@ def _write_conversations(records: Sequence[dict], path: Path, *, replicate: bool
 def _make_presplit_builder(
     train_file: Path, val_file: Path | None, *, common_config, shuffle_seed: int
 ):
-    """A ChatDatasetBuilder over OUR by-POST pre-split files: the cookbook's
-    `FromConversationFileBuilder` row-shuffles one file into train/test and
-    would leak val posts' sibling chunks. Lazy: `chz` needs the trainer extra.
-    `shuffle_seed` is required so the epoch shuffle takes the seed as well."""
+    """A ChatDatasetBuilder over our by-post pre-split files (D17), defined
+    lazily because `chz` needs the trainer extra. `shuffle_seed` is required so
+    the seed reaches the epoch shuffle (D23)."""
     import chz
     import datasets as hf_datasets
     from tinker_cookbook.renderers import TrainOnWhat
@@ -913,9 +905,8 @@ def _tinker_runner(
     *,
     download_adapter: bool = True,
 ) -> dict:
-    """The real Tinker execution: the cookbook supervised recipe (LoRA SFT)
-    over the assembled corpus, then a PEFT-adapter export. All heavy imports
-    live here; the interface is pinned against the installed tinker-cookbook."""
+    """The real Tinker execution: the cookbook supervised recipe (LoRA SFT),
+    then a PEFT-adapter export; heavy imports live here."""
     try:
         import asyncio
 
