@@ -3,9 +3,8 @@
 These exercise the training mechanics — dataset assembly from a pairs corpus,
 the leakage-safe POST-split metric, head extraction, holdout partitioning, and
 the artifact round-trip through `stylebot.classify` — WITHOUT any model
-download: embeddings are hand-made separable matrices. They need the dev-group
-`numpy` + `scikit-learn` (sentence-transformers is never touched) and skip
-cleanly on a minimal install.
+download: embeddings are hand-made separable matrices over the dev-group
+`numpy` + `scikit-learn` (sentence-transformers is never touched).
 
 The runtime seam's dependency-freedom is tested separately in
 `test_classify.py`; nothing here weakens that guarantee.
@@ -15,13 +14,11 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pytest
 
-np = pytest.importorskip("numpy")
-pytest.importorskip("sklearn")
-
-from stylebot import classify_train as ct  # noqa: E402
-from stylebot.synth import Target  # noqa: E402
+from stylebot import classify_train as ct
+from stylebot.synth import Target
 
 # These corpora are deliberately NOT contract-complete (no captured_at, no
 # chunk_total): the classifier assembles from whatever meta a record carries, and
