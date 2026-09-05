@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 
 from click.testing import CliRunner
+from conftest import corpus_records
 
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.bin import ai_style
@@ -30,9 +31,9 @@ def test_pair_writes_contract_schema(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, result.output
 
-    lines = (tmp_path / "pairs.jsonl").read_text().splitlines()
-    assert len(lines) == 1
-    rec = json.loads(lines[0])
+    records = corpus_records(tmp_path)
+    assert len(records) == 1
+    rec = records[0]
     roles = [m["role"] for m in rec["messages"]]
     assert roles == ["system", "user", "assistant"]
     assert rec["messages"][0]["content"] == STYLE_SYSTEM

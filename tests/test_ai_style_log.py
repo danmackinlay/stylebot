@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 from click.testing import CliRunner
+from conftest import corpus_records
 
 from stylebot import capture, session
 from stylebot.bin import ai_style_log as log
@@ -166,11 +167,11 @@ def test_env_supplied_data_dir_is_honoured(tmp_path, monkeypatch):
     f.write_text("## S\n\nWe dig in.\n", encoding="utf-8")
     out = _run("save", "post/foo.qmd")
 
-    assert (data_dir / "pairs.jsonl").exists()
+    assert [r["meta"]["source"] for r in corpus_records(data_dir)] == ["post/foo.qmd"]
     assert (data_dir / "snapshots-closed" / "post" / "foo.qmd").exists()
     # Not in the cwd-relative default, and the confirmation names where it went.
     assert not (repo / "_training_pairs").exists()
-    assert str((data_dir / "pairs.jsonl").resolve()) in out
+    assert str((data_dir / "draws").resolve()) in out
 
 
 # ---- the error idiom: UsageError -> 2, ClickException -> 1 ----------------

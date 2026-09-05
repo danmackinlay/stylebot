@@ -17,10 +17,9 @@ import uuid
 from collections.abc import Sequence
 from pathlib import Path
 
-from stylebot import config, corpus, draws
+from stylebot import config, draws
 from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.errors import RunError
-from stylebot.jsonl import append_jsonl
 from stylebot.lib import read_w_frontmatter_text, split_paragraphs
 from stylebot.markdown import is_heading_line
 from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content, system_sha
@@ -372,15 +371,12 @@ def _land(
     """Land a capture's records as draws (D84): `draw_from_pair`-shaped, no
     blog sha (the tree is dirty by definition), `span` into `before.md`.
 
-    Transition: a data dir with no `draws/` is the old layout and keeps
-    today's append into `pairs/`, with nothing superseded; W4 step 5 removes
-    that branch with `pairs/`.
+    `draws/` is the only landing site (W4 step 5). An absent one is created,
+    not refused: `ai-style log` has a default data dir, so a fresh corpus is
+    an ordinary first save. `draws.append` would otherwise write a *file*.
     """
     draws_dir = config.draws_path(pairs_path.parent)
-    if not draws_dir.is_dir():
-        for record in records:
-            append_jsonl(corpus.shard_path_for(pairs_path, record), record)
-        return records
+    draws_dir.mkdir(parents=True, exist_ok=True)
     for record, span in zip(records, spans, strict=True):
         draw = draws.draw_from_pair(record)
         draw.blog_dirty, draw.span, draw.supersedes = True, span, supersedes

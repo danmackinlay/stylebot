@@ -150,3 +150,23 @@ def write_pairs_corpus(tmp_path):
         return path
 
     return _write
+
+
+def corpus_records(data_dir) -> list[dict]:
+    """The records a save or a synth run landed, read back off its draws.
+
+    The identity view of `<data-dir>/draws` — what those commands appended to
+    `pairs.jsonl` before W4 step 5 stopped them writing one (D84).
+    """
+    from stylebot import config, draws
+
+    every = draws.iter_draws(config.draws_path(data_dir))
+    return list(draws.view_records(every, draws.ViewPolicy()))
+
+
+def corpus_view(data_dir, out) -> Path:
+    """`corpus_records` materialised at `out`, for a reader wanting a path."""
+    from stylebot import config, draws
+
+    draws.build_view(draws.iter_draws(config.draws_path(data_dir)), draws.ViewPolicy(), out=out)
+    return Path(out)

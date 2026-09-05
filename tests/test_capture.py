@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from conftest import corpus_records, corpus_view
 
 from stylebot import capture
 from stylebot.errors import RunError
@@ -28,9 +29,8 @@ def test_capture_pairs_writes_valid_records_to_explicit_path(tmp_path):
     )
     assert len(written) == 1
     assert written[0]["meta"]["context"] == "## S"
-    assert validate_pairs_file(pairs_path) == []
-    on_disk = [json.loads(ln) for ln in pairs_path.read_text().splitlines()]
-    assert on_disk == written
+    assert validate_pairs_file(corpus_view(pairs_path.parent, tmp_path / "view")) == []
+    assert corpus_records(pairs_path.parent) == written
 
 
 def test_capture_pairs_archives_full_texts_for_rechunking(tmp_path):
@@ -301,7 +301,7 @@ def test_captured_records_carry_provenance(tmp_path):
     assert sorted(meta["provenance"]) == sorted(PROVENANCE_KEYS)
     assert meta["provenance"]["source_automation"] == 0
     assert meta["provenance"]["policy_digest"]
-    assert validate_pairs_file(pairs_path) == []
+    assert validate_pairs_file(corpus_view(tmp_path, tmp_path / "view")) == []
 
 
 def test_capture_policy_digest_tracks_the_cut_knobs(tmp_path):
@@ -328,9 +328,9 @@ def test_capture_policy_digest_tracks_the_cut_knobs(tmp_path):
 # --- a save lands as draws (W4 step 4, D84) ----------------------------------
 
 
-def test_capture_pairs_lands_as_draws_when_the_data_dir_has_them(tmp_path):
-    """With `<data_dir>/draws/` present a capture is appended as draws and
-    nothing is written to `pairs/`; the identity view renders the pair back."""
+def test_capture_pairs_lands_a_save_as_draws(tmp_path):
+    """A capture is appended as draws and nothing else; the identity view
+    renders the pair back (W4 step 5)."""
     from stylebot import draws
     from stylebot.pairs import record_id
 
@@ -359,3 +359,22 @@ def test_capture_pairs_lands_as_draws_when_the_data_dir_has_them(tmp_path):
     meta = json.loads((data_dir / "captures" / cap_id / "meta.json").read_text(encoding="utf-8"))
     assert meta["captured_at"] == written[0]["meta"]["captured_at"]
     assert draws.build_view(got, draws.ViewPolicy()).records == 1
+
+
+def test_capture_pairs_creates_a_draws_dir_that_is_not_there_yet(tmp_path):
+    """W4 step 5: `draws/` is the only landing site, so an absent one is
+    created rather than read as the old `pairs/` layout (D84)."""
+    from stylebot import draws
+
+    data_dir = tmp_path / "fresh"
+    pairs_path = data_dir / "pairs.jsonl"
+    written = capture.capture_pairs(
+        "## S\n\nIt is worth noting the rich tapestry.",
+        "## S\n\nWe dig in.",
+        pairs_path=pairs_path,
+        source="post/foo.qmd",
+        snapped_at="2026-09-05T00:00:00+00:00",
+    )
+    assert (data_dir / "draws").is_dir()
+    assert not pairs_path.exists()
+    assert [d.record for d in draws.iter_draws(data_dir / "draws")] == written

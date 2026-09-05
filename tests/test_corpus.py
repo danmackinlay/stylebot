@@ -170,13 +170,13 @@ def test_capture_save_appends_to_the_captures_shard(sharded):
         snapped_at="2026-09-03T00:00:00+00:00",
     )
     assert written
+    # Nothing rewrites the corpus and nothing appends to it: the save is a draw,
+    # routed to the captures shard by `draw_shard_of` (D84, W4 step 5).
     assert (pairs / "synth-2026-07.jsonl").read_bytes() == july
-    assert all(
-        r["meta"]["source"] != "post/new.qmd"
-        for r in read_jsonl(pairs / "synth-2026-07.jsonl")
-    )
+    assert not (data_dir / "draws" / "synth-2026-09.jsonl").exists()
     assert any(
-        r["meta"]["source"] == "post/new.qmd" for r in read_jsonl(pairs / "captures.jsonl")
+        r["record"]["meta"]["source"] == "post/new.qmd"
+        for r in read_jsonl(data_dir / "draws" / "captures.jsonl")
     )
     # And the archive still lands beside the corpus dir, not inside it.
     assert (data_dir / "captures").is_dir()
