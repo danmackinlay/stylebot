@@ -417,6 +417,7 @@ def _post_targets(
         drop_link_dumps=policy.drop_link_dumps,
         drop_list_items=policy.drop_list_items,
     )
+    keep_kw = dict(min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw)
     # Junk gate per-paragraph BEFORE packing, with no min/max floor: short prose
     # survives to be rescued by its neighbours, while tables/lists/link dumps are
     # dropped so they never pollute a packed block.
@@ -438,9 +439,7 @@ def _post_targets(
                 if p == PROTECTED_MARK or _keep_chunk(p, **prepack_kw)
             )
         for block in _pack(units, merge_max_chars=policy.merge_max_chars):
-            if _keep_chunk(
-                block, min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw
-            ):
+            if _keep_chunk(block, **keep_kw):
                 chunks.append((block, ""))
     else:
         # Section-bounded: iterate header-delimited sections so a passage never
@@ -449,9 +448,7 @@ def _post_targets(
             ctx = heading if want_context else ""
             if not policy.merge:
                 for c in split_paragraphs(section):
-                    if c != PROTECTED_MARK and _keep_chunk(
-                        c, min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw
-                    ):
+                    if c != PROTECTED_MARK and _keep_chunk(c, **keep_kw):
                         chunks.append((c, ctx))
             else:
                 paras = [
@@ -460,9 +457,7 @@ def _post_targets(
                     if p == PROTECTED_MARK or _keep_chunk(p, **prepack_kw)
                 ]
                 for block in _pack(paras, merge_max_chars=policy.merge_max_chars):
-                    if _keep_chunk(
-                        block, min_chars=policy.min_chars, max_chars=policy.max_chars, **gate_kw
-                    ):
+                    if _keep_chunk(block, **keep_kw):
                         chunks.append((block, ctx))
 
     total = len(chunks)

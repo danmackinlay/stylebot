@@ -79,7 +79,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "functions": {"run_synth": 259, "_report_result": 123},
         "docstrings": (16,),
     },
-    "targets.py": {"functions": {"_post_targets": 99}},
+    "targets.py": {"functions": {"_post_targets": 94}},
     "train.py": {
         "lines": 996,
         "functions": {
