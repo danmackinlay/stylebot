@@ -771,6 +771,7 @@ def run_eval(
         for facet, fld in summary["by"].items():
             parts = ", ".join(
                 f"{fn}=det:{a['mean_detector_score']}/judge:{a['mean_judge_score']}"
+                f"/unscored:{a['n_unscored']}"
                 for fn, a in fld.items()
             )
             emit(f"  {facet}: {parts}")

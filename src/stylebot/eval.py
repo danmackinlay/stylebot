@@ -36,9 +36,7 @@ from typing import Protocol
 # contract from it keeps one definition of "which head scored this".
 from stylebot.classify import DETECTOR_IDENTITY_KEYS
 
-# Bumped to 4 on 2026-09-04: a judge refusal scores `None`, not a guessed digit,
-# and the summary and verdict gained `n_unscored` (ship-shape C4). Additive, but
-# the judge mean moved, so consumers keying on the version should see it move.
+#: 3 -> 4 when a judge refusal became `None` and `n_unscored` joined the summary (D87).
 SCHEMA_VERSION = 4
 
 #: The judge's OpenRouter model id: `openrouter_judge*` and `verdict.EvalOpts` share it.

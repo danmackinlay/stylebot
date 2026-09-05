@@ -123,7 +123,7 @@ def _recording_emitter():
 
 def test_run_eval_scores_keyless_and_facets_the_summary(tmp_path, monkeypatch):
     """Null detector, no judge, Vale absent: the pass still writes, reads back
-    and reports — the `--by` lines carry both means in the `det:/judge:` form."""
+    and reports — the `--by` lines carry both means and the unscored count (C4)."""
     from stylebot.verdict import EvalOpts, VerdictOpts
 
     monkeypatch.setattr(ev.shutil, "which", lambda name: None)
@@ -140,7 +140,10 @@ def test_run_eval_scores_keyless_and_facets_the_summary(tmp_path, monkeypatch):
     messages = [m for _, m in lines]
     assert f"scored 2 pair(s) (0 already scored, skipped) -> {scores}" in messages
     assert "by slop_strategy:" in messages
-    assert "  catalogue: slop=det:None/judge:None, target=det:None/judge:None" in messages
+    assert (
+        "  catalogue: slop=det:None/judge:None/unscored:0, target=det:None/judge:None/unscored:0"
+        in messages
+    )
     assert f"wrote summary -> {opts.summary_path}" in messages
     assert ("status", "  ... 2/2 scored") in lines
 

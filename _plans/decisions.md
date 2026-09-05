@@ -57,6 +57,7 @@ keep their numbers — the second index below is how you find them.
 | D84 | the corpus is append-only draws plus derived views | live |
 | D85 | the blog's literals are a `SourcePolicy` parameter, not a fork | live |
 | D86 | `ruff format` is the formatter of record; D58's ceilings re-baseline once | live |
+| D87 | a judge refusal is unscored, never a guessed digit; `SCHEMA_VERSION` 3 → 4 | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D48)
 
@@ -1136,3 +1137,20 @@ honest if it is re-measured against that tool's output, once, in the open.
 re-baseline and needs its own entry. Nothing enforces the formatter yet: `ruff format --check`
 is in the round-2 acceptance list but in no gate `pytest` runs, so the 11 files can drift
 back; wiring it in is the rest of that plan's R1, not this entry.
+
+## D87: a judge refusal is unscored, never a guessed digit; `SCHEMA_VERSION` 3 → 4
+
+**Decision (landed 2026-09-04 as round-1 C4; recorded 2026-09-05, round-2 R4).** A judge reply
+with no parseable score is `None`: it enters no mean, is counted in `n_unscored`, and that count
+is printed beside every judge mean — `format_summary`, `eval --by`, the verdict. `SCHEMA_VERSION`
+moved 3 → 4 because the judge mean itself moved once refusals stopped entering it as digits.
+
+**Alternatives.** *Take a stray digit from the refusal's prose as its score* — what the parser
+did. *Drop the row* — hides the refusal rate, a property of the judge worth seeing. *Leave the
+version at 3* — the fields are additive, but a consumer comparing means across the bump would
+be comparing different populations.
+
+**Deciding constraint.** A mean is comparable across runs only when its denominator is visible.
+
+**Re-evaluate if** the judge gains a structured output the parser can rely on, so that "no
+score" becomes a protocol error rather than a verdict.
