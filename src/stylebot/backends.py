@@ -1,20 +1,10 @@
 """The styler backend surface: one description, one build site, one diet rule.
 
-`BackendOpts` is *how to reach the styler* — the twelve flags `ai-style run` and
-`ai-style serve` share — plus `build_styler`, which turns them into a
-`stylebot.infer.Styler`. Mechanism here, click translation in `bin/`: this lived
-in the CLI module until livingthing had reimplemented the construction, and the
-copy passed no `max_tokens` (D35). Errors follow the package vocabulary (D47).
-
-`serving_diet` is the other half: which chunk budget and heading mode the
-*served adapter* was trained on, read off a training manifest rather than off
-the corpus's current policy. Serving at the wrong diet is out-of-distribution
-and the styler falls back to copying its input, and the two diverge the moment
-training policy moves ahead of the promoted run.
-
-`RunOpts` and the two `run` passes (`rewrite_corpus`, `rewrite_document`) are
-the command body as a library, so `dan-style run` calls them with its policy
-hooks instead of retyping them (D78).
+`BackendOpts` is how to reach the styler — the flags `run` and `serve` share
+— and `build_styler` turns them into a `stylebot.infer.Styler` (D35, D47).
+`serving_diet` reads the chunk budget and heading mode the served adapter
+was trained on off its manifest (D15). `RunOpts` and the two `run` passes are
+the command body as a library (D78).
 """
 
 from __future__ import annotations
@@ -38,8 +28,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Minimum share of the training corpus a chunk budget needs before `serving_diet`
-# will serve at it. One-sided on purpose — see the function.
+# Minimum corpus share a chunk budget needs before `serving_diet` serves at it.
 MIN_SCALE_SUPPORT = 0.10
 
 # Samples per chunk under `run`; 1 means nothing reranks and no scorer is needed.
@@ -55,12 +44,8 @@ MANIFEST_HELP = (
 
 @dataclass(frozen=True)
 class BackendOpts:
-    """How to reach the styler — the surface `run` and `serve` share.
-
-    Also a CLI option bundle (`cli_options.opt`), so the flags are declared
-    once and both this repo's commands and livingthing's `dan-style` mirror
-    build from the same declarations.
-    """
+    """How to reach the styler — the surface `run` and `serve` share, as a
+    `cli_options.opt` bundle (D78)."""
 
     cli_section = "Styler backend"
 
@@ -124,9 +109,7 @@ class BackendOpts:
         help="Inference chunk budget; MUST match the adapter's training chunk scale. "
         "[default: the manifest's diet under --manifest, else 1500]",
     )
-    # Tri-state, and that is the point: None means "nobody said", so a
-    # --manifest may supply the diet, while an explicit --no-inline-headings
-    # beats it. `headings()` is the resolved boolean every caller wants.
+    # Tri-state: None means a --manifest may supply the diet; `headings()` resolves it.
     inline_headings: bool | None = opt(
         None,
         "--inline-headings/--no-inline-headings",
@@ -160,9 +143,7 @@ class BackendOpts:
         return self.system_prompt or style_system()
 
     def tokens(self) -> int:
-        """Output-token budget. Fixed at backend construction, so it is scaled
-        off the chunk budget — a big --max-chunk-chars would otherwise truncate
-        a rewrite mid-chunk."""
+        """Output-token budget, scaled off the chunk budget unless explicit."""
         from stylebot import infer
 
         if self.max_tokens is not None:
@@ -180,10 +161,7 @@ def backend_options(**kw):
 
 def build_styler(opts: BackendOpts):
     """Construct the styler backend described by `opts` — the one build site.
-
-    Raises `ConfigError` for a flag combination the caller must fix, `RunError`
-    for an unready world (D47); the extras raise `MissingExtra`/`ImportError`.
-    """
+    Raises `ConfigError` / `RunError` (D47); the extras raise `MissingExtra`."""
     from stylebot import infer
 
     tokens = opts.tokens()
@@ -228,17 +206,12 @@ def serving_diet(
     default_chunk_chars: int | None = None,
     min_support: float = MIN_SCALE_SUPPORT,
 ) -> tuple[int, bool]:
-    """`(max_chunk_chars, inline_headings)` the SERVED adapter was trained on.
+    """`(max_chunk_chars, inline_headings)` the served adapter was trained on (D15).
 
-    Read from `data.chunk_scale` in a training manifest (recorded since v2).
-    A manifest predating that key — or none at all — falls back to
-    `default_chunk_chars` (the caller's corpus policy; `infer`'s default if
-    omitted), section-bounded, which is what those runs were trained on.
-
-    Serve at the largest budget with REAL support in the diet: under-chunking
-    costs some coherence, while over-chunking hits the identity fallback and
-    returns the input verbatim, so a thin experimental arm must not drag serving
-    out to a length the adapter barely saw. Heading mode follows the same logic.
+    Read from the manifest's `data.chunk_scale`; a manifest without it, or
+    none, falls back to `default_chunk_chars`, section-bounded. Serves at the
+    largest budget with real support in the diet, since over-chunking hits
+    the identity fallback; heading mode follows the same rule.
     """
     from stylebot import infer
 
@@ -255,13 +228,8 @@ def serving_diet(
 
 
 def manifest_renderer(manifest: Mapping[str, Any] | None) -> str | None:
-    """The renderer the manifest's run actually trained under.
-
-    `result.renderer_name` is what the run resolved (the cookbook recommendation
-    when the flag was None); `hyperparameters.renderer_name` is what was asked
-    for, and is all a dry-run manifest has. One reader, so the two spellings
-    cannot drift between the filler and the checker below.
-    """
+    """The renderer the manifest's run trained under: `result.renderer_name`
+    (what the run resolved), else `hyperparameters.renderer_name`."""
     manifest = manifest or {}
     return (manifest.get("result") or {}).get("renderer_name") or (
         manifest.get("hyperparameters") or {}
@@ -274,17 +242,11 @@ def manifest_mismatches(
     *,
     policy_system: str | None = None,
 ) -> list[str]:
-    """Ways the styler about to be built disagrees with the manifest it claims.
-
-    A manifest is a *pin*, and three of the things it pins are silent when
-    violated: the base model, the chat renderer, and the system prompt each
-    produce plausible garbage or an out-of-distribution adapter rather than an
-    error (D48). So say so at the moment the backend is built.
-
-    The prompt pin is `data.style_system` (its text) or, on an older manifest,
-    `style_system_sha` alone; it is compared with the prompt the caller pinned,
-    else `policy_system`, else the default author's, and a manifest with
-    neither reads as "cannot answer". Warnings, never errors.
+    """Ways the styler about to be built disagrees with the manifest it claims:
+    base model, renderer and system prompt are silent when violated (D48).
+    The prompt pin (`data.style_system`, or an older manifest's `style_system_sha`)
+    is compared with the prompt the caller pinned, else `policy_system`, else the
+    default author's; a manifest with neither cannot answer. Warnings, never errors.
     """
     from stylebot.pairs import system_sha
 
@@ -315,10 +277,7 @@ def manifest_mismatches(
             f"{manifest.get('run_id') or '?'} trained with {trained_renderer!r}"
         )
     elif opts.backend == "openai" and trained_renderer:
-        # The renderer pin is UNCHECKABLE here, which is not the same as
-        # checked-and-fine, and the two used to look identical (both silent).
-        # D48: the Protocol types the call, not the tokens, so this warning is
-        # the mechanism.
+        # Uncheckable is not checked-and-fine: this warning is the mechanism (D48).
         notes.append(
             f"renderer unverifiable: run {manifest.get('run_id') or '?'} trained with "
             f"{trained_renderer!r}, but an OpenAI-compatible endpoint applies its own chat "
@@ -350,19 +309,11 @@ def opts_from_manifest(
     default_chunk_chars: int | None = None,
     default_system: str | None = None,
 ) -> BackendOpts:
-    """Fill `opts` from a training manifest, without overriding what was set.
-
-    The manifest is the committed reproducibility record, so it — not a flag
-    soup — is where the checkpoint, base model, renderer, serving diet and
-    system prompt come from. Fields the caller already pinned (a flag the user
-    passed) win; only the unset ones are filled, which is why `inline_headings`
-    is tri-state. `default_chunk_chars` and `default_system` are the caller's
-    policy, used when the manifest pins no diet or no prompt text.
-
-    Whatever the caller *did* pin is then checked against the manifest
-    (`manifest_mismatches`) and disagreements are logged: filling a field
-    silently is right, overriding one silently is not.
-    """
+    """Fill `opts` from a training manifest without overriding what was set:
+    unset fields take the checkpoint, base model, renderer, diet and system
+    prompt (`default_chunk_chars` / `default_system` are the caller's policy
+    when the manifest pins neither); pinned ones are checked
+    (`manifest_mismatches`) and disagreements logged."""
     opts = opts or BackendOpts()
     manifest = manifest or {}
     result = manifest.get("result") or {}
@@ -388,10 +339,7 @@ def opts_from_manifest(
 
 @dataclass(frozen=True)
 class RunOpts:
-    """The `run` surface — what `rewrite_corpus` and `rewrite_document` take (D78).
-
-    `BackendOpts` says how to reach the styler; this says what to do with it.
-    """
+    """The `run` surface — what `rewrite_corpus` and `rewrite_document` take (D78)."""
 
     cli_section = "Rewrite"
 
@@ -480,11 +428,8 @@ def load_manifest(manifest_path: str | Path | None, *, param_hint: str = "--mani
 
 
 def corpus_mode(opts: RunOpts, *, source: Path | None = None) -> bool:
-    """Whether `opts` asks for corpus mode, after the flag checks both CLIs used to retype.
-
-    Raises `ConfigError` for `--pairs` beside a FILE or without `--out`, and
-    for `--out`/`--limit` outside corpus mode.
-    """
+    """Whether `opts` asks for corpus mode. Raises `ConfigError` for `--pairs`
+    beside a FILE or without `--out`, and for `--out`/`--limit` outside it."""
     if opts.pairs_path is not None:
         if source is not None:
             raise ConfigError(
@@ -508,12 +453,8 @@ def rewrite_corpus(
     selector: Callable[[dict], bool] | None = None,
     emit: Emitter = silent,
 ) -> int:
-    """Corpus mode: style the slop side of `opts.pairs_path` into `opts.out_path`.
-
-    `selector` is the caller's stratum policy over pair records (the blog keeps
-    its role selector); progress and the closing count go to `emit` at
-    `status`. Returns the number of pairs written (`infer.rewrite_pairs_file`).
-    """
+    """Corpus mode: style the slop side of `opts.pairs_path` into `opts.out_path`
+    under the caller's `selector`; returns the number of pairs written."""
     from stylebot import infer
 
     if opts.pairs_path is None:
@@ -553,12 +494,10 @@ def rewrite_document(
 ) -> RewriteResult:
     """Document mode: one text through the styler at the backend's diet.
 
-    `rewrite` replaces `infer.rewrite_text` (same keywords; the blog's masking
-    defence); `div_is_prose` is the caller's container policy. Decisions are
-    emitted at `status` when something chose (a scorer, or a custom `rewrite`),
-    the anchor audit lands in `opts.anchor_log`, and under `opts.write_in_place`
-    a `source` file is rewritten beside a `.bak`. Printing the text is the
-    caller's.
+    `rewrite` replaces `infer.rewrite_text` (same keywords); `div_is_prose` is
+    the caller's container policy. The anchor audit lands in `opts.anchor_log`;
+    under `opts.write_in_place` a `source` file is rewritten beside a `.bak`.
+    Printing the text is the caller's.
     """
     from stylebot import infer
 
@@ -597,13 +536,8 @@ def rewrite_document(
 
 
 def format_rewrite_summary(result: RewriteResult) -> str:
-    """The one-line run report: `[N chunk(s), M sample(s), ...]`.
-
-    Anchor rejections are broken out by cause — losing a link wants a better
-    sample, inventing one wants a model that stops making things up — and
-    truncation is reported apart from them because it usually means the token
-    budget, not the sample.
-    """
+    """The one-line run report: `[N chunk(s), M sample(s), ...]`, anchor
+    rejections broken out by cause and truncation apart from them."""
     return (
         f"[{result.n_chunks} chunk(s), {result.n_candidates} sample(s)"
         + (f", {result.n_kept_input} kept as input" if result.n_kept_input else "")

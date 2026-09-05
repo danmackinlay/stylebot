@@ -1,27 +1,13 @@
 """Phase 4: inference — rewrite prose through the trained styler.
 
-Library-first (`ai-style run` is the thin CLI): a `Styler` is the `Protocol`
-below —
-
-    styler(messages, num_samples=1) -> list[str]
-
-taking chat messages (`[{role, content}, ...]`) and returning candidate
-assistant texts. The two bundled backends are `backends.tinker_backend` (the
-checkpoint a training manifest pins, rendered with training's own cookbook
-renderer) and `backends.openai_backend` (any OpenAI-compatible endpoint, whose
-chat template stylebot cannot check — D48).
-
-`rewrite_text` chunks at inference the way training saw data: blank-line
-paragraph regions, grouped to ~STYLE_CHARS_PER_CHUNK chars, with chunk
-boundaries never inside a protected block and the original inter-chunk
-whitespace reassembled verbatim. A leading YAML frontmatter block is never sent
-to the model. `system` is the caller's prompt (`ai_core.style_system`; a run's
-manifest pins its text) — a prompt the adapter never saw is out-of-distribution.
-
-Best-of-N: pass `best_of > 1` and a `scorer` (lower = better, e.g. the voice
-classifier via `detector_scorer`). The scorer also arms the do-no-harm guard:
-the input chunk competes, so a rewrite ships only if scored strictly better.
-Small N is Goodhart-gentle (KL ~ log N; D7).
+A `Styler` is the `Protocol` below, `styler(messages, num_samples=1) ->
+list[str]` (D48); the bundled backends are `tinker_backend` and
+`openai_backend`. `rewrite_text` chunks the way training saw data — prose
+grouped to a chunk budget, never inside a protected block, whitespace
+reassembled verbatim, frontmatter never sent — under `system`, the caller's
+prompt (a run's manifest pins its text; D64). Best-of-N with a `scorer`
+(lower = better) also arms the do-no-harm guard: the input chunk competes
+(D20, D7).
 """
 
 from __future__ import annotations
@@ -41,18 +27,12 @@ from stylebot.jsonl import dumps_line
 
 logger = logging.getLogger(__name__)
 
-# Default inference chunk budget (chars). MUST match the caller's TRAINING
-# chunk scale: at out-of-distribution lengths the adapter stops transforming
-# and returns the input verbatim. Blog policy trains on <=1500-char merged
-# paragraphs, so dan-style run passes its own MERGE_MAX_CHARS here.
+# Default inference chunk budget (chars); must match the training scale (D15).
 STYLE_CHARS_PER_CHUNK = 1_500
 
 DEFAULT_TEMPERATURE = 0.3
-# Output budget per chunk — a FLOOR. It must clear the chunk budget with room
-# to spare (a ~4500-char cross-heading chunk is ~1200 tokens) because truncation
-# mid-rewrite is worse than no rewrite. The backends fix max_tokens at
-# construction, so the CLI (`ai-style run` / `serve`) scales it off
-# --max-chunk-chars through `max_tokens_for` unless --max-tokens is explicit.
+# Output budget per chunk, a floor: the backends fix max_tokens at
+# construction, so the CLI scales it off the chunk budget via `max_tokens_for`.
 DEFAULT_MAX_TOKENS = 2_000
 # Output tokens per input char: chars/4 for the rewrite, plus headroom to expand.
 _TOKENS_PER_CHAR = 0.75
@@ -65,20 +45,9 @@ def max_tokens_for(max_chunk_chars: int) -> int:
 
 @runtime_checkable
 class Styler(Protocol):
-    """The trained rewriter, as everything downstream of it sees one (D48).
-
-    `rewrite_text`, `rewrite_candidates`, `rewrite_pairs_file` and the sidecar
-    all take a `Styler`; a test stub or a second repo's backend is one by having
-    this shape and nothing else.
-
-    **It types the call, not the tokens.** Two backends conform to this while
-    rendering the same messages to different token sequences, and an
-    out-of-distribution rendering makes the adapter return its input silently.
-    What actually bears on parity is `backends.manifest_mismatches` and a
-    measured parity sample (findings.md, "MLX local-serving parity").
-    `@runtime_checkable` is not load-bearing — `tests/test_backends.py` checks
-    the signature.
-    """
+    """The trained rewriter, as everything downstream of it sees one (D48):
+    it types the call, not the tokens — parity is `backends.manifest_mismatches`
+    and a measured sample (findings.md, "MLX local-serving parity")."""
 
     def __call__(self, messages: list[dict], num_samples: int = 1) -> list[str]:
         """Candidate assistant texts for one chat-message list."""
@@ -101,25 +70,17 @@ def split_frontmatter(text: str) -> tuple[str, str]:
 def _blocks_with_separators(
     body: str, kinds: list[str | None]
 ) -> tuple[list[str], list[str], list[list[str | None]]]:
-    """Split body into blocks on blank-line runs that are OUTSIDE everything.
+    """Split body into blocks on blank, unprotected line runs (D26, D27).
 
-    `kinds` is `markdown.line_kinds(body)` — one label per line of
-    `body.split("\\n")`, so the indices line up exactly. A line separates blocks
-    only when it is blank *and* unprotected: a blank line inside a `:::` div or
-    a display-math block belongs to that block.
-
-    Returns `(blocks, seps, block_kinds)` with `len(seps) == len(blocks) - 1`;
-    `blocks[0] + seps[0] + blocks[1] + ...` reproduces the body exactly.
-    Leading/trailing blank runs stay attached to their neighbouring block, and
-    `block_kinds[i]` is the per-line kind list of `blocks[i].split("\\n")`.
-
-    The mask is the WHOLE of the protection here: `markdown.line_kinds` is the
-    one segmenter, so inference and `editable_prose` cannot disagree (D26, D27).
+    `kinds` is `markdown.line_kinds(body)`, one label per line of
+    `body.split("\\n")`. Returns `(blocks, seps, block_kinds)` with
+    `len(seps) == len(blocks) - 1`; `blocks[0] + seps[0] + blocks[1] + ...`
+    reproduces the body exactly, and `block_kinds[i]` is the kind list of
+    `blocks[i].split("\\n")`.
     """
     if not body:
         return [], [], []
-    # Segment lines into alternating runs: content (any protected line, or a
-    # non-blank unprotected one) vs separator (blank, unprotected lines).
+    # Alternating runs: content vs separator (blank, unprotected lines).
     runs: list[tuple[bool, list[str], list[str | None]]] = []  # (is_sep, lines, kinds)
     for line, kind in zip(body.split("\n"), kinds, strict=True):
         is_sep = kind is None and not line.strip()
@@ -139,8 +100,7 @@ def _blocks_with_separators(
         runs = runs[:-1]
     blocks = ["\n".join(lines) for is_sep, lines, _ in runs if not is_sep]
     block_kinds = [ks for is_sep, _, ks in runs if not is_sep]
-    # A separator string carries its boundary newlines, so plain concatenation
-    # (block + sep + block + ...) reproduces the body byte-for-byte.
+    # A separator carries its boundary newlines, so concatenation is byte-exact.
     seps = ["\n" + "\n".join(lines) + "\n" for is_sep, lines, _ in runs if is_sep]
     return blocks, seps, block_kinds
 
@@ -152,20 +112,13 @@ def _segment(
     inline_headings: bool = False,
     div_is_prose: markdown.DivIsProse | None = None,
 ) -> tuple[list[tuple[str, str]], list[str]]:
-    """Segment the body the way TRAINING saw data.
+    """Segment the body the way training saw data (D27).
 
-    Returns `(items, seps)` where each item is `(kind, text)`, kind in
-    {"prose", "heading"} | `markdown.PROTECTED_KINDS`; concatenating item texts
-    interleaved with seps reproduces the body exactly. Everything training drops
-    before chunking — fenced code, display math, `:::` divs, blockquotes,
-    headings — is protected here too, labelled per construct rather than flatly,
-    so `rewrite_candidates` can tell an editor *which* thing it refused (D27).
-    Adjacent prose blocks are grouped to <= max_chars.
-
-    `inline_headings` matches the cross-heading diet: headings become groupable
-    content, so a chunk spans sections as the training pairs do. Grouped heading
-    items are relabelled "prose"; a heading left alone keeps kind "heading", so
-    callers can skip a bare header.
+    Returns `(items, seps)`, each item `(kind, text)` with kind in
+    {"prose", "heading"} | `markdown.PROTECTED_KINDS`; items interleaved with
+    seps reproduce the body exactly. Adjacent prose is grouped to <= max_chars;
+    under `inline_headings` headings are groupable content, relabelled "prose"
+    when grouped, while a lone heading keeps kind "heading".
     """
     kinds = markdown.line_kinds(body, div_is_prose=div_is_prose)
     blocks, seps, block_kinds = _blocks_with_separators(body, kinds)
@@ -174,11 +127,8 @@ def _segment(
     for idx, (block, mask) in enumerate(zip(blocks, block_kinds, strict=True)):
         if idx:
             iseps.append(seps[idx - 1])
-        # Uniform run-length split on equal line kind. This is what replaced the
-        # bespoke leading-heading split, and it is why a heading glued to prose,
-        # a blockquote with no blank line after it, and a fence riding on the
-        # end of a paragraph all come apart the same way. Joining consecutive
-        # runs with "\n" reproduces the block, so reassembly stays byte-exact.
+        # Run-length split on equal line kind; joining runs with "\n"
+        # reproduces the block, so reassembly stays byte-exact.
         lines = block.split("\n")
         start = 0
         for i in range(1, len(lines) + 1):
@@ -188,9 +138,7 @@ def _segment(
                 iseps.append("\n")
             items.append((mask[start] or "prose", "\n".join(lines[start:i])))
             start = i
-    # Group ADJACENT groupable items within the budget (never across a
-    # protected item). Under inline_headings, headings are groupable too, so a
-    # chunk spans sections the way a cross-heading training pair does.
+    # Group adjacent groupable items within the budget, never across a protected one.
     groupable = {"prose", "heading"} if inline_headings else {"prose"}
 
     out_items: list[tuple[str, str]] = []
@@ -220,18 +168,8 @@ def prose_chunks(
     inline_headings: bool = False,
     div_is_prose: markdown.DivIsProse | None = None,
 ) -> list[str]:
-    """The prose chunks `rewrite_text` would actually send to the styler.
-
-    The public name for what `_segment` computes: frontmatter dropped, protected
-    blocks and bare headings excluded, adjacent prose grouped to the same
-    `max_chunk_chars` budget under the same diet. Whatever the styler is asked to
-    rewrite is exactly what comes back here, and nothing else.
-
-    Public because `eval.chunked_detector` scores a document at the scale the
-    detector was fit on (D54), and a private `_segment` reached across a module
-    boundary is the seam that goes stale (D26). Callers wanting the protected
-    items or the separators still want `_segment`.
-    """
+    """The prose chunks `rewrite_text` would send to the styler: `_segment`'s
+    prose items, frontmatter dropped. Public for `eval.chunked_detector` (D54)."""
     _, body = split_frontmatter(text)
     items, _ = _segment(
         body,
@@ -261,18 +199,12 @@ class RewriteResult:
     n_truncated: int = 0  # samples disqualified for collapsing in length
     chunk_chars: list[tuple[int, int]] = field(default_factory=list)  # (in, out)
     decisions: list[str] = field(default_factory=list)  # one human line per chunk
-    # Per-chunk anchor accounting, one entry per prose chunk — see
-    # `write_anchor_audit`. Held rather than printed because the headline counts
-    # answer "did this run go wrong" and this answers "how does the model behave".
+    # Per-chunk anchor accounting, one entry per prose chunk (`write_anchor_audit`).
     anchor_audit: list[dict] = field(default_factory=list)
 
 
-# A rewrite shorter than this fraction of its input did not compress — it
-# stopped. A floor and not a band: length alone cannot tell an expansive rewrite
-# from a rambling one, and a style rewrite is not a copy-edit — real rewrites
-# span 0.18x to 9.76x and 13.6% of them EXPAND. 0.3 sits below the 0.1th
-# percentile (findings.md; `_plans/placeholder-design-2026-08.md` for why a 0.9
-# floor from a copy-edit task does not transfer).
+# A rewrite shorter than this fraction of its input stopped; a floor, not a
+# band, set below the corpus's length-ratio tail (findings.md).
 MIN_REWRITE_LENGTH_RATIO = 0.3
 
 
@@ -286,22 +218,17 @@ def is_truncated(
     return len(candidate.strip()) < min_ratio * len(source.strip())
 
 
-# Content anchors — the mechanically-checkable information a style rewrite
-# must never lose: markdown link destinations, bare URLs, citation keys. A
-# rewrite can delete these while scoring WELL on voice, so anchor integrity is
-# checked before any scoring, never after it.
+# Content anchors — link destinations, bare URLs, citation keys — checked
+# before any scoring, since a rewrite can delete them and still score well (D32).
 _ANCHOR_RES = (
     re.compile(r"\]\(([^)\s]+)"),  # markdown link/image destination
     re.compile(r"(?<!\()https?://[^\s)\]]*[^\s)\].,;:!?]"),  # bare URL, sans trailing punctuation
     re.compile(r"(?<![\w.\\])@[A-Za-z][A-Za-z0-9_:-]*"),  # citation key, not an email
 )
 
-# Inline markup the styler must carry through verbatim. Unlike a fenced block
-# it lives INSIDE a chunk, so segmentation cannot protect it and only the anchor
-# guard can (D27). Both patterns are single-line by construction, and the math
-# one is deliberately tight — the obvious `\$([^$\n]+?)\$` calls "5 and " an
-# anchor in "it costs $5 and $10". A missed anchor costs nothing while a false
-# one rejects a good rewrite, so under-matching is the safe direction.
+# Inline markup the anchor guard protects because segmentation cannot (D27).
+# The math pattern is tight on purpose: a false anchor rejects a good rewrite,
+# a missed one costs nothing.
 _INLINE_ANCHOR_RES = (
     re.compile(r"(?<!`)(`+)(?P<anchor>[^`\n]+?)\1(?!`)"),  # inline code span
     re.compile(r"(?<![\\$\w])\$(?![\s$])(?P<anchor>[^$\n]*?[^\s$])\$(?!\$)"),  # inline math
@@ -309,13 +236,9 @@ _INLINE_ANCHOR_RES = (
 
 
 def content_anchors(text: str, *, inline: bool = False) -> dict[str, int]:
-    """Multiset of link targets / URLs / citation keys in `text`.
-
-    With `inline`, code spans and inline math count too — a much stricter guard
-    (findings.md, "Inline anchors would reject a fifth of good rewrites"), so it
-    is opt-in for `rewrite_text` (which decides) and always on for
-    `rewrite_candidates` (which only flags, and a human decides). D27, D20.
-    """
+    """Multiset of link targets / URLs / citation keys in `text`; with
+    `inline`, code spans and inline math too — a stricter guard (findings.md),
+    opt-in where it decides and always on where it only flags (D27, D20)."""
     counts: dict[str, int] = {}
     patterns = _ANCHOR_RES + _INLINE_ANCHOR_RES if inline else _ANCHOR_RES
     for pattern in patterns:
@@ -332,13 +255,7 @@ def anchor_delta(
     source: str, candidate: str, *, inline: bool = False
 ) -> tuple[list[str], list[str]]:
     """`(lost, gained)` — anchors `candidate` dropped, and ones it conjured.
-
-    The two halves use deliberately different rules (D32):
-
-    - LOST is a count DECREASE. Each occurrence anchors a separate claim.
-    - GAINED is key ABSENCE, not a count increase. Repeating a URL the source
-      supplied invents nothing.
-    """
+    Lost is a count decrease, gained is key absence (D32)."""
     have = content_anchors(candidate, inline=inline)
     want = content_anchors(source, inline=inline)
     lost = [key for key, n in want.items() if have.get(key, 0) < n]
@@ -353,8 +270,7 @@ def invented_anchors(source: str, candidate: str, *, inline: bool = False) -> li
 
 def record_anchor_delta(record: dict, *, inline: bool = False) -> tuple[list[str], list[str]]:
     """`anchor_delta` over a pair record: `(lost, gained)` from its slop side to
-    its Dan side. The corpus-side face of the guard `rewrite_text` applies to a
-    candidate."""
+    its target side."""
     from stylebot.pairs import extract_slop, extract_target
 
     return anchor_delta(extract_slop(record), extract_target(record), inline=inline)
@@ -364,24 +280,15 @@ def is_anchor_faithful(
     record: dict, *, lose: bool = True, gain: bool = True, inline: bool = False
 ) -> bool:
     """Pair-level `selector` for `train.assemble_training_corpus`: keep pairs
-    whose target neither invents nor drops an anchor.
-
-    Symmetric by default, matching the guard `rewrite_text` applies at
-    inference; `lose` and `gain` select which halves bind, and each keeps
-    `anchor_delta`'s rule. Why the halves differ, and why a captured pair is
-    filtered here while a synthetic one is culled outright: D32.
-
-    `assemble_training_corpus` records only `selector.__name__`, so a caller
-    that varies these keywords should wrap this in a distinctly *named* function
-    rather than a `partial`, or two runs will claim identical filters.
-    """
+    whose target neither invents nor drops an anchor (D32); `lose` and `gain`
+    select which halves bind. Wrap a keyword variant in a named function, not
+    a `partial`: only `selector.__name__` reaches the manifest."""
     lost, gained = record_anchor_delta(record, inline=inline)
     return not (lose and lost) and not (gain and gained)
 
 
 def _anchor_summary(keys: list[str]) -> str:
-    """The first three distinct anchors, elided — a decision line names enough
-    to recognise the damage, not enough to reproduce it."""
+    """The first three distinct anchors, elided."""
     uniq = sorted(set(keys))
     return f"{', '.join(uniq[:3])}{'…' if len(uniq) > 3 else ''}"
 
@@ -389,17 +296,9 @@ def _anchor_summary(keys: list[str]) -> str:
 def write_anchor_audit(
     path: str | Path, result: RewriteResult, *, source: str | None = None
 ) -> int:
-    """Append a run's per-chunk anchor accounting to a JSONL sidecar.
-
-    Step 0 of the anchor-integrity work (D32): how often an UNMASKED candidate
-    loses or invents an anchor is what the masking work is gated on (D33), and
-    it is answerable by joining these lines — the denominator is every candidate
-    not marked `truncated`, the numerator those with a non-empty `lost` or
-    `gained`.
-
-    Append-only: one line per prose chunk, carrying anchor KEYS and lengths but
-    never candidate text. Returns the number of lines written.
-    """
+    """Append a run's per-chunk anchor accounting to a JSONL sidecar (D32, D33):
+    one line per prose chunk, anchor keys and lengths but never candidate
+    text. Returns the number of lines written."""
     from stylebot.jsonl import append_jsonl
     from stylebot.provenance import now_iso
 
@@ -410,9 +309,8 @@ def write_anchor_audit(
 
 
 def detector_scorer(detector: Callable[[str], dict]) -> Callable[[str], float]:
-    """Best-of-N scorer from the voice classifier: lower = more Dan (`P(slop)`;
-    blank text scores worst). `detector` is the `stylebot.classify` seam, and
-    its D39 identity rides along as `.identity` so an output row can name it."""
+    """Best-of-N scorer from the voice classifier: `P(slop)`, lower = better,
+    blank text worst; the detector's identity rides along as `.identity` (D39)."""
 
     def score(text: str) -> float:
         return detector(text)["score"] if text.strip() else 1.0
@@ -439,17 +337,12 @@ def rewrite_candidates(
     div_is_prose: markdown.DivIsProse | None = None,
     system: str | None = None,
 ) -> dict:
-    """All candidates for ONE prose chunk, none auto-chosen — the editor seam.
+    """All candidates for one prose chunk, none auto-chosen — the editor seam (D20).
 
-    Where `rewrite_text` decides, this returns the full slate for a human to
-    choose from: anchor violations FLAG rather than disqualify, and the input's
-    own score rides along (D20). Serves `stylebot.serve`'s `rewrite` op.
-
-    Single-chunk contract: `text` must be prose at training chunk scale, so
-    frontmatter, a heading, a protected block or a `:::` line (D27, D76), or prose
-    over `max_chunk_chars`, raises ValueError with a message fit for an editor. Under
-    `inline_headings` a selection MAY span headings and any `context` is ignored.
-
+    Anchor violations flag rather than disqualify. `text` must be prose at
+    training chunk scale: frontmatter, a heading, a protected block, a `:::`
+    line (D27, D76) or prose over `max_chunk_chars` raises ValueError. Under
+    `inline_headings` a selection may span headings and `context` is ignored.
     Returns `{"input_score", "n_sampled", "candidates": [{"text", "score",
     "anchors_lost", "anchors_gained", "truncated", "identity"}, ...]}` in
     sampled order (duplicates collapse; a candidate byte-equal to the input is
@@ -457,9 +350,7 @@ def rewrite_candidates(
     """
     from stylebot.pairs import build_pair_content, pair_body
 
-    # Cross-heading pairs carry headings as CONTENT and record no `meta.context`,
-    # so a prefix here is one training never saw (D27). Dropped here, not in the
-    # caller: that is an editor extension, and the rule belongs to the diet.
+    # Cross-heading pairs record no `meta.context`: a prefix training never saw (D27).
     if inline_headings:
         context = None
     frontmatter, body = split_frontmatter(text)
@@ -472,8 +363,7 @@ def rewrite_candidates(
         body, max_chars=max_chunk_chars, inline_headings=inline_headings, div_is_prose=div_is_prose
     )
     kinds = [kind for kind, chunk in items if chunk.strip()]
-    # Nothing selected is its own failure: it is not an over-budget selection,
-    # and saying so (the old fall-through) told the user something false.
+    # Nothing selected is its own failure, not an over-budget selection.
     if not kinds:
         raise ConfigError("selection is empty — select some prose")
     # Headings are content under the cross-heading diet; fences never are.
@@ -497,21 +387,16 @@ def rewrite_candidates(
     deduped = [c for c in cleaned if c and not (c in seen or seen.add(c))]
     candidates = []
     for c in deduped:
-        # Always inline here: this seam only FLAGS, and a human picks. It is
-        # precisely where a strict mask-preservation check earns its keep.
+        # Always inline here: this seam only flags, and a human picks.
         lost, gained = anchor_delta(chunk, c, inline=True)
         candidates.append(
             {
                 "text": c,
                 "score": scorer(c) if scorer is not None else None,
                 "anchors_lost": lost,
-                # Invention is the likelier failure by ~6x in what the styler was
-                # trained on, and the one an editor is least able to catch by
-                # eye: a plausible URL reads exactly like a real one.
+                # Invention is the likelier failure and the hardest to catch by eye.
                 "anchors_gained": gained,
-                # Flagged, not filtered, like the anchor fields: a human picking
-                # from the slate should be told "this one is cut off" in those
-                # words rather than left to read it as a very terse rewrite.
+                # Flagged, not filtered, like the anchor fields.
                 "truncated": is_truncated(chunk, c),
                 "identity": c == chunk,
             }
@@ -538,20 +423,15 @@ def rewrite_text(
 ) -> RewriteResult:
     """Rewrite prose chunk-by-chunk through the styler, mirroring training.
 
-    Frontmatter, headings and protected blocks pass through verbatim (D27); a
-    prose chunk carries the nearest preceding heading as `context` unless
-    `inline_headings` selects the cross-heading diet, where a heading is chunk
-    content instead — set it from the adapter's `data.chunk_scale`. Whitespace
-    is reassembled verbatim and a blank answer keeps the input chunk. `system`
-    is `messages[0]`: the manifest's prompt, or the default author's when None.
-
-    Candidates are disqualified TRUNCATED first, then for anchor damage either
-    way (D32), counted in `n_truncated`, `n_anchor_rejected`, `n_anchor_lost`
-    and `n_anchor_invented`, detailed in `result.anchor_audit`; `inline_anchors`
-    widens the guard to inline code and math. With a `scorer` (lower = better)
-    the input chunk competes (D20) and `on_decision(chunk, context, candidates,
-    scores, chosen_index, kept_input)` fires per chunk — the preference seam;
-    `chosen_index` indexes `scores`/`candidates`, None when the input was kept.
+    Frontmatter, headings and protected blocks pass through (D27); a chunk
+    carries the nearest heading as `context` unless `inline_headings` (set it
+    from the adapter's `data.chunk_scale`). A blank answer keeps the input.
+    `system` is `messages[0]`: the manifest's prompt, or the default author's
+    when None. Candidates are disqualified truncated first, then for anchor
+    damage (D32), counted in the result; `inline_anchors` widens the guard.
+    With a `scorer` the input competes (D20) and `on_decision(chunk, context,
+    candidates, scores, chosen_index, kept_input)` fires per chunk,
+    `chosen_index` None when the input was kept.
     """
     from stylebot.pairs import build_pair_content, pair_body
 
@@ -567,16 +447,13 @@ def rewrite_text(
     context: str | None = None
     for kind, chunk in items:
         if kind == "heading":
-            # Under the cross-heading diet a heading is chunk CONTENT and those
-            # pairs record no `meta.context`, so setting `context` here would
-            # prepend a prefix training never saw to every following chunk.
+            # Under the cross-heading diet a heading is content, not `context`.
             if not inline_headings:
                 context = chunk.split("\n")[-1]
             out_chunks.append(chunk)
             continue
-        # A protected block passes through and deliberately does NOT reset
-        # `context`: `targets._split_sections` runs after `editable_prose`, so a
-        # block never breaks a section and its heading survives one in between.
+        # A protected block does not reset `context`: `targets._split_sections`
+        # never sees one, so a section's heading survives it.
         if kind in markdown.PROTECTED_KINDS or not chunk.strip():
             out_chunks.append(chunk)
             continue
@@ -633,9 +510,7 @@ def rewrite_text(
             out = chunk
             result.n_kept_input += 1
             if cut and not lost:
-                # Say truncation plainly rather than dressing it as anchor loss —
-                # the two want different fixes (a bigger --max-tokens vs a better
-                # sample), and conflating them sends the operator after the wrong one.
+                # Truncation and anchor loss want different fixes: say which.
                 result.decisions.append(
                     f"chunk {n}: kept input (all {len(raw)} sample(s) truncated, "
                     f"shortest {min(cut):.0%} of input — raise --max-tokens?)"
@@ -683,8 +558,7 @@ def rewrite_text(
         if on_decision is not None:
             on_decision(chunk, context, list(raw), raw_scores, chosen_idx, chosen_idx is None)
         if out is not chunk:
-            # Backends strip sampled text; restore the chunk's edge whitespace
-            # runs (EOF newline, CRLF, a two-space hard break) byte-for-byte.
+            # Backends strip sampled text; restore the chunk's edge whitespace.
             lead = chunk[: len(chunk) - len(chunk.lstrip())]
             trail = chunk[len(chunk.rstrip()) :]
             out = lead + out.strip() + trail
@@ -710,13 +584,9 @@ def rewrite_pairs_file(
     scorer: Callable[[str], float] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> int:
-    """Style the slop side of a pairs corpus into an output JSONL for eval.
-
-    Each output line is the pair record plus a top-level `"output"` field (the
-    styler's rewrite of `messages[1]` as stored, heading context included —
-    the eval extractor strips it like every other field) and `meta.reranker`
-    (`reranker_identity`). Resumable by id. Returns the number written.
-    """
+    """Style the slop side of a pairs corpus into an output JSONL for eval: each
+    record plus `"output"` (the rewrite of `messages[1]` as stored) and
+    `meta.reranker`. Resumable by id. Returns the number written."""
     from stylebot.pairs import iter_pairs, record_id
 
     out_path = Path(out_path)
@@ -755,12 +625,8 @@ def rewrite_pairs_file(
 
 
 def _message_text(content: object) -> str:
-    """Flatten a renderer `Message.content` — `str | list[ContentPart]` — to text.
-
-    A sample carrying a literal `<think>` block parses to content PARTS, and a
-    thinking part is re-wrapped rather than dropped: under a thinking-disabled
-    renderer it is the author's prose, not the model's reasoning (D75).
-    """
+    """Flatten a renderer `Message.content` — `str | list[ContentPart]` — to
+    text; a thinking part is re-wrapped, not dropped (D75)."""
     if isinstance(content, str):
         return content
     out: list[str] = []
@@ -782,12 +648,9 @@ def tinker_backend(
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> Styler:
-    """Sample the trained checkpoint via the Tinker sampling client.
-
-    Uses the SAME cookbook renderer as training (default: the model's
-    recommended one — pass the manifest's `renderer_name` to be exact), so no
-    chat-template skew is possible. Needs the ``trainer`` extra + TINKER_API_KEY.
-    """
+    """Sample the trained checkpoint via the Tinker sampling client, under the
+    cookbook renderer training used (pass the manifest's `renderer_name`).
+    Needs the ``trainer`` extra + TINKER_API_KEY (D19)."""
     try:
         import tinker
         from tinker import types
@@ -829,11 +692,8 @@ def openai_backend(
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> Styler:
-    """Any OpenAI-compatible endpoint: Fireworks, `mlx_lm.server`, Osaurus,
-    vLLM. The served model's chat template must match training's rendering —
-    score a parity sample against `tinker_backend` before trusting a new
-    endpoint. `num_samples` is drawn as separate requests (the `n` parameter
-    is not universally supported by local servers)."""
+    """Any OpenAI-compatible endpoint; its chat template is uncheckable (D48),
+    so score a parity sample first. `num_samples` is drawn as separate requests."""
     from openai import OpenAI
 
     client = OpenAI(base_url=base_url, api_key=api_key or "unused")

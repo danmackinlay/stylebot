@@ -1,32 +1,22 @@
-"""NDJSON scoring sidecar — the editor-facing seam over a detector.
+"""NDJSON scoring sidecar — the editor-facing seam over a detector (D20, D44).
 
-`ai-style serve` keeps a detector resident and scores texts over stdin/stdout,
-one JSON object per line each way. Load once (~5 s), then score a document in
-tens of milliseconds, a live marker's budget (`_plans/vscode-marker.md`, D20).
+`ai-style serve` keeps a detector resident and answers one JSON object per
+line over stdin/stdout:
 
-    -> {"id": 1, "op": "info"}
-    <- {"id": 1, "meta": {...artifact meta.json...}}
-    -> {"id": 2, "op": "score", "texts": ["para one", "para two"]}
-    <- {"id": 2, "scores": [0.72, 0.31]}
-    -> {"id": 5, "op": "segment", "text": "<whole document>", "min_chars": 80}
-    <- {"id": 5, "segments": [{"start": 0, "end": 42, "kind": "prose",
-                               "context": "## A heading"}, ...]}
-    -> {"id": 3, "op": "rewrite", "text": "...", "context": "## Heading",
-        "best_of": 4}
-    <- {"id": 3, "input_score": 0.52,
-        "candidates": [{"text": ..., "score": 0.31, "anchors_lost": [],
-                        "anchors_gained": []}, ...]}
-    -> {"id": 4, "op": "prefer", "decision": {...}}
-    <- {"id": 4, "ok": true}
+    -> {"id": 1, "op": "info"}                       <- {"id": 1, "meta": {...}}
+    -> {"id": 2, "op": "score", "texts": [...]}      <- {"id": 2, "scores": [...]}
+    -> {"id": 5, "op": "segment", "text": ..., "min_chars": 80}
+    <- {"id": 5, "segments": [{"start", "end", "kind", "context"}, ...]}
+    -> {"id": 3, "op": "rewrite", "text": ..., "context": ..., "best_of": 4}
+    <- {"id": 3, "input_score": 0.52, "candidates": [{"text", "score",
+                 "anchors_lost", "anchors_gained"}, ...]}
+    -> {"id": 4, "op": "prefer", "decision": {...}}  <- {"id": 4, "ok": true}
 
-`segment` stops the client owning a segmenter: it answers from
-`stylebot.markdown` under the `div_is_prose` policy the sidecar started with.
-`rewrite` and `prefer` arm only when their seam is injected — a rewriter
-`(text, context, best_of)` and a sink whose schema the caller owns; unarmed,
-they error politely. `info` doubles as the ready handshake. One request is in
-flight at a time, so a long `rewrite` delays a queued `score`; an error never
-kills the loop; EOF shuts down; all ML is injected, none imported. `serve_sidecar`
-is the command body as a library, `preference_recorder` its `prefer` sink (D78).
+`segment` answers from `stylebot.markdown` under the sidecar's `div_is_prose`.
+`rewrite` and `prefer` arm only when their seam is injected; `info` is the
+ready handshake. One request in flight at a time; an error never kills the
+loop; EOF shuts down; all ML is injected. `serve_sidecar` is the command body
+as a library, `preference_recorder` its `prefer` sink (D78).
 """
 
 from __future__ import annotations
@@ -48,19 +38,9 @@ if TYPE_CHECKING:
 
 
 def _utf16_mapper(text: str) -> Callable[[int], int]:
-    """Map a Python code-point offset into `text` to a UTF-16 code-unit offset.
-
-    The `segment` op's offsets are consumed by an editor, and every editor this
-    protocol will ever meet (VS Code, and the LSP spec it follows) indexes
-    documents in UTF-16 code units. Python indexes code points, so the two agree
-    until the document contains an astral character — one emoji or one
-    ``\\U0001d53c`` in a paragraph and every decoration below it lands one
-    character short. Converting here rather than in the client keeps the
-    client's arithmetic to none at all: `positionAt(start)` just works.
-
-    Fast path: a document with no astral characters needs no conversion, which
-    is nearly all of them.
-    """
+    """Map a Python code-point offset into `text` to a UTF-16 code-unit offset,
+    which is what an editor (VS Code, LSP) indexes by; identity when the
+    document has no astral characters."""
     astral = [i for i, ch in enumerate(text) if ch > "\uffff"]
     if not astral:
         return lambda offset: offset
@@ -75,18 +55,10 @@ def prose_paragraphs(
 ) -> list[dict]:
     """The scoreable prose paragraphs of a markdown document, with offsets.
 
-    A paragraph is a maximal run of adjacent lines that `markdown.line_kinds`
-    calls prose, so blank lines, protected blocks and heading lines all end one.
-    `context` is the nearest heading line above. Leading YAML frontmatter is
-    dropped; `min_chars` drops short paragraphs, which score noisily.
-
-    Offsets are UTF-16 code units into the ORIGINAL document, frontmatter
-    included (`_utf16_mapper`), so slicing by them reproduces the paragraph —
-    which is why the response carries no text.
-
-    Here rather than in `stylebot.markdown` because it needs two things that
-    module refuses on purpose: frontmatter knowledge, and a paragraph
-    granularity that is the *editor's* unit rather than the chunk budget's.
+    A paragraph is a maximal run of lines `markdown.line_kinds` calls prose;
+    `context` is the nearest heading above; frontmatter is dropped and
+    `min_chars` drops short paragraphs. Offsets are UTF-16 code units into the
+    original document, so the response carries no text.
     """
     from stylebot.infer import split_frontmatter
 
@@ -142,15 +114,11 @@ def handle_request(
     prefer: Callable[[dict], None] | None = None,
     div_is_prose: markdown.DivIsProse | None = None,
 ) -> dict:
-    """Compute the response for one parsed request object (pure, testable).
+    """Compute the response for one parsed request object; pure.
 
     Unknown ops and detector failures come back as an ``error`` response with
-    the request's ``id`` echoed, so the client can reject the matching promise
-    instead of stalling.
-
-    `div_is_prose` is the caller's div policy, applied to the `segment` op — it
-    must be the SAME object the injected `rewriter` closed over, or the marker
-    will offer to rewrite paragraphs the styler then refuses.
+    the ``id`` echoed. `div_is_prose` applies to the `segment` op and must be
+    the object the injected `rewriter` closed over.
     """
     rid = request.get("id")
     op = request.get("op")
@@ -161,9 +129,7 @@ def handle_request(
             texts = request.get("texts")
             if not isinstance(texts, list) or not all(isinstance(t, str) for t in texts):
                 return {"id": rid, "error": "'texts' must be a list of strings"}
-            # One `encode` for the whole request, not one per text: the
-            # marker sends a document's paragraphs as a single `score` op,
-            # and batch-of-one encodes cost 1.56x (D59).
+            # One `encode` for the whole request, not one per text (D59).
             return {"id": rid, "scores": [r["score"] for r in detect_many(detector, texts)]}
         if op == "segment":
             text = request.get("text")
@@ -217,13 +183,9 @@ def serve_loop(
     prefer: Callable[[dict], None] | None = None,
     div_is_prose: markdown.DivIsProse | None = None,
 ) -> None:
-    """Serve NDJSON requests until EOF on `stdin`.
-
-    Every response is a single line, flushed immediately — the client blocks
-    on the next line, so buffering here would deadlock it. Blank lines are
-    ignored; unparseable lines respond with ``id: null`` (the request id is
-    unrecoverable).
-    """
+    """Serve NDJSON requests until EOF on `stdin`: one flushed line per
+    response (the client blocks on it); blank lines ignored; an unparseable
+    line answers ``id: null``."""
     meta = meta or {}
     for line in stdin:
         line = line.strip()
@@ -251,11 +213,8 @@ def serve_loop(
 def preference_recorder(
     path: str | Path, *, run_id: str | None = None, default_chooser: str | None = None
 ) -> Callable[[dict], None]:
-    """A `prefer` sink appending `{ts, run_id, chooser, **decision}` to a JSONL.
-
-    `chooser` comes off the decision when the client names one, else
-    `default_chooser`; the parent directory is created on first write.
-    """
+    """A `prefer` sink appending `{ts, run_id, chooser, **decision}` to a JSONL;
+    `chooser` is the decision's, else `default_chooser`."""
     from stylebot.jsonl import append_jsonl
     from stylebot.provenance import now_iso
 
@@ -280,13 +239,10 @@ def serve_sidecar(
 ) -> None:
     """The sidecar: `serve_loop` with the `rewrite` op armed from `make_styler`.
 
-    The styler is built lazily, once, on the first `rewrite` — a backend that
-    dials out at construction must not take paragraph scoring down with it at
-    editor start — and `None` leaves the op unarmed (score-only serving). The
-    reranker is `infer.detector_scorer(detector)`; the chunk diet is
-    `backend`'s. `div_is_prose` reaches the loop's `segment` op only: the
-    single-chunk contract refuses a `:::` line before any policy applies.
-    Streams default to the process's at call time.
+    The styler is built lazily on the first `rewrite`, so a backend that dials
+    out cannot take scoring down at editor start; `None` leaves the op
+    unarmed. The reranker is `infer.detector_scorer(detector)`; the diet is
+    `backend`'s; `div_is_prose` reaches the `segment` op only.
     """
     from stylebot import infer
 

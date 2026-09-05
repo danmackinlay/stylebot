@@ -34,7 +34,7 @@ MODULE_DOCSTRING_LINES = 30
 
 #: Package-wide docstring + comment lines, measured by `_modules()` at the commit
 #: that set it. It only falls: a commit that lowers prose lowers it (D58).
-PROSE_CEILING = 3618
+PROSE_CEILING = 3368
 #: How far under the ceiling prose may sit before the test demands it be lowered.
 PROSE_SLACK = 50
 
@@ -53,11 +53,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
             "openai_generator._make_generate.generate": 99,
         },
     },
-    "infer.py": {
-        "lines": 854,
-        "functions": {"rewrite_text": 174, "rewrite_candidates": 94},
-        "docstrings": (17, 16),
-    },
+    "infer.py": {"functions": {"rewrite_text": 163, "rewrite_candidates": 81}},
     "splits.py": {
         "functions": {"apply_eval_extension": 112},
         "docstrings": (19,),
