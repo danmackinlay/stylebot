@@ -212,8 +212,9 @@ the extension:
    loudly if head and embedder disagree.
 3. **Recalibrate `voiceMarker.thresholds`** — the score distribution moves
    with every retrain. Gotcha: `scores.jsonl` is resumable (already-scored
-   ids are skipped), so point the recalibration run at a *fresh* `--out`
-   path or you'll silently compute quantiles over the old model's scores.
+   `(record_id, field, signal)` keys are skipped), so point the recalibration
+   run at a *fresh* `--out` — `scoring.scores_filename` names one per head —
+   or you'll silently compute quantiles over the old model's scores.
    Threshold changes apply live, no restart.
 
 Rebuilding/reinstalling the `.vsix` is needed only when the **wire protocol**

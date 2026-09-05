@@ -1,9 +1,9 @@
-"""Corpus-scale scoring: a `pairs.jsonl` in, an id-keyed `scores.jsonl` out.
+"""Corpus-scale scoring: a `pairs.jsonl` in, a signal-keyed `scores.jsonl` out.
 
-One score record per corpus row, keyed by `record_id`, so scores join back to
-the corpus, resume by id, and facet on carried `meta`. The per-passage signals
-and `score_candidate` are `stylebot.eval`; the paired verdict over two scored
-runs is `stylebot.verdict`.
+One row per `(record_id, field, signal)`, appended, never rewritten, beside the
+corpus rather than in a rebuildable view (D39, D84). `load_scores` folds the
+rows — and an old whole-record file — back to the shape readers take. Signals
+are `stylebot.eval`; the paired verdict over two runs is `stylebot.verdict`.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from stylebot.eval import (
     score_candidate,
     vale_score_many,
 )
-from stylebot.jsonl import dumps_line, iter_jsonl, read_jsonl, write_jsonl_atomic
+from stylebot.jsonl import dumps_line, read_jsonl, write_jsonl_atomic
 from stylebot.pairs import FIELD_EXTRACTORS, GEN_FACET_KEYS, iter_pairs, record_id
 
 if TYPE_CHECKING:
@@ -49,18 +49,63 @@ _CARRIED_META = (
     "transform_sim",
     "reranker",
 )
-# Generation covariates nested under `meta.gen` (synthetic pairs only), flattened
-# onto each score record so `summarize_scores(by=…)` can facet by them directly.
-# Real pairs lack `meta.gen` and simply omit these (null bucket).
+# Generation covariates nested under `meta.gen` (synthetic pairs only), carried
+# onto each row so `summarize_scores(by=…)` facets by them. Real pairs lack
+# `meta.gen` and omit these (null bucket).
 _CARRIED_GEN = GEN_FACET_KEYS
 
 #: Judge calls in flight (D59); `verdict.EvalOpts.max_workers` shares it.
 DEFAULT_MAX_WORKERS = 8
 
 
-def existing_scored_ids(out_path: str | Path) -> set[str]:
-    """Read the `id`s already present in a `scores.jsonl` (for resumable runs)."""
-    return {str(rec["id"]) for rec in iter_jsonl(out_path) if rec.get("id")}
+#: The signals a row can carry: an `eval.score_candidate` record's keys, less
+#: `text_chars`, which is the field's and rides on every one of its rows.
+SCORE_SIGNALS = ("vale", "judge", "detector", "eyeball")
+
+
+def explode_score_row(rec: dict) -> list[dict]:
+    """A whole-record score row -> its `(id, field, signal)` rows; pure.
+
+    Also the reader for the pre-D39 shape: an existing file seeds the keyed
+    layout, buying nothing twice. No result, no row; a keyed row passes through.
+    """
+    if "signal" in rec or "scores" not in rec:
+        return [rec]
+    base = {"id": rec.get("id"), "meta": rec.get("meta") or {}}
+    cells = {name: cell or {} for name, cell in (rec.get("scores") or {}).items()}
+    return [
+        {**base, "field": name, "signal": s, "text_chars": c.get("text_chars"), "value": c[s]}
+        for name, c in cells.items()
+        for s in SCORE_SIGNALS
+        if c.get(s) is not None
+    ]
+
+
+def _fold_score_rows(rows: Iterable[dict]) -> list[dict]:
+    """Rows -> one record per id, first-seen order; last write wins per key.
+
+    Which is what makes an append an upsert (D39).
+    """
+    folded: dict[str, dict] = {}
+    for row in rows:
+        rid, name, signal = row.get("id"), row.get("field"), row.get("signal")
+        if rid is None or not name or not signal:
+            continue
+        rec = folded.setdefault(str(rid), {"id": rid, "meta": {}, "scores": {}})
+        rec["meta"] = row.get("meta") or rec["meta"]
+        cell = rec["scores"].setdefault(name, {"text_chars": None} | dict.fromkeys(SCORE_SIGNALS))
+        cell["text_chars"], cell[signal] = row.get("text_chars"), row.get("value")
+    return list(folded.values())
+
+
+def existing_score_keys(out_path: str | Path) -> set[tuple[str, str, str]]:
+    """Every `(record_id, field, signal)` a scores file already holds."""
+    return {
+        (str(row["id"]), str(row["field"]), str(row["signal"]))
+        for rec in read_jsonl(out_path)
+        for row in explode_score_row(rec)
+        if row.get("id") is not None and row.get("field") and row.get("signal")
+    }
 
 
 def live_record_ids(pairs_path: str | Path) -> set[str]:
@@ -69,16 +114,16 @@ def live_record_ids(pairs_path: str | Path) -> set[str]:
 
 
 def prune_orphan_scores(pairs_path: str | Path, out_path: str | Path) -> int:
-    """Drop score records whose pair is gone from the corpus; return the count.
+    """Drop score rows whose pair is gone from the corpus; return the row count.
 
-    `scores.jsonl` is append-only and joins on `record_id`, so a re-cut strands
-    the superseded row; no consumer checks the join, so an orphan counts as a
-    pair — it inflates every `summarize_scores` mean and puts a phantom row in
-    a committed `covariate_table`. Pruning here keeps all of them consistent.
+    `scores.jsonl` joins on `record_id` and nothing checks the join, so a
+    re-cut's stranded row inflates every `summarize_scores` mean and lands in a
+    committed `covariate_table`.
 
     Undecodable lines are round-tripped verbatim (`jsonl.write_jsonl_atomic`);
-    a decodable record with no `id` has no join key and is pruned. Rewrites
-    `out_path` atomically, and only when something is actually dropped.
+    a decodable row with no `id` has no join key and is pruned. One stranded
+    record is one row per signal, so the count is rows (D63). Rewritten
+    atomically, and only when something is dropped.
     """
     records = read_jsonl(out_path, keep_undecodable=True)
     if not records:
@@ -95,16 +140,36 @@ def prune_orphan_scores(pairs_path: str | Path, out_path: str | Path) -> int:
     return pruned
 
 
-# Which instrument wrote these rows (D39). `eval.detector_identity` reads a
-# live detector; these read what a scores file already records.
+# Which instrument wrote these rows (D39): `eval.detector_identity` reads a live
+# detector, these read what a scores file records.
+
+
+def _scores_detector(detector: Detector) -> bool:
+    """Does this head produce detector rows, or is it the null default (D39)?
+
+    A stub row would make a later real head read as already-scored. A
+    chunk-wise wrapper suffixes its scale (D54), so the head precedes the `/`.
+    """
+    name = detector_identity(detector).get("name")
+    return str(name or "null").split("/")[0] != "null"
+
+
+def scores_filename(detector: Detector) -> str:
+    """The file these rows belong in: `scores-<name>@<git_sha>.jsonl` (D39);
+    a null head keeps the plain default, so nothing existing moves."""
+    if not _scores_detector(detector):
+        return "scores.jsonl"
+    ident = detector_identity(detector)
+    raw = f"{ident['name']}@{ident['git_sha']}" if ident.get("git_sha") else ident["name"]
+    slug = "".join(c if (c.isalnum() or c in "@._-") else "-" for c in str(raw))
+    return f"scores-{slug}.jsonl"
 
 
 def _identity_of_row(scores: dict) -> tuple | None:
     """The detector identity recorded on one score record, as a hashable tuple.
 
-    None when the row carries no *configured* detector — an unconfigured or
-    pre-contract row is not evidence of a different instrument, so it must not
-    trip the mixing guard.
+    None when the row carries no *configured* detector: an unconfigured or
+    pre-contract row is not evidence of another instrument (D39).
     """
     for signals in (scores or {}).values():
         detector = (signals or {}).get("detector") or {}
@@ -140,9 +205,8 @@ def assert_single_detector(
 ) -> list[dict]:
     """Refuse a scores file written by more than one detector; return what it has.
 
-    Everything that *compares* numbers goes through here first (D39).
-    `allow_mixed=True` downgrades to "return them all" for the deliberate case:
-    a file being migrated, a diagnostic.
+    Everything that *compares* numbers comes through here first (D39).
+    `allow_mixed=True` returns them all, for a migration or a diagnostic.
     """
     identities = detector_identities(scores)
     if len(identities) > 1 and not allow_mixed:
@@ -168,13 +232,14 @@ def _guard_detector_continuity(
     existing = identities[0]
     # An unconfigured (null) detector adds no detector scores at all, so it can
     # never blend the file's means; only a *scoring* head has to match.
-    if incoming == existing or incoming.get("name") in (None, "null"):
+    if incoming == existing or not _scores_detector(detector):
         return
+    fresh = Path(out_path).parent / scores_filename(detector)
     raise ConfigError(
         f"{out_path} was scored by {_identity_label(existing)} but this run uses "
-        f"{_identity_label(incoming)} — resume skips by pair id, so appending would "
-        f"blend two instruments into one mean. Point --out at a fresh file, or pass "
-        f"--allow-mixed-detector"
+        f"{_identity_label(incoming)} — resume skips by signal key, so appending would "
+        f"blend two instruments into one mean. Point --out at a fresh file "
+        f"({fresh}), or pass --allow-mixed-detector"
     )
 
 
@@ -188,10 +253,9 @@ class ScoreResult:
     errors: list[tuple[str, str]] = field(default_factory=list)  # (id, message)
 
 
-# Records per slice of the scoring loop. Each slice takes one pre-pass per
-# signal, so this is the granularity at which results reach the file: bigger
-# amortises `vale` startup and the judge's concurrency further, smaller keeps a
-# crashed run's lost work smaller. `fields` multiplies it into texts per slice.
+# Records per slice: one pre-pass per signal each, so this is the granularity at
+# which results reach the file. Bigger amortises `vale` startup and the judge's
+# concurrency; smaller loses less to a crash. `fields` multiplies it into texts.
 _SCORE_BATCH_RECORDS = 128
 
 
@@ -206,13 +270,12 @@ def _score_record(
     detector_by_field: dict[str, dict] | None = None,
     judge_by_field: dict[str, dict | BaseException] | None = None,
 ) -> dict:
-    """Score the requested fields of one pair record -> a `scores.jsonl` line.
+    """Score the requested fields of one pair record -> a whole-record row.
 
-    The three `*_by_field` maps carry the slice's pre-pass results (field name
-    -> that signal's record). A field missing from the Vale or detector map is
-    scored inline; missing from the judge map it raises, since the inline judge
-    call would store an async judge's coroutine. A judge call that raised is
-    carried as the exception and re-raised here, against that record alone.
+    The `*_by_field` maps carry the slice's pre-pass results. A field missing
+    from the Vale or detector map is scored inline; missing from the judge map
+    it raises, since the inline call would store an async judge's coroutine. A
+    judge call that raised is re-raised here, against that record alone.
     """
     meta = record.get("meta") or {}
     scores: dict[str, dict] = {}
@@ -246,9 +309,8 @@ def _slice_texts(
 ) -> tuple[list[str], list[tuple[int, str]]]:
     """Every (record, field) text in a slice, plus the slot each came from.
 
-    An extraction that blows up is simply left out: `_score_record` hits the
-    same error and `ScoreResult` captures it per record. A pre-pass must never
-    be the thing that fails a run.
+    An extraction that blows up is left out: `_score_record` hits the same
+    error and `ScoreResult` captures it per record — a pre-pass never fails a run.
     """
     texts: list[str] = []
     slots: list[tuple[int, str]] = []
@@ -306,9 +368,8 @@ def _detector_prepass(
 ) -> list[dict[str, dict]]:
     """Score every (record, field) text with the detector, Vale-style (D59).
 
-    One `classify.detect_many` call per slice. A failing batch retries per text
-    on this task and then records the error in the field: a signal is never a
-    run-ender. One ``{field: detector_record}`` dict per record, aligned.
+    One `classify.detect_many` call per slice; a failing batch retries per text
+    on this task, then records the error in the field. One dict per record.
     """
     per_record: list[dict[str, dict]] = [{} for _ in records]
     texts, slots = _slice_texts(records, fields)
@@ -393,51 +454,39 @@ async def _aclose_judge(judge: Judge | AsyncJudge | None) -> None:
         await aclose()
 
 
-def score_pairs_file(
-    pairs_path: str | Path,
-    out_path: str | Path,
-    *,
-    fields: Sequence[str] = ("slop", "target"),
-    judge: Judge | AsyncJudge | None = None,
-    detector: Detector = null_detector,
-    vale_config: str | Path | None = None,
-    max_workers: int = DEFAULT_MAX_WORKERS,
-    limit: int | None = None,
-    prune_orphans: bool = True,
-    allow_mixed_detector: bool = False,
-    on_progress: Callable[[int, int], None] | None = None,
-) -> ScoreResult:
-    """Score a `pairs.jsonl` corpus -> an id-keyed `scores.jsonl` (batched).
-
-    The sync entry point: it owns an event loop (`asyncio.run`) for the judge
-    pass. Call `score_pairs_file_async` from inside a running loop instead.
-    """
+def score_pairs_file(pairs_path: str | Path, out_path: str | Path, **kwargs) -> ScoreResult:
+    """The sync entry point: owns an event loop (`asyncio.run`) for the judge
+    pass, and takes `score_pairs_file_async`'s keywords, where they are typed
+    and documented. Call that one from inside a running loop instead."""
     _guard_no_running_loop()
-    return asyncio.run(
-        score_pairs_file_async(
-            pairs_path,
-            out_path,
-            fields=fields,
-            judge=judge,
-            detector=detector,
-            vale_config=vale_config,
-            max_workers=max_workers,
-            limit=limit,
-            prune_orphans=prune_orphans,
-            allow_mixed_detector=allow_mixed_detector,
-            on_progress=on_progress,
-        )
-    )
+    return asyncio.run(score_pairs_file_async(pairs_path, out_path, **kwargs))
+
+
+def _run_signals(judge: Judge | AsyncJudge | None, detector: Detector) -> tuple[str, ...]:
+    """The signals this run can produce — the keys it is allowed to skip on."""
+    signals = ["vale"]
+    if _scores_detector(detector):
+        signals.append("detector")
+    if judge is not None:
+        signals.append("judge")
+    return tuple(signals)
 
 
 def _unscored_records(
-    pairs_path: Path, seen: set[str], limit: int | None
+    pairs_path: Path,
+    keys: set[tuple[str, str, str]],
+    *,
+    fields: Sequence[str],
+    signals: Sequence[str],
+    limit: int | None,
 ) -> tuple[list[dict], int]:
-    """The corpus rows this run has to score, and how many it skipped."""
+    """The corpus rows this run owes a key, and how many it skipped: work is a
+    missing `(record_id, field, signal)`, not a missing record."""
     todo: list[dict] = []
     skipped = 0
     for rec in iter_pairs(pairs_path):
-        if record_id(rec) in seen:
+        rid = record_id(rec)
+        if all((rid, f, s) in keys for f in fields for s in signals):
             skipped += 1
             continue
         todo.append(rec)
@@ -450,18 +499,21 @@ async def _score_slice(
     fp,
     batch: Sequence[dict],
     result: ScoreResult,
+    keys: set[tuple[str, str, str]],
     *,
     fields: Sequence[str],
+    signals: Sequence[str],
     judge: Judge | AsyncJudge | None,
     detector: Detector,
     vale_config: str | Path | None,
     max_workers: int,
     progress: Callable[[], None] | None = None,
 ) -> None:
-    """One pre-pass per signal over the slice, then one written line per record.
+    """One pre-pass per signal over the slice, then the rows the file still owes.
 
-    Assembling the records afterwards is pure bookkeeping. Appends to `result`
-    in place: a written record bumps `written`, a raising one lands in `errors`.
+    A row is written only for a `signals` this run produces and only when
+    `keys` lacks it, so a pass adding a signal leaves the earlier rows exactly
+    as it found them. Appends to `result`: a raising record lands in `errors`.
     """
     vale_results = _vale_prepass(batch, fields=fields, vale_config=vale_config)
     det_results = _detector_prepass(batch, fields=fields, detector=detector)
@@ -483,7 +535,11 @@ async def _score_slice(
         except Exception as exc:  # a field/judge error on one record — log, continue
             result.errors.append((record_id(rec), f"{type(exc).__name__}: {exc}"))
             continue
-        fp.write(dumps_line(line) + "\n")
+        for row in explode_score_row(line):
+            key = (str(row["id"]), row["field"], row["signal"])
+            if row["signal"] in signals and key not in keys:
+                keys.add(key)
+                fp.write(dumps_line(row) + "\n")
         fp.flush()
         result.written += 1
 
@@ -502,20 +558,20 @@ async def score_pairs_file_async(
     allow_mixed_detector: bool = False,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> ScoreResult:
-    """Score a `pairs.jsonl` corpus -> an id-keyed `scores.jsonl` (batched).
+    """Score a corpus -> a signal-keyed `scores.jsonl`, batched and resumable.
 
-    For each pair, score the named `fields` and append one score record keyed by
-    `record_id`; ids already in `out_path` are skipped (idempotent, resumable).
-    Per slice (`_SCORE_BATCH_RECORDS`, `_score_slice`) the Vale and detector
-    pre-passes run synchronously, blocking the loop — by design, D59: the judge
-    awaits, everything else batches — then `max_workers` judge calls go in flight.
+    For each pair, score the named `fields` and append one row per
+    `(record_id, field, signal)`; keys already in `out_path` are skipped, so a
+    run is idempotent, resumable, and adds a signal without re-buying one. Per
+    slice (`_SCORE_BATCH_RECORDS`) the Vale and detector pre-passes block the
+    loop — by design, D59 — then `max_workers` judge calls go in flight.
 
-    On entry `out_path` is pruned of records whose pair no longer exists
-    (`prune_orphan_scores`; count in `ScoreResult.pruned_orphans` — surface it,
-    this rewrites a file the caller may have committed) against the WHOLE
-    corpus, `limit` notwithstanding; pass `prune_orphans=False` when `out_path`
-    belongs to a different corpus. The existing rows' detector identity must
-    match this run's unless `allow_mixed_detector` (D39).
+    The rows' detector identity must match this run's unless
+    `allow_mixed_detector` (D39), checked before anything writes, the prune
+    included. `out_path` is then pruned of rows whose pair is gone
+    (`prune_orphan_scores`; `ScoreResult.pruned_orphans` — surface it, it
+    rewrites a file the caller may have committed) against the WHOLE corpus,
+    `limit` notwithstanding; `prune_orphans=False` for another corpus.
     """
     pairs_path = Path(pairs_path)
     out_path = Path(out_path)
@@ -525,13 +581,14 @@ async def score_pairs_file_async(
         raise ConfigError(f"unknown field(s) {unknown}; known: {sorted(FIELD_EXTRACTORS)}")
     _guard_judge_concurrency(judge, max_workers)
 
-    # Prune before reading `seen`: an orphan id would otherwise both survive in
-    # the file and count as already-scored.
+    # The guard first: a refused run must not have rewritten anything, and the
+    # prune is one. Then prune before `keys`, or an orphan counts as scored.
+    _guard_detector_continuity(out_path, detector, allow_mixed=allow_mixed_detector)
     pruned = prune_orphan_scores(pairs_path, out_path) if prune_orphans else 0
 
-    _guard_detector_continuity(out_path, detector, allow_mixed=allow_mixed_detector)
-
-    todo, skipped = _unscored_records(pairs_path, existing_scored_ids(out_path), limit)
+    signals = _run_signals(judge, detector)
+    keys = existing_score_keys(out_path)
+    todo, skipped = _unscored_records(pairs_path, keys, fields=fields, signals=signals, limit=limit)
     result = ScoreResult(skipped_existing=skipped, pruned_orphans=pruned)
     if not todo:
         return result
@@ -554,7 +611,9 @@ async def score_pairs_file_async(
                     fp,
                     todo[start : start + batch_size],
                     result,
+                    keys,
                     fields=fields,
+                    signals=signals,
                     judge=judge,
                     detector=detector,
                     vale_config=vale_config,
@@ -567,14 +626,14 @@ async def score_pairs_file_async(
 
 
 def load_scores(scores: str | Path | Iterable[dict]) -> list[dict]:
-    """Load score records from a `scores.jsonl` path (or accept them in-memory).
+    """Load a `scores.jsonl` (or in-memory rows) folded to one record per id.
 
-    Tolerant (`stylebot.jsonl`: blank/undecodable lines skipped, missing file →
-    empty). An iterable is returned as a list unchanged.
+    Either shape goes in — keyed rows, or pre-D39 whole-record rows — and the
+    nesting `verdict`, `report` and `covariates` expect comes out. Tolerant
+    (`stylebot.jsonl`: blank/undecodable lines skipped, missing file → empty).
     """
-    if isinstance(scores, (str, Path)):
-        return read_jsonl(scores)
-    return list(scores)
+    raw = read_jsonl(scores) if isinstance(scores, (str, Path)) else list(scores)
+    return _fold_score_rows(row for rec in raw for row in explode_score_row(rec))
 
 
 def _aggregate_fields(records: list[dict]) -> dict:
@@ -613,11 +672,10 @@ def summarize_scores(
     """Aggregate a `scores.jsonl` (path or records) per field, optionally faceted.
 
     Fields-across-rows are the "groups" the styler is judged by movement across
-    (slop vs target vs output). `by` additionally facets on a carried `meta` key
-    — `by="slop_strategy"` gives per-strategy means. `facet_provenance`
-    (default on) adds `by_provenance.real` / `.synthetic` and names
-    `headline_facet: "real"` (D40). The summary always records the file's
-    `detector` identities beside the reading (D39).
+    (slop vs target vs output). `by` facets on a carried `meta` key —
+    `by="slop_strategy"` gives per-strategy means. `facet_provenance` (default
+    on) adds `by_provenance.real` / `.synthetic` and names `headline_facet:
+    "real"` (D40); the detector identities always ride beside it (D39).
     """
     records = load_scores(scores)
     summary: dict = {
@@ -688,7 +746,7 @@ def run_eval(
     # count usually means --out belongs to another corpus.
     if result.pruned_orphans:
         emit(
-            f"pruned {result.pruned_orphans} orphan score record(s) from {out} "
+            f"pruned {result.pruned_orphans} orphan score row(s) from {out} "
             f"— their pair is no longer in {pairs_path}",
             level="status",
         )

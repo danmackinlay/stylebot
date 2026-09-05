@@ -341,7 +341,7 @@ def test_score_pairs_file_emits_id_keyed_scores(tmp_path):
     res = ev.score_pairs_file(pairs, out, judge=fake_judge)
     assert res.written == 2
 
-    recs = [json.loads(line) for line in out.read_text().splitlines() if line.strip()]
+    recs = ev.load_scores(out)  # rows are `(id, field, signal)`; this folds them
     assert len(recs) == 2
     for r in recs:
         assert r["id"]  # id-keyed, joinable back to the corpus
@@ -387,10 +387,11 @@ def test_score_pairs_file_resumable(tmp_path):
     first = ev.score_pairs_file(pairs, out, judge=fake_judge)
     assert first.written == 2
 
+    written = out.read_text()
     second = ev.score_pairs_file(pairs, out, judge=fake_judge)
     assert second.written == 0
     assert second.skipped_existing == 2
-    assert len([line for line in out.read_text().splitlines() if line.strip()]) == 2  # did not grow
+    assert out.read_text() == written  # did not grow, and rewrote nothing
 
 
 def test_score_pairs_file_concurrency_same_ids(tmp_path):
@@ -489,7 +490,7 @@ def test_score_pairs_file_survives_a_vale_batch_failure(tmp_path, monkeypatch):
     res = ev.score_pairs_file(pairs, out, judge=fake_judge)
     assert res.written == 3
     assert res.errors == []  # not a per-record failure
-    for rec in _read_scores(out):
+    for rec in ev.load_scores(out):
         for name in ("slop", "target"):
             assert rec["scores"][name]["vale"]["available"] is False
             assert "vale batch failed" in rec["scores"][name]["vale"]["reason"]
@@ -522,7 +523,7 @@ def test_score_pairs_file_prunes_orphans_and_reports_the_count(tmp_path):
     )
     out = tmp_path / "scores.jsonl"
     ev.score_pairs_file(pairs, out, judge=fake_judge)
-    survivor, doomed = _read_scores(out)
+    survivor, doomed = ev.load_scores(out)
 
     # The corpus loses a pair (stand-in for a re-cut / regeneration).
     lines = [ln for ln in pairs.read_text().splitlines() if ln.strip()]
@@ -530,8 +531,8 @@ def test_score_pairs_file_prunes_orphans_and_reports_the_count(tmp_path):
     pairs.write_text(keep + "\n", encoding="utf-8")
 
     res = ev.score_pairs_file(pairs, out, judge=fake_judge)
-    assert res.pruned_orphans == 1
-    remaining = _read_scores(out)
+    assert res.pruned_orphans == 2 * 2  # rows, not records: (slop, target) x (vale, judge)
+    remaining = ev.load_scores(out)
     # The orphan is gone and the live record survived byte-for-byte — pruning
     # must not rescore or reshape anything it keeps.
     assert remaining == [survivor]
@@ -654,7 +655,8 @@ def test_summarize_scores_counts_a_refusal_as_unscored_not_a_3():
     }
     assert "unscored=1" in ev.format_summary(summary)[0]
     # A keyless run has no judge at all, which is not the same as refusing.
-    keyless = ev.summarize_scores([{"id": "k", "scores": {"slop": {"judge": None}}}])
+    unjudged = {"judge": None, "vale": {"available": False}}
+    keyless = ev.summarize_scores([{"id": "k", "scores": {"slop": unjudged}}])
     assert keyless["fields"]["slop"]["n_unscored"] == 0
 
 
@@ -767,8 +769,7 @@ def test_score_pairs_file_batches_the_detector_into_one_call_per_slice(tmp_path,
     )
     assert res.written == 6
     assert calls == [12], calls  # ONE call carrying every (record, field) text
-    lines = (tmp_path / "scores.jsonl").read_text().splitlines()
-    rows = [json.loads(ln) for ln in lines if ln.strip()]
+    rows = ev.load_scores(tmp_path / "scores.jsonl")
     assert all(r["scores"][f]["detector"]["batched"] for r in rows for f in ("slop", "target"))
 
 
@@ -815,7 +816,7 @@ def test_a_detector_that_fails_per_text_too_records_the_error_in_the_field(tmp_p
 
     res = ev.score_pairs_file(pairs, tmp_path / "s.jsonl", judge=None, detector=detect)
     assert res.written == 1 and res.errors == []
-    row = json.loads((tmp_path / "s.jsonl").read_text().splitlines()[0])
+    row = ev.load_scores(tmp_path / "s.jsonl")[0]
     det_field = row["scores"]["slop"]["detector"]
     assert det_field["score"] is None and det_field["name"] == "stub"
     assert "the backbone fell over" in det_field["error"]
@@ -845,7 +846,7 @@ def test_an_async_judge_is_awaited_with_max_workers_calls_in_flight(tmp_path, mo
     res = ev.score_pairs_file(pairs, tmp_path / "s.jsonl", judge=judge, max_workers=3)
     assert res.written == 6 and res.errors == []
     assert peak == 3, f"{peak} judge calls in flight against max_workers=3"
-    row = json.loads((tmp_path / "s.jsonl").read_text().splitlines()[0])
+    row = ev.load_scores(tmp_path / "s.jsonl")[0]
     assert row["scores"]["slop"]["judge"]["score"] == 4
 
 

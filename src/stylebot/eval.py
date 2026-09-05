@@ -572,7 +572,7 @@ def _aggregate(records: list[dict]) -> dict:
     """
     judged = [r["judge"] for r in records if isinstance(r.get("judge"), dict)]
     judge_scores = [j["score"] for j in judged if j.get("score") is not None]
-    vale_alerts = [r["vale"]["alerts"] for r in records if r.get("vale", {}).get("available")]
+    vale_alerts = [r["vale"]["alerts"] for r in records if (r.get("vale") or {}).get("available")]
     detector_scores = [
         r["detector"]["score"]
         for r in records
@@ -596,7 +596,6 @@ _SPLIT_OUT = {
         "ScoreResult",
         "assert_single_detector",
         "detector_identities",
-        "existing_scored_ids",
         "live_record_ids",
         "load_scores",
         "prune_orphan_scores",

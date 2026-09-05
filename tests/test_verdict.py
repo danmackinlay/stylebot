@@ -132,7 +132,8 @@ def test_eval_opts_defaults_are_the_library_functions_defaults():
     assert opts.judge_model == ev.DEFAULT_JUDGE_MODEL == default_of(ev.openrouter_judge, "model")
     assert opts.judge_model == default_of(ev.openrouter_judge_async, "model")
     assert opts.max_workers == scoring.DEFAULT_MAX_WORKERS
-    assert opts.max_workers == default_of(scoring.score_pairs_file, "max_workers")
+    # The typed keywords live on the async entry point; the sync one forwards.
+    assert opts.max_workers == default_of(scoring.score_pairs_file_async, "max_workers")
     assert opts.report_max_rows == report.DEFAULT_MAX_ROWS
     assert opts.report_max_rows == default_of(report.render_scores_report, "max_rows")
     assert opts.facet_by == report.DEFAULT_FACET_BY

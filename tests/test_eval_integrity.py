@@ -109,7 +109,7 @@ def test_score_rows_carry_the_detector_identity(tmp_path):
     pairs = _make_pairs(tmp_path / "c", [("A paragraph long enough to score.", "post/a.qmd")])
     out = tmp_path / "scores.jsonl"
     ev.score_pairs_file(pairs, out, detector=_stub_detector(git_sha="deadbeef"))
-    rec = json.loads(out.read_text().splitlines()[0])
+    rec = ev.load_scores(out)[0]
     assert rec["scores"]["slop"]["detector"]["git_sha"] == "deadbeef"
     assert ev.detector_identities(out) == [
         {
@@ -323,7 +323,7 @@ def test_document_scale_rewrite_emits_a_scorable_output_jsonl(tmp_path):
         detector=_stub_detector(git_sha="x"),
         prune_orphans=False,
     )
-    scored = json.loads(scores.read_text().splitlines()[0])
+    scored = ev.load_scores(scores)[0]
     assert set(scored["scores"]) == {"slop", "target", "output"}
 
     # Resumable: a second pass rewrites nothing.
@@ -676,7 +676,7 @@ def test_chunk_wise_document_scores_keep_the_ordinary_scores_jsonl_shape(tmp_pat
         prune_orphans=False,
     )
 
-    rec = json.loads(scores.read_text().splitlines()[0])
+    rec = ev.load_scores(scores)[0]
     slop = rec["scores"]["slop"]["detector"]
     assert slop["n_chunks"] == 3 and slop["sd"] is not None
     assert slop["score"] == pytest.approx((0.9 + 0.3 + 0.6) / 3)
@@ -752,7 +752,7 @@ def test_the_callout_policy_crosses_the_document_scale_seam(tmp_path):
             prune_orphans=False,
             detector=ev.chunked_detector(detector, max_chunk_chars=200, div_is_prose=div_is_prose),
         )
-        rec = json.loads(scores.read_text().splitlines()[0])
+        rec = ev.load_scores(scores)[0]
         return rewritten, sent, seen, json.loads(docs.read_text().splitlines()[0]), rec
 
     without, sent_w, seen_w, _, rec_w = run("plain.jsonl", None)
