@@ -53,6 +53,7 @@ class TrainClfOpts:
         None,
         "--blog-root",
         type=click.Path(exists=True, file_okay=False, path_type=Path),
+        is_eager=True,  # processed before any corpus default that reads it (D79)
         help="Tree the pinned eval posts must still exist in; a renamed one fails the run (D34).",
     )
     test_size: float = opt(

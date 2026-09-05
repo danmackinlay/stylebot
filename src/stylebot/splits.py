@@ -571,6 +571,7 @@ class ExtendEvalOpts:
         None,
         "--blog-root",
         type=click.Path(exists=True, file_okay=False, path_type=Path),
+        is_eager=True,  # processed before any corpus default that reads it (D79)
         help="Source tree the added posts must exist in (a typo'd path would pin a post that is "
         "not there). Skipped when unset.",
     )

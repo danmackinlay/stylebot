@@ -207,3 +207,43 @@ def test_ai_style_train_clf_is_the_pass_behind_flags(tmp_path, write_pairs_corpu
     help_text = CliRunner().invoke(main, ["train-clf", "--help"]).output
     assert "Voice classifier" in help_text
     assert "--holdout-frac" in help_text and f"[default: {ct.DEFAULT_TEST_SIZE}]" in help_text
+
+
+def test_blog_root_is_eager_wherever_a_bundle_declares_it(tmp_path, write_pairs_corpus):
+    """D79: a corpus default that reads `--blog-root` off the context must find
+    it already processed, whatever the flag order — so the three bundles that
+    declare `--blog-root` mark it eager, and a default pinned to a callable sees
+    the root even when `--blog-root` is the LAST flag on the line."""
+    import click
+    from click.testing import CliRunner
+
+    from stylebot import train as tr
+    from stylebot.cli_options import bundles_from_kwargs
+
+    for options in (cc.train_clf_options, sp.extend_eval_options, tr.train_options):
+
+        @click.command()
+        @options()
+        def cmd(**kw) -> None:
+            pass
+
+        (param,) = [p for p in cmd.params if "--blog-root" in p.opts]
+        assert param.is_eager, options.__name__
+
+    root = tmp_path / "blog"
+    root.mkdir()
+    corpus = write_pairs_corpus(path=root / "pairs.jsonl", n_posts=2, chunks=1)
+    seen: dict = {}
+
+    def corpus_under_root() -> Path:
+        return click.get_current_context().params["blog_root"] / "pairs.jsonl"
+
+    @click.command()
+    @cc.train_clf_options(defaults=[cc.TrainClfOpts(pairs_path=corpus_under_root)])
+    def train_clf(**kw) -> None:
+        seen.update(bundles_from_kwargs(kw, cc.TRAIN_CLF_PARAMS)["opts"].__dict__)
+
+    args = ["--out", str(tmp_path / "clf"), "--dry-run", "--blog-root", str(root)]
+    result = CliRunner().invoke(train_clf, args)
+    assert result.exit_code == 0, result.output
+    assert seen["pairs_path"] == corpus and seen["blog_root"] == root
