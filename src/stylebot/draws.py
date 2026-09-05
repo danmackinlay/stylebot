@@ -295,7 +295,7 @@ def _clauses(policy: ViewPolicy, draws: Sequence[Draw]) -> list[Clause]:
     posts that is no real capture is out, after `outcome` so a gate-dropped one
     is still counted as the reject it is.
     """
-    excluded = frozenset(policy.excluded_draw_ids)
+    excluded = frozenset(policy.excluded_draw_ids or ())
     named = (cid for cid in (policy.superseded_captures or ()) if cid)
     replaced = frozenset(cid for d in draws for cid in (d.supersedes or ())).union(named)
     out: list[Clause] = [("outcome", lambda d: d.outcome != ACCEPTED)]

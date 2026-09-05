@@ -136,6 +136,15 @@ def test_rejects_and_named_exclusions_never_reach_the_view(pairs_dir, tmp_path):
     assert _ids(tmp_path / "view") == {d.draw_id for d in lifted[1:3] + lifted[4:5] + lifted[6:]}
 
 
+def test_a_policy_with_none_for_a_collection_reads_it_as_empty(pairs_dir, tmp_path):
+    """`None` where the blog passes a tuple hashes, and applies as empty (S5a)."""
+    lifted = list(draws.draws_from_pairs(pairs_dir))
+    policy = draws.ViewPolicy(retired_arms=None, excluded_draw_ids=None, superseded_captures=None)
+    assert draws.policy_sha(policy)
+    report = draws.build_view(lifted, policy, out=tmp_path / "view")
+    assert report.records == 8 and report.excluded == {}
+
+
 def _sources(view: Path) -> set[tuple[str, bool]]:
     recs = corpus.iter_records(view)
     return {(r["meta"]["source"], bool(r["meta"].get("synthetic"))) for r in recs}
