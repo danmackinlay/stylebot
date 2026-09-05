@@ -46,7 +46,6 @@ from stylebot.bin.ai_style_log import main as _log
 from stylebot.cli_options import (
     ErrorTranslatingGroup,
     SectionedCommand,
-    bundle_options,
     bundles_from_kwargs,
     click_emitter,
 )
@@ -559,157 +558,22 @@ def train_clf_cmd(**kw) -> None:
 
 
 @main.command("train", cls=SectionedCommand)
-@click.option(
-    "--data-dir",
-    "data_dir",
-    required=True,
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Data dir holding the corpus (pairs/ or pairs.jsonl). Required, no default: "
-    "the explicit path is the reproducibility record — never silently train on the "
-    "wrong corpus.",
-)
-@click.option(
-    "--manifest-out",
-    required=True,
-    type=click.Path(dir_okay=False, path_type=Path),
-    help="Where to write the run manifest JSON (the ONLY artifact that gets committed).",
-)
-@click.option(
-    "--work-dir",
-    required=True,
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Scratch dir for assembled data, tinker logs, and the exported adapter (never committed).",
-)
-@click.option(
-    "--splits",
-    "splits_path",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help="The shared splits.json: train on STYLER-role posts only (the contract; see "
-    "make-splits). Omit only for fixture/experiment corpora.",
-)
-@click.option(
-    "--blog-root",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default=None,
-    help="Tree the pinned eval posts must still exist in; a renamed one fails the run (D34).",
-)
-@click.option(
-    "--val-frac",
-    default=tr.DEFAULT_VAL_FRAC,
-    show_default=True,
-    type=float,
-    help="Fraction of POSTs held out for val loss (by-post, deterministic).",
-)
-@click.option(
-    "--run-id",
-    default=None,
-    help="Run id for the manifest. Default: a UTC timestamp minted at launch "
-    "(train._default_run_id).",
-)
-@click.option(
-    "--price-per-mtok",
-    "train_price_per_mtok",
-    default=None,
-    type=float,
-    help="Train price $/1M tokens for the cost estimate (see the Tinker models page; "
-    "deliberately not hardcoded).",
-)
-@click.option(
-    "--download-adapter/--no-download-adapter",
-    default=True,
-    show_default=True,
-    help="Export the trained LoRA as a PEFT adapter into work-dir after the run.",
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    help="Assemble, print the manifest + token/cost estimate, and stop. Writes nothing; "
-    "no key, no spend.",
-)
-@click.option("--yes", "assume_yes", is_flag=True, help="Skip the pre-spend confirmation prompt.")
 @draws.view_options()
-@bundle_options([tr.Hyperparameters])
-def train_cmd(
-    data_dir: Path,
-    manifest_out: Path,
-    work_dir: Path,
-    splits_path: Path | None,
-    blog_root: Path | None,
-    val_frac: float,
-    run_id: str | None,
-    train_price_per_mtok: float | None,
-    download_adapter: bool,
-    dry_run: bool,
-    assume_yes: bool,
-    draws_dir: Path | None,
-    policy_path: Path | None,
-    **kw,
-) -> None:
-    """Phase 3: LoRA-SFT the styler on Tinker (stylebot.train.run_training).
+@tr.train_options()
+def train_cmd(draws_dir: Path | None, policy_path: Path | None, **kw) -> None:
+    """Phase 3: LoRA-SFT the styler on Tinker (stylebot.train.run_training_pass).
 
     Assembles the corpus (styler-role posts only under --splits, near-copy pairs
     KEPT) — or, with --draws, the view of those draws — cuts a by-POST val
     split, writes the manifest, runs the Tinker recipe. Needs the `trainer`
     extra and TINKER_API_KEY; --dry-run needs neither.
     """
-    pairs_path = config.pairs_path(data_dir)
-    if draws_dir is None and not pairs_path.exists():
-        raise click.ClickException(f"no corpus (pairs/ or pairs.jsonl) in {data_dir}")
-
-    kwargs = dict(
-        draws_dir=draws_dir,
-        policy=draws.load_policy(policy_path),
-        hp=bundles_from_kwargs(kw, {"hp": tr.Hyperparameters})["hp"],
-        splits_path=splits_path,
-        blog_root=blog_root,
-        val_frac=val_frac,
-        run_id=run_id,
-        train_price_per_mtok=train_price_per_mtok,
-        download_adapter=download_adapter,
+    parsed = bundles_from_kwargs(kw, tr.TRAIN_PARAMS)
+    opts = replace(
+        parsed["opts"], hp=parsed["hp"], draws_dir=draws_dir, policy=draws.load_policy(policy_path)
     )
-
-    # Always preview first: the dry-run manifest is also the pre-spend estimate.
-    preview = tr.run_training(pairs_path, work_dir, manifest_out, dry_run=True, **kwargs)
-    data = preview.manifest["data"]
-    est = preview.manifest["estimate"]
-    click.echo(
-        f"{data['n_train']} train / {data['n_val']} val pair(s) "
-        f"({data['n_real']} real / {data['n_synthetic']} synthetic; "
-        f"dropped {data['dropped']}) from {data['n_source_records']} record(s), "
-        f"pairs sha256 {data['pairs_sha256']}"
-    )
-    click.echo(tr.format_passage_scale(data["chunk_scale"]))
-    cost = f" ≈ ${est['cost_usd']}" if est["cost_usd"] is not None else ""
-    click.echo(
-        f"~{est['train_tokens']:,} train tokens ({est['basis']}){cost} on "
-        f"{preview.manifest['hyperparameters']['base_model']}"
-    )
-    if dry_run:
-        click.echo(f"[dry-run] the manifest a paid run would write to {preview.manifest_path}:")
-        click.echo(json.dumps(preview.manifest, indent=2))
-        return
-
-    if not config.get_key("TINKER_API_KEY"):
-        raise click.ClickException(
-            "TINKER_API_KEY is not set — the paid run needs it. Export it, or "
-            "run under direnv (`direnv exec <dir-with-an-.envrc> uv run ai-style train ...`)."
-        )
-    if not assume_yes:
-        click.confirm("Launch the paid Tinker run?", abort=True)
-
-    result = tr.run_training(pairs_path, work_dir, manifest_out, dry_run=False, **kwargs)
-
-    run_result = result.manifest["result"] or {}
-    for key in ("train_mean_nll", "test/nll", "train_tokens"):
-        if key in run_result:
-            click.echo(f"{key}: {run_result[key]}")
-    checkpoints = run_result.get("checkpoints") or {}
-    if checkpoints.get("sampler_path"):
-        click.echo(f"sampler checkpoint: {checkpoints['sampler_path']}")
-    if result.adapter_dir:
-        click.echo(f"PEFT adapter -> {result.adapter_dir} (never commit this)")
-    click.echo(f"manifest -> {result.manifest_path} (commit this)")
+    confirm = None if opts.assume_yes else (lambda _: click.confirm("Launch the paid Tinker run?"))
+    tr.run_training_pass(opts, confirm=confirm, emit=click_emitter())
 
 
 @main.command("promote")

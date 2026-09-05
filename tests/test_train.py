@@ -445,3 +445,45 @@ def test_train_cli_dry_run_prints_the_manifest_and_leaves_runs_untouched(
     sha = draws.policy_sha(draws.ViewPolicy(keep_superseded=True, retired_arms=("x",)))
     assert f'"policy_sha": "{sha}"' in result.output
     assert config.view_path(data_dir, sha).is_dir() and not manifest_out.parent.exists()
+
+
+def test_run_training_pass_reports_then_asks_before_spending(
+    tmp_path, write_pairs_corpus, monkeypatch
+):
+    """`run_training_pass` is the one `train` body both CLIs call (D78): the
+    preview lines, the dry-run exit, the key gate, then `confirm` before the
+    paid seam — which a refusal never reaches."""
+    from stylebot import config
+
+    data_dir = tmp_path / "corpus"
+    data_dir.mkdir()
+    write_pairs_corpus(path=config.pairs_path(data_dir), n_posts=6, **CORPUS)
+    opts = tr.TrainOpts(
+        data_dir=data_dir, manifest_out=tmp_path / "m.json", work_dir=tmp_path / "w", dry_run=True
+    )
+    lines: list[str] = []
+    preview = tr.run_training_pass(opts, emit=lambda m, level="info": lines.append(m))
+    assert preview.manifest["dry_run"] and not (tmp_path / "m.json").exists()
+    assert lines[:2] == tr.format_preview(preview.manifest)[:2]
+    assert lines[0].startswith(f"{preview.corpus.n_train} train / {preview.corpus.n_val} val")
+    assert any(line.startswith("[dry-run]") for line in lines)
+
+    paid = tr.TrainOpts(**{**opts.__dict__, "dry_run": False})
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+    with pytest.raises(RunError, match="TINKER_API_KEY"):
+        tr.run_training_pass(paid)
+    monkeypatch.setenv("TINKER_API_KEY", "not-a-key")
+    monkeypatch.setattr(tr, "_tinker_runner", lambda *a, **k: pytest.fail("the paid seam ran"))
+    asked: list[dict] = []
+
+    def decline(manifest: dict) -> bool:
+        asked.append(manifest)
+        return False
+
+    with pytest.raises(RunError) as declined:
+        tr.run_training_pass(paid, confirm=decline)
+    assert declined.value.quiet and asked[0]["run_id"] == preview.manifest["run_id"]
+    assert not (tmp_path / "m.json").exists()
+
+    with pytest.raises(ConfigError, match="no corpus"):
+        tr.run_training_pass(tr.TrainOpts(**{**opts.__dict__, "data_dir": tmp_path / "none"}))
