@@ -13,6 +13,7 @@ without torch loading a base model.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,7 @@ import safetensors.torch as st
 import torch
 
 from stylebot import export
-from stylebot.errors import RunError
+from stylebot.errors import MissingExtra, RunError
 
 SERVING_KEYS = {
     "base_model.model.model.language_model.layers.0.self_attn.q_proj.lora_A.weight": 1,
@@ -155,6 +156,15 @@ def test_merge_inverts_keys_then_renames_into_place(tmp_path):
     assert not export.is_serving_format(seen["adapter_keys"])
     assert not out.with_name(out.name + ".partial").exists(), "partial dir left behind"
     assert not (tmp_path / "merged-adapter-raw").exists(), "scratch adapter not cleaned"
+
+
+def test_a_missing_extra_is_the_d47_class(tmp_path, monkeypatch):
+    """Without safetensors the merge raises `MissingExtra`, the class the CLI
+    boundary renders as exit 1 with the install hint (C1, D47)."""
+    src = _adapter(tmp_path, SERVING_KEYS)
+    monkeypatch.setitem(sys.modules, "safetensors.torch", None)
+    with pytest.raises(MissingExtra, match="trainer"):
+        export.merge_adapter(src, tmp_path / "m", base_model="fake/model", merge_fn=_fake_merge)
 
 
 def test_merge_is_idempotent(tmp_path):

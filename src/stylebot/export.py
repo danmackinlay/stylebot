@@ -27,7 +27,7 @@ import shutil
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from stylebot.errors import RunError
+from stylebot.errors import MissingExtra, RunError
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ def normalize_adapter(adapter_dir: Path | str, out_dir: Path | str) -> Path:
     try:
         from safetensors.torch import load_file, save_file
     except ImportError as exc:  # pragma: no cover - needs the extra
-        raise ImportError(_EXTRA_HINT) from exc
+        raise MissingExtra(_EXTRA_HINT) from exc
 
     tensors = load_file(str(weights))
     if not is_serving_format(tensors):
@@ -208,7 +208,7 @@ def merge_adapter(
         try:
             from tinker_cookbook.weights import build_hf_model as merge_fn  # noqa: N813
         except ImportError as exc:  # pragma: no cover - needs the extra
-            raise ImportError(_EXTRA_HINT) from exc
+            raise MissingExtra(_EXTRA_HINT) from exc
 
     partial = out_dir.with_name(out_dir.name + ".partial")
     if partial.exists():
