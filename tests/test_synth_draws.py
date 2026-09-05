@@ -109,6 +109,25 @@ def test_a_gated_draw_is_kept_with_its_raw_output_and_no_record(tmp_path):
     assert [r["kind"] for r in rows] == ["gate"]
 
 
+def test_an_unescaped_anchor_is_gated_like_a_deleted_one(tmp_path):
+    """The target keeps `\\@key` escaped; a slop that un-escapes it carries a
+    citation the target never had, and reversed would teach breaking one (C13)."""
+    import dataclasses
+
+    data_dir, draws_dir = _corpus(tmp_path)
+    escaped = " Thanks to Heiko/\\@miteron for it."
+    targets = [dataclasses.replace(t, text=t.text + escaped) for t in _targets(2)]
+    unescaper = _metered("unescaper", lambda text: text.replace("\\@", "@"))
+    result = synth.synthesize_pairs(targets, data_dir, [unescaper], draws_dir=draws_dir)
+    assert result.written == 0 and result.skipped_invented_anchors == 2
+    rows = [json.loads(x) for x in (data_dir / "lost_draws.jsonl").read_text().splitlines()]
+    assert all("un-escaped 1 anchor(s)" in r["reason"] and "@miteron" in r["reason"] for r in rows)
+    assert _viewed(draws_dir, tmp_path / "view").by_outcome == {"gate:skipped_invented_anchors": 2}
+    # A generator that keeps the escape keeps the pair.
+    result = synth.synthesize_pairs(targets, data_dir, [_metered("faithful")], draws_dir=draws_dir)
+    assert result.written == 2 and result.skipped_invented_anchors == 0
+
+
 # --- (c) an errored draw is one `error:` draw (C14) -----------------------------
 
 

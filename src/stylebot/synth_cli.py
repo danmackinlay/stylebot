@@ -730,8 +730,8 @@ def _report_result(
     if result.skipped_invented_anchors:
         emit(
             f"  {result.skipped_invented_anchors} pair(s) DROPPED where the generator "
-            "deleted a link the target keeps — paid for, not written; reversed, those "
-            "pairs would teach the styler to invent links",
+            "deleted or un-escaped an anchor the target keeps — paid for, not written; "
+            "reversed, those pairs would teach the styler to invent or break anchors",
             level="note",
         )
     if result.gen_retries_spent or result.errors_by_generator:

@@ -36,7 +36,7 @@ from stylebot.generators import (
     Generator,
     _normalize_gen_output,
 )
-from stylebot.infer import invented_anchors
+from stylebot.infer import anchor_delta
 from stylebot.jsonl import append_jsonl, dumps_line, iter_jsonl
 from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content
 from stylebot.provenance import now_iso, pair_provenance, repo_provenance
@@ -284,21 +284,16 @@ class SynthResult:
     # run until it leaves the roster — these counts are the signal to act on.
     skipped_degenerate: int = 0  # identity: transform_sim > max_transform_sim
     skipped_inflated: int = 0  # inflation: length ratio > max_length_ratio
-    skipped_invented_anchors: int = 0  # fabrication: target carries anchors the slop lacks
+    skipped_invented_anchors: int = 0  # anchor edits: the slop lost or un-escaped one
     # Redraw accounting (`gate_retries`): a gated draw is paid for either way, so
     # these are the cost of NOT letting a gate quietly bias coverage.
     gate_redraws: int = 0  # extra paid draws spent clearing a gate
     redrawn_cells: int = 0  # cells that needed at least one redraw
     redraws_recovered: int = 0  # ... of those, ones that went on to be written
-    # Rejected draws per generator — the run-time face of `gate_drops.jsonl`.
-    # Against `per_generator` (written) this is an arm's rejection rate, which is
-    # what says whether an arm belongs on the roster: llama-3.3-70b left it on
-    # exactly this number, and no other gate could see the defect.
+    # Rejected draws per generator: against `per_generator`, an arm's rejection rate (D32).
     drops_by_generator: dict[str, int] = field(default_factory=dict)
-    # Transient upstream failures survived, and cells lost to one anyway. A run
-    # that spends many retries and still errors is looking at a sick provider,
-    # not a sick config — the distinction the printed-and-discarded errors could
-    # never make (`lost_draws.jsonl`, kind="error").
+    # Transient failures survived, and cells lost to one anyway: many retries that
+    # still error is a sick provider, not a sick config (`lost_draws.jsonl`, kind="error").
     gen_retries_spent: int = 0
     errors_by_generator: dict[str, int] = field(default_factory=dict)
     planned: int = 0  # (target, generator) assignments before dedup
@@ -671,15 +666,20 @@ def _gate_verdict(slop: str, target_text: str, st: _RunState) -> tuple[str, str]
                 "skipped_inflated",
                 f"generator wrote {ratio:.2f}x the target length, over {st.max_length_ratio}",
             )
-    if st.drop_invented_anchors and (invented := invented_anchors(slop, target_text)):
-        # Reversed, a deleted link is a lesson in inventing one (D32).
-        uniq = sorted(set(invented))
-        shown = ", ".join(uniq[:2]) + ("…" if len(uniq) > 2 else "")
-        return (
-            "skipped_invented_anchors",
-            f"generator deleted {len(uniq)} anchor(s) the target keeps ({shown}); "
-            "reversed, this pair would teach the styler to invent them",
-        )
+    if st.drop_invented_anchors:
+        lost, invented = anchor_delta(slop, target_text)
+        # Reversed, a deleted link is a lesson in inventing one, and an
+        # un-escaped `@key` (the target's `\\@key`) in breaking one (D32, C13).
+        unescaped = [a for a in lost if "\\" + a in target_text]
+        if invented or unescaped:
+            uniq = sorted(set(invented or unescaped))
+            shown = ", ".join(uniq[:2]) + ("…" if len(uniq) > 2 else "")
+            what = "deleted" if invented else "un-escaped"
+            return (
+                "skipped_invented_anchors",
+                f"generator {what} {len(uniq)} anchor(s) the target keeps ({shown}); "
+                "reversed, this pair would teach the styler to invent or break them",
+            )
     return None
 
 
