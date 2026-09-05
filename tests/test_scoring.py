@@ -75,6 +75,31 @@ def test_a_missing_judge_slot_fails_its_record_through_the_async_entry(tmp_path,
     assert out.read_text() == ""
 
 
+def test_a_judge_failure_is_one_error_row_and_no_partial_line(tmp_path, monkeypatch):
+    """A judge that raises, and one whose verdict the writer cannot serialise,
+    each cost their own record only: an `errors` row, nothing in the file (C20)."""
+    pairs = tmp_path / "pairs.jsonl"
+    for i in range(3):
+        append_jsonl(pairs, _record(i))
+    out = tmp_path / "scores.jsonl"
+    monkeypatch.setattr(ev.shutil, "which", lambda name: None)
+
+    async def judge(prose: str) -> dict:
+        if "Paragraph 0" in prose:
+            raise RuntimeError("judge down")
+        if "Paragraph 1" in prose:
+            return {"score": 4, "raw": {"a", "set"}}  # a set: not JSON
+        return {"score": 4}
+
+    res = asyncio.run(scoring.score_pairs_file_async(pairs, out, judge=judge, max_workers=2))
+    assert res.written == 1
+    assert [rid for rid, _ in res.errors] == [record_id(_record(0)), record_id(_record(1))]
+    assert res.errors[0][1] == "RuntimeError: judge down"
+    assert res.errors[1][1].startswith("TypeError:")
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert {row["id"] for row in rows} == {record_id(_record(2))}
+
+
 # --- `run_eval`: the `eval` pass as a library (D78) -------------------------
 
 

@@ -263,7 +263,7 @@ def _score_record(
     record: dict,
     *,
     fields: Sequence[str],
-    judge: Judge | None,
+    judge: Judge | AsyncJudge | None,
     detector: Detector,
     vale_config: str | Path | None,
     vale_by_field: dict[str, dict] | None = None,
@@ -511,9 +511,9 @@ async def _score_slice(
 ) -> None:
     """One pre-pass per signal over the slice, then the rows the file still owes.
 
-    A row is written only for a `signals` this run produces and only when
-    `keys` lacks it, so a pass adding a signal leaves the earlier rows exactly
-    as it found them. Appends to `result`: a raising record lands in `errors`.
+    A row is written only for a `signals` this run produces and only when `keys`
+    lacks it, so a pass adding a signal leaves the earlier rows as it found them. A
+    record that raises or will not serialise lands in `result.errors`, nothing written.
     """
     vale_results = _vale_prepass(batch, fields=fields, vale_config=vale_config)
     det_results = _detector_prepass(batch, fields=fields, detector=detector)
@@ -532,14 +532,18 @@ async def _score_slice(
                 detector_by_field=det_results[i],
                 judge_by_field=judge_results[i],
             )
-        except Exception as exc:  # a field/judge error on one record — log, continue
+            rows = [
+                ((str(row["id"]), row["field"], row["signal"]), dumps_line(row))
+                for row in explode_score_row(line)
+                if row["signal"] in signals
+            ]
+        except Exception as exc:  # a field/judge/row error on one record — log, continue
             result.errors.append((record_id(rec), f"{type(exc).__name__}: {exc}"))
             continue
-        for row in explode_score_row(line):
-            key = (str(row["id"]), row["field"], row["signal"])
-            if row["signal"] in signals and key not in keys:
+        for key, text in rows:
+            if key not in keys:
                 keys.add(key)
-                fp.write(dumps_line(row) + "\n")
+                fp.write(text + "\n")
         fp.flush()
         result.written += 1
 
