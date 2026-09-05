@@ -151,11 +151,11 @@ def gather_qmd_files(
 def is_human_authored(meta: dict, *, field: str = "automation", max_level: int = 0) -> bool:
     """True if frontmatter marks this content as human-written (no/low AI).
 
-    The **one** blog-specific seam stylebot is allowed to carry
-    (`_plans/OVERVIEW.md`): Dan's blog records an ``automation`` level per post
-    and ``0`` means no AI. Another blog retargets it with its own ``field`` /
-    ``max_level`` — as a `SourcePolicy`, which holds those two beside the glob. Conservative by design — clean posts are *marked*, so a
-    missing or unparseable field means "unknown" and returns False.
+    The **one** blog-specific seam stylebot is allowed to carry (`_plans/OVERVIEW.md`): Dan's blog
+    records an ``automation`` level per post and ``0`` means no AI. Another blog retargets it with
+    its own ``field`` / ``max_level`` — as a `SourcePolicy`, which holds those two beside the glob.
+    Conservative by design — clean posts are *marked*, so a missing or unparseable field means
+    "unknown" and returns False.
     """
     raw = meta.get(field)
     if raw is None:
