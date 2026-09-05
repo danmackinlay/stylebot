@@ -149,11 +149,12 @@ Most of what we imported is *generic*, not Dan-specific. The boundary:
   ```
 
   **Built** in `stylebot.lib.is_human_authored` (conservative: missing/
-  unparseable → excluded), tested in `tests/test_selection.py`. Its `field` /
-  `max_level` knobs are the *shallow* retarget; the *real* extension story is
-  the bullet above — a user passes their own `selector` (and, at assembly,
-  `per_passage` / `pair_weight`). This
-  function is the default that ships, not a gate stylebot imposes. Phases must
+  unparseable → excluded), tested in `tests/test_selection.py`. Since D85 its
+  `field` / `max_level` and the walk's glob are one `SourcePolicy` object:
+  `DEFAULT_SOURCE` renders Dan's literals and the blog states its own `SOURCE`.
+  The *real* extension story is the bullet above — a user passes their own
+  `selector` (and, at assembly, `per_passage` / `pair_weight`). This function
+  is the default that ships, not a gate stylebot imposes. Phases must
   therefore never call it directly on a hardcoded path: they accept a selector
   argument and use this only as the default value.
 - **Blog-build cruft — removed from stylebot (2026-06-29).** `migrate_ai_dates`
