@@ -383,3 +383,15 @@ Appended by the master, dated, one line each.
 - 2026-09-05 (R3): `TrainOpts` and `ViewOpts` both name `draws_dir`/`policy`;
   correctness rests on `bundles_from_kwargs` dict order (commented in both
   CLIs). A `TrainOpts.view` field would remove the coupling.
+- 2026-09-05 (R7 rebase): `tests/test_train.py::test_run_training_pass_reports_then_asks_before_spending`
+  flakes on a second boundary (two run ids minted from the wall clock; 2 fails
+  in 14 runs) — the unnamed intermittent from R3's report. Freeze the clock or
+  inject `run_id`.
+- 2026-09-05 (R7 rebase): `synth_cli.py:361`'s `--help` string carries history
+  ("18.6% of pairs … until 0.3.0"); a literal, outside the prose count.
+- 2026-09-05 (R7 rebase): `synth.py`'s anchor-gate comment cited `C13`; its why
+  lives in `6fc9d57`'s body and D32. R7 dropped the label; no D-amendment.
+- 2026-09-05 (R7 rebase): the five cull commits' bodies quote pre-rebase prose
+  counts; the ceilings actually set are 3991, 3808, 3618, 3368, 2276.
+- 2026-09-05 (R3): the live-listing test tripped on Dan's `.DS_Store` in
+  `views/`; `6faf02bca6` counts only view directories. `.DS_Store` is Dan's.
