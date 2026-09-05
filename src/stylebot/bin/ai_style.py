@@ -2,24 +2,21 @@
 
 Per OVERVIEW "Interfaces": one command, subcommands — not a scatter of loose
 scripts. Each subcommand is a thin `click` wrapper that parses flags and calls a
-typed library function: `log` (Phase 1 capture; a subcommand, not a console
-script, since 2026-07-20), `synth` (Phase 2), `make-splits` / `check-splits` /
-`extend-eval` (the by-post splits contract), `train-clf` (the voice
-classifier), `train` (Phase 3 LoRA SFT) and `promote` (which run serves, D74),
-`run` (Phase 4 inference), `eval` (the offline scorer), `export-table` (scores
--> tidy CSV), `merge-adapter` (`stylebot.export`), `serve` (the NDJSON editor
-sidecar), `validate-pairs` (the record contract on demand) and `status`
-(`stylebot.status` — what the corpus holds, which run serves, which detector
-scored it, and where those disagree; the numbers docs may not carry, D52).
+typed library function: `log` (Phase 1 capture), `synth` (Phase 2),
+`make-splits` / `check-splits` / `extend-eval` (the by-post splits contract),
+`train-clf` (the voice classifier), `train` (Phase 3 LoRA SFT), `promote`
+(which run serves, D74), `run` (Phase 4 inference), `eval` (the offline
+scorer), `export-table` (scores -> tidy CSV), `merge-adapter`
+(`stylebot.export`), `serve` (the NDJSON editor sidecar), `validate-pairs` (the
+record contract on demand), `build-view` (the view of a draws dir, D84) and
+`status` (`stylebot.status`: what the corpus holds, which run serves, which
+detector scored it, where they disagree — the numbers docs may not carry, D52).
 
 **Exit codes are not written here.** The libraries raise `stylebot.errors`'
 two classes and `ErrorTranslatingGroup` (on `main`, so the whole subtree
-inherits it) turns them into 2 and 1. Until 2026-09-03 this file had six
-hand-written `except ValueError:` blocks, all mapping to exit 1, which is how
-"no training pairs left after filtering" came to exit 1 while the same class of
-mistake in `synth` exited 2. What is still written here is what click alone can
-know: flag *combinations* (`--pairs` with a FILE, `--best-of` without a
-detector), which are `click.UsageError` at the point of parsing.
+inherits it) turns them into 2 and 1 (D47). What is still written here is what
+click alone can know: flag *combinations* (`--pairs` with a FILE, `--best-of`
+without a detector), which are `click.UsageError` at the point of parsing.
 """
 
 from __future__ import annotations
@@ -468,13 +465,7 @@ def make_splits_cmd(
     help="Also print the per-role post/pair table for this corpus, and the danger report.",
 )
 @draws.view_options()
-def check_splits_cmd(
-    splits_path: Path,
-    blog_root: Path,
-    pairs_path: Path | None,
-    draws_dir: Path | None,
-    policy_path: Path | None,
-) -> None:
+def check_splits_cmd(splits_path: Path, blog_root: Path, pairs_path: Path | None, **kw) -> None:
     """Health-check the splits contract: eval posts present, strata big enough.
 
     The read-only counterpart of `make-splits`, and the thing to run after any
@@ -484,7 +475,8 @@ def check_splits_cmd(
     small-stratum findings stay warnings. The table reads --pairs, or the view
     --draws builds — what `train --draws` would train on (D84).
     """
-    pairs_path = draws.corpus_or_view(pairs_path, draws_dir, policy_path)
+    view = bundles_from_kwargs(kw, {"view": draws.ViewOpts})["view"]
+    pairs_path = view.corpus_or_view(pairs_path)
     splits_doc = sp.load_splits(splits_path)
     spellings = sp.eval_post_spellings(splits_doc)
     missing = set(sp.missing_eval_posts(splits_doc, blog_root))
@@ -560,17 +552,21 @@ def train_clf_cmd(**kw) -> None:
 @main.command("train", cls=SectionedCommand)
 @draws.view_options()
 @tr.train_options()
-def train_cmd(draws_dir: Path | None, policy_path: Path | None, **kw) -> None:
+def train_cmd(**kw) -> None:
     """Phase 3: LoRA-SFT the styler on Tinker (stylebot.train.run_training_pass).
 
-    Assembles the corpus (styler-role posts only under --splits, near-copy pairs
-    KEPT) — or, with --draws, the view of those draws — cuts a by-POST val
-    split, writes the manifest, runs the Tinker recipe. Needs the `trainer`
-    extra and TINKER_API_KEY; --dry-run needs neither.
+    Corpus (styler-role posts under --splits, or the view of --draws) → by-POST
+    val split → manifest → Tinker. Needs `trainer` + TINKER_API_KEY; --dry-run neither.
     """
-    parsed = bundles_from_kwargs(kw, tr.TRAIN_PARAMS)
+    # ViewOpts first: TrainOpts also names `draws_dir`, as a library-only field.
+    parsed = bundles_from_kwargs(kw, {"view": draws.ViewOpts, **tr.TRAIN_PARAMS})
+    view = parsed["view"]
     opts = replace(
-        parsed["opts"], hp=parsed["hp"], draws_dir=draws_dir, policy=draws.load_policy(policy_path)
+        parsed["opts"],
+        hp=parsed["hp"],
+        draws_dir=view.draws_dir,
+        policy=view.view_policy(),
+        views_root=view.views_root,
     )
     confirm = None if opts.assume_yes else (lambda _: click.confirm("Launch the paid Tinker run?"))
     tr.run_training_pass(opts, confirm=confirm, emit=click_emitter())
@@ -770,26 +766,18 @@ def status_cmd(
     detector_dir: Path | None,
     blog_root: Path | None,
     as_json: bool,
-    draws_dir: Path | None,
-    policy_path: Path | None,
+    **kw,
 ) -> None:
     """Where this pipeline stands: corpus (or view), splits, promoted run, detector.
 
-    The command the documentation points at instead of carrying numbers it
-    cannot keep true. Read-only, keyless, and free.
-
-    Nothing is discovered: stylebot does not know where your blog, runs or
-    detector artifact are, so `--runs` / `--detector-model` / `--blog-root` /
-    `--draws` have no defaults and unnamed artifacts are reported as "not given"
-    rather than guessed at. `--pairs`/`--splits` fall back to the usual
-    `--data-dir` > `$STYLEBOT_DATA_DIR` > `./_training_pairs` precedence. A
-    policy mirror like `dan-style status` is this command with all six filled in.
-
-    The last block is the cross-check: a detector fit under a different
-    `splits_sha256` than `splits.json` now carries, a promoted run that trained
-    on a different partition, plus the `check-splits` danger report.
+    The command the documentation points at instead of carrying numbers (D52).
+    Nothing is discovered: an artifact no flag names is "not given", and only
+    `--pairs`/`--splits` fall back to the `--data-dir` precedence. The last
+    block is the cross-check between the four (`stylebot.status`).
     """
     from stylebot import status as st
+
+    view = bundles_from_kwargs(kw, {"view": draws.ViewOpts})["view"]
 
     resolved = config.resolve_data_dir(data_dir)
     if pairs_path is None:
@@ -805,13 +793,25 @@ def status_cmd(
         runs_dir=runs_dir,
         detector=detector_dir,
         blog_root=blog_root,
-        draws_dir=draws_dir,
-        policy=draws.load_policy(policy_path),
+        draws_dir=view.draws_dir,
+        policy=view.view_policy(),
     )
     if as_json:
         click.echo(json.dumps(asdict(report), indent=2, default=str))
         return
     click.echo(st.format_status(report))
+
+
+@main.command("build-view", cls=SectionedCommand)
+@draws.view_options()
+def build_view_cmd(**kw) -> None:
+    """Build (or reuse) the view of --draws under --policy; print its path (D84)."""
+    view = bundles_from_kwargs(kw, {"view": draws.ViewOpts})["view"].view()
+    side = draws.read_sidecar(view) or {}
+    click.echo(
+        f"{side.get('records')} record(s) content_sha256={side.get('content_sha256')}", err=True
+    )
+    click.echo(view)
 
 
 @main.command("validate-pairs")

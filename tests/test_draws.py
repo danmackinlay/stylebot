@@ -385,6 +385,91 @@ def test_ensure_view_refuses_a_missing_draws_dir(tmp_path):
         draws.ensure_view(tmp_path / "nope", draws.ViewPolicy(), views_root=tmp_path / "views")
 
 
+# --- the policy file and the view bundle ---------------------------------------
+
+
+def test_view_policy_dumps_and_loads_as_the_same_object(tmp_path):
+    policy = draws.ViewPolicy(
+        retired_arms=("b", "a"), gate_thresholds={"k": 1}, eval_sources=("post/x.qmd",)
+    )
+    doc = json.loads(json.dumps(policy.dump()))
+    assert doc["retired_arms"] == ["b", "a"] and doc["keep_superseded"] is False
+    assert draws.ViewPolicy.load(doc) == policy
+    assert draws.policy_sha(draws.ViewPolicy.load(doc)) == draws.policy_sha(policy)
+    with pytest.raises(ConfigError, match="system_sha"):
+        draws.ViewPolicy.load({"system_sha": "deadbeef"})
+    with pytest.raises(ConfigError, match="not a ViewPolicy"):
+        draws.ViewPolicy.load(["not", "an", "object"])
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps(policy.dump()), encoding="utf-8")
+    assert draws.load_policy(path) == policy
+
+
+def test_view_opts_names_one_corpus_and_builds_where_it_is_told(draws_dir, tmp_path):
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps({"keep_superseded": True}), encoding="utf-8")
+    sha = draws.policy_sha(draws.ViewPolicy(keep_superseded=True))
+
+    opts = draws.ViewOpts(draws_dir=draws_dir, policy_path=policy_file)
+    assert opts.view_policy() == draws.ViewPolicy(keep_superseded=True)
+    assert opts.corpus_or_view(None) == draws_dir.parent / "views" / f"pairs-{sha}"
+    elsewhere = draws.ViewOpts(draws_dir=draws_dir, views_root=tmp_path / "elsewhere")
+    assert elsewhere.view() == tmp_path / "elsewhere" / config.view_name(
+        draws.policy_sha(draws.ViewPolicy())
+    )
+
+    # A policy object stands in for --policy; naming both is incoherent.
+    in_code = draws.ViewOpts(draws_dir=draws_dir, policy=draws.ViewPolicy(keep_superseded=True))
+    assert in_code.view() == opts.view()
+    with pytest.raises(ConfigError, match="not both"):
+        dataclasses.replace(in_code, policy_path=policy_file).view_policy()
+
+    # --pairs is a scratch file: it passes through, never beside --draws.
+    scratch = tmp_path / "scratch.jsonl"
+    assert draws.ViewOpts().corpus_or_view(scratch) == scratch
+    assert draws.ViewOpts().corpus_or_view(None) is None
+    with pytest.raises(ConfigError, match="not both"):
+        opts.corpus_or_view(scratch)
+    with pytest.raises(ConfigError, match="--draws"):
+        draws.ViewOpts().corpus_or_view(None, required=True)
+    with pytest.raises(ConfigError, match="--draws"):
+        draws.ViewOpts().view()
+
+
+def test_view_options_repins_a_default_and_drops_a_flag():
+    import click
+
+    @click.command()
+    @draws.view_options(
+        defaults=[draws.ViewOpts(draws_dir=Path("elsewhere"))], exclude=["policy_path"]
+    )
+    def cmd(**kw):
+        pass
+
+    params = {p.name: p for p in cmd.params}
+    assert params["draws_dir"].default == Path("elsewhere")
+    assert "policy_path" not in params and "views_root" in params
+    assert all(
+        getattr(params[n], "help_section", None) == "View" for n in ("draws_dir", "views_root")
+    )
+
+
+def test_ai_style_build_view_prints_the_view_it_built_or_reused(draws_dir, tmp_path):
+    from click.testing import CliRunner
+
+    from stylebot.bin.ai_style import main as ai_style
+
+    args = ["build-view", "--draws", str(draws_dir), "--views-root", str(tmp_path / "v")]
+    result = CliRunner().invoke(ai_style, args)
+    assert result.exit_code == 0, result.output
+    view = Path(result.output.strip().splitlines()[-1])
+    assert view.parent == tmp_path / "v" and (view / draws.VIEW_SIDECAR).exists()
+    assert "8 record(s)" in result.output
+    assert CliRunner().invoke(ai_style, args).output.strip().splitlines()[-1] == str(view)
+    bare = CliRunner().invoke(ai_style, ["build-view"])
+    assert bare.exit_code == 2 and "--draws" in bare.output, bare.output
+
+
 # --- the opt-in sweep over the blog corpus ------------------------------------
 
 

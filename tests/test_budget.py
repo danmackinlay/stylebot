@@ -45,7 +45,7 @@ PROSE_SLACK = 50
 # largest first. "docstrings" lists every over-budget span, largest first.
 # A failure names the exact number to lower an entry to, or the entry to delete.
 ALLOWLIST: dict[str, dict[str, object]] = {
-    "bin/ai_style.py": {"lines": 848, "docstrings": (16,)},
+    "bin/ai_style.py": {"lines": 848},
     "classify_train.py": {
         "lines": 964,
         "functions": {"train": 82},
@@ -81,7 +81,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     },
     "targets.py": {"functions": {"_post_targets": 94}},
     "train.py": {
-        "lines": 996,
+        "lines": 995,
         "functions": {"run_training": 97, "_tinker_runner": 88, "assemble_training_corpus": 82},
     },
 }

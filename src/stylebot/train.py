@@ -539,6 +539,7 @@ def run_training(
     *,
     draws_dir: str | Path | None = None,
     policy: draws.ViewPolicy | None = None,
+    views_root: str | Path | None = None,
     hp: Hyperparameters | None = None,
     splits_path: str | Path | None = None,
     blog_root: str | Path | None = None,
@@ -556,16 +557,15 @@ def run_training(
 ) -> TrainResult:
     """Assemble → manifest → (unless dry-run) train on Tinker → export adapter.
 
-    Data: `pairs_path`, or the view of `draws_dir` under `policy`, whose pins
-    (`policy_sha`, `draws_sha256`, the `style_system` text) the manifest
-    carries; `blog_root` + `splits_path` refuse a run, dry run included, whose
-    pins or corpus sources left the tree (D34). A dry run writes nothing and
-    returns the manifest it would write; the paid run writes it pre-run and with
-    `result`. `runner` is the seam `(corpus, manifest, work_dir, hp, *, download_adapter)`.
+    Data: `pairs_path`, or the view of `draws_dir` under `policy` (built under
+    `views_root`), pinned in the manifest (`policy_sha`, `draws_sha256`, the
+    `style_system` text). `blog_root` + `splits_path` refuse a run, dry run
+    included, whose pins or corpus sources left the tree (D34). A dry run writes and
+    spends nothing. `runner` is the seam `(corpus, manifest, work_dir, hp, *, download_adapter)`.
     """
     view_pins: dict = {}
     if draws_dir is not None:
-        pairs_path, view_pins = draws.training_view(draws_dir, policy)
+        pairs_path, view_pins = draws.training_view(draws_dir, policy, views_root=views_root)
     elif pairs_path is None:
         raise ConfigError("run_training needs pairs_path or draws_dir")
     pairs_path = Path(pairs_path)
@@ -633,12 +633,9 @@ def run_training(
 
 @dataclass(frozen=True)
 class TrainOpts:
-    """The `train` surface — what `run_training_pass` takes (D78).
-
-    `pairs_path`, `draws_dir`, `policy` and `hp` carry no flag: the CLI fills
-    them from `--data-dir`, `draws.view_options()` and the `Hyperparameters`
-    bundle; a wrapper sets them on the bundle it passes.
-    """
+    """The `train` surface — what `run_training_pass` takes (D78). `pairs_path`,
+    `draws_dir`, `policy`, `views_root` and `hp` carry no flag: the CLI fills them
+    from `--data-dir` and the `ViewOpts`/`Hyperparameters` bundles."""
 
     cli_section = "Training run"
 
@@ -717,6 +714,7 @@ class TrainOpts:
     pairs_path: Path | None = None
     draws_dir: Path | None = None
     policy: draws.ViewPolicy | None = None
+    views_root: Path | None = None
     hp: Hyperparameters | None = None
 
 
@@ -780,8 +778,9 @@ def run_training_pass(
         pairs_path = config.pairs_path(opts.data_dir)
     if opts.draws_dir is None and (pairs_path is None or not pairs_path.exists()):
         raise ConfigError(f"no corpus (pairs/ or pairs.jsonl) in {opts.data_dir}")
-    carried = ("draws_dir", "policy", "hp", "splits_path", "blog_root", "val_frac", "run_id")
+    carried = ("draws_dir", "policy", "views_root", "hp", "splits_path", "blog_root", "val_frac")
     kwargs = {name: getattr(opts, name) for name in carried} | dict(
+        run_id=opts.run_id,
         train_price_per_mtok=opts.train_price_per_mtok,
         download_adapter=opts.download_adapter,
         selector=selector,

@@ -32,6 +32,7 @@ import click
 
 from stylebot import config, corpus, pairs
 from stylebot.ai_core import style_system
+from stylebot.cli_options import bundle_options, opt
 from stylebot.errors import ConfigError
 from stylebot.generators import Generator
 from stylebot.jsonl import append_jsonl, iter_jsonl
@@ -259,6 +260,19 @@ class ViewPolicy:
         """
         return pairs.system_sha(self.system_prompt) if self.system_prompt else None
 
+    def dump(self) -> dict:
+        """Every field as a JSON-ready object (tuples as lists); `load` inverts it."""
+        return {k: list(v) if isinstance(v, tuple) else v for k, v in asdict(self).items()}
+
+    @classmethod
+    def load(cls, doc: object) -> ViewPolicy:
+        """Inverse of `dump`; a non-object or an unknown field is a `ConfigError`."""
+        known = {f.name for f in fields(cls)}
+        if not isinstance(doc, dict) or set(doc) - known:
+            unknown = sorted(set(doc) - known) if isinstance(doc, dict) else type(doc).__name__
+            raise ConfigError(f"not a ViewPolicy object; unknown field(s) {unknown}")
+        return cls(**{k: tuple(v) if isinstance(v, list) else v for k, v in doc.items()})
+
 
 def policy_sha(policy: ViewPolicy) -> str:
     """16 hex over the policy's fields, order-free in every collection."""
@@ -425,14 +439,17 @@ def ensure_view(draws_dir: str | Path, policy: ViewPolicy, *, views_root: str | 
     return out
 
 
-def training_view(draws_dir: str | Path, policy: ViewPolicy | None) -> tuple[Path, dict]:
-    """The view a training run reads, built beside its draws, and the manifest
-    keys that name it: `policy_sha`, `draws_sha256` and the `style_system` text
-    (plus its sha) the view was stamped with sit next to `pairs_sha256`, which
-    is then the view's own content hash (W4 steps 4 and 5)."""
+def training_view(
+    draws_dir: str | Path, policy: ViewPolicy | None, *, views_root: str | Path | None = None
+) -> tuple[Path, dict]:
+    """The view a training run reads (under `views_root`, default the draws' sibling
+    `views/`) and the manifest keys that name it: `policy_sha`, `draws_sha256` and
+    the `style_system` text (plus its sha) it was stamped with, beside its own
+    `pairs_sha256`."""
     draws_dir = Path(draws_dir)
     policy = policy or ViewPolicy()
-    view = ensure_view(draws_dir, policy, views_root=config.views_root(draws_dir.parent))
+    root = views_root or config.views_root(draws_dir.parent)
+    view = ensure_view(draws_dir, policy, views_root=root)
     return view, {
         "policy_sha": policy_sha(policy),
         "draws_sha256": content_sha256(draws_dir),
@@ -441,59 +458,74 @@ def training_view(draws_dir: str | Path, policy: ViewPolicy | None) -> tuple[Pat
     }
 
 
-def corpus_or_view(
-    pairs_path: Path | None, draws_dir: Path | None, policy_path: Path | None
-) -> Path | None:
-    """The corpus a `--pairs` / `--draws` pair names, for a command taking both.
-
-    `--draws` builds (or reuses) its view and returns that, so a reader needs
-    no `pairs/`; naming both is a refusal, since only one of them can be the
-    corpus a report is about (D84).
-    """
-    if pairs_path is not None and draws_dir is not None:
-        raise ConfigError("pass --pairs or --draws, not both")
-    if draws_dir is None:
-        return pairs_path
-    return training_view(draws_dir, load_policy(policy_path))[0]
-
-
 def load_policy(path: str | Path | None) -> ViewPolicy:
-    """A `ViewPolicy` from a JSON object of its fields (lists become tuples);
-    `None` is the identity policy. The blog builds its policy from constants
-    instead (`training_targets.view_policy`); this is `ai-style`'s way in."""
+    """`ViewPolicy.load` of a JSON file; `None` is the identity policy."""
     if path is None:
         return ViewPolicy()
-    doc = json.loads(Path(path).read_text(encoding="utf-8"))
-    unknown = (
-        sorted(set(doc) - {f.name for f in fields(ViewPolicy)}) if isinstance(doc, dict) else []
+    try:
+        return ViewPolicy.load(json.loads(Path(path).read_text(encoding="utf-8")))
+    except ConfigError as exc:
+        raise ConfigError(f"{path}: {exc}") from None
+
+
+@dataclass(frozen=True)
+class ViewOpts:
+    """`--draws`, `--policy`, `--views-root`: the view a command reads (D84).
+
+    `policy` is library-only — a caller's `ViewPolicy` object in place of
+    `--policy` (the blog's `view_policy()`); naming both is refused.
+    """
+
+    cli_section = "View"
+
+    draws_dir: Path | None = opt(
+        None,
+        "--draws",
+        "draws_dir",
+        type=click.Path(file_okay=False, path_type=Path),
+        help="A draws/ directory: build (or reuse) its view and read that as the corpus (D84).",
     )
-    if not isinstance(doc, dict) or unknown:
-        raise ConfigError(f"{path}: not a ViewPolicy object; unknown field(s) {unknown}")
-    for key in ("retired_arms", "excluded_draw_ids", "superseded_captures", "eval_sources"):
-        if doc.get(key) is not None:
-            doc[key] = tuple(doc[key])
-    return ViewPolicy(**doc)
+    policy_path: Path | None = opt(
+        None,
+        "--policy",
+        "policy_path",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        help="A ViewPolicy as a JSON object of its fields (`ViewPolicy.dump`; `dan-style "
+        "policy --dump` writes the blog's). [default: the identity policy]",
+    )
+    views_root: Path | None = opt(
+        None,
+        "--views-root",
+        type=click.Path(file_okay=False, path_type=Path),
+        help="Where views are built. [default: the views/ beside --draws]",
+    )
+    policy: ViewPolicy | None = None
+
+    def view_policy(self) -> ViewPolicy:
+        """The policy in force: `policy`, else `--policy`'s file, else identity."""
+        if self.policy is not None and self.policy_path is not None:
+            raise ConfigError("pass --policy or a policy object, not both", param_hint="--policy")
+        return self.policy if self.policy is not None else load_policy(self.policy_path)
+
+    def view(self) -> Path:
+        """`ensure_view` of `--draws` under `view_policy()`; no `--draws` is a refusal."""
+        if self.draws_dir is None:
+            raise ConfigError("--draws names no directory", param_hint="--draws")
+        root = self.views_root or config.views_root(self.draws_dir.parent)
+        return ensure_view(self.draws_dir, self.view_policy(), views_root=root)
+
+    def corpus_or_view(self, pairs_path: Path | None, *, required: bool = False) -> Path | None:
+        """The corpus `--pairs`/`--draws` name: the view when `--draws` is given, else
+        `pairs_path`. Both is a refusal; neither is one too when `required`."""
+        if pairs_path is not None and self.draws_dir is not None:
+            raise ConfigError("pass --pairs or --draws, not both")
+        if self.draws_dir is not None:
+            return self.view()
+        if pairs_path is None and required:
+            raise ConfigError("pass --draws (the corpus) or --pairs (a scratch file)")
+        return pairs_path
 
 
-def view_options():
-    """`--draws DIR` and `--policy FILE` for a command that reads a view (W4 step 4)."""
-
-    def deco(f):
-        f = click.option(
-            "--policy",
-            "policy_path",
-            type=click.Path(exists=True, dir_okay=False, path_type=Path),
-            default=None,
-            help="A ViewPolicy as a JSON object of its fields (`draws.load_policy`). "
-            "[default: the identity policy]",
-        )(f)
-        return click.option(
-            "--draws",
-            "draws_dir",
-            type=click.Path(file_okay=False, path_type=Path),
-            default=None,
-            help="A draws/ directory: build (or reuse) its view under the sibling views/ "
-            "and read that instead of pairs/ (D84).",
-        )(f)
-
-    return deco
+def view_options(**kw):
+    """`ViewOpts`' flags as one decorator; `defaults=`/`exclude=` are `bundle_options`'."""
+    return bundle_options([ViewOpts], **kw)
