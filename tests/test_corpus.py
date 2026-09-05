@@ -333,3 +333,36 @@ def test_run_pairs_mode_rewrites_every_shards_records(sharded, tmp_path):
     assert {r["id"] if "id" in r else record_id(r) for r in read_jsonl(out)} == {
         record_id(r) for r in before
     }
+
+
+def test_every_corpus_reader_takes_draws_and_pairs_is_a_scratch_file(sharded, tmp_path):
+    """`--draws` is the corpus interface on every reader (D84): each builds the
+    view under `--policy` through `ensure_view` and reads that; `--pairs` (or
+    `validate-pairs`' PAIRS_FILE) is a scratch file; naming neither is refused."""
+    data_dir, before = sharded
+    draws_dir = data_dir / "draws"
+    for draw in draws.draws_from_pairs(data_dir / "pairs"):
+        draws.append(draws_dir, draw)
+    view = data_dir / "views" / config.view_name(draws.policy_sha(draws.ViewPolicy()))
+    d = ["--draws", str(draws_dir)]
+
+    res = CliRunner().invoke(ai_style, ["validate-pairs", *d])
+    assert res.exit_code == 0 and f"{view}: 0 problem line(s)" in res.output, res.output
+    res = CliRunner().invoke(ai_style, ["make-splits", *d, "--out", str(tmp_path / "s.json")])
+    assert res.exit_code == 0 and _role_totals(res.output) == (4, len(before)), res.output
+    res = CliRunner().invoke(
+        ai_style, ["train-clf", *d, "--out", str(tmp_path / "clf"), "--dry-run"]
+    )
+    assert res.exit_code == 0 and f"{len(before)} content-matched pair(s)" in res.output, res.output
+    res = CliRunner().invoke(ai_style, ["eval", *d, "--out", str(tmp_path / "scores.jsonl")])
+    assert res.exit_code == 0 and f"scored {len(before)} pair(s)" in res.output, res.output
+
+    out = ["--out", str(tmp_path / "x")]
+    for cmd, args in (
+        ("validate-pairs", []),
+        ("make-splits", out),
+        ("train-clf", out),
+        ("eval", []),
+    ):
+        neither = CliRunner().invoke(ai_style, [cmd, *args])
+        assert neither.exit_code == 2 and "--draws" in neither.output, (cmd, neither.output)

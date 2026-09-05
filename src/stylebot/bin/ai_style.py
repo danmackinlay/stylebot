@@ -172,19 +172,16 @@ def synth_cmd(
 @main.command("eval", cls=SectionedCommand)
 @ev.eval_options()
 def eval_cmd(**kw) -> None:
-    """Score a pairs corpus across the eval signals (offline, batched).
+    """Score a corpus (--draws, or a scratch --pairs) across the eval signals.
 
-    Scores the slop and Dan sides of each pair and appends one id-keyed record
-    per pair to scores.jsonl (joinable back to the corpus; resumable — re-running
-    skips scored ids). Keyless by default (Vale + null detector); --judge scores
-    voice via OpenRouter. The summary aggregates per field and per --by facet
-    (e.g. slop_strategy). --report is also the *pair browser*: a keyless run is
-    the cheap way to eyeball a fresh synth batch, slop↔Dan side by side with
-    generation covariates, faceted and sortable. A styler run scores the same
-    way from an output-bearing JSONL (`run --pairs --out`, then --field output).
+    One id-keyed row per (pair, field, signal) appended to scores.jsonl,
+    resumable; keyless by default (Vale + null detector), --judge scores voice
+    via OpenRouter. --report is the pair browser and --by facets the summary. A
+    styler's output scores from `run --pairs --out`, then --field output.
     """
     parsed = bundles_from_kwargs(kw, ev.EVAL_PARAMS)
     opts, verdict_opts, doc_opts = parsed["eval"], parsed["verdict"], parsed["documents"]
+    opts = replace(opts, pairs_path=parsed["view"].corpus_or_view(opts.pairs_path, required=True))
     emit = click_emitter()
     detector = ev.null_detector
     if opts.detector_model is not None:
@@ -339,13 +336,13 @@ def serve_cmd(
     )
 
 
-@main.command("make-splits")
+@main.command("make-splits", cls=SectionedCommand)
 @click.option(
     "--pairs",
     "pairs_path",
-    required=True,
     type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
-    help="The pairs corpus whose posts get partitioned (pairs.jsonl or a pairs/ directory).",
+    help="A scratch corpus whose posts get partitioned (pairs.jsonl or a shard directory). "
+    "The corpus itself is --draws.",
 )
 @click.option(
     "--out",
@@ -387,23 +384,26 @@ def serve_cmd(
     help="Overwrite an existing splits file. Re-cutting the partition un-freezes eval — only do "
     "this knowingly.",
 )
+@draws.view_options()
 def make_splits_cmd(
-    pairs_path: Path,
+    pairs_path: Path | None,
     out_path: Path,
     eval_frac: float,
     detector_frac: float,
     seed: int,
     allow_synthetic_eval: bool,
     force: bool,
+    **kw,
 ) -> None:
     """Create the shared by-POST splits contract (eval / styler / detector).
 
     Pins a frozen eval post list and a deterministic hash rule that routes every
-    other post — including future ones — to the styler or detector role. All
-    three stages (detector-train via `train-clf --splits`, Phase-3 styler-train,
-    the frozen eval) must consume this one file. Prints the role table and the
-    danger report (dangerously small strata). Needs no ML deps.
+    other post, future ones included, to the styler or detector role; every
+    consumer (`train-clf --splits`, `train`, the frozen eval) reads this one
+    file. Prints the role table and the danger report. Needs no ML deps.
     """
+    view = bundles_from_kwargs(kw, {"view": draws.ViewOpts})["view"]
+    pairs_path = view.corpus_or_view(pairs_path, required=True)
     if out_path.exists() and not force:
         raise click.ClickException(
             f"{out_path} exists — the eval stratum is FROZEN by design. "
@@ -479,13 +479,14 @@ def extend_eval_cmd(**kw) -> None:
 def train_clf_cmd(**kw) -> None:
     """Train a voice classifier (linear head over a style embedding).
 
-    Generic slop-vs-author trainer over a pairs corpus: embeds both sides of every
-    content-matched pair, fits a logistic regression, evaluates leakage-safely (by
-    POST, C by nested group-CV), and writes the head.json + meta.json artifact that
-    `--detector-model` / `serve` consume. Needs the `classifier` extra. Extra
-    positives are a library argument (`classify_train.train(extra_positives=…)`).
+    Slop-vs-author over a content-matched corpus: embeds both sides, fits a
+    logistic regression, evaluates by POST (C by nested group-CV) and writes
+    the head.json + meta.json artifact `--detector-model`/`serve` consume.
+    Needs the `classifier` extra; extra positives are a library argument.
     """
-    opts = bundles_from_kwargs(kw, cc.TRAIN_CLF_PARAMS)["opts"]
+    parsed = bundles_from_kwargs(kw, cc.TRAIN_CLF_PARAMS)
+    opts = parsed["opts"]
+    opts = replace(opts, pairs_path=parsed["view"].corpus_or_view(opts.pairs_path, required=True))
     cc.train_clf(opts, emit=click_emitter())
 
 
@@ -754,21 +755,20 @@ def build_view_cmd(**kw) -> None:
     click.echo(view)
 
 
-@main.command("validate-pairs")
-@click.argument("pairs_file", type=click.Path(exists=True, path_type=Path))
+@main.command("validate-pairs", cls=SectionedCommand)
+@click.argument("pairs_file", required=False, type=click.Path(exists=True, path_type=Path))
 @click.option("--limit", type=int, default=20, show_default=True, help="Problem lines to print.")
-def validate_pairs_cmd(pairs_file: Path, limit: int) -> None:
+@draws.view_options()
+def validate_pairs_cmd(pairs_file: Path | None, limit: int, **kw) -> None:
     """Check a corpus against the record contract. Read-only (D84).
 
-    The gate `train` runs on its input, exposed so it can be run on demand: the
-    message triple and the frozen system prompt, meta types and domains, and
-    `record_id` uniqueness across the whole corpus. A duplicate is fixed by a
-    policy clause and a rebuilt view, never by rewriting the file.
-
-    PAIRS_FILE is a `pairs.jsonl` or a `pairs/` shard directory. Uniqueness is
-    checked across every shard, which is the reason to point this at the
-    directory rather than at each file in turn.
+    The gate `train` runs on its input: the message triple and the frozen
+    system prompt, meta types and domains, and `record_id` uniqueness across
+    every shard. The corpus is the view of --draws; PAIRS_FILE is a scratch
+    file. A duplicate is a policy clause plus a rebuilt view, never an edit.
     """
+    view = bundles_from_kwargs(kw, {"view": draws.ViewOpts})["view"]
+    pairs_file = view.corpus_or_view(pairs_file, required=True)
     problems = pairs.validate_pairs_file(pairs_file)
     dupes = [(ln, e) for ln, e in problems if any("duplicate record_id" in x for x in e)]
     click.echo(

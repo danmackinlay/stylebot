@@ -24,6 +24,7 @@ import click
 from stylebot import report
 from stylebot.classify import DETECTOR_IDENTITY_KEYS
 from stylebot.cli_options import Emitter, opt, silent
+from stylebot.draws import ViewOpts
 from stylebot.errors import ConfigError
 from stylebot.eval import DEFAULT_JUDGE_MODEL, SCHEMA_VERSION
 from stylebot.scoring import (
@@ -128,10 +129,9 @@ class EvalOpts:
         None,
         "--pairs",
         "pairs_path",
-        required=True,
         type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
-        help="The pairs corpus to score (slop + Dan sides of every pair): a "
-        "pairs.jsonl or a pairs/ shard directory.",
+        help="A scratch corpus to score (slop + Dan sides of every pair): a pairs.jsonl "
+        "or a shard directory. The corpus itself is --draws.",
     )
     fields: tuple[str, ...] = opt(
         (),
@@ -347,7 +347,7 @@ class DocumentOpts:
 
 
 VERDICT_PARAMS: dict[str, type] = {"verdict": VerdictOpts, "documents": DocumentOpts}
-EVAL_PARAMS: dict[str, type] = {"eval": EvalOpts, **VERDICT_PARAMS}
+EVAL_PARAMS: dict[str, type] = {"eval": EvalOpts, **VERDICT_PARAMS, "view": ViewOpts}
 
 
 def verdict_options(**kw):
@@ -363,7 +363,7 @@ def verdict_options(**kw):
 
 
 def eval_options(**kw):
-    """The whole `eval` surface — `EVAL_PARAMS`'s three bundles, one decorator."""
+    """The whole `eval` surface — `EVAL_PARAMS`'s four bundles, one decorator."""
     from stylebot.cli_options import bundle_options
 
     return bundle_options(list(EVAL_PARAMS.values()), **kw)

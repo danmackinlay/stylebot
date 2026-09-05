@@ -15,6 +15,7 @@ import pytest
 from stylebot import classify_cli as cc
 from stylebot import classify_train as ct
 from stylebot import splits as sp
+from stylebot.draws import ViewOpts
 from stylebot.errors import ConfigError
 
 POSTS = [f"post/p{p}.qmd" for p in range(4)]
@@ -45,7 +46,7 @@ def test_train_clf_opts_defaults_are_the_trainer_constants():
     assert opts.holdout_frac == ct.DEFAULT_HOLDOUT_FRAC
     assert opts.holdout_seed == ct.DEFAULT_HOLDOUT_SEED
     assert opts.embed_model == ct.DEFAULT_EMBED_MODEL
-    assert {"opts": cc.TrainClfOpts} == cc.TRAIN_CLF_PARAMS
+    assert {"opts": cc.TrainClfOpts, "view": ViewOpts} == cc.TRAIN_CLF_PARAMS
 
 
 def test_train_clf_dry_run_reports_assembly_and_the_splits_table(tmp_path, write_pairs_corpus):

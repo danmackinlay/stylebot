@@ -12,6 +12,7 @@ import click
 from stylebot import classify_train as ct
 from stylebot import splits as sp
 from stylebot.cli_options import Emitter, bundle_options, opt, silent
+from stylebot.draws import ViewOpts
 from stylebot.errors import ConfigError
 
 
@@ -28,9 +29,9 @@ class TrainClfOpts:
         None,
         "--pairs",
         "pairs_path",
-        required=True,
         type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
-        help="The content-matched pairs corpus to train on (pairs.jsonl or a pairs/ directory).",
+        help="A scratch corpus to train on (pairs.jsonl or a shard directory). The corpus "
+        "itself is --draws.",
     )
     out_dir: Path | None = opt(
         None,
@@ -114,12 +115,12 @@ class TrainClfOpts:
     )
 
 
-TRAIN_CLF_PARAMS: dict[str, type] = {"opts": TrainClfOpts}
+TRAIN_CLF_PARAMS: dict[str, type] = {"opts": TrainClfOpts, "view": ViewOpts}
 
 
 def train_clf_options(**kw):
     """The whole `train-clf` surface as one decorator; `kw` is `bundle_options`'."""
-    return bundle_options([TrainClfOpts], **kw)
+    return bundle_options([TrainClfOpts, ViewOpts], **kw)
 
 
 def format_clf_metrics(metrics: dict, indent: str = "") -> list[str]:
@@ -179,6 +180,8 @@ def train_clf(
     dry run. Raises `ConfigError` on a conflicting `--splits`/`--holdout-*`
     or an empty corpus.
     """
+    if opts.pairs_path is None:
+        raise ConfigError("no corpus: pass --draws, or a scratch --pairs", param_hint="--pairs")
     if opts.splits_path is not None and (opts.holdout_frac or opts.holdout_posts is not None):
         raise ConfigError("--splits is mutually exclusive with --holdout-frac/--holdout-posts")
 

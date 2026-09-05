@@ -13,6 +13,7 @@ import pytest
 
 from stylebot import classify
 from stylebot import eval as ev
+from stylebot.draws import ViewOpts
 from stylebot.errors import ConfigError
 
 _HEAD = {
@@ -138,7 +139,12 @@ def test_eval_opts_defaults_are_the_library_functions_defaults():
     assert opts.report_max_rows == default_of(report.render_scores_report, "max_rows")
     assert opts.facet_by == report.DEFAULT_FACET_BY
     assert opts.facet_by == default_of(report.render_scores_report, "facet_by")
-    assert {"eval": EvalOpts, "verdict": VerdictOpts, "documents": DocumentOpts} == EVAL_PARAMS
+    assert {
+        "eval": EvalOpts,
+        "verdict": VerdictOpts,
+        "documents": DocumentOpts,
+        "view": ViewOpts,
+    } == EVAL_PARAMS
     assert {"verdict": VerdictOpts, "documents": DocumentOpts} == VERDICT_PARAMS
     assert EvalOpts(pairs_path="c/pairs.jsonl").scores_path().as_posix() == "c/scores.jsonl"
     assert EvalOpts(fields=("output",)).score_fields() == ("output",)

@@ -522,7 +522,7 @@ class ViewOpts:
         if self.draws_dir is not None:
             return self.view()
         if pairs_path is None and required:
-            raise ConfigError("pass --draws (the corpus) or --pairs (a scratch file)")
+            raise ConfigError("no corpus named: pass --draws, or a scratch pairs file")
         return pairs_path
 
 
