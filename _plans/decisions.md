@@ -1032,17 +1032,14 @@ honest.
 **Decision (2026-08-13; recorded 2026-09-04, T1).** The audit's remaining
 retirement candidates were reviewed together and the file closed. Retired:
 `--sort`, `--report-max-rows`, `--all`, `--tag` — each non-`synth_key` by
-construction and each surviving as a library knob at its old value
+construction, each surviving as a library knob at its old value
 (`synth_cli.InspectOpts.report_max_rows`, `run_synth(extra_tags=)`;
-`ChunkPolicy.sort_name` was deleted outright 2026-09-03, D43), so no cell
-re-keyed and no paid corpus regenerated. Kept: `--capture-reasoning` — reading
-what a model deliberated has no substitute, the tokens are paid for whether or
-not the trace is saved, and "never run" is not evidence against a diagnostic.
-Kept: `--splits` / `--role` / `--sample-frac` / `--sample-salt` — retiring
-them bets that no measurement run will ever need a substrate disjoint from the
-detector's pool, and the masking work (D33) needs exactly that `--role styler`
-case. Deferred: `--assign-seed` — a `synth_key` input (it picks the arm, hence
-the generator name in the hash, D12), so outside the rule this pass ran under.
+`ChunkPolicy.sort_name` deleted outright 2026-09-03, D43): no cell re-keyed,
+no paid corpus regenerated. Kept: `--capture-reasoning` — the tokens are paid
+whether or not the trace is saved; "never run" is no evidence against a
+diagnostic. Kept: `--splits`/`--role`/`--sample-frac`/`--sample-salt` — the
+masking work (D33) needs exactly this `--role styler` substrate. Deferred:
+`--assign-seed` — a `synth_key` input (it picks the arm, D12), outside this rule.
 
 **Alternatives.** *Retire the substrate cluster as the "biggest single win"* —
 declined for the bet above. *Retire `--assign-seed` with the rest* — re-keys the
@@ -1057,6 +1054,9 @@ same audit.
 **Re-evaluate if** the masking work ships without ever using `--role styler`,
 or a use for re-randomised arm assignment appears — `--assign-seed` is then
 decided, not deferred.
+
+**Amended 2026-09-05 (R1)**: surface accepted at 41 flags; library-only fields
+stay reachable through the bundles (`InspectOpts`, `run_synth(...)`).
 
 ## D84: the corpus is append-only draws plus derived views
 
