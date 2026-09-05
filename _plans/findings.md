@@ -1035,3 +1035,26 @@ holds no judge verdicts at all** — nor do the three run-local score files unde
 `runs/docscale-2026090[34]/` (34 rows each, 0 judge), which corrects the premise
 that the 83 carried paid verdicts: what the key protects is 1,080 vale and
 detector rows. Decided: D39.
+
+## The eval stratum is synthetic-free, and the clause keeps it so — 2026-09-05 (W4 step 5 item 6)
+
+`uv run python` over the live `~/Source/livingthing/_training_pairs/draws/*.jsonl`
+(14,579 draws, `draws_sha256` `6f8081ba2cc917fd`), grouped by
+`splits.role_of(source)` against that corpus's `splits.json`. Read-only, no spend.
+
+| role | real accepted | synthetic accepted | synthetic rejected |
+|---|---|---|---|
+| eval | 151 | 0 | 69 |
+| styler | 77 | 4,677 | 3,901 |
+| detector | 179 | 3,073 | 2,459 |
+
+No synthetic draw is accepted on an eval post: the retired `prune-stale
+--no-orphans` deleted them before the backfill, and nothing has run `synth` over
+an eval post since. So `ViewPolicy.eval_sources` excludes **0 records today** —
+the 69 are gate-drops the `outcome` clause already takes, and the clause is
+ordered after it so they stay counted as rejects. Built against the blog's live
+policy, `content_sha256` is `e3d9809bddc9a616` with the clause and without it,
+8,145 records either way; `policy_sha` moves, as a new field must. The 14
+`eval_posts` entries are 12 sources after `splits.canonical_source`. What the
+clause buys is the next `synth` run over an eval post, which would otherwise
+contaminate the held-out stratum silently. Decided: D84.

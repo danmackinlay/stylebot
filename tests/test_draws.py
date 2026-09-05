@@ -136,6 +136,36 @@ def test_rejects_and_named_exclusions_never_reach_the_view(pairs_dir, tmp_path):
     assert _ids(tmp_path / "view") == {d.draw_id for d in lifted[1:3] + lifted[4:5] + lifted[6:]}
 
 
+def _sources(view: Path) -> set[tuple[str, bool]]:
+    recs = corpus.iter_records(view)
+    return {(r["meta"]["source"], bool(r["meta"].get("synthetic"))) for r in recs}
+
+
+def test_a_synthetic_draw_on_an_eval_source_never_reaches_the_view(pairs_dir, tmp_path):
+    """W4 step 5 item 6: the retired eval-role prune, as a clause (D84)."""
+    lifted = list(draws.draws_from_pairs(pairs_dir))  # p0-p1 real, p2-p3 synthetic
+    policy = draws.ViewPolicy(eval_sources=("post/p0.qmd", "post/p3.qmd"))
+
+    report = draws.build_view(lifted, policy, out=tmp_path / "view")
+    assert report.records == 6 and report.excluded == {"eval_sources": 2}
+    kept = _sources(tmp_path / "view")
+    assert ("post/p0.qmd", False) in kept, "the eval stratum is real draws on eval posts"
+    assert ("post/p2.qmd", True) in kept, "a styler-role post keeps its synthetic draws"
+    assert ("post/p3.qmd", True) not in kept
+
+
+def test_the_eval_clause_reads_the_capture_id_and_not_the_gen_block(pairs_dir, tmp_path):
+    """A lifted synthetic pair carries no `meta.gen`, so `gen` is not the test."""
+    lifted = list(draws.draws_from_pairs(pairs_dir))
+    synth = [d for d in lifted if d.source == "post/p3.qmd"]
+    assert len(synth) == 2 and all(d.gen is None for d in synth)
+    assert all(draws.capture_id_of(d) is None for d in synth)
+
+    report = draws.build_view(lifted, draws.ViewPolicy(eval_sources=("post/p3.qmd",)))
+    assert report.excluded == {"eval_sources": 2}
+    assert draws.build_view(lifted, draws.ViewPolicy()).excluded == {}
+
+
 # --- draws on disk -------------------------------------------------------------
 
 
@@ -249,12 +279,14 @@ def test_policy_sha_ignores_order_and_notices_every_field():
         system_prompt="p",
         excluded_draw_ids=("1", "2"),
         superseded_captures=("c1", "c2"),
+        eval_sources=("notebook/a.qmd", "post/b.qmd"),
     )
     b = draws.ViewPolicy(
         excluded_draw_ids=("2", "1"),
         system_prompt="p",
         superseded_captures=("c2", "c1"),
         retired_arms=("y", "x"),
+        eval_sources=("post/b.qmd", "notebook/a.qmd"),
     )
     assert draws.policy_sha(a) == draws.policy_sha(b)
 
@@ -270,6 +302,7 @@ def test_policy_sha_ignores_order_and_notices_every_field():
         "keep_superseded": True,
         "excluded_draw_ids": ("cap0000:0",),
         "superseded_captures": ("cap0000",),
+        "eval_sources": ("notebook/adhd.qmd",),
     }
     assert set(changed) == {f.name for f in dataclasses.fields(draws.ViewPolicy)}
     shas = {name: draws.policy_sha(draws.ViewPolicy(**{name: v})) for name, v in changed.items()}
@@ -407,6 +440,14 @@ def test_load_policy_takes_a_prompt_and_refuses_a_supplied_sha(tmp_path):
     doc.write_text(json.dumps({"system_sha": "deadbeefdeadbeef"}), encoding="utf-8")
     with pytest.raises(ConfigError):
         draws.load_policy(doc)
+
+
+def test_load_policy_round_trips_the_eval_sources(tmp_path):
+    doc = tmp_path / "policy.json"
+    sources = ["notebook/adhd.qmd", "post/should_we_allow_ai_articles.qmd"]
+    doc.write_text(json.dumps({"eval_sources": sources}), encoding="utf-8")
+    assert draws.load_policy(doc).eval_sources == tuple(sources)
+    assert draws.load_policy(None).eval_sources is None
 
 
 def test_training_view_pins_the_prompt_the_view_was_stamped_with(draws_dir):

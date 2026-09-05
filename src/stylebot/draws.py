@@ -230,11 +230,11 @@ class ViewPolicy:
 
     Each field is optional so the blog's `view_policy()` fills what it has;
     all of them enter `policy_sha`. `system_prompt` is applied as a *stamp*
-    (`_stamped`) and `keep_superseded`, `excluded_draw_ids` and
-    `superseded_captures` (the capture ids this policy declares superseded)
-    as clauses; the rest are named-only so far, because the gates already ran
-    on today's draws and re-applying a threshold waits for draws that carry
-    their raw output.
+    (`_stamped`) and `keep_superseded`, `excluded_draw_ids`, `superseded_captures`
+    (the captures this policy declares superseded) and `eval_sources` (the
+    eval-role posts, data so the sha covers them) as clauses; the rest are
+    named-only, because the gates already ran on today's draws and re-applying
+    a threshold waits for draws that carry their raw output.
     """
 
     chunk_policy_digest: str | None = None
@@ -247,6 +247,7 @@ class ViewPolicy:
     keep_superseded: bool = False
     excluded_draw_ids: tuple[str, ...] = ()
     superseded_captures: tuple[str, ...] | None = None
+    eval_sources: tuple[str, ...] | None = None
 
     @property
     def system_sha(self) -> str | None:
@@ -261,7 +262,7 @@ class ViewPolicy:
 def policy_sha(policy: ViewPolicy) -> str:
     """16 hex over the policy's fields, order-free in every collection."""
     d = asdict(policy)
-    for key in ("retired_arms", "excluded_draw_ids", "superseded_captures"):
+    for key in ("retired_arms", "excluded_draw_ids", "superseded_captures", "eval_sources"):
         if d[key] is not None:
             d[key] = sorted(d[key])
     blob = json.dumps(d, sort_keys=True, ensure_ascii=False)
@@ -289,6 +290,9 @@ def _clauses(policy: ViewPolicy, draws: Sequence[Draw]) -> list[Clause]:
     A draw is superseded when it says so (`superseded_by`, the backfill's),
     when any draw names its `capture_id` in `supersedes` (a later save's), or
     when the policy names that capture in `superseded_captures` (D84).
+    `eval_sources` keeps that stratum synthetic-free — a draw on one of those
+    posts that is no real capture is out, after `outcome` so a gate-dropped one
+    is still counted as the reject it is.
     """
     excluded = frozenset(policy.excluded_draw_ids)
     named = (cid for cid in (policy.superseded_captures or ()) if cid)
@@ -300,6 +304,9 @@ def _clauses(policy: ViewPolicy, draws: Sequence[Draw]) -> list[Clause]:
         )
     if excluded:
         out.append(("excluded_draw_ids", lambda d: d.draw_id in excluded))
+    if policy.eval_sources:
+        held = frozenset(policy.eval_sources)
+        out.append(("eval_sources", lambda d: d.source in held and capture_id_of(d) is None))
     out.append(("no_record", lambda d: d.record is None))
     return out
 
@@ -460,7 +467,7 @@ def load_policy(path: str | Path | None) -> ViewPolicy:
     )
     if not isinstance(doc, dict) or unknown:
         raise ConfigError(f"{path}: not a ViewPolicy object; unknown field(s) {unknown}")
-    for key in ("retired_arms", "excluded_draw_ids", "superseded_captures"):
+    for key in ("retired_arms", "excluded_draw_ids", "superseded_captures", "eval_sources"):
         if doc.get(key) is not None:
             doc[key] = tuple(doc[key])
     return ViewPolicy(**doc)
