@@ -723,3 +723,77 @@ def apply_eval_extension(opts: ExtendEvalOpts, *, emit: Emitter = silent) -> dic
         level="note",
     )
     return report
+
+
+@dataclass(frozen=True)
+class CheckSplitsOpts:
+    """The `check-splits` surface — what `check_splits_pass` takes (D78)."""
+
+    cli_section = "Splits"
+
+    splits_path: Path | None = opt(
+        None,
+        "--splits",
+        "splits_path",
+        required=True,
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        help="The splits.json to check.",
+    )
+    blog_root: Path = opt(
+        Path("."),
+        "--blog-root",
+        type=click.Path(exists=True, file_okay=False, path_type=Path),
+        show_default=True,
+        help="Source tree the pinned eval posts must still exist in.",
+    )
+    pairs_path: Path | None = opt(
+        None,
+        "--pairs",
+        "pairs_path",
+        type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
+        help="A scratch corpus for the per-role table and danger report; the corpus is --draws.",
+    )
+
+
+def check_splits_options(**kw):
+    """`CheckSplitsOpts` + `draws.ViewOpts`, one decorator; `kw` is `bundle_options`'."""
+    from stylebot.cli_options import bundle_options
+    from stylebot.draws import ViewOpts  # `targets` imports this module, so not at top
+
+    return bundle_options([CheckSplitsOpts, ViewOpts], **kw)
+
+
+def check_splits_pass(opts: CheckSplitsOpts, view, *, emit: Emitter = silent) -> None:
+    """The `check-splits` pass, read-only: pinned eval posts on disk under `blog_root`,
+    then, given a corpus (`view.corpus_or_view(opts.pairs_path)`), the per-role table
+    and the danger report. A missing source is a `RunError` raised after the report."""
+    from stylebot import classify_train as ct
+
+    pairs_path = view.corpus_or_view(opts.pairs_path)
+    splits_doc = load_splits(opts.splits_path)
+    spellings = eval_post_spellings(splits_doc)
+    missing = set(missing_eval_posts(splits_doc, opts.blog_root))
+    sha = splits_sha256(opts.splits_path)
+    emit(f"eval stratum v{eval_version(splits_doc)}  splits_sha256={sha}")
+    on_disk = f"{len(spellings) - len(missing)}/{len(spellings)}"
+    emit(f"eval posts on disk: {on_disk} (under {opts.blog_root})")
+    for canonical, paths in spellings.items():
+        mark = "MISSING" if canonical in missing else "ok"
+        others = [p for p in paths if p != canonical]
+        alias_note = f"  [also: {', '.join(others)}]" if others else ""
+        emit(f"  {mark:>7}  {canonical}{alias_note}")
+    if pairs_path is not None:
+        ds = ct.assemble_dataset(pairs_path)
+        emit("\n".join(role_lines(splits_doc, ds, top=True)))
+        report = check_splits(splits_doc, ds, blog_root=opts.blog_root)
+    else:
+        report = [
+            f"{ERROR_PREFIX} pinned eval post {canonical!r} is not on disk under {opts.blog_root}"
+            for canonical in sorted(missing)
+        ]
+    errors = [line for line in report if is_error(line)]
+    for line in report:
+        err = is_error(line)
+        emit(line if err else f"WARNING: {line}", level="error" if err else "warn")
+    if errors:
+        raise RunError(f"{len(errors)} missing source(s) under {opts.blog_root}")

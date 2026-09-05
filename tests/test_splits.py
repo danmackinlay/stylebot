@@ -364,3 +364,32 @@ def test_extending_with_a_renamed_post_pins_both_spellings():
     # Re-adding under either spelling is a no-op, not a version churn.
     assert sp.extend_eval(extended, ["notebook/new.qmd"]) is extended
     assert sp.extend_eval(extended, ["notebook/old.qmd"]) is extended
+
+
+def test_check_splits_pass_reports_then_raises_on_a_missing_pinned_post(tmp_path):
+    """The library behind `ai-style`/`dan-style check-splits`: the on-disk check
+    needs no corpus, every line goes through `emit`, and a pinned eval post gone
+    from `blog_root` is a `RunError` (C12's "missing source") after the report (D47)."""
+    from stylebot.draws import ViewOpts
+
+    posts = [f"post/p{i}.qmd" for i in range(10)]
+    splits = sp.make_splits(posts, eval_frac=0.2, seed=1)
+    path = sp.save_splits(splits, tmp_path / "splits.json")
+    opts = sp.CheckSplitsOpts(splits_path=path, blog_root=tmp_path)
+    lines: list[tuple[str, str]] = []
+
+    def emit(message: str, /, *, level: str = "info") -> None:
+        lines.append((level, message))
+
+    with pytest.raises(RunError, match="2 missing source"):
+        sp.check_splits_pass(opts, ViewOpts(), emit=emit)
+    assert sum(1 for level, m in lines if level == "error" and m.startswith(sp.ERROR_PREFIX)) == 2
+    assert any("eval posts on disk: 0/2" in m for _, m in lines)
+
+    for post in splits["eval_posts"]:
+        (tmp_path / post).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / post).write_text("prose\n", encoding="utf-8")
+    lines.clear()
+    sp.check_splits_pass(opts, ViewOpts(), emit=emit)
+    assert any("eval posts on disk: 2/2" in m for _, m in lines)
+    assert not [m for level, m in lines if level == "error"]

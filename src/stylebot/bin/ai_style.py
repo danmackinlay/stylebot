@@ -442,76 +442,16 @@ def make_splits_cmd(
     click.echo(f"wrote splits -> {out_path} (seed {seed}; eval frozen, rest by hash rule)")
 
 
-@main.command("check-splits")
-@click.option(
-    "--splits",
-    "splits_path",
-    required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="The splits.json to check.",
-)
-@click.option(
-    "--blog-root",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default=".",
-    show_default=True,
-    help="Source tree the pinned eval posts must still exist in.",
-)
-@click.option(
-    "--pairs",
-    "pairs_path",
-    type=click.Path(exists=True, path_type=Path),  # dir: a sharded corpus
-    default=None,
-    help="Also print the per-role post/pair table for this corpus, and the danger report.",
-)
-@draws.view_options()
-def check_splits_cmd(splits_path: Path, blog_root: Path, pairs_path: Path | None, **kw) -> None:
+@main.command("check-splits", cls=SectionedCommand)
+@sp.check_splits_options()
+def check_splits_cmd(**kw) -> None:
     """Health-check the splits contract: eval posts present, strata big enough.
 
-    The read-only counterpart of `make-splits`, and the thing to run after any
-    `post-op move`: a renamed post silently changes role, which is how two
-    frozen-eval posts leaked into the styler/detector pools (2026-09-03). Exits
-    non-zero when a pinned post or corpus source is no longer on disk under --blog-root;
-    small-stratum findings stay warnings. The table reads --pairs, or the view
-    --draws builds — what `train --draws` would train on (D84).
+    Read-only, and the thing to run after any `post-op move` (D34). Exits 1 when
+    a pinned post or corpus source is gone from --blog-root; small strata are warnings.
     """
-    view = bundles_from_kwargs(kw, {"view": draws.ViewOpts})["view"]
-    pairs_path = view.corpus_or_view(pairs_path)
-    splits_doc = sp.load_splits(splits_path)
-    spellings = sp.eval_post_spellings(splits_doc)
-    missing = set(sp.missing_eval_posts(splits_doc, blog_root))
-    click.echo(
-        f"eval stratum v{sp.eval_version(splits_doc)}  "
-        f"splits_sha256={sp.splits_sha256(splits_path)}"
-    )
-    click.echo(
-        f"eval posts on disk: {len(spellings) - len(missing)}/{len(spellings)} (under {blog_root})"
-    )
-    for canonical, paths in spellings.items():
-        mark = "MISSING" if canonical in missing else "ok"
-        others = [p for p in paths if p != canonical]
-        alias_note = f"  [also: {', '.join(others)}]" if others else ""
-        click.echo(f"  {mark:>7}  {canonical}{alias_note}")
-
-    if pairs_path is not None:
-        ds = ct.assemble_dataset(pairs_path)
-        click.echo("\n".join(sp.role_lines(splits_doc, ds, top=True)))
-        report = sp.check_splits(splits_doc, ds, blog_root=blog_root)
-    else:
-        # No corpus, no danger report — the on-disk contract is checkable alone.
-        report = [
-            f"{sp.ERROR_PREFIX} pinned eval post {canonical!r} is not on disk under {blog_root}"
-            for canonical in sorted(missing)
-        ]
-
-    errors = [line for line in report if sp.is_error(line)]
-    for line in report:
-        if sp.is_error(line):
-            click.secho(line, fg="red", err=True)
-        else:
-            click.secho(f"WARNING: {line}", fg="yellow", err=True)
-    if errors:
-        raise click.ClickException(f"{len(errors)} missing source(s) under {blog_root}")
+    parsed = bundles_from_kwargs(kw, {"opts": sp.CheckSplitsOpts, "view": draws.ViewOpts})
+    sp.check_splits_pass(parsed["opts"], parsed["view"], emit=click_emitter())
 
 
 @main.command("extend-eval", cls=SectionedCommand)
