@@ -195,7 +195,11 @@ def _div_spans(
 
 def _find_div_blocks(content: str, *, div_is_prose: DivIsProse | None = None) -> list[Span]:
     """All ``:::`` div/callout spans, nesting-aware (end includes the newline)."""
-    lines = content.splitlines(keepends=True)
+    # Split as `line_kinds` does: on `\n` only, so a lone `\r` is not a line break.
+    lines = [line + "\n" for line in content.split("\n")]
+    lines[-1] = lines[-1][:-1]
+    if not lines[-1]:
+        lines.pop()
     offsets: list[int] = []
     pos = 0
     for line in lines:

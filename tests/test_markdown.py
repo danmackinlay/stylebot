@@ -253,6 +253,15 @@ def test_line_kinds_labels_one_per_line():
     ]
 
 
+def test_a_lone_carriage_return_is_not_a_line_break_for_divs():
+    """`_find_div_blocks` splits on `\\n` like `line_kinds`, so a `\\r` inside a
+    fence line leaves it one line on both sides (C19)."""
+    doc = "::: {.note}\r:::\nbody\n"  # one unclosed opener, not an opener + closer
+    assert md._find_div_blocks(doc) == []
+    assert md.line_kinds(doc) == [None, None, None]
+    assert len(md._find_div_blocks(doc.replace("\r", "\n"))) == 1
+
+
 def test_line_kinds_do_not_bleed_past_a_span():
     doc = "> quoted\n\nprose after\n"
     assert md.line_kinds(doc) == [md.BLOCKQUOTE, None, None, None]
