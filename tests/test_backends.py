@@ -322,6 +322,18 @@ def test_load_manifest_is_empty_for_none_and_a_config_error_for_bad_json(tmp_pat
     assert info.value.param_hint == "--documents-manifest"
 
 
+def test_the_not_both_refusal_names_what_was_passed(tmp_path):
+    """A FILE is named by its path; text with no FILE came on stdin (A3)."""
+    opts = RunOpts(pairs_path=_pairs(tmp_path), out_path=tmp_path / "o")
+    doc = tmp_path / "d.qmd"
+    with pytest.raises(ConfigError) as info:
+        backends.corpus_mode(opts, source=doc)
+    assert str(doc) in str(info.value) and "FILE" not in str(info.value)
+    with pytest.raises(ConfigError) as info:
+        backends.rewrite_document("prose", opts, BackendOpts(), _identity)
+    assert "stdin" in str(info.value) and "FILE" not in str(info.value)
+
+
 def test_corpus_mode_refuses_the_three_flag_combinations(tmp_path):
     pairs = _pairs(tmp_path)
     assert backends.corpus_mode(RunOpts()) is False

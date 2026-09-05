@@ -488,7 +488,7 @@ def corpus_mode(opts: RunOpts, *, source: Path | None = None) -> bool:
     if opts.pairs_path is not None:
         if source is not None:
             raise ConfigError(
-                "--pairs rewrites a corpus; pass it or a FILE, not both", param_hint="--pairs"
+                f"--pairs rewrites a corpus; pass it or {source}, not both", param_hint="--pairs"
             )
         if opts.out_path is None:
             raise ConfigError(
@@ -564,7 +564,8 @@ def rewrite_document(
 
     if corpus_mode(opts, source=source):
         raise ConfigError(
-            "--pairs rewrites a corpus; pass it or a FILE, not both", param_hint="--pairs"
+            "--pairs rewrites a corpus; pass it or the document on stdin, not both",
+            param_hint="--pairs",
         )
     rewriter = rewrite or infer.rewrite_text
     result = rewriter(
