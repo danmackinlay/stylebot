@@ -229,10 +229,11 @@ class ViewPolicy:
     """Every input whose change should name a different view (D84).
 
     Each field is optional so the blog's `view_policy()` fills what it has;
-    all of them enter `policy_sha`. Only `keep_superseded` and
-    `excluded_draw_ids` are applied as clauses so far: the gates already ran
-    on today's draws and their raw output is not kept, so re-applying a
-    threshold waits for draws that carry one.
+    all of them enter `policy_sha`. Only `keep_superseded`,
+    `excluded_draw_ids` and `superseded_captures` (the capture ids this
+    policy declares superseded) are applied as clauses so far: the gates
+    already ran on today's draws and their raw output is not kept, so
+    re-applying a threshold waits for draws that carry one.
     """
 
     chunk_policy_digest: str | None = None
@@ -244,12 +245,13 @@ class ViewPolicy:
     system_sha: str | None = None
     keep_superseded: bool = False
     excluded_draw_ids: tuple[str, ...] = ()
+    superseded_captures: tuple[str, ...] | None = None
 
 
 def policy_sha(policy: ViewPolicy) -> str:
     """16 hex over the policy's fields, order-free in every collection."""
     d = asdict(policy)
-    for key in ("retired_arms", "excluded_draw_ids"):
+    for key in ("retired_arms", "excluded_draw_ids", "superseded_captures"):
         if d[key] is not None:
             d[key] = sorted(d[key])
     blob = json.dumps(d, sort_keys=True, ensure_ascii=False)
@@ -274,11 +276,13 @@ Clause = tuple[str, Callable[[Draw], bool]]
 def _clauses(policy: ViewPolicy, draws: Sequence[Draw]) -> list[Clause]:
     """The exclusion clauses a policy applies, first match wins.
 
-    A draw is superseded when it says so (`superseded_by`, the backfill's) or
-    when any draw names its `capture_id` in `supersedes` (a later save's).
+    A draw is superseded when it says so (`superseded_by`, the backfill's),
+    when any draw names its `capture_id` in `supersedes` (a later save's), or
+    when the policy names that capture in `superseded_captures` (D84).
     """
     excluded = frozenset(policy.excluded_draw_ids)
-    replaced = frozenset(cid for d in draws for cid in (d.supersedes or ()))
+    named = (cid for cid in (policy.superseded_captures or ()) if cid)
+    replaced = frozenset(cid for d in draws for cid in (d.supersedes or ())).union(named)
     out: list[Clause] = [("outcome", lambda d: d.outcome != ACCEPTED)]
     if not policy.keep_superseded:
         out.append(
@@ -408,7 +412,7 @@ def load_policy(path: str | Path | None) -> ViewPolicy:
     )
     if not isinstance(doc, dict) or unknown:
         raise ConfigError(f"{path}: not a ViewPolicy object; unknown field(s) {unknown}")
-    for key in ("retired_arms", "excluded_draw_ids"):
+    for key in ("retired_arms", "excluded_draw_ids", "superseded_captures"):
         if doc.get(key) is not None:
             doc[key] = tuple(doc[key])
     return ViewPolicy(**doc)

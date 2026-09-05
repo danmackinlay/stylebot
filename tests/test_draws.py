@@ -87,6 +87,42 @@ def test_a_superseded_draw_is_excluded_unless_the_policy_keeps_it(pairs_dir, tmp
     assert corpus.content_sha256(tmp_path / "v2") == corpus.content_sha256(pairs_dir)
 
 
+def test_a_policy_supersedes_a_capture_unless_the_policy_keeps_it(pairs_dir, tmp_path):
+    """W4 step 5: the supersession map is authoritative at view time (D84)."""
+    lifted = list(draws.draws_from_pairs(pairs_dir))
+    policy = draws.ViewPolicy(superseded_captures=("cap0000",))
+    assert [d.superseded_by for d in lifted] == [None] * 8, "nothing says so itself"
+
+    report = draws.build_view(lifted, policy, out=tmp_path / "v1")
+    assert report.records == 6 and report.excluded == {"superseded": 2}
+    assert _ids(tmp_path / "v1") == {d.draw_id for d in lifted if d.draw_id[:7] != "cap0000"}
+    seen = [(r.get("meta") or {}).get("capture_id") for r in draws.view_records(lifted, policy)]
+    assert len(seen) == 6 and "cap0000" not in seen
+
+    kept = draws.ViewPolicy(superseded_captures=("cap0000",), keep_superseded=True)
+    report = draws.build_view(lifted, kept, out=tmp_path / "v2")
+    assert report.records == 8 and report.excluded == {}
+    assert corpus.content_sha256(tmp_path / "v2") == corpus.content_sha256(pairs_dir)
+
+
+def test_superseded_captures_cannot_catch_a_synthetic_draw(pairs_dir, tmp_path):
+    lifted = list(draws.draws_from_pairs(pairs_dir))
+    synthetic = [d for d in lifted if (d.record["meta"] or {}).get("synthetic")]
+    assert len(synthetic) == 4 and all(draws.capture_id_of(d) is None for d in synthetic)
+
+    # A policy is user-supplied JSON: the synthetic records' own `capture_id`s,
+    # an id no draw carries and an empty one all leave every draw in.
+    policy = draws.ViewPolicy(superseded_captures=("cap0002", "cap0003", "nosuch", ""))
+    report = draws.build_view(lifted, policy, out=tmp_path / "view")
+    assert report.records == 8 and report.excluded == {}
+    assert corpus.content_sha256(tmp_path / "view") == corpus.content_sha256(pairs_dir)
+
+    # `capture_id_of` is None for a synthetic draw, so a null entry matches none
+    # of them either (`policy_sha` sorts, so this policy only reaches the clause).
+    null = draws.ViewPolicy(superseded_captures=(None,))
+    assert len(list(draws.view_records(lifted, null))) == 8
+
+
 def test_rejects_and_named_exclusions_never_reach_the_view(pairs_dir, tmp_path):
     lifted = list(draws.draws_from_pairs(pairs_dir))
     lifted[0] = dataclasses.replace(lifted[0], outcome="gate:anchor")
@@ -171,6 +207,21 @@ def test_draw_id_is_a_function_of_the_design_cell():
     assert draws.draw_id(*unspanned, chunk_index=None) == draws.draw_id(*unspanned)
 
 
+def test_two_saves_of_one_chunk_are_two_draws(tmp_path, write_pairs_corpus):
+    """W4 step 5: the retired backfill keyed a real draw on (source, sha, span),
+    so an interim save and its successor collided; `pairs.record_id` cannot."""
+    flat = write_pairs_corpus(tmp_path / "flat.jsonl", n_posts=1, chunks=1)
+    first = corpus.read_records(flat)[0]
+    second = json.loads(json.dumps(first))
+    second["meta"]["capture_id"] = "cap9999"
+
+    a, b = draws.draw_from_pair(first), draws.draw_from_pair(second)
+    assert a.source == b.source
+    assert a.record["meta"]["chunk_index"] == b.record["meta"]["chunk_index"] == 0
+    assert {a.draw_id, b.draw_id} == {"cap0000:0", "cap9999:0"}
+    assert draws.build_view([a, b], draws.ViewPolicy()).records == 2
+
+
 def test_new_draws_of_one_source_are_keyed_by_chunk_until_spans_exist():
     """W4 step 4: two chunks of one post under one arm were one `draw_id` (step 2)."""
     from stylebot.generators import Generator
@@ -193,8 +244,18 @@ def test_new_draws_of_one_source_are_keyed_by_chunk_until_spans_exist():
 
 
 def test_policy_sha_ignores_order_and_notices_every_field():
-    a = draws.ViewPolicy(retired_arms=("x", "y"), system_sha="s", excluded_draw_ids=("1", "2"))
-    b = draws.ViewPolicy(excluded_draw_ids=("2", "1"), system_sha="s", retired_arms=("y", "x"))
+    a = draws.ViewPolicy(
+        retired_arms=("x", "y"),
+        system_sha="s",
+        excluded_draw_ids=("1", "2"),
+        superseded_captures=("c1", "c2"),
+    )
+    b = draws.ViewPolicy(
+        excluded_draw_ids=("2", "1"),
+        system_sha="s",
+        superseded_captures=("c2", "c1"),
+        retired_arms=("y", "x"),
+    )
     assert draws.policy_sha(a) == draws.policy_sha(b)
 
     identity = draws.policy_sha(draws.ViewPolicy())
@@ -208,6 +269,7 @@ def test_policy_sha_ignores_order_and_notices_every_field():
         "system_sha": "ffff",
         "keep_superseded": True,
         "excluded_draw_ids": ("cap0000:0",),
+        "superseded_captures": ("cap0000",),
     }
     assert set(changed) == {f.name for f in dataclasses.fields(draws.ViewPolicy)}
     shas = {name: draws.policy_sha(draws.ViewPolicy(**{name: v})) for name, v in changed.items()}
