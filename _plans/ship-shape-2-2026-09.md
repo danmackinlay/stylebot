@@ -153,6 +153,15 @@ same styler count as `dan-style status`; after `dan-style status`,
 src/livingthing` empty; `rg -n "shard_path_for|old layout|until W4" src/stylebot`
 empty; both suites green; the corpus sha unchanged.
 
+**Landed `ad2a95f..3f6e041`, blog `e0bc8b00bf..b88895bab7`.** Deviations: the
+blog's `eval`/`train-clf` exclude the view flags (their `--pairs` default is
+already the policy view, and a defaulted `--pairs` beside `--draws` trips the
+not-both refusal); `ai-style --draws` without `--policy` still builds under
+identity (a test depends on it) — "never under identity" is delivered by
+`dan-style check-splits`, `policy --dump` and `ensure_view` deleting strays;
+`synth.py`'s "month shard" was already gone (`632c151`); `SessionStore.pairs_path`
+stays as a derivation path. `splits.py` is at 799/800 and `ai_style.py` 787/800.
+
 ## 4. R4 — correctness leftovers (stylebot, one agent, one commit each)
 
 Each is small and in a different file; none needs a D-entry.
