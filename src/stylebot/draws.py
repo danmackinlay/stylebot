@@ -31,6 +31,7 @@ from pathlib import Path
 import click
 
 from stylebot import config, corpus, pairs
+from stylebot.ai_core import style_system
 from stylebot.errors import ConfigError
 from stylebot.generators import Generator
 from stylebot.jsonl import append_jsonl, iter_jsonl
@@ -426,15 +427,16 @@ def ensure_view(draws_dir: str | Path, policy: ViewPolicy, *, views_root: str | 
 
 def training_view(draws_dir: str | Path, policy: ViewPolicy | None) -> tuple[Path, dict]:
     """The view a training run reads, built beside its draws, and the manifest
-    keys that name it: `policy_sha`, `draws_sha256` and the `style_system_sha`
-    the view was stamped with sit next to `pairs_sha256`, which is then the
-    view's own content hash (W4 steps 4 and 5)."""
+    keys that name it: `policy_sha`, `draws_sha256` and the `style_system` text
+    (plus its sha) the view was stamped with sit next to `pairs_sha256`, which
+    is then the view's own content hash (W4 steps 4 and 5)."""
     draws_dir = Path(draws_dir)
     policy = policy or ViewPolicy()
     view = ensure_view(draws_dir, policy, views_root=config.views_root(draws_dir.parent))
     return view, {
         "policy_sha": policy_sha(policy),
         "draws_sha256": content_sha256(draws_dir),
+        "style_system": policy.system_prompt or style_system(),
         "style_system_sha": policy.system_sha or pairs.system_sha(),
     }
 

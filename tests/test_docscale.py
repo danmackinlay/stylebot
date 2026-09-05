@@ -63,6 +63,27 @@ def _one_document(tmp_path, **rewrite_kwargs):
     return json.loads(out.read_text().splitlines()[0])
 
 
+def test_the_document_row_carries_the_served_prompt_and_hands_it_to_rewrite(tmp_path):
+    from stylebot.ai_core import STYLE_SYSTEM
+
+    seen: dict = {}
+
+    def rewrite(text, styler, **kw):
+        seen.update(kw)
+        return _fake_rewrite(text, styler)
+
+    data_dir = tmp_path / "mine"
+    data_dir.mkdir()
+    pairs = data_dir / "pairs.jsonl"
+    pairs.write_text("", encoding="utf-8")
+    _archive(data_dir, "cap-1", "post/a.qmd", "Before doc.\n", "After doc.\n")
+    out = tmp_path / "mine.jsonl"
+    docscale.rewrite_documents_file(pairs, out, styler=object(), rewrite=rewrite, system="served")
+    rec = json.loads(out.read_text().splitlines()[0])
+    assert rec["messages"][0]["content"] == seen["system"] == "served"
+    assert _one_document(tmp_path)["messages"][0]["content"] == STYLE_SYSTEM
+
+
 def test_a_best_of_1_document_row_carries_reranker_null(tmp_path):
     rec = _one_document(tmp_path)
     assert "reranker" in rec["meta"]

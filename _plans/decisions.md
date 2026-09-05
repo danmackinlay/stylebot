@@ -1109,10 +1109,9 @@ the generality tax* — the real contender, put to Dan as the either/or; he chos
 unpaid-for until something forced the seam to be *named*; the step-4 re-stamp was the one
 moment the corpus could absorb it — a view rebuild, not a migration (D84).
 
-**Re-evaluate if** a second consumer appears, or the author slot has to reach inference and
-serving. It does not today: `infer`'s two chat builds and `capture`'s draw record still emit
-the module-level `STYLE_SYSTEM`, so a non-default author can be trained but would be *served*
-under Dan's prompt.
+**Re-evaluate if** a second consumer appears. The author slot reached inference and serving on
+2026-09-05 (R2): `train` pins `data.style_system`, `opts_from_manifest` carries it into
+`BackendOpts.system_prompt`, `infer` takes `system=`, and draws stamp `SourcePolicy.system_prompt`.
 
 ## D86: `ruff format` is the formatter of record; D58's ceilings re-baseline once
 

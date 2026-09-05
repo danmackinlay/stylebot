@@ -46,6 +46,7 @@ from pathlib import Path
 import click
 
 from stylebot import draws
+from stylebot.ai_core import style_system
 from stylebot.cli_options import opt
 from stylebot.corpus import content_sha256
 from stylebot.errors import ConfigError, MissingExtra, RunError
@@ -592,15 +593,14 @@ def build_manifest(
             "n_synthetic": corpus.n_synthetic,
             "dropped": corpus.dropped,
             "splits_path": str(splits_path) if splits_path else None,
-            # Which system prompt the pairs behind this run were built against;
-            # a view's own is merged in over this from `draws.training_view`.
+            # The prompt the pairs were built against; a view's own overrides it.
+            "style_system": style_system(),
             "style_system_sha": system_sha(),
             "splits_sha256": _splits_sha256(splits_path),
             "eval_version": (splits or {}).get("eval_version"),
-            # Which RECORDS were kept, not merely which file they came from: the
-            # selector, the role filter and the multiplicity hook all run after
-            # `pairs_sha256` is taken, so two runs over one corpus can (and did)
-            # train on different data under identical hashes.
+            # Which RECORDS were kept, not merely which file: the selector, the
+            # role filter and the multiplicity hook all run after `pairs_sha256`
+            # is taken, so two runs over one corpus can train on different data.
             "record_ids_sha256": _record_ids_sha256(corpus),
             "n_train_posts": len(corpus.train_posts),
             "val_posts": corpus.val_posts,
@@ -709,7 +709,7 @@ def run_training(
     """Assemble → manifest → (unless dry-run) train on Tinker → export adapter.
 
     Data: `pairs_path`, or the view of `draws_dir` under `policy`, which the
-    manifest pins as `policy_sha`, `draws_sha256` and `style_system_sha`
+    manifest pins as `policy_sha`, `draws_sha256` and the `style_system` text
     (`draws.training_view`). `hp` is the fit; `val_frac` shapes the split as
     `data.val_posts`; `blog_root` + `splits_path` refuse a run whose pinned eval
     posts left the tree (D34). A dry run writes nothing and returns the manifest

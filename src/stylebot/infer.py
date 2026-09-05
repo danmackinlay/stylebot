@@ -15,8 +15,8 @@ chat template stylebot cannot check — D48).
 paragraph regions, grouped to ~STYLE_CHARS_PER_CHUNK chars, with chunk
 boundaries never inside a protected block and the original inter-chunk
 whitespace reassembled verbatim. A leading YAML frontmatter block is never sent
-to the model. `STYLE_SYSTEM` travels verbatim (`stylebot.ai_core`) — the adapter
-was trained on it; a different system prompt is out-of-distribution.
+to the model. `system` is the caller's prompt (`ai_core.style_system`; a run's
+manifest pins its text) — a prompt the adapter never saw is out-of-distribution.
 
 Best-of-N: pass `best_of > 1` and a `scorer` (lower = better, e.g. the voice
 classifier via `detector_scorer`). The scorer also arms the do-no-harm guard:
@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from stylebot import markdown
-from stylebot.ai_core import STYLE_SYSTEM
+from stylebot.ai_core import style_system
 from stylebot.errors import ConfigError, MissingExtra
 from stylebot.eval import detector_identity
 from stylebot.jsonl import dumps_line
@@ -437,6 +437,7 @@ def rewrite_candidates(
     max_chunk_chars: int = STYLE_CHARS_PER_CHUNK,
     inline_headings: bool = False,
     div_is_prose: markdown.DivIsProse | None = None,
+    system: str | None = None,
 ) -> dict:
     """All candidates for ONE prose chunk, none auto-chosen — the editor seam.
 
@@ -451,15 +452,14 @@ def rewrite_candidates(
 
     Returns `{"input_score", "n_sampled", "candidates": [{"text", "score",
     "anchors_lost", "anchors_gained", "truncated", "identity"}, ...]}` in
-    sampled order; the caller owns presentation order. Duplicates collapse, and
-    a candidate byte-equal to the input is flagged `identity: true`.
+    sampled order (duplicates collapse; a candidate byte-equal to the input is
+    flagged `identity: true`). `system` is `messages[0]` as in `rewrite_text`.
     """
     from stylebot.pairs import build_pair_content, pair_body
 
-    # Cross-heading pairs carry headings as CONTENT and record no
-    # `meta.context`, so prepending one is a prefix training never saw (D27).
-    # Dropped here rather than in the caller: the caller is an editor extension
-    # in another language, and the rule belongs to the diet.
+    # Cross-heading pairs carry headings as CONTENT and record no `meta.context`,
+    # so a prefix here is one training never saw (D27). Dropped here, not in the
+    # caller: that is an editor extension, and the rule belongs to the diet.
     if inline_headings:
         context = None
     frontmatter, body = split_frontmatter(text)
@@ -488,7 +488,7 @@ def rewrite_candidates(
         )
     chunk = body.strip("\n")
     messages = [
-        {"role": "system", "content": STYLE_SYSTEM},
+        {"role": "system", "content": system or style_system()},
         {"role": "user", "content": build_pair_content(context, chunk)},
     ]
     sampled = styler(messages, num_samples=best_of)
@@ -534,6 +534,7 @@ def rewrite_text(
     inline_headings: bool = False,
     inline_anchors: bool = False,
     div_is_prose: markdown.DivIsProse | None = None,
+    system: str | None = None,
 ) -> RewriteResult:
     """Rewrite prose chunk-by-chunk through the styler, mirroring training.
 
@@ -541,16 +542,16 @@ def rewrite_text(
     prose chunk carries the nearest preceding heading as `context` unless
     `inline_headings` selects the cross-heading diet, where a heading is chunk
     content instead — set it from the adapter's `data.chunk_scale`. Whitespace
-    is reassembled verbatim and a blank answer keeps the input chunk.
+    is reassembled verbatim and a blank answer keeps the input chunk. `system`
+    is `messages[0]`: the manifest's prompt, or the default author's when None.
 
     Candidates are disqualified TRUNCATED first, then for anchor damage either
-    way (D32), counted in `n_truncated`, `n_anchor_rejected`, `n_anchor_lost`,
-    `n_anchor_invented` with detail in `result.anchor_audit`; `inline_anchors`
-    widens the guard to inline code and math, default off. With a `scorer`
-    (lower = better) the input chunk competes (D20) and `on_decision(chunk,
-    context, candidates, scores, chosen_index, kept_input)` fires per chunk —
-    the preference seam; `scores` aligns with `candidates` and `chosen_index`
-    indexes it, None when the input was kept.
+    way (D32), counted in `n_truncated`, `n_anchor_rejected`, `n_anchor_lost`
+    and `n_anchor_invented`, detailed in `result.anchor_audit`; `inline_anchors`
+    widens the guard to inline code and math. With a `scorer` (lower = better)
+    the input chunk competes (D20) and `on_decision(chunk, context, candidates,
+    scores, chosen_index, kept_input)` fires per chunk — the preference seam;
+    `chosen_index` indexes `scores`/`candidates`, None when the input was kept.
     """
     from stylebot.pairs import build_pair_content, pair_body
 
@@ -573,17 +574,16 @@ def rewrite_text(
                 context = chunk.split("\n")[-1]
             out_chunks.append(chunk)
             continue
-        # A protected block passes through and — deliberately — does NOT reset
-        # `context`. `targets._split_sections` runs AFTER `editable_prose`, so
-        # protected blocks are invisible to it and never break a section; the
-        # heading a chunk was captured under must survive one in between.
+        # A protected block passes through and deliberately does NOT reset
+        # `context`: `targets._split_sections` runs after `editable_prose`, so a
+        # block never breaks a section and its heading survives one in between.
         if kind in markdown.PROTECTED_KINDS or not chunk.strip():
             out_chunks.append(chunk)
             continue
         result.n_chunks += 1
         n = result.n_chunks
         messages = [
-            {"role": "system", "content": STYLE_SYSTEM},
+            {"role": "system", "content": system or style_system()},
             {"role": "user", "content": build_pair_content(context, chunk)},
         ]
         candidates = styler(messages, num_samples=best_of)

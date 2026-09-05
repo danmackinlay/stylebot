@@ -381,6 +381,21 @@ def test_capture_pairs_creates_a_draws_dir_that_is_not_there_yet(tmp_path):
     assert [d.record for d in draws.iter_draws(data_dir / "draws")] == written
 
 
+def test_capture_stamps_its_source_policys_prompt_unless_told_otherwise(tmp_path):
+    """D85: the author slot is the policy's; the default renders the frozen bytes."""
+    from stylebot.ai_core import STYLE_SYSTEM, style_system
+    from stylebot.lib import SourcePolicy
+
+    before = "---\ntitle: T\n---\n\nIt is worth noting the rich tapestry."
+    after = "---\ntitle: T\n---\n\nWe dig in."
+    kw = dict(pairs_path=tmp_path / "pairs.jsonl", source="post/foo.md", snapped_at=None)
+    ada = capture.capture_pairs(before, after, source_policy=SourcePolicy(author="Ada"), **kw)
+    assert ada[0]["messages"][0]["content"] == style_system("Ada")
+    told = capture.capture_pairs(before, after, system_prompt="a custom prompt", **kw)
+    assert told[0]["messages"][0]["content"] == "a custom prompt"
+    assert capture.capture_pairs(before, after, **kw)[0]["messages"][0]["content"] == STYLE_SYSTEM
+
+
 def test_capture_reads_the_level_through_its_source_policy(tmp_path):
     """W4 step 5: which frontmatter field says "human" is policy, not a literal."""
     from stylebot.lib import SourcePolicy

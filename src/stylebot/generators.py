@@ -21,8 +21,8 @@ from typing import NamedTuple
 from stylebot.errors import ConfigError, RunError
 
 # Shared tail for every strategy, so only the *flavour* of slop varies. Mirrors
-# STYLE_SYSTEM's structure-preservation clause: the synthetic source must differ
-# from the target in style, not markdown shape, or the styler learns reformatting.
+# the style prompt's structure-preservation clause (`ai_core`): the synthetic
+# source must differ in style, not markdown shape, or the styler learns reformatting.
 _SLOP_PRESERVE = (
     "Preserve all markdown structure (code fences, math, links, "
     "list markers, blank lines) verbatim. "

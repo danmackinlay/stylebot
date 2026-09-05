@@ -88,28 +88,30 @@ def rewrite_documents_file(
     limit: int | None = None,
     rewrite: Callable[..., object] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
+    system: str | None = None,
     **rewrite_kwargs,
 ) -> DocumentRewriteResult:
     """Rewrite whole eval-stratum documents; emit a scorable output JSONL.
 
-    Each record is pair-shaped — `messages` = (frozen system, before, after)
-    plus a top-level `output` — so `score_pairs_file(fields=("slop", "target",
+    Each record is pair-shaped — `messages` = (`system`, before, after) plus a
+    top-level `output` — so `score_pairs_file(fields=("slop", "target",
     "output"))` scores it unchanged. `meta.capture_id` is prefixed `doc:` so a
     document row's `record_id` cannot collide with the chunk-level pair cut
     from the same capture.
 
     `rewrite` is the seam onto `infer.rewrite_text`, lazily imported and stubbed
-    by tests so the path runs with no sampling spend; the rest of the keywords
-    (`max_chunk_chars`, `inline_headings`, `best_of`, `scorer`, `div_is_prose`)
-    pass straight through, which is where a diet switch gets exercised.
+    by tests so the path runs with no sampling spend; `system` (the served
+    prompt; the default author's when None) and the diet keywords pass straight
+    through, which is where a diet switch gets exercised.
 
     Resumable by record id; score the output with `prune_orphans=False`.
     """
-    from stylebot.ai_core import STYLE_SYSTEM
+    from stylebot.ai_core import style_system
     from stylebot.infer import reranker_identity
 
     if rewrite is None:
         from stylebot.infer import rewrite_text as rewrite
+    system = system or style_system()
     reranker = reranker_identity(rewrite_kwargs.get("scorer"), rewrite_kwargs.get("best_of", 1))
 
     out_path = Path(out_path)
@@ -130,14 +132,14 @@ def rewrite_documents_file(
     with out_path.open("a", encoding="utf-8") as fp:
         for i, doc in enumerate(docs, start=1):
             try:
-                rewritten = rewrite(doc["before"], styler, **rewrite_kwargs)
+                rewritten = rewrite(doc["before"], styler, system=system, **rewrite_kwargs)
             except Exception as exc:  # noqa: BLE001 - one bad post must not end the pass
                 result.errors.append((str(doc["capture_id"]), f"{type(exc).__name__}: {exc}"))
                 continue
             text = getattr(rewritten, "text", rewritten)
             result.n_chunks += int(getattr(rewritten, "n_chunks", 0) or 0)
             result.n_kept_input += int(getattr(rewritten, "n_kept_input", 0) or 0)
-            fp.write(dumps_line(_document_record(doc, text, STYLE_SYSTEM, reranker)) + "\n")
+            fp.write(dumps_line(_document_record(doc, text, system, reranker)) + "\n")
             fp.flush()
             result.written += 1
             if on_progress is not None:
@@ -183,9 +185,8 @@ def document_pass(
             f"--documents-role {role} needs a splits contract, and none was given",
             param_hint="--documents-role",
         )
-    styler = backends.build_styler(
-        backends.opts_from_manifest(manifest, backends.BackendOpts(backend="tinker"))
-    )
+    opts = backends.opts_from_manifest(manifest, backends.BackendOpts(backend="tinker"))
+    styler = backends.build_styler(opts)
     max_chunk_chars, inline_headings = backends.serving_diet(manifest)
     docs_out = Path(doc_opts.documents_out or (Path(out).parent / "documents.jsonl"))
     emit(
@@ -205,6 +206,7 @@ def document_pass(
         styler,
         splits=splits,
         role=role,
+        system=opts.system(),
         **chunk_scale,
         on_progress=lambda i, total: emit(f"  ... {i}/{total} documents rewritten", level="status"),
     )

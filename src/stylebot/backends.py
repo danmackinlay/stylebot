@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 import click
 
 from stylebot import config
+from stylebot.ai_core import author_of, style_system
 from stylebot.cli_options import Emitter, bundle_options, opt, silent
 from stylebot.errors import ConfigError, RunError
 
@@ -141,6 +142,8 @@ class BackendOpts:
         type=click.Path(exists=True, file_okay=False, path_type=Path),
         help="Voice-classifier artifact dir for --best-of reranking.",
     )
+    #: `messages[0]` when serving; no flag: filled from a manifest or a policy (D85).
+    system_prompt: str | None = None
 
     def chunk_chars(self) -> int:
         """The inference chunk budget, defaulted from `infer`."""
@@ -151,6 +154,10 @@ class BackendOpts:
     def headings(self) -> bool:
         """The resolved heading mode (the tri-state field collapsed to a bool)."""
         return bool(self.inline_headings)
+
+    def system(self) -> str:
+        """The prompt to serve: `system_prompt`, else the default author's."""
+        return self.system_prompt or style_system()
 
     def tokens(self) -> int:
         """Output-token budget. Fixed at backend construction, so it is scaled
@@ -262,7 +269,10 @@ def manifest_renderer(manifest: Mapping[str, Any] | None) -> str | None:
 
 
 def manifest_mismatches(
-    manifest: Mapping[str, Any] | None, opts: BackendOpts | None = None
+    manifest: Mapping[str, Any] | None,
+    opts: BackendOpts | None = None,
+    *,
+    policy_system: str | None = None,
 ) -> list[str]:
     """Ways the styler about to be built disagrees with the manifest it claims.
 
@@ -271,22 +281,31 @@ def manifest_mismatches(
     produce plausible garbage or an out-of-distribution adapter rather than an
     error (D48). So say so at the moment the backend is built.
 
-    `style_system_sha` is the prompt pin (`pairs.system_sha`), checked only when
-    the manifest carries one, so an older manifest reads as "cannot answer".
-    Warnings, never errors.
+    The prompt pin is `data.style_system` (its text) or, on an older manifest,
+    `style_system_sha` alone; it is compared with the prompt the caller pinned,
+    else `policy_system`, else the default author's, and a manifest with
+    neither reads as "cannot answer". Warnings, never errors.
     """
     from stylebot.pairs import system_sha
 
     manifest = manifest or {}
     opts = opts or BackendOpts()
     notes: list[str] = []
+    run = manifest.get("run_id") or "?"
 
-    pinned_sha = (manifest.get("data") or {}).get("style_system_sha")
-    if pinned_sha and pinned_sha != system_sha():
+    data = manifest.get("data") or {}
+    expected = opts.system_prompt or policy_system or style_system()
+    trained, trained_sha = data.get("style_system"), data.get("style_system_sha")
+    if trained and trained != expected:
         notes.append(
-            f"STYLE_SYSTEM has changed since run {manifest.get('run_id') or '?'} was trained "
-            f"(manifest {pinned_sha}, current {system_sha()}); the styler is being served under "
-            f"a system prompt its pairs were never built against"
+            f"prompt mismatch: run {run} was trained for {_prompt_name(trained)}, the serving "
+            f"policy names {_prompt_name(expected)}"
+        )
+    elif not trained and trained_sha and trained_sha != system_sha(expected):
+        notes.append(
+            f"the system prompt has changed since run {run} was trained (manifest {trained_sha}, "
+            f"policy {system_sha(expected)}) and the manifest pins no text to serve instead; "
+            f"the styler is being served under a prompt its pairs were never built against"
         )
 
     trained_renderer = manifest_renderer(manifest)
@@ -316,18 +335,29 @@ def manifest_mismatches(
     return notes
 
 
+def _prompt_name(prompt: str) -> str:
+    """How a warning names a prompt: its author, or its digest off-template."""
+    from stylebot.pairs import system_sha
+
+    author = author_of(prompt)
+    return repr(author) if author else f"prompt {system_sha(prompt)}"
+
+
 def opts_from_manifest(
     manifest: Mapping[str, Any] | None,
     opts: BackendOpts | None = None,
     *,
     default_chunk_chars: int | None = None,
+    default_system: str | None = None,
 ) -> BackendOpts:
     """Fill `opts` from a training manifest, without overriding what was set.
 
     The manifest is the committed reproducibility record, so it — not a flag
-    soup — is where the checkpoint, base model, renderer and serving diet come
-    from. Fields the caller already pinned (a flag the user passed) win; only
-    the unset ones are filled, which is why `inline_headings` is tri-state.
+    soup — is where the checkpoint, base model, renderer, serving diet and
+    system prompt come from. Fields the caller already pinned (a flag the user
+    passed) win; only the unset ones are filled, which is why `inline_headings`
+    is tri-state. `default_chunk_chars` and `default_system` are the caller's
+    policy, used when the manifest pins no diet or no prompt text.
 
     Whatever the caller *did* pin is then checked against the manifest
     (`manifest_mismatches`) and disagreements are logged: filling a field
@@ -343,9 +373,10 @@ def opts_from_manifest(
         "renderer_name": manifest_renderer(manifest),
         "max_chunk_chars": diet_chars,
         "inline_headings": diet_inline,
+        "system_prompt": (manifest.get("data") or {}).get("style_system") or default_system,
     }
     fill = {k: v for k, v in from_manifest.items() if v is not None and getattr(opts, k) is None}
-    for note in manifest_mismatches(manifest, opts):
+    for note in manifest_mismatches(manifest, opts, policy_system=default_system):
         logger.warning("%s", note)
     return replace(opts, **fill)
 
@@ -546,6 +577,7 @@ def rewrite_document(
         inline_headings=backend.headings(),
         inline_anchors=opts.strict_anchors,
         div_is_prose=div_is_prose,
+        system=backend.system(),
     )
     if scorer is not None or rewrite is not None:
         for line in result.decisions:

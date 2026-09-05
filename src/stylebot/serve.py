@@ -305,6 +305,7 @@ def serve_sidecar(
                 scorer=scorer,
                 max_chunk_chars=chunk_chars,
                 inline_headings=inline_headings,
+                system=backend.system(),
             )
 
         rewriter = rewrite_op

@@ -140,6 +140,18 @@ def test_resolve_strategy():
         synth.resolve_strategy("nonsense")
 
 
+def test_draws_carry_the_runs_system_prompt(tmp_path):
+    """D85: the author slot is a run parameter; the default renders the frozen bytes."""
+    from stylebot.ai_core import STYLE_SYSTEM, style_system
+
+    other = style_system("Ada Lovelace")
+    synth.synthesize_pairs(_targets(2), tmp_path / "ada", [_fake("g")], system_prompt=other)
+    assert {r["messages"][0]["content"] for r in corpus_records(tmp_path / "ada")} == {other}
+    synth.synthesize_pairs(_targets(2), tmp_path / "plain", [_fake("g")])
+    stamped = {r["messages"][0]["content"] for r in corpus_records(tmp_path / "plain")}
+    assert stamped == {STYLE_SYSTEM}
+
+
 def test_dry_run_writes_nothing(tmp_path, make_blog):
     root = make_blog()
     data_dir = tmp_path / "corpus"
@@ -793,6 +805,7 @@ def test_a_cell_claimed_mid_run_by_another_writer_is_not_duplicated(tmp_path, ma
                     target=t,
                     generator_name="g",
                     synth_key=key,
+                    system=synth.style_system(),
                     context=t.context,
                 )
                 draws.append(draws_dir, draws.draw_from_pair(rec))

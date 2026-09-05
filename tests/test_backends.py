@@ -142,20 +142,76 @@ def test_no_mismatch_when_nothing_disagrees():
     assert backends.manifest_mismatches(None, BackendOpts()) == []
 
 
-def test_style_system_pin_is_checked_only_when_the_manifest_carries_one():
+def test_the_prompt_pin_is_checked_against_the_policy_and_names_the_author():
+    from stylebot.ai_core import style_system
     from stylebot.pairs import system_sha
 
+    other = style_system("Someone Else")
+    trained = json.loads(json.dumps(_RUN))
+    trained["data"]["style_system"] = other
+    notes = backends.manifest_mismatches(trained, BackendOpts())
+    assert len(notes) == 1 and "prompt mismatch" in notes[0]
+    assert "'Someone Else'" in notes[0] and "'Dan Mackinlay'" in notes[0]
+    # The policy it was trained under, or a caller pinning that text, agrees.
+    assert backends.manifest_mismatches(trained, BackendOpts(), policy_system=other) == []
+    assert backends.manifest_mismatches(trained, BackendOpts(system_prompt=other)) == []
+
+    # An older manifest pins only the digest: checked, with nothing to serve instead.
     stale = json.loads(json.dumps(_RUN))
     stale["data"]["style_system_sha"] = "deadbeefdeadbeef"
     notes = backends.manifest_mismatches(stale, BackendOpts())
-    assert len(notes) == 1 and "STYLE_SYSTEM has changed" in notes[0]
-
-    current = json.loads(json.dumps(_RUN))
-    current["data"]["style_system_sha"] = system_sha()
-    assert backends.manifest_mismatches(current, BackendOpts()) == []
+    assert len(notes) == 1 and "system prompt has changed" in notes[0]
+    stale["data"]["style_system_sha"] = system_sha(other)
+    assert backends.manifest_mismatches(stale, BackendOpts(), policy_system=other) == []
     # A manifest predating the pin answers "cannot say", not "mismatch".
     assert "style_system_sha" not in _RUN["data"]
     assert backends.manifest_mismatches(_RUN, BackendOpts()) == []
+
+
+def test_opts_from_manifest_carries_the_trained_prompt_else_the_policy_prompt():
+    from stylebot.ai_core import STYLE_SYSTEM, style_system
+
+    other = style_system("Someone Else")
+    trained = json.loads(json.dumps(_RUN))
+    trained["data"]["style_system"] = other
+    assert backends.opts_from_manifest(trained).system() == other
+    # A caller's pin wins, as for every field; a run pinning no text serves the policy's.
+    pinned = BackendOpts(system_prompt=STYLE_SYSTEM)
+    assert backends.opts_from_manifest(trained, pinned).system() == STYLE_SYSTEM
+    assert backends.opts_from_manifest(_RUN, default_system=other).system() == other
+    assert backends.opts_from_manifest(_RUN).system() == STYLE_SYSTEM == BackendOpts().system()
+
+
+def test_a_run_trained_for_another_author_is_served_under_that_prompt(tmp_path, write_pairs_corpus):
+    """D85's re-evaluate clause: the author slot reaches serving through the manifest."""
+    from stylebot import draws, train
+    from stylebot.ai_core import style_system
+
+    other = style_system("Someone Else")
+    draws_dir = tmp_path / "data" / "draws"
+    for draw in draws.draws_from_pairs(write_pairs_corpus(n_posts=4)):
+        draws.append(draws_dir, draw)
+    manifest = train.run_training(
+        None,
+        tmp_path / "work",
+        tmp_path / "runs" / "r.json",
+        dry_run=True,
+        run_id="v",
+        draws_dir=draws_dir,
+        policy=draws.ViewPolicy(system_prompt=other),
+    ).manifest
+    assert manifest["data"]["style_system"] == other
+
+    sent: list[str] = []
+
+    def spy(messages, num_samples=1):
+        sent.append(messages[0]["content"])
+        return [messages[1]["content"]]
+
+    opts = backends.opts_from_manifest(manifest, BackendOpts(backend="tinker"))
+    backends.rewrite_document("One paragraph of prose.\n", RunOpts(), opts, spy)
+    assert sent == [other]
+    assert backends.manifest_mismatches(manifest, opts) == []
 
 
 def test_renderer_and_base_model_overrides_are_reported():

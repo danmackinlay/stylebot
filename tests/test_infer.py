@@ -55,6 +55,22 @@ def test_rewrite_identity_round_trips_a_trailing_hard_break():
     assert result.n_chunks == 2
 
 
+def test_the_system_prompt_is_the_callers_and_defaults_to_the_default_author():
+    from stylebot.ai_core import style_system
+
+    other = style_system("Ada Lovelace")
+    seen: list[str] = []
+
+    def spy(messages, num_samples=1):
+        seen.append(messages[0]["content"])
+        return [messages[1]["content"]]
+
+    infer.rewrite_text("Just prose.", spy, system=other)
+    infer.rewrite_candidates("Just prose.", spy, best_of=1, system=other)
+    infer.rewrite_text("Just prose.", spy)
+    assert seen == [other, other, STYLE_SYSTEM]
+
+
 def test_rewrite_frontmatter_never_sent_to_styler():
     seen = []
 

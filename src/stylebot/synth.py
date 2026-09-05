@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from stylebot import config, corpus, draws
-from stylebot.ai_core import STYLE_SYSTEM
+from stylebot.ai_core import style_system
 from stylebot.generators import (
     DEFAULT_REASONING_EFFORT,
     DEFAULT_STRATEGY,
@@ -168,7 +168,7 @@ def coverage_key(body: str) -> str:
     twice; most of that drift is mechanical and not a difference the styler
     could learn (D53).
 
-    Three folds, each a difference `STYLE_SYSTEM` makes invisible: inline link
+    Three folds, each a difference the style prompt makes invisible: inline link
     **destinations**, curly **quotes**, and **whitespace** runs. Nothing else —
     every extra rule risks collapsing two distinct passages onto one key, and
     that failure is silent. NOT `_synth_key`, which stays keyed on raw text.
@@ -221,6 +221,7 @@ def _build_record(
     target: Target,
     generator_name: str,
     synth_key: str,
+    system: str,
     strategy: str = DEFAULT_STRATEGY,
     context: str = "",
     extra_tags: Sequence[str] = (),
@@ -237,8 +238,7 @@ def _build_record(
         "before_chars": len(slop),  # body lengths (the transform), excluding the heading prefix
         "after_chars": len(target.text),
         "transform_sim": transform_similarity(slop, target.text),
-        # Chunk-scale facet: the merge budget the target was packed under (None =
-        # unmerged) and how it was cut (None = section-bounded).
+        # Chunk-scale facet: merge budget (None = unmerged) and cut (None = section).
         "merge_max_chars": target.merge_max_chars,
         "chunk_mode": target.chunk_mode,
         "synthetic": True,
@@ -247,12 +247,9 @@ def _build_record(
         "synth_key": synth_key,
         "tags": ["synthetic", "paraphrase", *extra_tags],
         # Which trees and which cut produced this pair. The chunk policy arrives
-        # ON THE TARGET (`iter_targets` digests whatever `ChunkPolicy` it was
-        # handed) rather than as a parameter here, so the stamp tracks the real
-        # composed policy without `synthesize_pairs` having to be told about it
-        # — and keeps tracking it once the blog composes that policy in one
-        # place. `synth_key` deliberately does NOT fold any of this in: resume
-        # must not restart because the tree moved a commit.
+        # ON THE TARGET (`iter_targets` digests the `ChunkPolicy` it was handed),
+        # so the stamp tracks the composed policy without being told about it.
+        # `synth_key` folds none of this in: resume must survive a tree commit.
         "provenance": pair_provenance(
             repo_prov,
             policy_digest=target.policy_digest,
@@ -260,15 +257,14 @@ def _build_record(
         ),
     }
     if context:
-        # Identical heading prefix on both sides: the styler restyles the body
-        # conditioned on, but never rewriting, the heading.
+        # Identical heading prefix on both sides: conditioned on, never rewritten.
         meta["context"] = context
         meta["context_mode"] = "immediate"
     if gen_meta:
         meta["gen"] = gen_meta  # synthetic-only; real pairs have no `gen`
     return {
         "messages": [
-            {"role": "system", "content": STYLE_SYSTEM},
+            {"role": "system", "content": system},
             {"role": "user", "content": build_pair_content(context, slop)},
             {"role": "assistant", "content": build_pair_content(context, target.text)},
         ],
@@ -512,6 +508,7 @@ class _RunState:
     extra_tags: Sequence[str]
     total: int  # pairs this run will attempt (for progress)
     writer: DrawWriter  # the one handle on `draws/` for this run's duration
+    system_prompt: str  # `messages[0]` of every draw this run lands (D85)
     max_transform_sim: float | None = None  # identity gate (None = off)
     max_length_ratio: float | None = None  # inflation gate (None = off)
     drop_invented_anchors: bool = True  # fabrication gate (see `_gate_verdict`)
@@ -987,8 +984,7 @@ async def _run_session(sess: _Session, st: _RunState) -> list[_Turn]:
             st.result.errors_by_generator[gen.name] = (
                 st.result.errors_by_generator.get(gen.name, 0) + 1
             )
-            # Only this cell is lost; the REST of the session reflows to a fresh
-            # provider, since a sticky session that started failing keeps failing.
+            # Only this cell is lost; the rest reflows: a failing sticky session keeps failing.
             return list(sess.turns[pos + 1 :])
 
         prompt_tokens = gen_meta.get("prompt_tokens")
@@ -1011,6 +1007,7 @@ async def _run_session(sess: _Session, st: _RunState) -> list[_Turn]:
             target=turn.target,
             generator_name=gen.name,
             synth_key=turn.key,
+            system=st.system_prompt,
             strategy=gen.strategy,
             context=turn.context,
             extra_tags=st.extra_tags,
@@ -1096,6 +1093,7 @@ def synthesize_pairs(
     gen_retries: int = DEFAULT_GEN_RETRIES,
     blog_root: Path | str | None = None,
     draws_dir: Path | str | None = None,
+    system_prompt: str | None = None,
 ) -> SynthResult:
     """Generate synthetic pairs and append them to `draws_dir` as draws.
 
@@ -1116,7 +1114,8 @@ def synthesize_pairs(
     a re-run retries it (D32). Heading `context` is prepended verbatim to both
     sides, slop is generated from the body alone (D14). `dry_run` only plans.
     **Provenance** is resolved once per run (D36). Every call lands as one draw
-    under `draws_dir` (default `<data-dir>/draws`); no `pairs.jsonl` (D84).
+    under `draws_dir` (default `<data-dir>/draws`) carrying `system_prompt` (the
+    default author's when None) as `messages[0]`; no `pairs.jsonl` (D84).
     """
     data_dir = Path(data_dir)
     draws_dir = Path(draws_dir) if draws_dir is not None else config.draws_path(data_dir)
@@ -1183,6 +1182,7 @@ def synthesize_pairs(
         extra_tags=extra_tags,
         total=len(missing),
         writer=DrawWriter(draws_dir, disk_keys),
+        system_prompt=system_prompt or style_system(),
         max_transform_sim=max_transform_sim,
         max_length_ratio=max_length_ratio,
         drop_invented_anchors=drop_invented_anchors,

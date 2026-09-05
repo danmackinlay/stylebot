@@ -5,6 +5,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 
 from stylebot import markdown
+from stylebot.ai_core import DEFAULT_AUTHOR, style_system
 
 yaml = YAML(typ="rt")
 yaml.preserve_quotes = True
@@ -170,15 +171,21 @@ class SourcePolicy:
     """Which files hold source prose, and which frontmatter marks it human.
 
     Every blog-shaped literal stylebot carries, in one object: the walk's
-    `glob`, the frontmatter `meta_field` a selector reads, and the `max_level`
-    it keeps. The defaults are Dan's blog, so a caller that passes nothing
-    moves nothing; another blog passes one policy instead of retargeting three
-    call sites (`_plans/OVERVIEW.md`; D84 rides it in at W4 step 4).
+    `glob`, the frontmatter `meta_field` a selector reads, the `max_level` it
+    keeps, and the `author` whose voice the prompt names (D85). The defaults
+    are Dan's blog, so a caller that passes nothing moves nothing; another
+    blog passes one policy instead of retargeting four call sites.
     """
 
     glob: str = "**/*.qmd"
     meta_field: str = "automation"
     max_level: int = 0
+    author: str = DEFAULT_AUTHOR
+
+    @property
+    def system_prompt(self) -> str:
+        """The prompt draws and un-manifested serving carry: `style_system(author)`."""
+        return style_system(self.author)
 
     def selects(self, meta: dict) -> bool:
         """`is_human_authored` under this policy — `iter_targets`'s default selector."""

@@ -814,7 +814,7 @@ def run_cmd(file: Path | None, **kw) -> None:
 
     Chunks prose at training granularity (frontmatter and code fences
     protected, original whitespace reassembled verbatim), sends each chunk
-    with the frozen STYLE_SYSTEM, and prints the rewrite to stdout (--write
+    under the manifest's system prompt, and prints the rewrite to stdout (--write
     edits in place with a backup). See `stylebot.infer` for the library seam.
 
     With --pairs/--out it runs in **corpus mode** instead: the styler rewrites

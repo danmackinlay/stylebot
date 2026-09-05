@@ -357,6 +357,25 @@ def test_serve_sidecar_builds_the_styler_lazily_and_once():
     assert second["id"] == 3 and "candidates" in second
 
 
+def test_the_rewrite_op_serves_the_backends_prompt():
+    """D85: the manifest's prompt, carried on `BackendOpts`, is what the editor's chunk sees."""
+    seen: list[str] = []
+
+    def make_styler():
+        def styler(messages, num_samples=1):
+            seen.append(messages[0]["content"])
+            return ["Rewritten."] * num_samples
+
+        return styler
+
+    sidecar_lines(
+        {"id": 1, "op": "rewrite", "text": "Plain prose here.", "best_of": 1},
+        make_styler=make_styler,
+        backend=backends.BackendOpts(system_prompt="the served prompt"),
+    )
+    assert seen == ["the served prompt"]
+
+
 def test_serve_sidecar_hands_a_failed_build_to_the_client_and_lives():
     def unready():
         raise RunError("TINKER_API_KEY is not set")

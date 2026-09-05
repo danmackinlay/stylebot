@@ -9,6 +9,8 @@
 # demanding they be preserved verbatim contradicts what the data teaches. The
 # level/meaning clause keeps the structural guarantee that actually matters —
 # a restyled heading must still be the same heading at the same depth.
+import re
+
 DEFAULT_AUTHOR = "Dan Mackinlay"
 
 STYLE_SYSTEM_TEMPLATE = (
@@ -26,3 +28,11 @@ def style_system(author: str = DEFAULT_AUTHOR) -> str:
 
 
 STYLE_SYSTEM = style_system()
+
+_AUTHOR_RE = re.compile(re.escape(STYLE_SYSTEM_TEMPLATE).replace(r"\{author\}", "(.+?)"))
+
+
+def author_of(prompt: str) -> str | None:
+    """The author a rendered prompt names; None when it is not this template."""
+    m = _AUTHOR_RE.fullmatch(prompt)
+    return m.group(1) if m else None

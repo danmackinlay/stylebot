@@ -11,6 +11,7 @@ from click.testing import CliRunner
 from conftest import corpus_records
 
 from stylebot import capture, session
+from stylebot.ai_core import STYLE_SYSTEM
 from stylebot.bin import ai_style_log as log
 from stylebot.pairs import build_pair_content, validate_pair_record
 
@@ -68,8 +69,10 @@ def test_build_pair_record_context_matches_build_pair_content():
         capture_id="cap12345",
         chunk_index=0,
         chunk_total=1,
+        system=STYLE_SYSTEM,
         context="## A Heading",
     )
+    assert rec["messages"][0]["content"] == STYLE_SYSTEM
     assert rec["messages"][1]["content"] == build_pair_content("## A Heading", "slop body")
     assert rec["messages"][2]["content"] == build_pair_content("## A Heading", "dan body")
     assert rec["meta"]["context"] == "## A Heading"

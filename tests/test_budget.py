@@ -71,7 +71,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     },
     "synth.py": {
         "lines": 1197,
-        "functions": {"synthesize_pairs": 128, "_run_session": 118},
+        "functions": {"synthesize_pairs": 127, "_run_session": 118},
         "docstrings": (26,),
     },
     "synth_cli.py": {
@@ -86,7 +86,7 @@ ALLOWLIST: dict[str, dict[str, object]] = {
             "run_training": 98,
             "_tinker_runner": 95,
             "assemble_training_corpus": 90,
-            "build_manifest": 87,
+            "build_manifest": 86,
         },
         "docstrings": (26, 23, 20, 18, 17, 17),
         "module_docstring": 35,

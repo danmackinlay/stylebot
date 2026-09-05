@@ -150,6 +150,17 @@ def test_gather_qmd_files_explicit_list_filters_missing_and_invalid(tmp_path):
 # --- SourcePolicy: the blog-shaped literals in one object (W4 step 5) --------
 
 
+def test_source_policy_renders_its_authors_prompt():
+    from stylebot.ai_core import DEFAULT_AUTHOR, STYLE_SYSTEM, author_of, style_system
+
+    assert SourcePolicy().system_prompt == STYLE_SYSTEM
+    ada = SourcePolicy(author="Ada Lovelace")
+    assert ada.system_prompt == style_system("Ada Lovelace")
+    assert author_of(ada.system_prompt) == "Ada Lovelace"
+    assert author_of(STYLE_SYSTEM) == DEFAULT_AUTHOR
+    assert author_of("not the template") is None
+
+
 def test_source_policy_defaults_are_the_blogs_literals():
     policy = SourcePolicy()
     assert (policy.glob, policy.meta_field, policy.max_level) == ("**/*.qmd", "automation", 0)
