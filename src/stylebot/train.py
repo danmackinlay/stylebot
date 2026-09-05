@@ -558,10 +558,10 @@ def run_training(
 
     Data: `pairs_path`, or the view of `draws_dir` under `policy`, whose pins
     (`policy_sha`, `draws_sha256`, the `style_system` text) the manifest
-    carries; `blog_root` + `splits_path` refuse a run whose pinned eval posts
-    left the tree (D34). A dry run writes nothing and returns the manifest it
-    would write; the paid run writes it pre-run and with `result`. `runner` is
-    the seam `(corpus, manifest, work_dir, hp, *, download_adapter)`.
+    carries; `blog_root` + `splits_path` refuse a run, dry run included, whose
+    pins or corpus sources left the tree (D34). A dry run writes nothing and
+    returns the manifest it would write; the paid run writes it pre-run and with
+    `result`. `runner` is the seam `(corpus, manifest, work_dir, hp, *, download_adapter)`.
     """
     view_pins: dict = {}
     if draws_dir is not None:
