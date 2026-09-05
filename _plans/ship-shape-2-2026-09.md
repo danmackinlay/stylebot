@@ -1,6 +1,7 @@
 # Ship-shape, round 2 — closing what the swarm reported
 
-**Status: specified 2026-09-05, not started.** The reviewer's QA of the round-1
+**Status: specified 2026-09-05; R1 and R0 landed that day (`999e943..17755b3`,
+blog `37577b378d`); R2–R7 dispatched in parallel, R7 to merge last.** The reviewer's QA of the round-1
 swarm (`ship-shape-2026-09.md`, retired) verified both suites, the corpus gates,
 P5 over all 142 commits, the allowlists and every done-line that is a command,
 and found the work landed as reported. What remains is the live residue of its
@@ -67,26 +68,23 @@ simplification is the opposite of its purpose. Measured 2026-09-05 at
 
 Done: `rg -n "RATIO" tests/test_budget.py ../livingthing/tests/test_budget.py`
 empty; both suites green; `_post_targets` at 94 in the allowlist; the ceiling
-constant equals the measured prose count in the commit body.
+constant equals the measured prose count in the commit body. **Landed
+`5d83f6a` (items 1–3), blog `37577b378d` (item 4), `17755b3` (the proof).** The
+ceilings are the test's own `_modules()` counts, which differ from the estimate
+above; the commit bodies carry them.
 
 ## 1. R1 — rules and the reformat (stylebot, then blog docs; first, alone)
 
 1. ~~`uv run ruff format src tests` as one reformat-only commit~~ — **landed
    `999e943`**; D86 records the three allowlist numbers the formatter moved.
-   What remains of item 1: `ruff format --check src tests` joins the merge gate
-   (§7 below), and CLAUDE.md gains a "Ruff" line under "Setup & verify": lint
-   and format, diverging from the blog's lint-only rule on purpose.
-2. CLAUDE.md P8 gains the cross-repo sentence from §0 (≤ 2 lines). **Payment
-   for items 1 and 2 together** (the file is at 160/160): cut the "Blog
-   integration" section to two bullets — the walker facts (glob, skip-list,
-   `post/`/`notebook/`) and the `automation:` sentence are OVERVIEW's and the
-   blog CLAUDE.md's, so keep only "blog repo path, passed as `--blog-root`" and
-   "the corpus there is `_training_pairs/`: committed `draws/`, built `views/`".
-   That frees five lines; spend three, bank two.
-3. `decisions.md` D83: three-line amendment, "surface at 41 flags, accepted
-   2026-09-05; library-only fields stay reachable through the bundles".
-4. `ship-shape-2026-09.md` stub: the step-5 range ends at `ae5dfb6`, not
-   `6fcee88`.
+   ~~What remains of item 1: `ruff format --check src tests` joins the merge
+   gate (§7 below), and CLAUDE.md gains a "Ruff" line~~ — **landed `a5e3e35`**.
+2. ~~CLAUDE.md P8 gains the cross-repo sentence from §0 (≤ 2 lines), paid for
+   by cutting "Blog integration" to two bullets~~ — **landed `a5e3e35`**, 158.
+3. ~~`decisions.md` D83: three-line amendment~~ — **landed `78154dc`**, D83
+   tightened by three lines to pay; still 31.
+4. ~~`ship-shape-2026-09.md` stub: the step-5 range ends at `ae5dfb6`~~ —
+   **landed `ebd78a6`**.
 
 Done: `uv run ruff format --check src tests` clean; `uv run pytest -q` green;
 CLAUDE.md ≤ 160 lines; `rg -n "6fcee88" _plans/ship-shape-2026-09.md` names only
