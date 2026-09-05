@@ -310,3 +310,9 @@ Appended by the master, dated, one line each.
   "until ai-style grows one"; stale once R3 lands.
 - 2026-09-05 (R6): `_training_pairs/scores.jsonl` (270 rows, 2026-08-12,
   gitignored) is still in the main blog checkout — Dan's to delete.
+- 2026-09-05 (R2): `tests/test_budget.py` rows sit above actual sizes without
+  failing (`bin/ai_style.py` 984 against 987, `train.py`'s docstring tuple one
+  entry long); the test enforces a cap, not the "exact size" P2 states. Either
+  the test gains a slack check like `PROSE_SLACK`, or P2's wording softens.
+- 2026-09-05 (R2): blog `a52842a1ef`'s body cites stylebot `0b1bb5b`, the
+  pre-rebase hash of `c77c1ea`; not amended (P8).
