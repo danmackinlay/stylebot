@@ -34,7 +34,7 @@ MODULE_DOCSTRING_LINES = 30
 
 #: Package-wide docstring + comment lines, measured by `_modules()` at the commit
 #: that set it. It only falls: a commit that lowers prose lowers it (D58).
-PROSE_CEILING = 4266
+PROSE_CEILING = 3991
 #: How far under the ceiling prose may sit before the test demands it be lowered.
 PROSE_SLACK = 50
 
@@ -69,14 +69,12 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "module_docstring": 32,
     },
     "synth.py": {
-        "lines": 1197,
-        "functions": {"synthesize_pairs": 127, "_run_session": 118},
-        "docstrings": (26,),
+        "lines": 1083,
+        "functions": {"synthesize_pairs": 115, "_run_session": 114},
     },
     "synth_cli.py": {
-        "lines": 1059,
-        "functions": {"run_synth": 259, "_report_result": 123},
-        "docstrings": (16,),
+        "lines": 937,
+        "functions": {"run_synth": 233, "_report_result": 109},
     },
     "targets.py": {"functions": {"_post_targets": 94}},
     "train.py": {

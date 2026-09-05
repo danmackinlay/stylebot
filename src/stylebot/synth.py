@@ -1,18 +1,12 @@
-"""Phase 2 — synthetic pair generation.
+"""Phase 2 — synthetic pair generation (D9, D11–D14, D84).
 
-Library-first: `synthesize_pairs` is a typed function over explicit paths/params;
-`ai-style synth` (`stylebot.bin.ai_style`) is a thin CLI wrapper.
-
-Method (see `_plans/decisions.md` D9, D11-D13): human-authored prose is the
-**target** (`messages[2]`); an LLM paraphrases it into "more polished" prose, the
-**slop source** (`messages[1]`), and the styler learns to undo that transform.
-Every generator call is appended to `draws_dir` as one draw (D84); a reader sees
-the accepted draws' records, in the Phase-1 schema chunked the same way, so real
-and synthetic pairs are mixable. Synthetic records add `meta.synthetic`,
-`meta.generator`, `meta.slop_strategy`, `meta.synth_key` and `meta.tags`.
-Generators and slop prompts are injected knobs, both folded into `synth_key`;
-rotate ≥2 generators so the styler undoes AI writing broadly, not one model's
-tics.
+Human-authored prose is the target (`messages[2]`); an LLM paraphrases it into
+"more polished" prose, the slop source (`messages[1]`), and the styler learns
+to undo that transform. Every generator call is appended to `draws_dir` as one
+draw; a reader sees the accepted draws' records in the Phase-1 schema, chunked
+the same way, plus `meta.synthetic`, `meta.generator`, `meta.slop_strategy`,
+`meta.synth_key` and `meta.tags`. `synthesize_pairs` is the library entry;
+`ai-style synth` wraps it.
 """
 
 from __future__ import annotations
@@ -44,12 +38,9 @@ from stylebot.targets import Target
 
 logger = logging.getLogger(__name__)
 
-# --- re-exports ---------------------------------------------------------------
-# Names reached by ATTRIBUTE lookup (`synth.openrouter_generator`) by
-# `synth_cli`, `bin/ai_style.py` and livingthing — the indirection that lets a
-# test monkeypatch a factory where production resolves it. Anything not needing
-# that imports from `stylebot.generators` / `.targets` directly. Keep this list
-# minimal and check before adding: nothing prunes it on its own.
+# --- re-exports: reached by attribute (`synth.openrouter_generator`) so a test
+# can monkeypatch a factory where production resolves it. Nothing prunes this
+# list; check before adding.
 from stylebot.generators import (  # noqa: E402, F401
     DEFAULT_GEN_TIMEOUT,
     DEFAULT_SLOP_MAX_TOKENS,
@@ -65,12 +56,10 @@ from stylebot.targets import iter_targets  # noqa: E402, F401
 
 
 def transform_similarity(a: str, b: str) -> float:
-    """Character-level copying ratio between two prose bodies, in [0, 1].
+    """Character-level copying ratio in [0, 1]: 1.0 verbatim, ~0 no shared runs.
 
-    1.0 = verbatim copy, ~0 = no shared runs. A *copying* measure, not a style
-    measure — sentence reordering counts as a transform. `autojunk=False`: on
-    prose the default popularity heuristic junks the space character, which
-    makes ratios erratic.
+    A copying measure, not a style one — reordering counts as a transform.
+    `autojunk=False`: the popularity heuristic junks the space character on prose.
     """
     na = " ".join(a.split())
     nb = " ".join(b.split())
@@ -84,10 +73,9 @@ def transform_similarity(a: str, b: str) -> float:
 # modes, not covariates worth sampling.
 SESSION_WINDOW_FILL_CAP = 0.8
 # Extra draws after a TRANSIENT upstream failure (502/429/timeout), and the
-# first backoff, doubling thereafter. Distinct from `gate_retries`, which
-# redraws a draw that ARRIVED and was rejected on quality; the counts must not
-# be pooled. 2, and a short backoff, because the fix that works is re-pinning
-# the provider rather than waiting — the SDK already retried the same request.
+# first backoff, doubling thereafter. Distinct from `gate_retries` (a draw that
+# arrived and was rejected); the counts are never pooled. Short, because the
+# fix is re-pinning the provider, not waiting.
 DEFAULT_GEN_RETRIES = 2
 _RETRY_BACKOFF_SECS = 2.0
 # Default per-session prompt-token budget, same for every model (cost grows
@@ -111,16 +99,10 @@ def _synth_key(
 ) -> str:
     """Stable id for one synthetic pair — the resume/dedup cell identity (D11).
 
-    **Key on content, record circumstance.** Keyed: generator, strategy,
-    reasoning effort, prompt id, heading context, target text, `replicate`. NOT
-    keyed: sampling params, anything positional, and session membership above
-    all (D13).
-
-    **Also not keyed: the chunk budget.** Two budgets that cut a passage to
-    byte-identical text are ONE cell, stamped `meta.merge_max_chars` by whichever
-    batch reached it first — so that field records provenance, not a design cell.
-    Keying on it would mint a duplicate pair per budget for identical text
-    (D82).
+    Keyed on content: generator, strategy, effort, prompt id, heading context,
+    target text, `replicate`. Not keyed: sampling params, position, session
+    membership (D13), the chunk budget (D82: `meta.merge_max_chars` is
+    provenance, not a cell).
     """
     h = hashlib.sha256()
     for part in (generator_name, strategy, reasoning_effort, prompt_id, context, target_text):
@@ -133,11 +115,8 @@ def _synth_key(
 
 
 def _effective_context(target: Target, context_dropout: float) -> str:
-    """The context to use for a target, applying deterministic dropout.
-
-    Keyed on the body hash, so resume is stable. Leaving some pairs heading-less
-    stops the styler *requiring* a heading at inference.
-    """
+    """The context for a target after deterministic dropout, keyed on the body
+    hash so resume is stable; heading-less pairs stop the styler requiring one."""
     if not target.context or context_dropout <= 0:
         return target.context
     bucket = int(hashlib.sha256(target.text.encode("utf-8")).hexdigest(), 16) % 1000
@@ -150,28 +129,21 @@ def _capture_id(source: str, generator_name: str, strategy: str = DEFAULT_STRATE
     return h.hexdigest()[:8]
 
 
-# Markdown inline-link destination, one level of balanced parens deep:
-# `](dest)` / `](dest "title")`. Reference definitions and autolinks are left
-# alone — only the inline form drifted.
+# Inline-link destination, one level of balanced parens deep; reference
+# definitions and autolinks are left alone — only the inline form drifted.
 _LINK_DEST_RE = re.compile(r"\]\((?:[^()\\]|\\.|\([^()]*\))*\)")
 
-# Curly punctuation the blog's quote-curling pass introduced, folded back to the
-# ASCII the corpus was captured with.
+# Curly punctuation the blog's quote-curling pass introduced, folded to ASCII.
 _QUOTE_FOLD = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"'})
 
 
 def coverage_key(body: str) -> str:
     """The key `skip_covered` compares target bodies on, cosmetic drift removed.
 
-    The corpus is a frozen record and does NOT track current prose, so a post
-    edited after its pair was generated re-reads as uncovered and gets paid for
-    twice; most of that drift is mechanical and not a difference the styler
-    could learn (D53).
-
-    Three folds, each a difference the style prompt makes invisible: inline link
-    **destinations**, curly **quotes**, and **whitespace** runs. Nothing else —
-    every extra rule risks collapsing two distinct passages onto one key, and
-    that failure is silent. NOT `_synth_key`, which stays keyed on raw text.
+    A post edited after its pair was generated would otherwise re-read as
+    uncovered and be paid for twice (D53). Three folds, each invisible to the
+    style prompt: inline link destinations, curly quotes, whitespace runs;
+    any more risks collapsing distinct passages. `_synth_key` stays on raw text.
     """
     return " ".join(_LINK_DEST_RE.sub("]()", body).translate(_QUOTE_FOLD).split())
 
@@ -186,11 +158,8 @@ def drawn_records(draws_dir: Path | str) -> Iterator[dict]:
 def covered_target_keys(records: Iterable[dict]) -> set[str]:
     """The `coverage_key`s that already have >=1 pair, over any record stream.
 
-    Context-agnostic: the assistant side of every record is
-    `build_pair_content(meta.context, body)`, so the body is recovered by
-    stripping the recorded prefix. Backs `skip_covered`, and returns normalised
-    keys rather than raw bodies — see `coverage_key`. A run passes
-    `drawn_records`; `pairs.iter_pairs` reads a corpus file instead.
+    The body is recovered by stripping the recorded `meta.context` prefix. A
+    run passes `drawn_records`; `pairs.iter_pairs` reads a corpus file instead.
     """
     bodies: set[str] = set()
     for rec in records:
@@ -238,7 +207,7 @@ def _build_record(
         "before_chars": len(slop),  # body lengths (the transform), excluding the heading prefix
         "after_chars": len(target.text),
         "transform_sim": transform_similarity(slop, target.text),
-        # Chunk-scale facet: merge budget (None = unmerged) and cut (None = section).
+        # Chunk-scale facet (D82): None = unmerged / section-bounded.
         "merge_max_chars": target.merge_max_chars,
         "chunk_mode": target.chunk_mode,
         "synthetic": True,
@@ -246,10 +215,9 @@ def _build_record(
         "slop_strategy": strategy,
         "synth_key": synth_key,
         "tags": ["synthetic", "paraphrase", *extra_tags],
-        # Which trees and which cut produced this pair. The chunk policy arrives
-        # ON THE TARGET (`iter_targets` digests the `ChunkPolicy` it was handed),
-        # so the stamp tracks the composed policy without being told about it.
-        # `synth_key` folds none of this in: resume must survive a tree commit.
+        # Which trees and which cut produced this pair; the chunk policy arrives
+        # on the target, so the stamp tracks the composed policy. `synth_key`
+        # folds none of this in: resume must not restart on a tree move.
         "provenance": pair_provenance(
             repo_prov,
             policy_digest=target.policy_digest,
@@ -279,14 +247,12 @@ class SynthResult:
     written: int = 0
     skipped_existing: int = 0
     skipped_covered: int = 0  # targets dropped by skip_covered (any-config coverage)
-    # Hygiene-gate drops: paid for, never written. A dropped cell stays un-keyed,
-    # so a re-run retries it and a consistently failing model burns spend every
-    # run until it leaves the roster — these counts are the signal to act on.
+    # Hygiene-gate drops: paid for, never written; the cell stays un-keyed, so a
+    # re-run retries it and a failing model burns spend until it leaves the roster.
     skipped_degenerate: int = 0  # identity: transform_sim > max_transform_sim
     skipped_inflated: int = 0  # inflation: length ratio > max_length_ratio
     skipped_invented_anchors: int = 0  # anchor edits: the slop lost or un-escaped one
-    # Redraw accounting (`gate_retries`): a gated draw is paid for either way, so
-    # these are the cost of NOT letting a gate quietly bias coverage.
+    # Redraw accounting (`gate_retries`): the cost of not letting a gate bias coverage.
     gate_redraws: int = 0  # extra paid draws spent clearing a gate
     redrawn_cells: int = 0  # cells that needed at least one redraw
     redraws_recovered: int = 0  # ... of those, ones that went on to be written
@@ -304,8 +270,7 @@ class SynthResult:
     budget_bound_sessions: int = 0  # sessions ended by the token budget
     reflow_sessions: int = 0  # fresh sessions spawned to carry leftovers
     reflowed_turns: int = 0  # leftover turns respun (a turn respun twice counts twice)
-    # Per-model economics keyed by gen.name. Cost is billed credits, not an
-    # estimate; zeros for generators that report no usage.
+    # Per-model economics keyed by gen.name: billed credits, zeros when unreported.
     model_stats: dict[str, dict] = field(default_factory=dict)
 
     def add_gen_stats(self, name: str, gen_meta: Mapping) -> None:
@@ -348,12 +313,8 @@ class _Session:
 
 
 def _arm_identity(gen: Generator) -> str:
-    """The identity assignment hashes on — the ARM, not the model.
-
-    The rotation is models × strategies × efforts, so many arms share one
-    `Generator.name`; keying on `name` would score them identically and let one
-    win every target while its siblings got no work at all.
-    """
+    """The identity assignment hashes on — the arm, not the model: many arms
+    share one `Generator.name`, and name-keyed siblings would get no work."""
     return f"{gen.name}\x00{gen.strategy}\x00{gen.reasoning_effort}\x00{gen.prompt_id}"
 
 
@@ -367,12 +328,9 @@ def _assign(
 ) -> list[tuple[Target, Generator, str]]:
     """Pair targets with generators → ``(target, generator, effective_context)``.
 
-    Default (rotate, `per_generator=False`): **rendezvous assignment** — score
-    every arm as ``sha256(salt, arm_identity, text)``, take the argmax, break
-    ties on arm identity (D12). Balance is multinomial, not exact;
-    `per_generator=True` crosses every target x every generator instead, at n x
-    the pairs and cost. `assign_seed` re-randomizes the whole design, which
-    changes which arm generated each target, so those assignments regenerate.
+    Rendezvous assignment (D12): argmax of ``sha256(salt, arm_identity, text)``,
+    ties on arm identity; `per_generator=True` crosses every target with every
+    generator instead. `assign_seed` re-randomizes the whole design.
     """
     if not generators:
         return []
@@ -400,10 +358,8 @@ def _assign(
 
 
 def _session_id(gen: Generator, items: Sequence[tuple[Target, str]]) -> str:
-    """Grouping label for one session's actual composition — a covariate, NOT a key.
-
-    Recomputed at reflow time, so it always names what the session contained.
-    """
+    """Label for one session's actual composition — a covariate, not a key;
+    recomputed at reflow."""
     sid_h = hashlib.sha256(f"{gen.name}\x00{gen.strategy}\x00{gen.prompt_id}".encode())
     for target, ctx in items:
         sid_h.update(b"\x00")
@@ -417,13 +373,10 @@ def _plan_sessions(
     *,
     session_turns: int = 1,
 ) -> list[_Session]:
-    """Chunk each generator's (target, ctx, key) work items into sessions.
+    """Chunk each generator's missing (target, ctx, key) work items into sessions.
 
-    Takes only *missing* cells — the caller filters against the corpus first —
-    so a session never contains already-generated turns; assignment order is
-    preserved. Sessions do not touch keys, so a cell keys identically whether it
-    lands in a session, reflows into a fresh one, or runs stateless.
-    `session_turns` is only a backstop; the token budget is the depth control.
+    Assignment order is preserved and keys are untouched (D13). `session_turns`
+    is a backstop; the token budget is the depth control.
     """
     # Group by generator IDENTITY, not name: a rotation may carry the same model
     # under several strategies, and name-keying would silently merge them.
@@ -445,11 +398,8 @@ def _plan_sessions(
 
 
 def _respin_session(gen: Generator, leftover: Sequence[_Turn]) -> _Session:
-    """A fresh session holding the turns an earlier one couldn't run.
-
-    Fresh history (window position restarts), fresh session_id from the actual
-    composition, turn indices renumbered from 1.
-    """
+    """A fresh session (history, id, turn indices) for the turns an earlier one
+    couldn't run."""
     sid = _session_id(gen, [(t.target, t.context) for t in leftover])
     turns = [
         _Turn(target=t.target, key=t.key, context=t.context, index=i)
@@ -459,12 +409,8 @@ def _respin_session(gen: Generator, leftover: Sequence[_Turn]) -> _Session:
 
 
 def _record_prompts(data_dir: Path, generators: Sequence[Generator]) -> None:
-    """Archive each run's system prompts to `<data-dir>/prompts.jsonl` (id-deduped).
-
-    `prompt_id` is a content hash, opaque on its own; this sidecar keeps the
-    prompt text next to the corpus it produced, so resolving an id is a grep —
-    including for custom `--slop-system-file` prompts and superseded versions.
-    """
+    """Archive each run's system prompts to `<data-dir>/prompts.jsonl` (id-deduped),
+    so a `prompt_id` content hash resolves by grep."""
     path = data_dir / "prompts.jsonl"
     seen = {rec.get("prompt_id", "") for rec in iter_jsonl(path)}
     with path.open("a", encoding="utf-8") as fp:
@@ -490,11 +436,8 @@ def _exchange(user_text: str, assistant_text: str) -> list[dict]:
 
 @dataclass
 class _RunState:
-    """Shared mutable state for one `synthesize_pairs` run.
-
-    Every session's coroutine shares this object. Single-threaded asyncio —
-    mutations interleave only between awaits, so no locks.
-    """
+    """Shared mutable state for one `synthesize_pairs` run; single-threaded
+    asyncio, so no locks (D56)."""
 
     result: SynthResult
     windows: dict[str, int]  # generator name -> context window (live sessions)
@@ -524,15 +467,10 @@ def synth_key_of(record: Mapping | None) -> str:
 class DrawWriter:
     """The one append handle on a `draws/`, which will not duplicate a cell.
 
-    Every draw a run makes goes through it, routed by `draws.draw_shard_of` so
-    the run leaves every other shard byte-identical (D50); handles are opened
-    lazily and kept, one per shard touched.
-
-    Before each append the writer catches up on whatever another run appended
-    since it last looked — a tail read from a remembered offset over *every*
-    shard, since re-reading per record would be quadratic (D36). No lock and
-    no inode check: nothing rewrites a corpus (D84), so a handle never goes
-    stale and a run is the only writer of its shards.
+    Draws route by `draws.draw_shard_of` (D50), one lazily-opened handle per
+    shard. Before each append the writer tails every shard from a remembered
+    offset for keys another run appended (D36). No lock, no inode check:
+    nothing rewrites a corpus (D84).
     """
 
     def __init__(self, draws_dir: Path, seen: set[str]) -> None:
@@ -556,10 +494,8 @@ class DrawWriter:
         """One shard's append handle, opened on first use and kept."""
         fp = self._handles.get(shard)
         if fp is None:
-            # BINARY "ab+", not text mode, for two reasons that both bite
-            # silently: a text handle raises on `tell()` after line iteration,
-            # and its `seek` takes an opaque cookie rather than a byte offset.
-            # Encoding one JSON line by hand is the cheaper half of that trade.
+            # Binary "ab+": a text handle raises on `tell()` after iteration and
+            # its `seek` takes an opaque cookie, not a byte offset.
             fp = shard.open("ab+")
             self._handles[shard] = fp
             self._offsets.setdefault(shard, 0)
@@ -568,11 +504,7 @@ class DrawWriter:
     def _catch_up(self) -> None:
         """Fold every synth_key appended by anyone since our last look into `seen`.
 
-        Across every shard, not just the one about to be written: a cell's key
-        does not know which month it landed in, so a per-shard catch-up would
-        answer "not seen" for a key another writer had just put in a neighbour.
-        The read is a tail from a remembered byte offset, so the cost is what was
-        appended since the last write, not the 38 MB corpus.
+        Across every shard: a cell's key does not know which month it landed in.
         """
         for shard in corpus.shard_paths(self._path):
             size = shard.stat().st_size if shard.exists() else 0
@@ -639,14 +571,9 @@ def _estimate_next_prompt(
 def _gate_verdict(slop: str, target_text: str, st: _RunState) -> tuple[str, str] | None:
     """`(counter_name, reason)` if a hygiene gate rejects this draw, else None.
 
-    Pure and record-free so it can run BEFORE the per-pair bookkeeping (reasoning
-    sidecar, session covariates), which a redrawn sample must not repeat.
-
-    **Every reason describes what the GENERATOR did**, never what the pair looks
-    like afterwards: synthesis is a reverse edit, so a defect in the generated
-    slop surfaces as an apparent property of Dan's prose. "target invents 3
-    anchors" is backwards — the generator DELETED three links while producing
-    slop, and reversing that edit is what would teach invention.
+    Pure, so it runs before the per-pair bookkeeping a redraw must not repeat.
+    Every reason names what the generator did, never what the pair looks like:
+    synthesis is a reverse edit, so a deleted link reads as an invented one (D32).
     """
     if st.max_transform_sim is not None:
         sim = transform_similarity(slop, target_text)
@@ -669,7 +596,7 @@ def _gate_verdict(slop: str, target_text: str, st: _RunState) -> tuple[str, str]
     if st.drop_invented_anchors:
         lost, invented = anchor_delta(slop, target_text)
         # Reversed, a deleted link is a lesson in inventing one, and an
-        # un-escaped `@key` (the target's `\\@key`) in breaking one (D32, C13).
+        # un-escaped `@key` (the target's `\\@key`) in breaking one (D32).
         unescaped = [a for a in lost if "\\" + a in target_text]
         if invented or unescaped:
             uniq = sorted(set(invented or unescaped))
@@ -684,18 +611,11 @@ def _gate_verdict(slop: str, target_text: str, st: _RunState) -> tuple[str, str]
 
 
 class _EmptyDraw(RuntimeError):
-    """A provider answered a valid request with no content.
-
-    Its own type because it is a *transient upstream* failure wearing the
-    clothes of a programming error: retrying against a different provider
-    usually works, and `_is_transient` has to be able to tell it apart from a
-    genuine `RuntimeError`.
-    """
+    """A provider answered a valid request with no content: a transient upstream
+    failure that `_is_transient` must tell from a genuine `RuntimeError`."""
 
 
-# Upstream statuses worth another draw. Everything else (400/401/403/404 — a
-# malformed request, a bad key, a model that does not exist) is our bug or our
-# config, and retrying it just burns the budget more slowly.
+# Upstream statuses worth another draw; 400/401/403/404 are our bug or config.
 _TRANSIENT_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 _TRANSIENT_NAMES = frozenset(
     {"APIConnectionError", "APITimeoutError", "ConnectionError", "TimeoutError"}
@@ -703,12 +623,8 @@ _TRANSIENT_NAMES = frozenset(
 
 
 def _is_transient(exc: BaseException) -> bool:
-    """Is this failure worth redrawing, or is it ours to fix?
-
-    Duck-typed on `status_code` rather than catching `openai.APIStatusError`:
-    the SDK is a lazy dependency here, and generators are an injected seam that
-    any backend may implement.
-    """
+    """Is this failure worth redrawing, or is it ours to fix? Duck-typed on
+    `status_code`: the SDK is lazy here and generators are an injected seam."""
     if isinstance(exc, _EmptyDraw):
         return True
     status = getattr(exc, "status_code", None)
@@ -761,11 +677,8 @@ def _record_lost_draw(
 def _pop_reasoning_to_sidecar(
     data_dir: Path, turn: _Turn, gen: Generator, gen_meta: dict, *, in_session: bool
 ) -> None:
-    """Route a reasoning trace to the `reasoning.jsonl` sidecar (keyed to the pair).
-
-    Traces are diagnostics, not corpus: `reasoning_text` is POPPED from
-    `gen_meta`, so it never enters `pairs.jsonl`.
-    """
+    """Pop `reasoning_text` from `gen_meta` into the `reasoning.jsonl` sidecar
+    (keyed to the pair): traces are diagnostics, not corpus."""
     reasoning_text = gen_meta.pop("reasoning_text", None)
     if reasoning_text is None:
         return
@@ -839,12 +752,8 @@ def _record_draw(
 
 
 async def _attempt(fn, text: str, history: Sequence[dict]) -> tuple[str, dict]:
-    """One call to a generator callable, sync or async, normalized.
-
-    `history` is a parameter, not a closed-over variable: a session mutates its
-    history between turns, and passing it explicitly is what keeps the binding
-    obvious rather than something the reader has to reason about.
-    """
+    """One call to a generator callable, sync or async, normalized. `history`
+    is passed explicitly because a session mutates it between turns."""
     out = fn(text, history=list(history) or None)
     if inspect.isawaitable(out):
         out = await out
@@ -857,11 +766,8 @@ async def _attempt(fn, text: str, history: Sequence[dict]) -> tuple[str, dict]:
 async def _draw(
     call, gen: Generator, turn: _Turn, history: Sequence[dict], st: _RunState
 ) -> tuple[str, dict, object]:
-    """One paid draw, retried across providers. Raises once it gives up.
-
-    Returns `(slop, gen_meta, call)`: a retry RE-PINS the provider (see
-    `DEFAULT_GEN_RETRIES`), so the caller must keep using the callable that worked.
-    """
+    """One paid draw, retried across providers; raises once it gives up. Returns
+    `(slop, gen_meta, call)`: a retry re-pins the provider, so keep using `call`."""
     delay = _RETRY_BACKOFF_SECS
     for attempt in range(st.gen_retries + 1):
         try:
@@ -894,9 +800,8 @@ async def _draw_past_gates(
     """Draw for one turn, redrawing while a hygiene gate rejects the sample (D32).
 
     Returns `(slop, gen_meta, verdict, redraws, call)`: `verdict` is None once a
-    sample cleared, else the last rejection when the redraw budget ran out.
-    Raises when `_draw` gives up, on a redraw as on the first draw: the caller's
-    error path is the one place a lost draw is recorded (C14).
+    sample cleared, else the last rejection. Raises when `_draw` gives up; the
+    caller's error path is the one place a lost draw is recorded.
     """
     redraws = 0
     try:
@@ -929,11 +834,10 @@ async def _draw_past_gates(
 async def _run_session(sess: _Session, st: _RunState) -> list[_Turn]:
     """Run one session's turns in order, appending records as they complete.
 
-    Returns the turns this session could NOT run, for the caller to reflow —
-    never silently dropped: a binding token budget returns every remaining turn,
-    an erroring turn returns the turns AFTER it (the failed cell retries next
-    run). The budget check is skipped while history is empty, so every reflow
-    writes a pair or sheds an errored turn, strictly shrinking the leftovers.
+    Returns the turns this session could not run, for the caller to reflow: a
+    binding token budget returns every remaining turn, an erroring turn the
+    turns after it. The budget check is skipped while history is empty, so
+    every reflow strictly shrinks the leftovers.
     """
     gen = sess.generator
     # Multi-turn sessions get a per-session callable when the generator offers
@@ -961,8 +865,7 @@ async def _run_session(sess: _Session, st: _RunState) -> list[_Turn]:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            # A failed pair is never written, so its synth_key resolves to
-            # nothing: the recorded error must carry its config to be attributable.
+            # A failed pair is never written, so the recorded error carries its config.
             who = f"{gen.name} strategy={gen.strategy} effort={gen.reasoning_effort}"
             if sess.session_id:
                 who += f" turn={turn.index}"
@@ -1015,23 +918,21 @@ async def _run_session(sess: _Session, st: _RunState) -> list[_Turn]:
             repo_prov=st.repo_prov,
         )
         if verdict is not None:
-            # Count loudly, record the spend, write nothing — the cell stays
-            # un-keyed, so a re-run retries it.
+            # Count, record the spend, write nothing: the cell stays un-keyed.
             counter, reason = verdict
             setattr(st.result, counter, getattr(st.result, counter) + 1)
             _record_gate_drop(
                 st, turn, gen, gen_meta, slop, verdict, attempt=redraws, redrawn=False
             )
-            # "gate dropped a draw", not "degenerate output": the anchor gate
-            # catches a fluent draw that merely deleted a link (D32).
+            # "gate dropped a draw", not "degenerate output" (D32).
             logger.warning("gate dropped a draw: %s — %s (%s)", gen.name, reason, turn.key)
         elif _record_draw(st, turn, gen, gen_meta, slop, draws.ACCEPTED, record):
             st.result.written += 1
             st.result.per_generator[gen.name] = st.result.per_generator.get(gen.name, 0) + 1
             st.result.add_gen_stats(gen.name, gen_meta)
         else:
-            # Another writer claimed this cell between plan and write (`DrawWriter`):
-            # the draw is kept without its record, so a view renders theirs.
+            # Another writer claimed this cell between plan and write: the draw
+            # is kept without its record.
             st.result.skipped_existing += 1
             logger.info("cell already written by a concurrent run: %s", turn.key)
         st.done += 1
@@ -1047,12 +948,9 @@ async def _run_session(sess: _Session, st: _RunState) -> list[_Turn]:
 
 
 async def _run_sessions(sessions: Sequence[_Session], st: _RunState, max_workers: int) -> None:
-    """Run sessions concurrently, `max_workers` at a time, on one append handle.
-
-    Leftover turns (budget bind, error) reflow into fresh sessions inside the
-    same worker slot until the work list is empty, so the run finishes with every
-    planned turn either written or individually errored.
-    """
+    """Run sessions concurrently, `max_workers` at a time, on one append handle;
+    leftover turns reflow in the same slot until every planned turn is written
+    or individually errored."""
     sem = asyncio.Semaphore(max(1, max_workers))
 
     async def _gated(sess: _Session) -> None:
@@ -1095,38 +993,27 @@ def synthesize_pairs(
     draws_dir: Path | str | None = None,
     system_prompt: str | None = None,
 ) -> SynthResult:
-    """Generate synthetic pairs and append them to `draws_dir` as draws.
+    """Generate synthetic pairs and append them to `draws_dir` as draws (D84).
 
-    Idempotent and resumable: cells whose content-only `meta.synth_key` is
-    already in the corpus are skipped, so re-running never duplicates and a
-    crashed run resumes where it stopped (D11). Sessions run on one asyncio
-    loop, `max_workers` at a time, no locks (D56); generators may be sync or
-    async.
-
-    **Sessions** (`session_turns > 1`): missing cells are chunked into live
-    multi-turn sessions, fill is *measured* (`prompt_tokens`, `context_window`,
-    `window_fill` in `meta.gen`), and **the token budget is the depth control**:
-    a session ends at `min(session_budget or session_max_tokens,
-    SESSION_WINDOW_FILL_CAP x window)` and the turns it could not run REFLOW
-    into fresh sessions rather than being dropped.
-
-    **Hygiene gates** count loudly, write nothing and leave the cell un-keyed so
-    a re-run retries it (D32). Heading `context` is prepended verbatim to both
-    sides, slop is generated from the body alone (D14). `dry_run` only plans.
-    **Provenance** is resolved once per run (D36). Every call lands as one draw
-    under `draws_dir` (default `<data-dir>/draws`) carrying `system_prompt` (the
-    default author's when None) as `messages[0]`; no `pairs.jsonl` (D84).
+    Idempotent and resumable: cells whose `meta.synth_key` is already in the
+    corpus are skipped (D11). Sessions run on one asyncio loop, `max_workers`
+    at a time (D56); generators may be sync or async. With `session_turns > 1`
+    the token budget is the depth control — a session ends at
+    `min(session_budget or session_max_tokens, SESSION_WINDOW_FILL_CAP x window)`
+    and the turns it could not run reflow into fresh sessions. Hygiene gates
+    write nothing and leave the cell un-keyed (D32); heading `context` is
+    prepended to both sides (D14); provenance is resolved once per run (D36).
+    Every call lands as one draw under `draws_dir` (default `<data-dir>/draws`)
+    carrying `system_prompt` (the default author's when None) as `messages[0]`;
+    no `pairs.jsonl` (D84). `dry_run` only plans.
     """
     data_dir = Path(data_dir)
     draws_dir = Path(draws_dir) if draws_dir is not None else config.draws_path(data_dir)
 
     skipped_covered = 0
     if skip_covered:
-        # Coverage mode: a target with ANY existing pair is done. Compared on
-        # `coverage_key`, so cosmetic prose drift since generation (rewritten
-        # link destinations, curled quotes, a reflow) still reads as covered.
-        # Applied before assignment; cell-level dedup below still governs the
-        # rest, and it keys on RAW text.
+        # Coverage mode: a target with any existing pair is done, compared on
+        # `coverage_key` before assignment; cell-level dedup below keys on raw text.
         covered = covered_target_keys(drawn_records(draws_dir))
         kept = [t for t in targets if coverage_key(t.text) not in covered]
         skipped_covered = len(targets) - len(kept)
@@ -1142,9 +1029,8 @@ def synthesize_pairs(
     result = SynthResult(planned=len(assignments), skipped_covered=skipped_covered)
 
     # Key everything, drop what the corpus already has plus in-run duplicates,
-    # then plan sessions over only the missing cells.
-    # `disk_keys` is what is ON DISK, and is NOT the planner's `seen` below: that
-    # also holds every cell this run PLANS, which would refuse its own first write.
+    # then plan sessions over only the missing cells. `disk_keys` is what is on
+    # disk, not the planner's `seen`, which also holds every cell this run plans.
     disk_keys = existing_synth_keys(drawn_records(draws_dir))
     seen = set(disk_keys)
     missing: list[tuple[Target, Generator, str, str]] = []

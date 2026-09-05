@@ -1,27 +1,17 @@
-"""Shared CLI kit for synth-style commands.
+"""Shared CLI kit for synth-style commands (D78, D83).
 
-`ai-style synth` and downstream blog wrappers present the same knobs over the
-same engine; only *selection* and a few pinned defaults differ per caller. This
-module is the single source for the shared surface:
+`ai-style synth` and the blog's wrapper present the same knobs over the same
+engine; only selection and a few pinned defaults differ. The surface is the
+frozen option bundles below (a field with `cli_options.opt()` is a flag, a
+plain field is library-only), `synth_options(bundles=, defaults=, exclude=)`
+over them, `pop_bundles` to fold a callback's `**kw` back, and
+`run_synth(targets, ...)` — the command body after target selection.
+`ChunkPolicy` is `stylebot.targets`'s, re-exported, and feeds `iter_targets`
+on the selection side.
 
-- the six frozen **option bundles** below, grouped by the consumer each feeds.
-  A field declares its flag via `cli_options.opt()`, so a default exists in
-  exactly one place; a plain field is library-only (D83);
-- `synth_options(bundles=..., defaults=..., exclude=...)` — the click decorator
-  over them;
-- `run_synth(targets, ...)` — the whole command body after target selection:
-  count echo, `--sample`/`--report` short-circuit, generator construction,
-  `synthesize_pairs`, result reporting, and `SynthGenerationError`.
-
-Per-command concerns stay with the caller: target selection options, the
-`--data-dir` resolution policy, provenance tags. A callback's `**kw` becomes
-bundles via `pop_bundles`. `ChunkPolicy` (re-exported from `stylebot.targets`)
-feeds `iter_targets` on the *selection* side, before `run_synth` sees a target.
-
-**click declares this module's options; it does not decide its control flow or
-own its output.** The library entry points raise the `SynthError` family and
-never exit, and they write to a caller-supplied `emit` sink defaulting to
-silence; `bin/ai_style.py` decides exit codes and rendering (D47).
+click declares the options; it decides no control flow and owns no output.
+The library raises the `SynthError` family, never exits, and writes to a
+caller-supplied `emit` defaulting to silence (D47).
 """
 
 from __future__ import annotations
@@ -76,12 +66,8 @@ __all__ = [
 _HEARTBEAT_SECS = 20.0
 
 
-# ---------------------------------------------------------------------------
-# The error vocabulary: three named specializations of `stylebot.errors`' two
-# classes (D47). A library function reachable without click must not hand its
-# caller a CLI exception, so nothing here raises one or exits the process;
-# `cli_options.translate_errors` is where they become exit codes.
-# ---------------------------------------------------------------------------
+# --- errors: three specializations of `stylebot.errors` (D47); exit codes are
+# `cli_options.translate_errors`'s.
 
 
 class SynthError(StylebotError):
@@ -89,54 +75,34 @@ class SynthError(StylebotError):
 
 
 class SynthConfigError(SynthError, ConfigError):
-    """A synth-shaped `stylebot.errors.ConfigError` — exit 2.
-
-    Kept as a name so `except SynthConfigError` can mean "this run's flags",
-    not "some flag somewhere"; the exit code and the `param_hint` come from the
-    package vocabulary.
-    """
+    """A synth-shaped `stylebot.errors.ConfigError` — exit 2."""
 
 
 class SynthRunError(SynthError, RunError):
-    """A synth-shaped `stylebot.errors.RunError` — exit 1.
-
-    A missing API key, an unreachable model registry.
-    """
+    """A synth-shaped `stylebot.errors.RunError` — exit 1: a missing key, an
+    unreachable registry."""
 
 
 class SynthGenerationError(SynthRunError):
-    """The run completed but some pairs failed to generate.
-
-    Carries the `SynthResult` so a library caller can still see what landed.
-    `quiet`, because the per-error detail and the run summary have already been
-    reported by the time this is raised: exit 1 with nothing further to print.
-    """
+    """The run completed but some pairs failed to generate; carries the
+    `SynthResult`. `quiet`: the errors and summary were already reported."""
 
     def __init__(self, result: synth.SynthResult) -> None:
         super().__init__(f"{len(result.errors)} generation error(s)", quiet=True)
         self.result = result
 
 
-# Slop models are selected by `--openrouter-model` alone: one key reaches many
-# upstream models, which is what a multi-source rotation wants. The direct-API
-# presets are retired (D21); another provider is an injected `synth.Generator`.
+# Slop models are selected by `--openrouter-model` alone (D21); another
+# provider is an injected `synth.Generator`.
 
 
-# ---------------------------------------------------------------------------
-# The option bundles: the surface grouped along its seams, one frozen dataclass
-# per consumer. Each field carries its own flag (`opt(default, *decls, **kw)`),
-# so a default is declared exactly once and `run_synth` cannot drift from the
-# CLI; a field WITHOUT `opt()` is library-only. `ChunkPolicy` is the one bundle
-# not declared here — it belongs to `stylebot.targets` — but is re-exported, so
-# a wrapper reaches it as `synth_cli.ChunkPolicy`.
-# ---------------------------------------------------------------------------
+# --- option bundles: one frozen dataclass per consumer, `opt()` per flag field.
 
 
 @dataclass(frozen=True)
 class InspectOpts:
-    """Read-only inspection — `--sample` / `--report`, handled by
-    `_inspect_targets`, which exits before any generation (no data-dir, no
-    keys)."""
+    """Read-only inspection (`--sample` / `--report`): returns before any
+    generation, so no data-dir and no keys."""
 
     cli_section = "Inspection (read-only; exits before generation)"
 
@@ -156,22 +122,15 @@ class InspectOpts:
         type=int,
         help="Print N random targets to stdout and exit (no generation).",
     )
-    # Library-only: `report_title` is a caller-supplied label; `report_max_rows`
-    # caps table rows (0 = all) and lost its flag in 0.3.1 (D83).
+    # Library-only (D83): a caller-supplied label; a table-row cap (0 = all).
     report_title: str | None = None
     report_max_rows: int = 2000
 
 
 @dataclass(frozen=True)
 class GenOpts:
-    """Rotation / generation — which arms exist and how each request is made.
-
-    Feeds `iter_arms` (the models x strategies x efforts cross product, whose
-    *membership* — not its order — decides which arm owns which target) and
-    `build_generators` (per-request knobs). `dry_run` lives here because it is
-    a generator-construction switch: stubs instead of API clients. It is read
-    downstream too (concurrency, windows, reporting).
-    """
+    """Rotation / generation — which arms exist (`iter_arms`) and how each
+    request is made (`build_generators`); `dry_run` swaps stubs for clients."""
 
     cli_section = "Generation"
 
@@ -291,18 +250,14 @@ class SessionOpts:
         "builds, 1 for a library caller's injected generators (an unknown endpoint may want "
         "sequential).",
     )
-    # Library-only policy hook: a wrapper's per-model budget map (the blog pins
-    # one), applied on top of `session_max_tokens`.
+    # Library-only: a wrapper's per-model budget map over `session_max_tokens`.
     session_budgets: Mapping[str, int] | None = None
 
 
 @dataclass(frozen=True)
 class SubstrateOpts:
-    """WHICH population this run measures — applied before `--limit`.
-
-    `role`/`sample_frac` define the substrate (`select_targets`); `limit` is
-    only a cost cap on it, which is why it is applied afterwards.
-    """
+    """Which population this run measures (`select_targets`); `limit` is only a
+    cost cap, applied afterwards."""
 
     cli_section = "Substrate (which population this run measures)"
 
@@ -341,12 +296,8 @@ class SubstrateOpts:
 
 @dataclass(frozen=True)
 class CorpusOpts:
-    """What gets written, under which design cell — feeds `synthesize_pairs`.
-
-    The arm-assignment design (`per_generator` / `assign_seed` / `replicate` /
-    `skip_covered`: which cells exist, so what resume regenerates), the write
-    gates (`context_dropout`, the hygiene thresholds), and where draws land.
-    """
+    """What gets written, under which design cell — feeds `synthesize_pairs`:
+    the assignment design, the write gates, and where draws land."""
 
     cli_section = "Corpus (design cell + write gates)"
 
@@ -435,8 +386,7 @@ class CorpusOpts:
     )
 
 
-# The shared surface, keyed by the parameter each bundle binds to downstream:
-# "chunk" goes to `iter_targets`, the rest are `run_synth`'s own bundle params.
+# The shared surface, keyed by the parameter each bundle binds to downstream.
 BUNDLE_PARAMS: dict[str, type] = {
     "chunk": ChunkPolicy,
     "inspection": InspectOpts,
@@ -447,8 +397,7 @@ BUNDLE_PARAMS: dict[str, type] = {
 }
 DEFAULT_BUNDLES: tuple[type, ...] = tuple(BUNDLE_PARAMS.values())
 
-# Two bundles must not claim one field name, and no field may collide with a
-# parameter `run_synth` already has — either would make routing ambiguous.
+# No field name may recur across bundles or shadow a `run_synth` parameter.
 field_owners(
     DEFAULT_BUNDLES,
     reserved=BUNDLE_PARAMS.keys()
@@ -471,22 +420,16 @@ def synth_options(
 ):
     """Decorator applying the shared synth option set.
 
-    `defaults` re-pins flag defaults as bundle instances
-    (`defaults=[GenOpts(max_tokens=900)]`); `exclude` drops flags the wrapper
-    pins as policy constants (its callback never sees them, and it sets those
-    fields on the bundle itself); `bundles` is the extension point — another
-    repo passes `[*DEFAULT_BUNDLES, MyRepoOpts]` to add its own options.
-
-    Use `cls=SectionedCommand` on the command for sectioned `--help`.
+    `defaults` re-pins flag defaults as bundle instances; `exclude` drops flags
+    the wrapper pins itself; `bundles` adds a repo's own. Use
+    `cls=SectionedCommand` on the command for sectioned `--help`.
     """
     return bundle_options(bundles, defaults=defaults, exclude=exclude)
 
 
 def pop_bundles(kw: dict, bundles: Mapping[str, type] = BUNDLE_PARAMS) -> dict[str, object]:
-    """Fold a click callback's `**kw` into bundle instances, keyed by the
-    parameter each binds to (`chunk` for `iter_targets`, the rest for
-    `run_synth`). `kw` is left holding only the command's own parameters; a
-    wrapper with extra bundles passes its own `{name: cls}` map."""
+    """Fold a click callback's `**kw` into bundle instances keyed by the
+    parameter each binds to, leaving `kw` with the command's own parameters."""
     return bundles_from_kwargs(kw, bundles)
 
 
@@ -494,12 +437,9 @@ def pop_bundles(kw: dict, bundles: Mapping[str, type] = BUNDLE_PARAMS) -> dict[s
 class Arm:
     """One rotation arm: a (model, slop strategy, reasoning effort) combination.
 
-    Reifies the unit rendezvous assignment spreads targets across. ``name`` is
-    the single computation of the generator name that feeds ``synth_key`` —
-    dry-run stubs and real factory generators both take it from here, so the
-    two paths cannot drift apart. Every arm is OpenRouter-served, so ``name``
-    is unconditionally ``openrouter/<model>``: that spelling is a corpus
-    invariant, not a formatting choice, since changing it re-keys every cell.
+    ``name`` is the one computation of the generator name that feeds
+    ``synth_key``, for stubs and real generators alike; its spelling
+    ``openrouter/<model>`` is a corpus invariant — changing it re-keys every cell.
     """
 
     model: str  # OpenRouter model id
@@ -516,13 +456,8 @@ def iter_arms(
     efforts: Sequence[str],
     openrouter_models: Sequence[str],
 ) -> list[Arm]:
-    """The rotation cross product: strategies (outer) × efforts × OpenRouter
-    models in flag order.
-
-    `synth._assign` scores arms by rendezvous hashing on arm identity, so this
-    enumeration order does not affect assignment — reordering it reassigns
-    nothing. Adding or dropping an arm moves only that arm's own share.
-    """
+    """The rotation cross product: strategies × efforts × models, in flag order.
+    Order does not affect assignment (D12)."""
     return [
         Arm(model=model, strategy=rs, effort=effort)
         for rs in resolved_strategies
@@ -545,14 +480,9 @@ def build_generators(
     sticky_provider: bool,
     prompt_cache: bool,
 ) -> list[synth.Generator]:
-    """One generator per arm.
-
-    Dry-run stubs (name-only, no API clients, no keys) and real factory
-    generators share ``arm.name`` and the key covariates, so their synth_keys
-    are identical by construction — dry-run resume counts are the real run's.
-    The factory is reached as ``synth.openrouter_generator`` (attribute lookup
-    on purpose: tests monkeypatch it on the synth module).
-    """
+    """One generator per arm; stubs and real generators share ``arm.name``, so
+    dry-run resume counts are the real run's. The factory is reached as
+    ``synth.openrouter_generator`` so tests can monkeypatch it."""
     out: list[synth.Generator] = []
     for arm in arms:
         if dry_run:
@@ -593,18 +523,12 @@ def _inspect_targets(
     generation_flags_set: bool,
     emit: Emitter,
 ) -> None:
-    """The read-only --sample/--report modes: print/write and return, before
-    any generation — no API keys, and `data_dir` may be None (the caller skips
-    resolving it when nothing will be written).
-
-    `emit` is required (not defaulted): a helper whose whole job is output must
-    never guess where it goes — see the module docstring."""
+    """The read-only --sample/--report modes: print/write and return before any
+    generation; `data_dir` may be None. `emit` is required, not defaulted."""
     from stylebot import report
 
     emit("[inspection] targets only — nothing generated.", level="status")
-    # Generation flags alongside --report/--sample are a classic trap: the
-    # run exits before any generator fires. Say so, and point at the pair
-    # browser (the eval scores report) that DOES show generated slop.
+    # Generation flags alongside --report/--sample never fire: say so.
     if generation_flags_set:
         emit(
             "[inspection] generation flags ignored; to generate then browse pairs: "
@@ -631,13 +555,9 @@ def _resolve_windows(
     session_turns: int,
     dry_run: bool,
 ) -> dict[str, int]:
-    """Per-generator context-window sizes — live sessions only (the overflow
-    guard + the window_fill covariate). Resolved from the OpenRouter models
-    registry, which is ground truth — there is no manual-override flag, and
-    every window value ever recorded on the corpus came from the registry. An
-    injected generator with a non-OpenRouter name simply gets no window (no
-    overflow guard, no window_fill); a library caller that needs one passes
-    `context_windows=` to `synth.synthesize_pairs` directly."""
+    """Per-generator context windows for live sessions, from the OpenRouter
+    registry (no override flag). A non-OpenRouter name gets none; a library
+    caller passes `context_windows=` to `synthesize_pairs` directly."""
     windows: dict[str, int] = {}
     if session_turns <= 1 or dry_run:
         return windows
@@ -657,14 +577,8 @@ def _resolve_windows(
 
 
 def _model_economics(ms: dict | None) -> str:
-    """Per-model cost/cache/throughput suffix for the exit summary.
-
-    Everything here is folded from meta.gen covariates already recorded on the
-    pairs — this prints run economics, it does not measure anything new. The
-    cached share is the direct check on whether session prefix caching pays;
-    tok/s (visible completion over wall generation time) is the provider-
-    throughput check. Empty string when the generator reported no usage.
-    """
+    """Per-model cost/cache/throughput suffix for the exit summary, folded from
+    recorded `meta.gen` covariates; "" when the generator reported no usage."""
     if not ms or not (ms["cost"] or ms["prompt_tokens"]):
         return ""
     parts = [f"${ms['cost']:.3f} (${ms['cost'] / ms['pairs']:.4f}/pair)"]
@@ -687,14 +601,7 @@ def _report_result(
     max_transform_sim: float | None = None,
     max_length_ratio: float | None = None,
 ) -> None:
-    """Render the run summary to `emit` — reporting only.
-
-    Reporting only: deciding the run failed is `run_synth`'s (it raises
-    `SynthGenerationError`), and deciding what that costs the process is the
-    CLI's. `emit` is required rather than defaulted for the same reason: a
-    helper whose whole job is output decides *what* to say, never *where* it
-    lands.
-    """
+    """Render the run summary to `emit`; deciding the run failed is `run_synth`'s."""
     if dry_run:
         emit(
             f"[dry-run] would write {result.planned - result.skipped_existing} new pair(s) "
@@ -735,8 +642,7 @@ def _report_result(
             level="note",
         )
     if result.gen_retries_spent or result.errors_by_generator:
-        # The split the printed-and-discarded errors could never show: how much
-        # of a run's shortfall is an unreachable provider versus a careless one.
+        # How much of a run's shortfall is an unreachable provider vs a careless one.
         lost = sum(result.errors_by_generator.values())
         emit(
             f"  {result.gen_retries_spent} transient upstream failure(s) survived by redrawing"
@@ -744,19 +650,15 @@ def _report_result(
             + (" — see lost_draws.jsonl (kind=error)" if lost else "")
         )
     if result.redrawn_cells:
-        # The redraw budget's own report card: cells recovered vs draws spent.
-        # A low recovery rate means the gate is finding something structural
-        # (a passage no arm handles) and more retries will not fix it.
+        # Cells recovered vs draws spent: a low rate is structural, not fixable
+        # by more retries.
         emit(
             f"  {result.redrawn_cells} cell(s) hit a gate and were redrawn "
             f"({result.gate_redraws} extra draw(s) spent, "
             f"{result.redraws_recovered} recovered)"
         )
     for name, count in sorted(result.per_generator.items()):
-        # Written, then rejected-as-a-share-of-draws. The rate is the roster
-        # signal — an arm can be cheap per written pair and still be the most
-        # expensive one, because rejected draws are paid for and never rendered
-        # (llama-3.3-70b left the roster on exactly this number).
+        # Written, then rejected-as-a-share-of-draws: the roster signal (D32).
         dropped = result.drops_by_generator.get(name, 0)
         rate = (
             f"  {dropped} dropped ({100 * dropped / (count + dropped):.0f}% of draws)"
@@ -766,8 +668,7 @@ def _report_result(
         economics = _model_economics(result.model_stats.get(name))
         emit(f"  {name}: {count}{rate}{economics}")
     for name, dropped in sorted(result.drops_by_generator.items()):
-        # An arm that wrote NOTHING never reaches the loop above, which is the
-        # case most worth shouting about.
+        # An arm that wrote nothing never reaches the loop above.
         if name not in result.per_generator:
             emit(f"  {name}: 0 written, {dropped} draw(s) all rejected", level="note")
     if result.total_cost:
@@ -778,9 +679,8 @@ def _report_result(
             f"{result.reflowed_turns} leftover turn(s) reflowed into "
             f"{result.reflow_sessions} fresh session(s)"
         )
-    # The post-mortem invariant: every planned turn is written, skipped, or
-    # individually errored. Anything else is silent work-dropping — the bug
-    # class that cost 46% of a paid run in 2026-07 — so make it loud.
+    # The invariant: every planned turn is written, skipped, or individually
+    # errored; anything else is silent work-dropping, so make it loud.
     unattempted = (
         result.planned
         - result.skipped_existing
@@ -818,19 +718,12 @@ def run_synth(
 ) -> synth.SynthResult | None:
     """Everything after target selection, shared by all synth-style commands.
 
-    The knobs arrive as **option bundles** — ``run_synth(targets, data_dir=d,
-    gen=GenOpts(max_tokens=900))``, or splatted from ``pop_bundles(kw)``.
-    `ChunkPolicy` is not among them: it is consumed on the selection side.
-    `data_dir` may be None **only** for the inspection modes, which write
-    nothing and need no keys; the caller resolves it (and owns its "no silent
-    default" message) after seeing `--sample`/`--report`. Library callers may
-    inject ready-made `generators`. Returns the `SynthResult`, or None when
-    short-circuited.
-
-    `emit` takes the counts, heartbeat, errors and summary and **defaults to
-    silence**; a CLI passes `click_emitter()`. Raises `SynthConfigError`,
-    `SynthRunError` or `SynthGenerationError` (which carries the result), and
-    never exits the process (D47).
+    Knobs arrive as option bundles (or splatted from ``pop_bundles(kw)``).
+    `data_dir` may be None only for the inspection modes; library callers may
+    inject `generators`. Returns the `SynthResult`, or None when
+    short-circuited. `emit` defaults to silence. Raises `SynthConfigError`,
+    `SynthRunError` or `SynthGenerationError` (carrying the result); never
+    exits (D47).
     """
     say: Emitter = emit if emit is not None else silent
     gen = gen if gen is not None else GenOpts()
@@ -843,8 +736,7 @@ def run_synth(
 
     loaded: dict | None = None
 
-    # Substrate selection runs BEFORE --limit: role and sample-frac define
-    # *which* population this run measures, --limit is only a cost cap on it.
+    # Substrate selection runs before --limit, which is only a cost cap.
     if substrate.role is not None or substrate.sample_frac is not None:
         from stylebot.targets import select_targets
 
@@ -871,10 +763,8 @@ def run_synth(
         )
         say(f"substrate: {before} -> {len(targets)} target chunk(s) ({detail})")
 
-    # The frozen-eval guard (D34): cutting eval-pinned prose as a synthesis
-    # target trains the styler on the metric, and `--role` is optional, so this
-    # does not wait to be asked — it consults the corpus's own `splits.json`
-    # when `--splits` was not given, and only `--role eval` gets past it.
+    # The frozen-eval guard (D34) consults the corpus's own `splits.json` when
+    # `--splits` was not given; only `--role eval` gets past it.
     if substrate.role != "eval":
         eval_splits = loaded
         if eval_splits is None:
@@ -909,8 +799,7 @@ def run_synth(
         say("nothing to synthesize", level="status")
         return None
 
-    # Read-only inspection modes — print/write and exit before any generation,
-    # so no --data-dir or API keys are needed to vet the targets.
+    # Read-only inspection modes return before any generation.
     if inspection.sample_n is not None or inspection.report_path is not None:
         _inspect_targets(
             targets,
@@ -924,18 +813,15 @@ def run_synth(
         return None
 
     if generators is None:
-        # At least one slop source is required (no silent default — synth spends money
-        # and may hit a provider key the operator hasn't configured).
+        # At least one slop source is required: no silent default where money is spent.
         if not gen.openrouter_models:
             raise SynthConfigError(
                 "no generators selected: pass --openrouter-model MODEL "
                 "(synth needs at least one slop source)"
             )
-        # Resolve every requested slop prompt up front (fail fast on a bad name;
-        # dedupe repeats, order-preserving). For a registry strategy the *name*
-        # (system=None) goes down to the factory so it resolves the registry entry
-        # and keeps its version; a custom --slop-system-file overrides the system
-        # text and is single-strategy by construction (one file = one prompt).
+        # Resolve every slop prompt up front (fail fast, dedupe, order-preserving).
+        # A registry strategy passes its name (system=None) so the factory keeps
+        # its version; a --slop-system-file is single-strategy by construction.
         custom_system = (
             gen.slop_system_file.read_text(encoding="utf-8") if gen.slop_system_file else None
         )
@@ -951,11 +837,8 @@ def run_synth(
             raise SynthConfigError(str(exc), param_hint="--slop-strategy") from exc
         efforts = list(dict.fromkeys(gen.reasoning_efforts)) or [synth.DEFAULT_REASONING_EFFORT]
 
-        # The rotation is the models x strategies x efforts cross product:
-        # rendezvous assignment then spreads targets across every combination,
-        # so one run diversifies prompts and reasoning depth the same way it
-        # diversifies models (same cost — still one generation per target, just
-        # a finer rotation).
+        # The rotation is models x strategies x efforts; still one generation
+        # per target, just a finer rotation (D12).
         arms = iter_arms(resolved_strategies, efforts, gen.openrouter_models)
         try:
             generators = build_generators(
@@ -983,9 +866,7 @@ def run_synth(
             if budget:
                 generator.session_budget = budget
 
-    # auto concurrency: OpenRouter multiplexes fine, so a run we built ourselves
-    # gets 16. Injected generators (a library caller's own endpoint, which we
-    # know nothing about) still get sequential.
+    # auto concurrency: 16 for OpenRouter, sequential for injected generators.
     max_workers = session.max_workers
     if max_workers <= 0:
         max_workers = 16 if (gen.openrouter_models and not gen.dry_run) else 1
@@ -996,13 +877,11 @@ def run_synth(
         dry_run=gen.dry_run,
     )
 
-    # Everything below writes: a data-dir is mandatory from here on (the
-    # inspection modes returned above; `synth_cmd` owns the refusal message).
+    # Everything below writes: a data-dir is mandatory from here on.
     if data_dir is None:
         raise SynthConfigError("a data-dir is required to write draws")
 
-    # Heartbeat on wall-clock, not pair count: at high effort a pair takes ~1-2
-    # min, so count-gated echoes sit silent for half an hour and look like a hang.
+    # Heartbeat on wall-clock, not pair count: a high-effort pair takes minutes.
     last_echo = [0.0]
 
     def _progress(i: int, total: int, live: synth.SynthResult) -> None:
@@ -1053,7 +932,6 @@ def run_synth(
         max_length_ratio=corpus.max_length_ratio,
     )
     if result.errors:
-        # `_report_result` has already printed each error and the summary; this
-        # only signals the failure upward, carrying the result with it.
+        # Errors and summary are already printed; this signals upward.
         raise SynthGenerationError(result)
     return result
