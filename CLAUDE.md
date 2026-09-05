@@ -16,6 +16,7 @@ measured result), which together absorbed the per-phase plans. Narrative:
 uv sync                 # install (incl. dev group: pytest, ruff)
 uv run pytest -q        # must stay green
 uv run ai-style --help  # the full subcommand tree; every phase has landed
+uv run ruff check && uv run ruff format --check src tests  # lint AND format; the blog is lint-only, on purpose
 ```
 
 **Always run Python through `uv`** — `uv run python …`, `uv run pytest`,
@@ -65,6 +66,8 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
 - **P8. Dispatch rules for agents.**
   - One worktree per agent, or one committer. Named pathspecs only — never
     `git add -A`/`.`/`-u`.
+  - A cross-repo slice: one agent, two worktrees, two commits merged back-to-
+    back; test the blog half with `uv run --with-editable <stylebot-wt> pytest`.
   - Report anything out of scope rather than fixing it.
   - **No new mechanism without a budget.** A new thread, lock, process,
     fallback path, module, or file over 300 lines needs its D-entry *before* the
@@ -132,12 +135,7 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
 
 ## Blog integration (Dan's blog, wired 2026-06-27)
 
-- Blog repo `~/Source/livingthing` (`danmackinlay.github.io`), passed as
-  `--blog-root`: Quarto `.qmd`, glob `**/*.qmd`, posts under `post/` and
-  `notebook/`, `digest/` auxiliary; build dirs (`_site`, `_freeze`, `_`- and
-  `.`-prefixed) are already in the `gather_qmd_files` skip-list.
-- `automation:` is an int frontmatter level of how much AI touched a post; `0`
-  is the slop-free target prose, and matches `is_human_authored`'s defaults.
+- Blog repo `~/Source/livingthing` (`danmackinlay.github.io`), passed as `--blog-root`.
 - The corpus there is `_training_pairs/` — committed `draws/`, built `views/`.
 
 ## Current status
