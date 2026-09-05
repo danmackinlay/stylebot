@@ -989,3 +989,28 @@ Measured before each deletion: the blog copy was **byte-identical on all 1,758
 `.qmd`**; the TypeScript port matched on **1,728 of 1,757**, all 29 differences
 corrections — plus **385 callout paragraphs, 96,796 chars across 148 files** it
 could not see, `div_is_prose` being a blog-side callable. D26, D28/D30, D44.
+
+## The view drops the superseded captures — 2026-09-05 (W4 step 5, D84)
+
+`uv run dan-style status --data-dir ~/Source/livingthing/_training_pairs` over
+the live `draws/` (14,586 draws, 407 real), before and after `view_policy()`
+stopped passing `keep_superseded=True` and started passing
+`superseded_captures` from `SUPERSEDED_CAPTURES`.
+
+| | before | after |
+|---|---|---|
+| records rendering | 8,157 | **8,145** |
+| excluded | `outcome 6,429` | `outcome 6,429, superseded 12` |
+| duplicate `draw_id` among kept draws | 7 | **0** |
+| `policy_sha` | `42c1ceefe1fd0e4c` → `22b9921a76d4e7f9` | **`4e349d3405787782`** |
+| `content_sha256` | `d49ba7ad60774ea6` | **`e3d9809bddc9a616`** |
+| splits eval / styler / detector | 151 / 4009 / 2709 | **148 / 4006 / 2703** |
+
+The 12 are 11 draws the backfill stamped `superseded_by` plus the 9th interim
+session (`d89d26a4` → `f608a742`), which the backfill predated; all real, so
+the synthetic counts do not move and `test_corpus_stability`'s floors are
+untouched. The 7 duplicates were backfill artefacts — it keyed a real draw on
+`(source, blog_sha, span)`, so an interim save and its successor editing one
+paragraph collided; the live capture path keys on `pairs.record_id`
+(`capture_id:chunk_index`) and never did. `policy_sha` moved twice: once when
+`ViewPolicy` gained the field, once when the blog filled it. Decided: D84.
