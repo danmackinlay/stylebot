@@ -311,11 +311,10 @@ _INLINE_ANCHOR_RES = (
 def content_anchors(text: str, *, inline: bool = False) -> dict[str, int]:
     """Multiset of link targets / URLs / citation keys in `text`.
 
-    With `inline`, code spans and inline math count too. That is a much stricter
-    guard — measured over the 4624-pair corpus it takes the share of pairs where
-    a real Dan rewrite would be disqualified from 6.4% to 19.1% — so it is
-    opt-in for `rewrite_text` (which decides) and always on for
-    `rewrite_candidates` (which only flags, and a human decides).
+    With `inline`, code spans and inline math count too — a much stricter guard
+    (findings.md, "Inline anchors would reject a fifth of good rewrites"), so it
+    is opt-in for `rewrite_text` (which decides) and always on for
+    `rewrite_candidates` (which only flags, and a human decides). D27, D20.
     """
     counts: dict[str, int] = {}
     patterns = _ANCHOR_RES + _INLINE_ANCHOR_RES if inline else _ANCHOR_RES

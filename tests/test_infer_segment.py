@@ -220,12 +220,10 @@ def test_packing_parity_holds_when_the_policy_asks_for_it(doc: str):
 def test_the_default_policy_packs_across_a_deleted_block(doc: str):
     """The declared exception, with its price on the record.
 
-    Measured 2026-09-03 against the two corpus-stability arms: flipping the
-    default takes section-bounded reproduction from 3,023/3,028 to 2,116 and
-    cross-heading from 4,181/4,194 to 964 — 4,124 cells orphaned, 57% of the
-    synthetic corpus, refillable only by a paid synth run and, for the frozen
-    section-bounded arm, not at all. So the default stays, and this asserts the
-    shape of what it costs rather than pretending the two agree.
+    Flipping the default orphans most of the synthetic corpus, refillable only
+    by a paid synth run (the table under D27's alternative B,
+    `decisions-archive.md`). So the default stays, and this asserts the shape
+    of what it costs rather than pretending the two agree.
     """
     packed = _training_chunks(doc, pack_across_protected=True)
     split = _training_chunks(doc, pack_across_protected=False)
