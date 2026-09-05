@@ -316,3 +316,13 @@ Appended by the master, dated, one line each.
   the test gains a slack check like `PROSE_SLACK`, or P2's wording softens.
 - 2026-09-05 (R2): blog `a52842a1ef`'s body cites stylebot `0b1bb5b`, the
   pre-rebase hash of `c77c1ea`; not amended (P8).
+- 2026-09-05 (R4, C13): the three synthetic draws with a generator-un-escaped
+  anchor, for Dan to exclude by a policy clause in `view_policy()` (D84; it moves
+  the corpus sha, so not this round): `f27e2c4107ce79f5` and `89ac7f7457862f5c`
+  (`notebook/latex_editors.qmd`, `@miteron`), `e1e35364230a6eb1`
+  (`notebook/email_hosts.qmd`, `@posteo`). `9cbc553c0ea1982c` is an email, not
+  an anchor, and is correctly untouched.
+- 2026-09-05 (R4): `infer.invented_anchors` has zero callers in either repo
+  after C13 (synth reads `anchor_delta` directly); a deletion for R7 or later.
+- 2026-09-05 (R4): `splits.missing_eval_posts` is now a thin special case of
+  `missing_sources` with two callers (`status.py`, `check-splits`' table).
