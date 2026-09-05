@@ -306,25 +306,23 @@ record of what was measured then, not a claim about now.
   `uv add stylebot` would start giving you a `synth` subcommand that cannot run.
   Re-evaluate on a PyPI release, a second consumer, or a non-OpenAI generator
   backend.
-- **Serving is not prompt-parameterised.** The source policy and the author slot
-  reach training (D85, D64), but `infer`'s two chat builds and `capture`'s record
-  build still emit the module-level `STYLE_SYSTEM`, so a non-default author can
-  be trained and would then be *served* under Dan's prompt. It touches `infer`,
-  `serve` and `backends.manifest_mismatches`; D85's re-evaluate-if names it.
-- **The CLI is only half draws-reachable.** `train`, `status` and `check-splits`
-  take `--draws`; `eval`, `make-splits`, `validate-pairs` and `train-clf` still
-  take only `--pairs`, so those four need a view built by hand first (D84).
-- **`check-splits --draws` builds under the identity policy**, not the caller's
-  `view_policy()`, so its role table disagrees with `status` and it leaves a
-  second view on disk. Either `--policy` gains a way to dump the caller's policy,
-  or `dan-style` grows the `check-splits` mirror it does not have.
-- **The prose/code ratio is at the wall** (`tests/test_budget.py`, P2): the next
-  docstring under `src/stylebot` has to be paid for in the same change.
-- **The old-layout pair-corpus fallback is dead weight.** With `pairs/` retired
-  blog-side, `session.corpus_path`/`read_pairs`'s "no draws dir, read the pair
-  corpus" branch is reachable only for a data dir nothing has ever saved into,
-  its "until W4 step 5" note is stale, and `corpus.shard_path_for` has no caller
-  in either repo. Measure before deleting (P8).
+- ~~**Serving is not prompt-parameterised.**~~ — **closed 2026-09-05** (round 2
+  R2): the manifest pins `data.style_system` and serving reads it, else the
+  `SourcePolicy` author's prompt; D85 amended.
+- ~~**The CLI is only half draws-reachable.**~~ — **closed 2026-09-05** (R3):
+  every corpus command takes `--draws`/`--policy`; `ai-style build-view` and
+  `dan-style policy --dump` exist; `ensure_view` keeps one view (D84).
+- ~~**`check-splits --draws` builds under the identity policy**~~ — **closed
+  2026-09-05** (R3): `dan-style check-splits` mirrors it under `view_policy()`.
+- ~~**The prose/code ratio is at the wall**~~ — **closed 2026-09-05** (R0, R7):
+  the ratio is retired for `PROSE_CEILING`, which only falls (D58), and the
+  cull halved the prose it bounds.
+- ~~**The old-layout pair-corpus fallback is dead weight.**~~ — **closed
+  2026-09-05** (R3): deleted, with the `rg` counts in the commit body.
+- **Three synthetic draws carry a generator-un-escaped anchor** and await a
+  policy clause in the blog's `view_policy()` (D84 — it moves the corpus sha,
+  so it is Dan's); the ids are in `ship-shape-2-2026-09.md`'s residue. The
+  synth-side gate that would have refused them shipped 2026-09-05 (R4, C13).
 - **Phase 7 preference/DPO** on the same Tinker platform (decisions #D5), with
   D7's Goodhart guards (signals with independent failure modes). Preference
   data already accrues from
