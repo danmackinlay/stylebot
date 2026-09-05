@@ -413,8 +413,9 @@ def ensure_view(draws_dir: str | Path, policy: ViewPolicy, *, views_root: str | 
 
     Built when absent; rebuilt when its sidecar names another policy or other
     draws (`content_sha256`), since a view is derived and never edited (D84).
-    A rebuild removes the directory first, so `build_view` gets the fresh one
-    it requires. Returns the path a `pairs/` reader can be pointed at.
+    Every other view under `views_root` is deleted for the same reason: one
+    `(policy_sha, draws_sha)` pair is current, the rest are disposable.
+    Returns the path a `pairs/` reader can be pointed at.
     """
     draws_dir = Path(draws_dir)
     if not draws_dir.is_dir():
@@ -422,6 +423,9 @@ def ensure_view(draws_dir: str | Path, policy: ViewPolicy, *, views_root: str | 
     sha = policy_sha(policy)
     draws_sha = content_sha256(draws_dir)
     out = Path(views_root) / config.view_name(sha)
+    for stray in out.parent.glob(config.view_name("*")) if out.parent.is_dir() else ():
+        if stray.is_dir() and stray != out:
+            shutil.rmtree(stray)
     side = read_sidecar(out)
     if side and side.get("policy_sha") == sha and side.get("draws_sha256") == draws_sha:
         return out

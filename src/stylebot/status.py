@@ -5,9 +5,9 @@ and points here (D52). `collect` is a read-only sweep over the five artifacts
 that answer "where is this pipeline?":
 
 1. the **corpus** — how many records, how they split real/synthetic, how they
-   are sharded (`stylebot.corpus`) — or, given a draws dir, the **view** it
-   would build under the policy: counts by outcome and the content hash,
-   without building it (`draws.build_view` with no `out`, W4 step 4);
+   are sharded (`stylebot.corpus`) — or, given a draws dir, the **view** of it
+   under the policy: counts by outcome and the content hash, computed without
+   building, plus whether that view is built on disk (`draws.read_sidecar`);
 2. the **splits contract** — eval stratum version and `splits_sha256`, whether
    every pinned eval post is still on disk, the per-role table and the danger
    report (`stylebot.splits`);
@@ -142,7 +142,7 @@ class CorpusStatus:
 
 @dataclass(frozen=True)
 class ViewStatus:
-    """What `draws.ensure_view` would build from `path` under a policy, unbuilt."""
+    """The view of the draws at `path` under a policy, and whether it is built."""
 
     path: Path
     exists: bool
@@ -152,6 +152,8 @@ class ViewStatus:
     by_outcome: dict[str, int] = field(default_factory=dict)
     excluded: dict[str, int] = field(default_factory=dict)
     content_sha256: str | None = None
+    view_path: Path | None = None
+    built: bool = False
 
 
 @dataclass(frozen=True)
@@ -205,26 +207,33 @@ class Status:
     view: ViewStatus | None = None
 
 
-def _view_status(path: Path | None, policy) -> ViewStatus | None:
-    """The view `path`'s draws would render under `policy` (a `draws.ViewPolicy`,
-    identity when None); None when no draws dir was named, absent when missing."""
+def _view_status(path: Path | None, policy, views_root: Path | None) -> ViewStatus | None:
+    """The view `path`'s draws render under `policy` (a `draws.ViewPolicy`, identity
+    when None), and whether `views_root` (default the draws' sibling `views/`)
+    holds it built; None when no draws dir was named, absent when missing."""
     if path is None:
         return None
     if not path.is_dir():
         return ViewStatus(path=path, exists=False)
+    from stylebot import config
     from stylebot import draws as draws_mod
 
     policy = policy or draws_mod.ViewPolicy()
     report = draws_mod.build_view(draws_mod.iter_draws(path), policy)
+    draws_sha = draws_mod.content_sha256(path)
+    view_path = (views_root or config.views_root(path.parent)) / config.view_name(report.policy_sha)
+    side = draws_mod.read_sidecar(view_path) or {}
     return ViewStatus(
         path=path,
         exists=True,
         policy_sha=report.policy_sha,
-        draws_sha256=draws_mod.content_sha256(path),
+        draws_sha256=draws_sha,
         records=report.records,
         by_outcome=dict(report.by_outcome),
         excluded=dict(report.excluded),
         content_sha256=report.content_sha256,
+        view_path=view_path,
+        built=side.get("policy_sha") == report.policy_sha and side.get("draws_sha256") == draws_sha,
     )
 
 
@@ -423,14 +432,15 @@ def collect(
     blog_root: str | Path | None = None,
     draws_dir: str | Path | None = None,
     policy=None,
+    views_root: str | Path | None = None,
 ) -> Status:
     """Sweep whichever of the five artifacts the caller names. Read-only, keyless.
 
     Every argument is optional and none is discovered: what is not passed is
     reported as "not given", never guessed at. A path that does not exist is
     reported as absent rather than raised on — status is most useful on a
-    pipeline that is half built. `draws_dir` (+ `policy`) adds the view block,
-    which stands in for the corpus block when the draws are there.
+    pipeline that is half built. `draws_dir` (+ `policy`, `views_root`) adds the
+    view block, which stands in for the corpus block when the draws are there.
     """
     from stylebot.provenance import now_iso, stylebot_sha
 
@@ -450,7 +460,11 @@ def collect(
         runs=runs_status,
         detector=detector_status,
         warnings=_cross_checks(splits_status, runs_status, detector_status),
-        view=_view_status(Path(draws_dir) if draws_dir is not None else None, policy),
+        view=_view_status(
+            Path(draws_dir) if draws_dir is not None else None,
+            policy,
+            Path(views_root) if views_root is not None else None,
+        ),
     )
 
 
@@ -510,13 +524,14 @@ def _format_corpus(c: CorpusStatus) -> list[str]:
 
 
 def _format_view(v: ViewStatus) -> list[str]:
-    """The view block: what the draws would render under the policy, unbuilt."""
+    """The view block: what the draws render under the policy, and whether it is built."""
     if not v.exists:
         return [f"view       {v.path} — absent (no draws directory)"]
     outcomes = ", ".join(f"{k} {_fmt_int(n)}" for k, n in sorted(v.by_outcome.items()))
     excluded = ", ".join(f"{k} {_fmt_int(n)}" for k, n in sorted(v.excluded.items()))
+    on_disk = f"built {v.view_path}" if v.built else "unbuilt"
     return [
-        f"view       {v.path} -> pairs-{v.policy_sha} (unbuilt)",
+        f"view       {v.path} -> pairs-{v.policy_sha} {on_disk}",
         f"           {_fmt_int(v.records)} record(s) would render; draws by outcome: {outcomes}",
         f"           excluded: {excluded or 'none'}",
         f"           policy_sha={v.policy_sha}  draws_sha256={v.draws_sha256}",

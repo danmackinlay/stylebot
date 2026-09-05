@@ -721,12 +721,10 @@ def status_cmd(
     view = bundles_from_kwargs(kw, {"view": draws.ViewOpts})["view"]
 
     resolved = config.resolve_data_dir(data_dir)
-    if pairs_path is None:
-        candidate = config.pairs_path(resolved)
-        pairs_path = candidate if candidate.exists() else None
-    if splits_path is None:
-        candidate = config.splits_path(resolved)
-        splits_path = candidate if candidate.exists() else None
+    if pairs_path is None and config.pairs_path(resolved).exists():
+        pairs_path = config.pairs_path(resolved)
+    if splits_path is None and config.splits_path(resolved).exists():
+        splits_path = config.splits_path(resolved)
 
     report = st.collect(
         pairs=pairs_path,
@@ -736,6 +734,7 @@ def status_cmd(
         blog_root=blog_root,
         draws_dir=view.draws_dir,
         policy=view.view_policy(),
+        views_root=view.views_root,
     )
     if as_json:
         click.echo(json.dumps(asdict(report), indent=2, default=str))

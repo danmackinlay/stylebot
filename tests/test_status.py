@@ -296,8 +296,16 @@ def test_ai_style_status_draws_reports_the_view(tmp_path):
     args = ["status", "--draws", str(draws_dir), "--policy", str(policy_file)]
     result = CliRunner().invoke(ai_style, args + ["--data-dir", str(tmp_path / "data")])
     assert result.exit_code == 0, result.output
-    assert draws.policy_sha(draws.ViewPolicy(system_prompt="p")) in result.output
-    assert "view       " in result.output and "1 record" in result.output
+    sha = draws.policy_sha(draws.ViewPolicy(system_prompt="p"))
+    assert f"-> pairs-{sha} unbuilt" in result.output and "1 record" in result.output
+    # Status reads the disk: once built (by any reader) it says where.
+    built = CliRunner().invoke(
+        ai_style, ["build-view", "--draws", str(draws_dir), "--policy", str(policy_file)]
+    )
+    assert built.exit_code == 0, built.output
+    result = CliRunner().invoke(ai_style, args)
+    assert f"-> pairs-{sha} built {tmp_path / 'data' / 'views' / f'pairs-{sha}'}" in result.output
+    assert "unbuilt" not in result.output, result.output
 
 
 def _write_flat(tmp_path):

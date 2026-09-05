@@ -366,10 +366,14 @@ def test_ensure_view_builds_once_and_reuses_until_draws_or_policy_move(draws_dir
     draws.ensure_view(draws_dir, policy, views_root=data_dir / "views")
     assert not marker.exists()
 
+    (data_dir / "views" / "pairs-stale").mkdir()
+    (data_dir / "views" / "notes.txt").write_text("not a view\n", encoding="utf-8")
     other = draws.ensure_view(
         draws_dir, draws.ViewPolicy(keep_superseded=True), views_root=data_dir / "views"
     )
     assert other != view and other.parent == view.parent
+    # One (policy, draws) pair is current; every other view is disposable (D84).
+    assert sorted(p.name for p in (data_dir / "views").iterdir()) == ["notes.txt", other.name]
 
 
 def test_build_view_without_out_reports_the_sha_the_view_would_have(draws_dir, pairs_dir):
