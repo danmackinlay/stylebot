@@ -196,6 +196,13 @@ Each is small and in a different file; none needs a D-entry.
 Done: each bullet's test fails on the pre-fix code (paste the failing run in
 the commit body); suite green; no allowlist number rises.
 
+**Landed `b7f9d06..d78121a`, blog `f8081ecd17..6d6d348423`.** Ten bullets, one
+commit each, D87 for C4. **C7 does not reproduce**: the gate has two call sites
+in mutually exclusive branches (`train_clf`'s dry-run return and
+`_train_splits_mode`), so there was no failing test to write and no commit.
+C13's gate landed; its policy clause is Dan's (§8). C12's wider gate broke two
+blog fixtures that never put their sources on disk — fixed blog-side.
+
 ## 5. R5 — the blog's leftovers (blog, one agent; the fifth copy is cross-repo)
 
 - **`bin/train_styler.py` `train_cmd`** is 100 lines and the fifth copy of
@@ -349,3 +356,7 @@ Appended by the master, dated, one line each.
   `corpus_sources` pass walks the whole corpus; C7's shape, cheap but doubled.
 - 2026-09-05 (R4 finish): the blog's gate is `ruff check src tests` (clean);
   §8's R1 count of 43 is repo-wide (`bin/anchor-check/`, `scripts/`).
+- 2026-09-05 (R4 rebase): `tests/test_budget.py` counts lines, so an equivalent
+  docstring rewrap can trip an allowlisted row; a wrap is not a growth.
+- 2026-09-05 (R4 rebase): R5's D79 blog test made `post/` itself where the C12
+  fixture now owns it; fixtures that own a directory should say so once.
