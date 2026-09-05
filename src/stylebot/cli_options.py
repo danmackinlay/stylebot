@@ -167,8 +167,9 @@ def _pinned_defaults(instances: Iterable[Any], bundles: Sequence[type]) -> dict[
     return out
 
 
-def _last_param(f: Any) -> click.Parameter:
-    """The parameter `click.option` just attached (command or bare function)."""
+def last_param(f: Any) -> click.Parameter:
+    """The parameter `click.option` just attached (command or bare function): where a
+    wrapper that declares a flag of its own sets that flag's `help_section`."""
     return f.params[-1] if isinstance(f, click.Command) else f.__click_params__[-1]
 
 
@@ -211,7 +212,7 @@ def bundle_options(
                     kw["default"] = pinned[fld.name]
                     kw["show_default"] = True
                 f = click.option(*decls, **kw)(f)
-                _last_param(f).help_section = section
+                last_param(f).help_section = section
         return f
 
     return deco
