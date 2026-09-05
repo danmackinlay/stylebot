@@ -12,7 +12,10 @@ and the corpus `content_sha256` does not move. Retires under P7 when R1–R6 lan
 **Owner decisions, 2026-09-05.** Serving takes the prompt from the manifest, not
 the module (R2). Draws are the corpus interface everywhere; `--pairs` survives
 for scratch files only (R3). stylebot adopts `ruff format` (R1). `synth` stays
-at 41 flags; D83 records it (R1).
+at 41 flags; D83 records it (R1). **P2's package-wide prose/code ratio is
+retired for an absolute prose ceiling that only ratchets down** (R0), after the
+ratio failed the suite on a five-line de-duplication; and a prose cull runs
+this round (R7).
 
 ## 0. How this round runs
 
@@ -30,18 +33,56 @@ Same roles and gate as round 1 §0, with three changes learned there:
   Bash tool's cwd persists between calls and drifts; two rounds of QA lost
   batches to it.
 
-Critical path: R1 (≤ 1 h), then R2–R6 in parallel (≤ 3 h). Nothing waits on Dan.
+Critical path: R1's remainder, then R0 (each ≤ 1 h, sequential: both edit
+CLAUDE.md and `tests/test_budget.py`), then R2–R7 in parallel (≤ 3 h). R7
+merges last among the parallel slices, because it touches docstrings in files
+the others edit; it rebases onto them. Nothing waits on Dan.
+
+## 0b. R0 — prose is bounded by a ceiling, not a ratio (both repos, after R1)
+
+The ratio `(docstring+comment)/code ≤ 0.40` (D58, P2) fails when code is
+deleted: `_post_targets`'s `keep_kw` hoist, five duplicated lines out, tipped
+the package to 0.4001 and was backed out. A rule that prices out
+simplification is the opposite of its purpose. Measured 2026-09-05 at
+`999e943`: prose 4,516 (docstrings 3,488, comments 1,028), non-blank code
+≈ 11,300.
+
+1. `tests/test_budget.py`: `test_prose_does_not_outgrow_the_code_it_explains`
+   becomes `test_prose_stays_under_its_ceiling`: `prose <= PROSE_CEILING`, with
+   `PROSE_CEILING` set to the measured count at the commit; a second assertion
+   fails when prose is more than 50 lines *under* the ceiling ("lower
+   `PROSE_CEILING` to N") so the ratchet is enforced, not hoped for. `RATIO_BUDGET`,
+   `RATIO_PIN` and the ratio assertion go. Per-docstring (15), module-docstring
+   (30) and function/module line caps are unchanged.
+2. CLAUDE.md P2: replace "package-wide (docstring + comment) / code ≤ 0.40"
+   with "package-wide docstring + comment lines ≤ `PROSE_CEILING`, which only
+   falls" (same length).
+3. D58 amended in ≤ 4 lines: what the ratio did, the measurement that showed it,
+   and that the ceiling ratchets down on every commit that lowers prose.
+4. The blog mirrors 1 and 2 (its `tests/test_budget.py` is a copy by design;
+   its CLAUDE.md P8 bullet states the budgets).
+5. **Proof:** re-land the backed-out `_post_targets` `keep_kw` hoist (99 → 94)
+   in the same slice as its own commit; it must pass with no allowlist edit
+   other than lowering `_post_targets`'s number.
+
+Done: `rg -n "RATIO" tests/test_budget.py ../livingthing/tests/test_budget.py`
+empty; both suites green; `_post_targets` at 94 in the allowlist; the ceiling
+constant equals the measured prose count in the commit body.
 
 ## 1. R1 — rules and the reformat (stylebot, then blog docs; first, alone)
 
-1. `uv run ruff format src tests` as one reformat-only commit ("style: adopt
-   ruff format (owner decision 2026-09-05)"), then `ruff format --check` joins
-   the merge gate in §5 and CLAUDE.md's "Ruff" line says lint *and* format,
-   diverging from the blog's lint-only rule on purpose. `tests/test_budget.py`
-   allowlist numbers may change from the reformat: record the new exact sizes
-   in the same commit, no number may rise above budget.
-2. CLAUDE.md P8 gains the cross-repo sentence from §0 (≤ 2 lines; the file is at
-   160/160, so trim the "Measure before deleting" bullet's second clause to pay).
+1. ~~`uv run ruff format src tests` as one reformat-only commit~~ — **landed
+   `999e943`**; D86 records the three allowlist numbers the formatter moved.
+   What remains of item 1: `ruff format --check src tests` joins the merge gate
+   (§7 below), and CLAUDE.md gains a "Ruff" line under "Setup & verify": lint
+   and format, diverging from the blog's lint-only rule on purpose.
+2. CLAUDE.md P8 gains the cross-repo sentence from §0 (≤ 2 lines). **Payment
+   for items 1 and 2 together** (the file is at 160/160): cut the "Blog
+   integration" section to two bullets — the walker facts (glob, skip-list,
+   `post/`/`notebook/`) and the `automation:` sentence are OVERVIEW's and the
+   blog CLAUDE.md's, so keep only "blog repo path, passed as `--blog-root`" and
+   "the corpus there is `_training_pairs/`: committed `draws/`, built `views/`".
+   That frees five lines; spend three, bank two.
 3. `decisions.md` D83: three-line amendment, "surface at 41 flags, accepted
    2026-09-05; library-only fields stay reachable through the bundles".
 4. `ship-shape-2026-09.md` stub: the step-5 range ends at `ae5dfb6`, not
@@ -210,10 +251,41 @@ Done: `rg -n "6\.4%|no-op" src/stylebot/infer.py ../livingthing/_training_pairs/
 empty; `rg -n "optional" ../livingthing/pyproject.toml` names no stylebot line;
 budget tests green in both repos.
 
+## 6b. R7 — the prose cull (stylebot, docs-in-code only, merges last)
+
+P1 says a docstring cites a decision and may not restate it; P2 caps a
+docstring at 15 lines. Measured 2026-09-05: 172 prose lines read as history or
+narrative (dates, "used to", "until W4", wave and slice labels), 136 docstrings
+over 8 lines hold 1,907 of the 3,488 docstring lines, and module docstrings
+average 14 lines with seven at 27 or more (`train`, `splits`, `classify_train`,
+`status`, `serve`, `markdown`, `cli_options`).
+
+Rules for the cull, in order of yield: a sentence that tells how a thing came
+to be is replaced by `(Dn)` or deleted; a docstring that restates its
+function's signature or its caller list is cut to the contract (what it takes,
+what it returns, what it raises, one invariant); a module docstring is the
+module's contract and its D-citations, not its history; a comment that names a
+wave, slice, F-number or date is deleted or becomes a D-citation; a `#:`
+attribute comment stays. Nothing moves *into* `decisions.md` unless the "why"
+lives nowhere else, and then as a ≤ 5-line amendment to the nearest D-entry.
+Target: prose 4,516 → ≤ 3,500, i.e. `PROSE_CEILING` lowered by ≥ 1,000 in the
+same commit. One agent, one commit per module group (`synth*`, `eval`/`scoring`
+/`verdict`, `train`/`classify*`, `infer`/`serve`/`backends`, the rest), each
+green, each lowering the ceiling.
+
+Done: `PROSE_CEILING` ≤ 3,500 with the suite green; every remaining docstring
+≤ 15 lines and module docstring ≤ 30 with the allowlist's docstring rows gone
+or shrunk; a `rg` for `\b(W\d|F\d{1,2}|S\d[a-c]?|step \d|20\d\d-\d\d)\b` over
+`src/stylebot` docstrings and comments returns only D-entry citations and
+dated `#:` constants.
+
 ## 7. Acceptance (the reviewer's checklist)
 
-Round 1 §7 in full, plus: `uv run ruff format --check src tests` clean in
-stylebot; the corpus `content_sha256` equals the master's wave-0 message
+Round 1 §7 in full (the merge gate: both suites green in the worktree, the
+diff names only the slice's files, no allowlist number rises, `git status`
+free of `.env`/`pairs.jsonl`, rebase then `--ff-only`), plus: `uv run ruff
+format --check src tests` clean in stylebot; after R0, `PROSE_CEILING` never
+rises and is lowered by any slice that lowers prose; the corpus `content_sha256` equals the master's wave-0 message
 throughout (no slice here may move it); `ls _training_pairs/views` is one
 directory after `dan-style status`; every R4 bullet's commit body carries its
 failing pre-fix test run; no `__click_params__` in the blog; both suites green
@@ -222,3 +294,8 @@ and 0 skipped.
 ## 8. Out-of-scope reports
 
 Appended by the master, dated, one line each.
+
+- 2026-09-05 (R1): the blog's `ruff check` finds 43 errors (27 UP006, 6 B023,
+  5 I001, 3 UP035, 2 UP032; 34 auto-fixable) and `ruff format` would touch 207
+  of 462 files; the blog is lint-only by its own CLAUDE.md and warn-only at
+  commit, so this is a blog slice for another round, not R1's.
