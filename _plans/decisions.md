@@ -34,7 +34,7 @@ keep their numbers — the second index below is how you find them.
 | D61 | the executables package holds no libraries | live |
 | D62 | `stylebot.eval` keeps a lazy re-export map after the split | live |
 | D63 | orphan score rows are pruned where they are read | live |
-| D64 | `STYLE_SYSTEM` was amended once, 2026-08-04, and the corpus re-stamped | live |
+| D64 | `STYLE_SYSTEM` is frozen text with an author slot; a re-stamp is a rebuild | live |
 | D65 | `--include-real` defaults off — the two strata invent different things | live |
 | D66 | the `anthropic/` arms bill through OpenRouter BYOK | live |
 | D67 | the blog's Linux/CI machinery for `stylebot` is deleted | live |
@@ -499,36 +499,36 @@ prunes the **corpus**, not its scores.
 **Re-evaluate if:** score rows ever carry the corpus hash they were computed
 against, which would let a mismatch be detected rather than silently repaired.
 
-## D64: `STYLE_SYSTEM` was amended once, on 2026-08-04, and the corpus was re-stamped
+## D64: `STYLE_SYSTEM` is frozen text with an author slot; a re-stamp is a rebuild
 
 **Decision (2026-08-04, recorded 2026-09-04).** The frozen system prompt dropped
 `headings` from its "preserve … verbatim" list and gained *"Section headings may
 be restyled, but keep each heading's level and meaning."* Every existing record's
-`messages[0]` was re-stamped by a one-off script the same day. This is the only
-edit ever made to the string every pair in the corpus is keyed on.
+`messages[0]` was re-stamped by a one-off script the same day — the only edit
+ever made to the string every pair in the corpus is keyed on.
 
 **Why it was permitted.** Cross-heading chunking (D15's consequence) packs
 heading lines into the chunk as rewritable **content**, so a prompt demanding
-they be preserved verbatim contradicts what the data teaches. The change is
-forced by the diet, not chosen for taste: Dan's sections are short enough that
-raising the byte budget alone moves the median target *down* (`findings.md`
-"Section length", "Chunk yield by budget and mode"), so packing across headings
-was the only route to v2 scale.
+they be preserved verbatim contradicts what the data teaches; the change is
+forced by the diet, not taste (`findings.md` "Section length", "Chunk yield by
+budget and mode"). It moved the instruction the pair is *conditioned on* and
+never the (slop, Dan) transform, which is what makes it legitimate.
 
-**Why re-stamping retroactively is legitimate**, the load-bearing half: the
-migration touched `messages[0]` only — the user and assistant sides, the actual
-(slop, Dan) transform, were never read or written. What changed is the
-instruction the pair is *conditioned on*, which is exactly what should change
-when the instruction's meaning changes. Pre-v2 records never contained a heading
-as content, so they never exercise the new clause.
+**Alternatives.** Keeping `headings` and forbidding cross-heading chunks caps the
+diet at the section wall (D15); forking a v2 prompt splits the corpus on the one
+field the validator pins. **Deciding constraint**: a corpus is conditioned on one
+prompt, so that prompt must have exactly one value, and it must be nameable.
 
-**Alternatives — none were recorded at the time, and that is itself a finding.**
-Keeping `headings` and forbidding cross-heading chunks would cap the diet at the
-section wall (D15); forking a v2 prompt would split the corpus on the one field
-the validator pins. **Deciding constraint**: amending the string fails the whole
-corpus until every record is updated, and there is deliberately **no re-stamping
-script in the tree** — the one-off was deleted in 0.3 (D38). **Re-evaluate if** a
-masked corpus is generated: its placeholder shape must be settled first.
+**Amended 2026-09-05 (W4 step 5).** The text stays frozen; the **author** is a
+slot — `ai_core.style_system(author)` renders `STYLE_SYSTEM_TEMPLATE`, and the
+default renders the 2026-08-04 string byte for byte. Which prompt a corpus
+carries is `ViewPolicy.system_prompt`: the view stamps `messages[0]` from the
+policy, the draw's own turn becomes history nothing reads, and validation takes
+the prompt as an argument. **Superseded**: "amending the string fails the whole
+corpus until every record is re-stamped by a one-off" — a re-stamp is now a
+policy change plus a view rebuild (D84), and there is still no migration.
+
+**Re-evaluate if** a masked corpus is generated: settle its placeholders first.
 
 ## D65: `--include-real` defaults off — the two strata invent different things
 

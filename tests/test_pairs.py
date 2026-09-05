@@ -34,7 +34,49 @@ def test_wrong_system_prompt_flagged():
     rec = _good_record()
     rec["messages"][0]["content"] = "you are a helpful assistant"
     errs = validate_pair_record(rec)
-    assert any("STYLE_SYSTEM" in e for e in errs)
+    assert any("system prompt" in e for e in errs)
+
+
+def test_the_author_slot_renders_the_frozen_prompt():
+    from stylebot.ai_core import DEFAULT_AUTHOR, style_system
+
+    assert style_system() == STYLE_SYSTEM
+    assert style_system(DEFAULT_AUTHOR) == STYLE_SYSTEM
+    other = style_system("Ada Lovelace")
+    assert other != STYLE_SYSTEM
+    assert other == STYLE_SYSTEM.replace(DEFAULT_AUTHOR, "Ada Lovelace")
+
+
+def test_validation_is_relative_to_the_given_prompt():
+    from stylebot.ai_core import style_system
+
+    prompt = style_system("Ada Lovelace")
+    theirs = _good_record()
+    theirs["messages"][0]["content"] = prompt
+    assert any("system prompt" in e for e in validate_pair_record(theirs))
+    assert validate_pair_record(theirs, system_prompt=prompt) == []
+    ours = validate_pair_record(_good_record(), system_prompt=prompt)
+    assert any("system prompt" in e for e in ours)
+
+
+def test_system_sha_digests_the_prompt_it_is_given():
+    from stylebot.ai_core import style_system
+    from stylebot.pairs import system_sha
+
+    prompt = style_system("Ada Lovelace")
+    assert system_sha() == system_sha(STYLE_SYSTEM) != system_sha(prompt)
+
+
+def test_file_validation_takes_the_prompt_too(tmp_path):
+    from stylebot.ai_core import style_system
+
+    prompt = style_system("Ada Lovelace")
+    rec = _good_record()
+    rec["messages"][0]["content"] = prompt
+    p = tmp_path / "pairs.jsonl"
+    p.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    assert validate_pairs_file(p, system_prompt=prompt) == []
+    assert validate_pairs_file(p) != []
 
 
 def test_bad_roles_flagged():

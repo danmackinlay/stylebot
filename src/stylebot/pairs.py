@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Iterator
-from functools import lru_cache
 from pathlib import Path
 
 from stylebot import corpus
@@ -111,18 +110,15 @@ GEN_FACET_KEYS = (
 )
 
 
-@lru_cache(maxsize=1)
-def system_sha() -> str:
-    """16-hex digest of the frozen `STYLE_SYSTEM`, stamped as `meta.system_sha`.
+def system_sha(prompt: str | None = None) -> str:
+    """16-hex digest of a system prompt — `STYLE_SYSTEM` unless one is given.
 
-    `validate_pair_record` already refuses a record whose system message is not
-    the frozen prompt, so this is not a second check of the same thing: it is
-    what a *derived* artifact — a scores row, a run manifest, a training shard
-    that dropped `messages[0]` — can carry to say which prompt the pairs behind
-    it were built against. Stamping it on the record is what makes that
-    transitive claim checkable.
+    What a *derived* artifact — a scores row, a run manifest, a training shard
+    that dropped `messages[0]` — carries to say which prompt the pairs behind
+    it were built against. The prompt is the view's, so a caller holding a
+    policy passes `policy.system_prompt` (D36, D64).
     """
-    return hashlib.sha256(STYLE_SYSTEM.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256((prompt or STYLE_SYSTEM).encode("utf-8")).hexdigest()[:16]
 
 
 def build_pair_content(context: str, body: str) -> str:
@@ -289,7 +285,7 @@ def _type_name(types: tuple) -> str:
     return " | ".join("null" if t is _NoneType else t.__name__ for t in types)
 
 
-def _check_meta_types(meta: dict) -> list[str]:
+def _check_meta_types(meta: dict, prompt: str) -> list[str]:
     errors: list[str] = []
     for key, types in _META_TYPES.items():
         if key not in meta:
@@ -316,10 +312,10 @@ def _check_meta_types(meta: dict) -> list[str]:
         and idx >= total
     ):
         errors.append(f"meta.chunk_index {idx} must be < meta.chunk_total {total}")
-    if isinstance(meta.get("system_sha"), str) and meta["system_sha"] != system_sha():
+    if isinstance(meta.get("system_sha"), str) and meta["system_sha"] != system_sha(prompt):
         errors.append(
-            "meta.system_sha does not match the frozen STYLE_SYSTEM "
-            f"(record {meta['system_sha']}, current {system_sha()})"
+            "meta.system_sha does not match the system prompt "
+            f"(record {meta['system_sha']}, prompt {system_sha(prompt)})"
         )
     prov = meta.get("provenance")
     if isinstance(prov, dict):
@@ -341,13 +337,14 @@ def _check_meta_types(meta: dict) -> list[str]:
     return errors
 
 
-def validate_pair_record(rec: object) -> list[str]:
+def validate_pair_record(rec: object, *, system_prompt: str | None = None) -> list[str]:
     """Return a list of human-readable problems with one pair record.
 
     Empty list == valid. Checks the message triple (system/user/assistant),
-    that the system prompt is the frozen `STYLE_SYSTEM`, that user/assistant
-    content is non-empty, that the required `meta` keys are present, and that
-    every meta key it knows about carries the right type and a value in range.
+    that `messages[0]` is `system_prompt` (the view's, defaulting to
+    `STYLE_SYSTEM`), that user/assistant content is non-empty, that the required
+    `meta` keys are present, and that every meta key it knows about carries the
+    right type and a value in range.
 
     **Per-record by construction, which is the limit worth naming**: nothing
     here can see that two records share a `record_id`, and for two years nothing
@@ -355,6 +352,7 @@ def validate_pair_record(rec: object) -> list[str]:
     where that check lives.
     """
     errors: list[str] = []
+    prompt = system_prompt or STYLE_SYSTEM
 
     if not isinstance(rec, dict):
         return ["record is not a JSON object"]
@@ -367,10 +365,10 @@ def validate_pair_record(rec: object) -> list[str]:
         if roles != ["system", "user", "assistant"]:
             errors.append(f"message roles must be [system, user, assistant], got {roles}")
         else:
-            if msgs[0].get("content") != STYLE_SYSTEM:
+            if msgs[0].get("content") != prompt:
                 errors.append(
-                    "system message content is not the frozen STYLE_SYSTEM "
-                    "(changing it invalidates the corpus)"
+                    "system message content is not the view's system prompt "
+                    "(a re-stamp is a policy change plus a rebuild, D84)"
                 )
             for role_idx, label in ((1, "user"), (2, "assistant")):
                 content = msgs[role_idx].get("content")
@@ -384,7 +382,7 @@ def validate_pair_record(rec: object) -> list[str]:
         for key in REQUIRED_META_KEYS:
             if key not in meta:
                 errors.append(f"meta missing required key {key!r}")
-        errors.extend(_check_meta_types(meta))
+        errors.extend(_check_meta_types(meta, prompt))
 
         # Heading-context invariant: a declared meta.context must be the
         # verbatim prefix of BOTH the user and assistant content — added as
@@ -405,7 +403,7 @@ def validate_pair_record(rec: object) -> list[str]:
 
 
 def validate_pairs_file(
-    path: str | Path, *, check_duplicates: bool = True
+    path: str | Path, *, check_duplicates: bool = True, system_prompt: str | None = None
 ) -> list[tuple[int | str, list[str]]]:
     """Validate every line of a corpus, and the corpus-level uniqueness rule.
 
@@ -438,7 +436,7 @@ def validate_pairs_file(
                 except json.JSONDecodeError as exc:
                     problems.append((where, [f"invalid JSON: {exc}"]))
                     continue
-                errs = validate_pair_record(rec)
+                errs = validate_pair_record(rec, system_prompt=system_prompt)
                 if check_duplicates and isinstance(rec, dict) and isinstance(rec.get("meta"), dict):
                     rid = record_id(rec)
                     if rid in first_seen:
