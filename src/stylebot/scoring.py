@@ -723,7 +723,6 @@ def run_eval(
 
     if opts.pairs_path is None:
         raise ConfigError("no corpus: pass --draws, or a scratch --pairs", param_hint="--pairs")
-
     pairs_path, out = Path(opts.pairs_path), opts.scores_path()
     fields, prune_orphans = opts.score_fields(), opts.prune_orphans
     if documents is not None:
