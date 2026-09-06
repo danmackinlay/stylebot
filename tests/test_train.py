@@ -465,6 +465,9 @@ def test_run_training_pass_reports_then_asks_before_spending(
     opts = tr.TrainOpts(
         data_dir=data_dir, manifest_out=tmp_path / "m.json", work_dir=tmp_path / "w", dry_run=True
     )
+    # Two passes below each mint a run id from the clock; pin it so a second
+    # boundary between them cannot make the preview and the paid call disagree.
+    monkeypatch.setattr(tr, "default_run_id", lambda: "20260101-000000")
     lines: list[str] = []
     preview = tr.run_training_pass(opts, emit=lambda m, level="info": lines.append(m))
     assert preview.manifest["dry_run"] and not (tmp_path / "m.json").exists()
