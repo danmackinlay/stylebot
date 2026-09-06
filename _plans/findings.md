@@ -1015,6 +1015,24 @@ paragraph collided; the live capture path keys on `pairs.record_id`
 (`capture_id:chunk_index`) and never did. The live `policy_sha` is
 `dan-style status`'s to print (D52). Decided: D84.
 
+## Three C13 draws leave the view by policy clause — 2026-09-05 (D84)
+
+`uv run dan-style status` in `~/Source/livingthing`, before and after
+`training_targets.EXCLUDED_DRAW_IDS` named the three accepted synthetic draws
+whose target carries a backslash-escaped handle the generator un-escaped
+(round-2 C13; the synth gate now refuses new ones). Owner decision, Dan.
+
+| | before | after |
+|---|---|---|
+| records rendering | 8,145 | **8,142** |
+| excluded | `outcome 6,429, superseded 12` | `excluded_draw_ids 3, outcome 6,429, superseded 12` |
+| `policy_sha` / `content_sha256` | `d02d152e18e406f8` / `e3d9809bddc9a616` | **`5257549f211dda24` / `9c57ef6777e5a63e`** |
+| `test_corpus_stability` floors | 2998/3005, 4108/4130 | **2997/3004, 4106/4128** |
+
+All three were reproducible cells, so the floors fell by exactly the cells
+excluded, the case the test's message names as a deliberate corpus edit. The
+live shas are `dan-style status`'s to print (D52). Decided: D84's clause route.
+
 ## The live scores file's join keys — 2026-09-05 (W4 step 5 item 5)
 
 `uv run python` over a scratch **copy** of `~/Source/livingthing/_training_pairs/scores.jsonl`
