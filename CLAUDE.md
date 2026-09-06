@@ -13,7 +13,7 @@ measured result), which together absorbed the per-phase plans. Narrative:
 ## Setup & verify
 
 ```sh
-uv sync                 # install (incl. dev group: pytest, ruff)
+uv sync --all-extras    # dev group + both extras; without them one test skips
 uv run pytest -q        # must stay green
 uv run ai-style --help  # the full subcommand tree; every phase has landed
 uv run ruff check && uv run ruff format --check src tests  # lint AND format; the blog is lint-only, on purpose
