@@ -1,8 +1,22 @@
 # `argued` — a slop arm for concessive / justificatory structure
 
-**Status: specified 2026-09-03, not built.** An open slice under the prompt
-ablation ([`OVERVIEW.md`](OVERVIEW.md) §"Open questions"). Self-contained: a
-subagent can build stage 0 and stage 1 from this file.
+**Status: specified 2026-09-03, not built; next up (Dan, 2026-09-05).** An open
+slice under the prompt ablation ([`OVERVIEW.md`](OVERVIEW.md) §"Open questions").
+Self-contained: a subagent can build stage 0 and stage 1 from this file.
+
+**What moved under it since it was written** (2026-09-05, after the two
+ship-shape rounds): the corpus is append-only `draws/` plus a view built under
+`training_targets.view_policy()` (D84), so every `pairs.jsonl` below reads as
+"the view": `stylebot.features` takes `--draws`/`--policy` like every other
+reader, `--pairs` only for a scratch file, and `dan-style features` reads the
+blog's view. The measurement table stands as dated (its rows came from the
+8,157-record corpus of 2026-09-03; the view is 8,142 today). `synth` is at 41
+flags; `--slop-strategy`, `--session-turns` and `--limit` are unchanged. A
+gate now refuses a draw whose target gained a backslash-escaped anchor (round-2
+C13), and a judge refusal scores `None` (D87), so a `--judge` audition's mean
+is over scored pairs only. The real stratum is still `meta.synthetic` falsy.
+Transcript mining ([`transcript-mining.md`](transcript-mining.md)) is still
+unbuilt, so stage 2's objection source remains the fabricated brief.
 
 ## The claim, and the evidence for it
 
