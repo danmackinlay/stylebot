@@ -155,6 +155,8 @@ def _check_scalar(name: str, key: str, budget: int, actual: int, allowed: dict) 
             return [f"{name}: {key} is {actual} (budget {budget}) and is not allowlisted"]
         if actual > ceiling:
             return [f"{name}: {key} grew {ceiling} -> {actual}; the allowlist only shrinks"]
+        if actual < ceiling:
+            return [f"{name}: {key} is {actual}, under its allowance {ceiling} — lower the entry"]
     elif ceiling is not None:
         return [f"{name}: {key} is {actual}, under budget — delete its allowlist entry"]
     return []
@@ -173,6 +175,9 @@ def _check_spans(name: str, key: str, budget: int, actual: list[int], allowed: d
     grew = [(a, c) for a, c in zip(actual, ceilings, strict=False) if a > c]
     if grew:
         return [f"{name}: {key} grew {grew} (actual, ceiling); the allowlist only shrinks"]
+    slack = [(a, c) for a, c in zip(actual, ceilings, strict=False) if a < c]
+    if slack:
+        return [f"{name}: {key} {slack} (actual, ceiling) sit under their allowance — lower them"]
     return []
 
 
@@ -201,6 +206,9 @@ def _check_functions(name: str, actual: dict[str, list[int]], allowed: dict) -> 
                 problems.append(
                     f"{name}: {q} grew {grew} (actual, ceiling); the allowlist only shrinks"
                 )
+            slack = [(a, k) for a, k in zip(sizes, c, strict=False) if a < k]
+            if slack:
+                problems.append(f"{name}: {q} {slack} (actual, ceiling) sits under its allowance")
     for q in sorted(set(ceilings) - set(over)):
         if q in actual:
             problems.append(
