@@ -60,7 +60,7 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
   separated in the working tree" is the working tree's problem — P8.
 - **P6. This file is an operating manual ≤ 160 lines.** Every bullet is a rule
   plus a pointer; how the rule was learned belongs in `decisions.md`.
-- **P7. A plan retires when its work ships** — within a week of the last item
+- **P7. A plan retires when its work ships, to `_plans/retired/`** — within a week of the last item
   landing, to a ≤ 40-line stub: what it was, what shipped (commit range), what
   was refuted (D-numbers), what stayed open (the successor). Git holds the rest.
 - **P8. Dispatch rules for agents.**

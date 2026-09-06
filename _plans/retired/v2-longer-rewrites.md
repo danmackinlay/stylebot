@@ -36,4 +36,4 @@ v2 density (D33).
 editor thresholds `[0.51, 0.55, 0.59, 0.65]` predate two refits; the
 extension does not yet offer "rewrite section". Choosing a weighting policy
 is Dan's call (D43); the masking work is
-[`masking-placement.md`](masking-placement.md).
+[`masking-placement.md`](../masking-placement.md).

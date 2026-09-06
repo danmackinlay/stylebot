@@ -36,5 +36,5 @@ promotion).
 
 **What stayed open.** The 55 dated out-of-scope reports are §8 of
 `git show 6fcee88:_plans/ship-shape-2026-09.md`; the ones that are still live
-work are bullets in [`OVERVIEW.md`](OVERVIEW.md)'s "Open slices". Wave 3's own
+work are bullets in [`OVERVIEW.md`](../OVERVIEW.md)'s "Open slices". Wave 3's own
 brief retired alongside this one ([`seam-consolidation-2026-09.md`](seam-consolidation-2026-09.md)).

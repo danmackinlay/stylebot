@@ -32,7 +32,7 @@ be unjustified — did not occur. The cull it spawned was spent by 2026-09-04
 against 117 for loss: the failure the data most encouraged was the one nothing
 checked.
 
-**What stayed open.** Step 3: [`masking-placement.md`](masking-placement.md)
-(D33) for where masking goes, [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md)
+**What stayed open.** Step 3: [`masking-placement.md`](../masking-placement.md)
+(D33) for where masking goes, [`placeholder-design-2026-08.md`](../placeholder-design-2026-08.md)
 for the encoding; the blog-side masker (`workflow_style.rewrite_masked`) has
 not moved into stylebot, and the synthesis gate is still one-sided.

@@ -30,5 +30,5 @@ stands, in `stylebot.eval`'s docstring and D7.
 
 **What stayed open.** The fifth capability, a synthetic↔real distribution
 match over the `meta.synthetic` facet, is unbuilt; its spec is stage 0 of
-[`argued-slop-arm.md`](argued-slop-arm.md). D53's open half: `extend-eval`
+[`argued-slop-arm.md`](../argued-slop-arm.md). D53's open half: `extend-eval`
 does not prune the synthetic pairs of the posts it freezes.

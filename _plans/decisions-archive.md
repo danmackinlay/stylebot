@@ -308,7 +308,7 @@ stays — `openrouter_generator` is built on it. Kept against the same evidence:
 `--temperature` and `--top-p`, unset on every pair, because their importance is
 *untested* rather than disproven and they were designed as recorded-but-unkeyed
 covariates precisely so sampling can be swept without re-keying. Full audit:
-[`synth-flag-audit.md`](synth-flag-audit.md); closed 2026-08-13, D83.
+[`synth-flag-audit.md`](retired/synth-flag-audit.md); closed 2026-08-13, D83.
 
 ## D22: register conditioning, parked
 
@@ -806,7 +806,7 @@ its source never had, half of those external URLs. Reverse-edit synthesis
 produces that directly: a generator that drops a link while "improving" a
 paragraph becomes, after the swap, an example reading *given text without links,
 produce text with these links*. The failure the data most encourages was the one
-nothing checked (stylebot#1, `_plans/anchor-integrity.md`).
+nothing checked (stylebot#1, `_plans/retired/anchor-integrity.md`).
 
 **Why the halves differ.** Each occurrence of an anchor supports a separate
 claim, so dropping one of two citations of the same key leaves a sentence
@@ -1296,7 +1296,7 @@ well as offsets* — the client sent the document and can slice it.
 alone. Offsets are UTF-16 code units, converted server-side, because every editor
 this protocol will meet indexes UTF-16. **Re-evaluate if** the marker ever ships
 as a `.vsix` with no sidecar — this entry is then the list of what a TypeScript
-segmenter must get right (`_plans/vscode-marker.md`, alternative B).
+segmenter must get right (`_plans/retired/vscode-marker.md`, alternative B).
 
 ## D45: one corpus location, resolved once — and the synth walker keeps its blog root
 

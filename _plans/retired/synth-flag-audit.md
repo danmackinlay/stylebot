@@ -29,4 +29,4 @@ finding was true on 2026-08-10 and false from the 2026-08-12 v2 batches on.
 
 **What stayed open.** Nothing in it. The substrate cluster's justification
 rests on the masking work, which is
-[`masking-placement.md`](masking-placement.md) and still unbuilt.
+[`masking-placement.md`](../masking-placement.md) and still unbuilt.

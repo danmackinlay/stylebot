@@ -131,7 +131,7 @@ pairs by the existing `ai-style log` tasks. It is the front-end of the capture
 loop, not a verdict machine: the classifier is a soft signal (held-out AUC
 ~0.7 on real pairs, and it moves with every refit — `ai-style status` prints
 the artifact's own honest number), so the marks are framed as *suspicion* and
-your eyeball stays the arbiter. Design and caveats: [`_plans/vscode-marker.md`](_plans/vscode-marker.md).
+your eyeball stays the arbiter. Design and caveats: [`_plans/retired/vscode-marker.md`](_plans/retired/vscode-marker.md).
 
 ### How it works
 

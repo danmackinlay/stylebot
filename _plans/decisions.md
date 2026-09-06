@@ -602,7 +602,7 @@ sibling `../stylebot`. The marker-partitioned git source W11.d added and the
 Ubuntu `test` job W5 added are both removed (2026-09-04), with that job's
 `setup-pandoc` and `setup-uv` steps. A fresh clone clones the sibling first;
 the blog `CLAUDE.md` says so. F13 in the blog's
-`_plans/stylebot-seam-followup-2026-09.md` is the work; F10 is the argument.
+`_plans/retired/stylebot-seam-followup-2026-09.md` (blog) is the work; F10 is the argument.
 
 **Alternatives.** Keep both and make the refresh routine — push stylebot,
 `uv lock --upgrade-package stylebot`, commit, push the blog — rejected: never

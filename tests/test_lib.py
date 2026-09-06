@@ -106,7 +106,7 @@ def test_is_valid_qmd_file(tmp_path):
 # Every case below passed the pre-2026-08-12 predicate, which tested
 # `path.name` — the filename — so an underscore *directory* was invisible to
 # it. These feed `iter_targets`, i.e. scratch prose offered up as a training
-# target (livingthing `_plans/qmd-walker-2026-08.md`).
+# target (livingthing `_plans/retired/qmd-walker-2026-08.md`).
 @pytest.mark.parametrize(
     "rel",
     ["_tmp/scratch.qmd", "_freeze/a/b.qmd", "_site/index.qmd", "_plans/design.qmd"],

@@ -1,6 +1,6 @@
 # Where masking goes: synthesis, training, inference — and what gets stored
 
-Step 3 of [`anchor-integrity.md`](anchor-integrity.md), unblocked 2026-08-12 by
+Step 3 of [`anchor-integrity.md`](retired/anchor-integrity.md), unblocked 2026-08-12 by
 the measurement it was waiting for.
 
 **Scope.** This decides *placement*: which pipeline stages mask, what the corpus

@@ -980,7 +980,7 @@ Decided: D68.
 for the next-largest subcommand — 14 load-bearing / 24 policy constants / 16
 retirement candidates; retiring the `gpt`/`local` preset path left **50**, and
 the 2026-08-13 close (four more retired) left **49**.
-[`synth-flag-audit.md`](synth-flag-audit.md). Decided: D21, D83.
+[`synth-flag-audit.md`](retired/synth-flag-audit.md). Decided: D21, D83.
 
 **Segmenter implementations: 7 → 3** (2026-08-11), then **3 → 1** (2026-09-03).
 Five copies inside stylebot merged into `stylebot.markdown`; each survivor was
