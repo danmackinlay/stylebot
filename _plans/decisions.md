@@ -1055,6 +1055,10 @@ re-baseline and needs its own entry. Nothing enforces the formatter yet: `ruff f
 is in the round-2 acceptance list but in no gate `pytest` runs, so the 11 files can drift
 back; wiring it in is the rest of that plan's R1, not this entry.
 
+**Amended 2026-09-07.** `.githooks/pre-commit` blocks a staged `.py` that `ruff format --check` or
+`ruff check` rejects (`git config core.hooksPath .githooks`, once per clone). The blog stays
+lint-only on purpose: its marimo notebooks are rewritten by marimo, not ruff.
+
 ## D87: a judge refusal is unscored, never a guessed digit; `SCHEMA_VERSION` 3 → 4
 
 **Decision (landed 2026-09-04 as round-1 C4; recorded 2026-09-05, round-2 R4).** A judge reply

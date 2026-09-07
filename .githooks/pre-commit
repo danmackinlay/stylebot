@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — stylebot
+#
+# Two checks over the staged .py files, both BLOCKING (D86: `ruff format` is
+# the formatter of record, so a commit that disagrees with it is a mistake):
+#
+#   1. ruff format --check   the staged files are formatted
+#   2. ruff check            the staged files lint clean
+#
+# Install once with:   git config core.hooksPath .githooks
+# Skip for one commit: git commit --no-verify   (or SKIP_FORMAT_CHECK=1)
+#
+# Only the staged paths are checked, so an unformatted file elsewhere in the
+# tree never blocks a commit that does not touch it.
+
+set -e
+if [ -n "$SKIP_FORMAT_CHECK" ]; then
+    exit 0
+fi
+
+staged_py=$(git diff --cached --name-only --diff-filter=ACMR -- '*.py' 2>/dev/null || true)
+if [ -z "$staged_py" ]; then
+    exit 0
+fi
+
+# shellcheck disable=SC2086
+if ! uv run ruff format --check $staged_py; then
+    echo "pre-commit: staged .py files are not ruff-formatted; run \`uv run ruff format <files>\` and re-stage" >&2
+    exit 1
+fi
+# shellcheck disable=SC2086
+if ! uv run ruff check $staged_py; then
+    echo "pre-commit: staged .py files fail ruff check" >&2
+    exit 1
+fi

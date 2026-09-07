@@ -17,6 +17,7 @@ uv sync --all-extras    # dev group + both extras; without them one test skips
 uv run pytest -q        # must stay green
 uv run ai-style --help  # the full subcommand tree; every phase has landed
 uv run ruff check && uv run ruff format --check src tests  # lint AND format; the blog is lint-only, on purpose
+git config core.hooksPath .githooks  # once per clone: the pre-commit hook blocks an unformatted or unlinted staged .py
 ```
 
 **Always run Python through `uv`** — `uv run python …`, `uv run pytest`,
