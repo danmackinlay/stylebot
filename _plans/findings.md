@@ -1151,3 +1151,33 @@ should hold. "A previous version of this text asserted" is nearly absent from th
 captures themselves (2 of 395): it lives in Claude's chat-turn account of an edit, which
 is `transcript-mining.md`'s sidecar and no synth call's output. Decided: nothing; cited
 by the plan's "Risks" and the next-steps note of 2026-09-07.
+
+## Separability on the style backbone — 2026-09-07 (D88, `--embed`)
+
+`uv run dan-style features --pairs <v1 view> --pairs <v2 view> --by slop_strategy
+--separability --embed` in `~/Source/livingthing`, and again with `--same-sources`
+(synthetic restricted to the 54 posts the real captures sit on). The same post-grouped
+logistic head as the proxy AUC, on `StyleDistance/styledistance` embeddings of the slop
+side. Keyless, one local encoding pass over 8,367 texts.
+
+| arm | AUC, proxies (all posts) | AUC, embed (all posts) | N same posts | AUC, embed (same posts) |
+|---|---|---|---|---|
+| measured | 0.730 | 0.999 | 118 | 0.997 |
+| verbose | 0.722 | 0.997 | 85 | 0.993 |
+| polish | 0.750 | 0.996 | 92 | 0.989 |
+| casual | 0.776 | 0.996 | 92 | 0.983 |
+| engaging | 0.793 | 0.998 | 83 | 0.996 |
+| linkedin | 0.920 | 0.997 | 61 | 0.989 |
+| argued v1 | 0.962 | 0.992 | — | — |
+| argued v2 | 0.831 | 0.965 | 17 | 0.957 |
+
+On the backbone every synthetic arm is near-perfectly separable from the real captures, and
+restricting to the same posts moves nothing, so the gap is not topic. The syntactic proxies
+understate it by a wide margin; they measure one dimension of a difference the embedding sees
+whole. argued v2 is the least separable arm on both instruments, by a little. Two readings
+stay open: the real captures were written by Claude inside an editing session and the synth
+by five models through OpenRouter, so part of the signal may be model identity rather than
+regime; and the head sees 768 dimensions from 395 positives, so the absolute number is an
+upper bound. Either way the fifth signal's instrument is the embedding, with the proxies as
+its readable explanation. Decided: D88 amended in spirit; a re-fit of `verbose`/`argued`
+against this instrument is the next audition's bar.

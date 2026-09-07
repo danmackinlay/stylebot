@@ -1,8 +1,23 @@
 # Transcript mining — real pairs from Claude Code session logs
 
-**Status: specified 2026-09-03, not built.** A capture-expansion slice: grows
-the *real* stratum, which the [`argued`](argued-slop-arm.md) synth arm is
-trying to approximate. Self-contained; a subagent can build it from this file.
+**Status: built 2026-09-07 (D89) — `stylebot.transcripts`, `ai-style log mine`,
+`tests/test_transcripts.py`; dry-run over the real logs, counts in the blog's
+private sizing note; `--apply` and the `pair_weight` policy are Dan's.** A
+capture-expansion slice: grows the *real* stratum, which the
+[`argued`](argued-slop-arm.md) synth arm is trying to approximate.
+
+**What the build changed under the design below** (each is in D89's
+alternatives): the differ sees Dan's next commit with every paragraph Claude
+never touched *reverted* to its pre-edit text (`transcripts.revert_untouched`),
+and a `keep` predicate on `capture_pairs` admits only chunks on a paragraph
+Claude changed and not already a captured target — otherwise a Dan-only edit
+beside a Claude paragraph coalesces into the pair; `meta.novel_after` is
+stamped by `build_pair_record` on every new real pair, hand-captured or mined,
+and the backfill over the old captures is a view stamp under D84, not a
+migration; the `Edit` result's `originalFile` is empty on most 2026-09 logs, so
+it is not the base; a file created by `Write` replays from empty. The user
+turns and Claude's text/thinking go to `<data-dir>/transcript_turns.jsonl`
+(gitignored blog-side) as specified. The design follows, unchanged.
 
 ## Why
 
