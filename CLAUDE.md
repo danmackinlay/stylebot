@@ -90,7 +90,7 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
   wrapper translating `stylebot.errors` into exit codes (D47). A library
   reachable only through `CliRunner` gets copied, and the copy drifts (D35).
 - **One entry point, subcommands** (`ai-style
-  check-splits|eval|export-table|extend-eval|log|make-splits|merge-adapter|promote|run|serve|status|synth|train|train-clf|validate-pairs`),
+  check-splits|eval|export-table|extend-eval|features|log|make-splits|merge-adapter|promote|run|serve|status|synth|train|train-clf|validate-pairs`),
   not a scatter of loose scripts. **No carve-out, and there is no `scripts/`
   directory** — an error message must name a command that exists, and a
   directory outside the package is outside the checks (D38).

@@ -22,6 +22,7 @@ from stylebot import backends, config, draws, pairs, synth, synth_cli
 from stylebot import classify_cli as cc
 from stylebot import classify_train as ct
 from stylebot import eval as ev
+from stylebot import features as ft
 from stylebot import splits as sp
 from stylebot import train as tr
 from stylebot.backends import BACKEND_PARAMS, BackendOpts, backend_options
@@ -174,6 +175,16 @@ def eval_cmd(**kw) -> None:
             emit=emit,
         )
     ev.run_eval(opts, verdict_opts, detector=detector, documents=documents, emit=emit)
+
+
+@main.command("features", cls=SectionedCommand)
+@ft.features_options()
+def features_cmd(**kw) -> None:
+    """Syntactic proxies per stratum: real vs synthetic (or --by a meta key),
+    pooled over one side of --draws' view and every --pairs; --separability adds
+    each facet's grouped-CV AUC against real. Keyless, read-only (D88)."""
+    parsed = bundles_from_kwargs(kw, ft.FEATURES_PARAMS)
+    click.echo(ft.features_pass(parsed["opts"], parsed["view"]))
 
 
 @main.command("export-table")
