@@ -1076,3 +1076,27 @@ policy, `content_sha256` is `e3d9809bddc9a616` with the clause and without it,
 `eval_posts` entries are 12 sources after `splits.canonical_source`. What the
 clause buys is the next `synth` run over an eval post, which would otherwise
 contaminate the held-out stratum silently. Decided: D84.
+
+## Syntactic proxies by stratum — 2026-09-07 (D88, `argued-slop-arm.md` stage 0)
+
+`uv run dan-style features --by slop_strategy --separability` in `~/Source/livingthing`,
+over the view `pairs-5257549f211dda24` (8,142 records, 395 real). Slop side, per-sentence
+rates pooled per stratum; AUC is `features.separability`'s out-of-fold logistic head on
+the punctuation-free vector, folds grouped by post. Read-only, keyless.
+
+| stratum | N | words/sent | sent-len var | commas | subordinators | em-dash | semicolon | connectives | concessions | AUC vs real |
+|---|---|---|---|---|---|---|---|---|---|---|
+| real | 395 | 23.4 | 207 | 1.38 | 0.26 | 0.37 | 0.14 | 0.021 | 0.026 | — |
+| casual | 1451 | 17.2 | 99 | 0.92 | 0.16 | 0.14 | 0.04 | 0.005 | 0.041 | 0.776 |
+| engaging | 1228 | 18.1 | 140 | 0.82 | 0.13 | 0.20 | 0.04 | 0.004 | 0.039 | 0.793 |
+| linkedin | 790 | 12.9 | 84 | 0.51 | 0.08 | 0.10 | 0.04 | 0.005 | 0.017 | 0.920 |
+| measured | 1595 | 20.5 | 116 | 1.21 | 0.25 | 0.12 | 0.08 | 0.015 | 0.090 | **0.730** |
+| polish | 1538 | 18.6 | 123 | 1.06 | 0.19 | 0.14 | 0.07 | 0.005 | 0.065 | 0.750 |
+| verbose | 1145 | 25.3 | 178 | 1.43 | 0.32 | 0.15 | 0.08 | 0.011 | 0.066 | **0.722** |
+
+The 2026-09-03 table in the plan regenerates within rounding, which settles that it was
+pooled rates, not medians (D88). `--same-sources` (531 synthetic records on the 54 real
+posts) moves no arm by more than 0.04 on any rate. Sentence-length variance is the widest
+gap that punctuation does not explain: real 207 against 84–178. The stage-1 bar is AUC
+≤ 0.70 and below `measured`'s 0.730; `verbose` at 0.722 is the arm to beat on the
+separability criterion, `measured` on the rates. Decided: D88.
