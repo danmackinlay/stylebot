@@ -3,19 +3,21 @@ separable two strata are on them (D88; `_plans/argued-slop-arm.md` stage 0).
 
 `syntax_profile` is the per-text vector; `profile_pairs` pools counts per
 facet, the real stratum being `meta.synthetic` falsy; `separability` is an
-out-of-fold AUC of a logistic head on the punctuation-free vector, real vs
-one facet, folds grouped by `meta.source`. `ai-style features` is the shell.
+out-of-fold AUC of a logistic head, real vs one facet, folds grouped by
+`meta.source`, on the punctuation-free vector or on an `embed`ding of the
+text (the style backbone, `--embed`). `ai-style features` is the shell.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import click
 
+from stylebot.classify_train import DEFAULT_EMBED_MODEL, embed_texts
 from stylebot.cli_options import opt
 from stylebot.draws import ViewOpts
 from stylebot.errors import ConfigError, MissingExtra
@@ -178,13 +180,15 @@ def separability(
     by: str | None = "slop_strategy",
     field: str = "slop",
     same_sources_as_real: bool = False,
+    embed: Callable[[Sequence[str]], object] | None = None,
     n_splits: int = 5,
     seed: int = 0,
 ) -> dict[str, object]:
-    """Out-of-fold AUC of a logistic head on `SEPARABILITY_FEATURES`, real vs the
-    records whose facet is `facet_value`; folds are grouped by `meta.source`
-    (`StratifiedGroupKFold`, at most `n_splits`). Fewer than two posts a side
-    is a refusal. Returns `{"auc", "n_real", "n_facet", "n_groups", "n_splits"}`."""
+    """Out-of-fold AUC of a logistic head, real vs the records whose facet is
+    `facet_value`, on `SEPARABILITY_FEATURES` or, with `embed` (texts -> [N, D]),
+    on that embedding; folds are grouped by `meta.source` (`StratifiedGroupKFold`,
+    at most `n_splits`). Fewer than two posts a side is a refusal. Returns
+    `{"auc", "n_real", "n_facet", "n_groups", "n_splits", "vector"}`."""
     try:
         import numpy as np
         from sklearn.linear_model import LogisticRegression
@@ -195,12 +199,12 @@ def separability(
     except ImportError as exc:  # pragma: no cover - exercised only without the extra
         raise MissingExtra(_SKLEARN_HINT) from exc
 
-    rows, labels, groups = [], [], []
+    texts, labels, groups = [], [], []
     for rec, text in _load(paths, field, same_sources_as_real):
         label = facet_of(rec, by)
         if label not in (REAL, facet_value) or not sentences(text):
             continue
-        rows.append([syntax_profile(text)[k] for k in SEPARABILITY_FEATURES])
+        texts.append(text)
         labels.append(1 if label == REAL else 0)
         groups.append(str(meta_value(rec, "source")))
     y = np.asarray(labels)
@@ -213,7 +217,10 @@ def separability(
             f"separability needs records on >= 2 posts a side; real {n_real} on "
             f"{posts_a_side[0]}, {facet_value!r} {n_facet} on {posts_a_side[1]}"
         )
-    x = np.asarray(rows, dtype=float)
+    if embed is None:
+        x = np.asarray([[syntax_profile(s)[k] for k in SEPARABILITY_FEATURES] for s in texts])
+    else:
+        x = np.asarray(embed(texts), dtype=float)
     splits = min(n_splits, len(set(groups)), n_real, n_facet)
     folds = StratifiedGroupKFold(n_splits=splits, shuffle=True, random_state=seed)
     oof = np.full(len(y), np.nan)
@@ -231,19 +238,35 @@ def separability(
         "n_facet": n_facet,
         "n_groups": len(set(groups)),
         "n_splits": splits,
+        "vector": "proxies" if embed is None else "embed",
     }
 
 
-def format_table(profiles: dict[str, dict[str, float]], aucs: dict[str, dict] | None = None) -> str:
-    """The plan's markdown table: one row per facet, `AUC vs real` when given."""
-    cols = ["stratum", "N", "words/sent", "sent-len var", *MARKERS]
-    if aucs:
-        cols.append("AUC vs real")
+def memo_embedder(model_id: str = DEFAULT_EMBED_MODEL) -> Callable[[Sequence[str]], object]:
+    """`embed_texts` behind a per-text cache, so the real stratum is encoded once
+    across every facet's `separability` call."""
+    cache: dict[str, object] = {}
+
+    def embed(texts: Sequence[str]):
+        import numpy as np
+
+        missing = sorted({s for s in texts if s not in cache})
+        if missing:
+            cache.update(zip(missing, embed_texts(missing, model_id=model_id), strict=True))
+        return np.stack([cache[s] for s in texts])
+
+    return embed
+
+
+def format_table(profiles: dict[str, dict[str, float]], *aucs: tuple[str, dict[str, dict]]) -> str:
+    """The plan's markdown table: one row per facet, one column per `(title,
+    {facet: separability})` given."""
+    cols = ["stratum", "N", "words/sent", "sent-len var", *MARKERS, *(title for title, _ in aucs)]
     lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     for label, prof in profiles.items():
         cells = [label, str(prof["n"])] + [f"{prof[k]:.3f}" for k in FEATURES]
-        if aucs:
-            cells.append(f"{aucs[label]['auc']:.3f}" if label in aucs else "—")
+        for _, table in aucs:
+            cells.append(f"{table[label]['auc']:.3f}" if label in table else "—")
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -286,7 +309,21 @@ class FeaturesOpts:
         False,
         "--separability",
         is_flag=True,
-        help="Add each facet's grouped-CV AUC against real (needs scikit-learn).",
+        help="Add each facet's grouped-CV AUC against real on the punctuation-free "
+        "proxies (needs scikit-learn).",
+    )
+    embed: bool = opt(
+        False,
+        "--embed",
+        is_flag=True,
+        help="Add the same AUC on --embed-model's embedding of the text (needs the "
+        "'classifier' extra; one local encoding pass, no spend).",
+    )
+    embed_model: str = opt(
+        DEFAULT_EMBED_MODEL,
+        "--embed-model",
+        show_default=True,
+        help="sentence-transformers model id for --embed.",
     )
 
 
@@ -306,7 +343,13 @@ def features_pass(opts: FeaturesOpts, view: ViewOpts) -> str:
     paths += list(opts.pairs_paths)
     kw = {"field": opts.field, "by": opts.by, "same_sources_as_real": opts.same_sources}
     profiles = profile_pairs(paths, **kw)
-    aucs = None
+    facets = [label for label in profiles if label != REAL]
+    columns = []
     if opts.separability:
-        aucs = {label: separability(paths, label, **kw) for label in profiles if label != REAL}
-    return format_table(profiles, aucs)
+        columns.append(("AUC vs real", {f: separability(paths, f, **kw) for f in facets}))
+    if opts.embed:
+        embed = memo_embedder(opts.embed_model)
+        columns.append(
+            ("AUC (embed)", {f: separability(paths, f, embed=embed, **kw) for f in facets})
+        )
+    return format_table(profiles, *columns)

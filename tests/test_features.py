@@ -159,6 +159,43 @@ def test_separability_is_high_on_separable_and_chance_on_inseparable_facets(tmp_
     assert 0.3 < same["auc"] < 0.7
 
 
+def test_separability_on_an_embedding_takes_the_vector_it_is_handed(tmp_path):
+    """`embed` replaces the proxy vector: a one-hot of which bag a text came from
+    separates perfectly; a constant vector cannot separate at all."""
+    pytest.importorskip("sklearn")
+    import numpy as np
+
+    corpus = _separable_corpus(tmp_path, separable=True)
+    seen: list[int] = []
+
+    def one_hot(texts):
+        seen.append(len(texts))
+        return np.array(
+            [[1.0, 0.0] if "Although" in s or "Granted" in s else [0.0, 1.0] for s in texts]
+        )
+
+    apart = ft.separability(corpus, "x", embed=one_hot)
+    assert apart["auc"] > 0.95 and apart["vector"] == "embed" and seen == [80]
+    rng = np.random.default_rng(0)
+    noise = ft.separability(corpus, "x", embed=lambda texts: rng.standard_normal((len(texts), 3)))
+    assert 0.3 < noise["auc"] < 0.7
+    # The memoised embedder encodes each distinct text once across calls.
+    calls: list[int] = []
+
+    def fake_embed_texts(texts, model_id):
+        calls.append(len(texts))
+        return np.ones((len(texts), 2))
+
+    embed = ft.memo_embedder("fake")
+    ft.embed_texts, real_embed = fake_embed_texts, ft.embed_texts
+    try:
+        embed(["a", "b"])
+        assert embed(["b", "a", "c"]).shape == (3, 2)
+    finally:
+        ft.embed_texts = real_embed
+    assert calls == [2, 1]
+
+
 def test_separability_refuses_a_side_on_fewer_than_two_posts(six_rows):
     pytest.importorskip("sklearn")
     with pytest.raises(ConfigError, match="2 posts a side"):
