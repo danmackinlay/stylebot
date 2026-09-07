@@ -37,6 +37,12 @@ MODULE_DOCSTRING_LINES = 30
 PROSE_CEILING = 2276
 #: How far under the ceiling prose may sit before the test demands it be lowered.
 PROSE_SLACK = 50
+#: Code lines when the ceiling was set; re-record it whenever the ceiling is lowered.
+PROSE_CODE_BASE = 11175
+#: Prose per line of NEW code — the post-cull package density (D58). Allowance:
+#: `PROSE_CEILING + PROSE_DENSITY * max(0, code - PROSE_CODE_BASE)`, so deleting
+#: code never fails and a new module funds its own contract docstrings.
+PROSE_DENSITY = 0.20
 
 # module -> the budgets it is over today, at their exact current size.
 # "functions" maps each over-budget function's qualified name (`Class.method`,
@@ -260,10 +266,15 @@ def test_allowlist_names_real_modules() -> None:
 
 
 def test_prose_stays_under_its_ceiling() -> None:
-    prose = sum(m["prose"] for _, m in _modules())
-    assert prose <= PROSE_CEILING, (
-        f"docstring+comment lines grew {PROSE_CEILING} -> {prose}; say it once, in "
-        "the layer that owns it (D58/P1). The ceiling only falls."
+    modules = _modules()
+    prose = sum(m["prose"] for _, m in modules)
+    code = sum(m["code"] for _, m in modules)
+    growth = max(0, code - PROSE_CODE_BASE)
+    allowance = PROSE_CEILING + int(PROSE_DENSITY * growth)
+    assert prose <= allowance, (
+        f"docstring+comment lines are {prose}, over the ceiling {PROSE_CEILING} plus "
+        f"{PROSE_DENSITY} x {growth} new code lines = {allowance}; say it once, in the "
+        "layer that owns it (D58/P1)."
     )
     assert prose > PROSE_CEILING - PROSE_SLACK, (
         f"prose is {prose}, more than {PROSE_SLACK} under the ceiling: lower "

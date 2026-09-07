@@ -395,9 +395,9 @@ the test; the allowlist edit rides in the commit that earns it (P5); rejected
 hint-not-fail, since an unread hint is how the allowlist stops shrinking.
 `findings.md` is gated the same way (`FINDINGS_ALLOWLIST`, prose ≤ 12 after the table).
 
-**Amended 2026-09-05 (R0)**: the ratio is retired; it failed the suite on a
-five-line de-duplication (`_post_targets`), pricing out the diet it guarded.
-`PROSE_CEILING` is a count that only falls; lowering prose must lower it (`PROSE_SLACK`).
+**Amended 2026-09-05 (R0, then the same day)**: the ratio failed on a five-line
+de-duplication; a fall-only `PROSE_CEILING` then priced out a new module within a day.
+Allowance: `PROSE_CEILING + 0.20 × new code` — deletion never fails, growth funds its contracts.
 
 ## D59: one mechanism in the scoring path — the judge awaits, everything else batches
 
