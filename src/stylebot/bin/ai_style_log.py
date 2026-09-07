@@ -28,6 +28,7 @@ from stylebot.cli_options import (
     SectionedCommand,
     bundle_options,
     bundles_from_kwargs,
+    click_emitter,
     opt,
 )
 from stylebot.session import SessionStore, SnapshotEntry, humanize_age
@@ -303,6 +304,82 @@ def save_session(
             )
 
     _remind_open_sessions(ctx)
+
+
+@main.command(name="mine", cls=SectionedCommand)
+@click.option(
+    "--transcripts",
+    "transcripts_dir",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="A Claude Code project directory of session JSONLs (~/.claude/projects/<slug>/).",
+)
+@click.option(
+    "--blog-root",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="The prose checkout the sessions edited; Dan's next commit is the after side.",
+)
+@click.option(
+    "--data-dir",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Where draws and captures/ are appended. Required: this grows the real stratum.",
+)
+@click.option("--since", default=None, help="Skip sessions whose last edit precedes this ISO date.")
+@click.option(
+    "--apply",
+    is_flag=True,
+    help="Write draws, archives and the turns sidecar (default: report only).",
+)
+@click.option("--no-turns", is_flag=True, help="With --apply, do not write transcript_turns.jsonl.")
+@click.option(
+    "--gap-paras",
+    default=0,
+    show_default=True,
+    type=int,
+    help="Coalesce gap in paragraphs (the blog uses its recut policy's).",
+)
+@click.option(
+    "--gap-chars", default=0, show_default=True, type=int, help="Coalesce gap in characters."
+)
+@click.option("--heading-context/--no-heading-context", default=True, help="As for save.")
+def mine_transcripts_cmd(
+    transcripts_dir,
+    blog_root,
+    data_dir,
+    since,
+    apply,
+    no_turns,
+    gap_paras,
+    gap_chars,
+    heading_context,
+):
+    """Replay Claude Code sessions and capture what Dan changed afterwards (D89).
+
+    Each session's .qmd edits are replayed onto the file as Claude saw it; the
+    result is paired with the file at Dan's next commit through the same differ
+    `save` uses, keeping only paragraphs Claude touched. Dry-run by default.
+    """
+    from stylebot import transcripts
+
+    report = transcripts.mine_transcripts(
+        transcripts_dir,
+        blog_root=blog_root,
+        data_dir=data_dir,
+        since=since,
+        dry_run=not apply,
+        write_turns=not no_turns,
+        heading_context=heading_context,
+        coalesce_gap_paras=gap_paras,
+        coalesce_gap_chars=gap_chars,
+        emit=click_emitter(),
+    )
+    click.echo("\n".join(report.lines()))
+    if apply:
+        click.echo(f"wrote {len(report.written)} pair(s) -> {data_dir}")
+    else:
+        click.echo("dry run: nothing written (pass --apply)")
 
 
 @main.command(name="drop")
