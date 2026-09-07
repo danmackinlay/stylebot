@@ -169,6 +169,7 @@ def prose_chunks(
     max_chunk_chars: int = STYLE_CHARS_PER_CHUNK,
     inline_headings: bool = False,
     div_is_prose: markdown.DivIsProse | None = None,
+    html_comments: bool = False,
 ) -> list[str]:
     """The prose chunks `rewrite_text` would send to the styler: `_segment`'s
     prose items, frontmatter dropped. Public for `eval.chunked_detector` (D54)."""
@@ -178,6 +179,7 @@ def prose_chunks(
         max_chars=max_chunk_chars,
         inline_headings=inline_headings,
         div_is_prose=div_is_prose,
+        html_comments=html_comments,
     )
     return [
         chunk
@@ -338,18 +340,14 @@ def rewrite_candidates(
     inline_headings: bool = False,
     div_is_prose: markdown.DivIsProse | None = None,
     system: str | None = None,
+    html_comments: bool = False,
 ) -> dict:
     """All candidates for one prose chunk, none auto-chosen — the editor seam (D20).
-
-    Anchor violations flag rather than disqualify. `text` must be prose at
-    training chunk scale: frontmatter, a heading, a protected block, a `:::`
-    line (D27, D76) or prose over `max_chunk_chars` raises ValueError. Under
-    `inline_headings` a selection may span headings and `context` is ignored.
-    Returns `{"input_score", "n_sampled", "candidates": [{"text", "score",
-    "anchors_lost", "anchors_gained", "truncated", "identity"}, ...]}` in
-    sampled order (duplicates collapse; a candidate byte-equal to the input is
-    flagged `identity: true`). `system` is `messages[0]` as in `rewrite_text`.
-    """
+    Anchor violations flag rather than disqualify; `text` must be prose at chunk
+    scale (frontmatter, a heading, a protected block, a `:::` line or an
+    over-budget chunk raises; D27, D76). Returns `{"input_score", "n_sampled",
+    "candidates": [{"text", "score", "anchors_lost", "anchors_gained",
+    "truncated", "identity"}, ...]}` in sampled order, duplicates collapsed."""
     from stylebot.pairs import build_pair_content, pair_body
 
     # Cross-heading pairs record no `meta.context`: a prefix training never saw (D27).
@@ -362,7 +360,11 @@ def rewrite_candidates(
     if any(markdown.is_div_fence_line(line) for line in body.splitlines()):
         raise ConfigError("selection contains a div — select prose only")
     items, _seps = _segment(
-        body, max_chars=max_chunk_chars, inline_headings=inline_headings, div_is_prose=div_is_prose
+        body,
+        max_chars=max_chunk_chars,
+        inline_headings=inline_headings,
+        div_is_prose=div_is_prose,
+        html_comments=html_comments,
     )
     kinds = [kind for kind, chunk in items if chunk.strip()]
     # Nothing selected is its own failure, not an over-budget selection.
@@ -422,18 +424,17 @@ def rewrite_text(
     inline_anchors: bool = False,
     div_is_prose: markdown.DivIsProse | None = None,
     system: str | None = None,
+    html_comments: bool = False,
 ) -> RewriteResult:
     """Rewrite prose chunk-by-chunk through the styler, mirroring training.
 
     Frontmatter, headings and protected blocks pass through (D27); a chunk
-    carries the nearest heading as `context` unless `inline_headings` (set it
-    from the adapter's `data.chunk_scale`). A blank answer keeps the input.
-    `system` is `messages[0]`: the manifest's prompt, or the default author's
-    when None. Candidates are disqualified truncated first, then for anchor
-    damage (D32), counted in the result; `inline_anchors` widens the guard.
-    With a `scorer` the input competes (D20) and `on_decision(chunk, context,
-    candidates, scores, chosen_index, kept_input)` fires per chunk,
-    `chosen_index` None when the input was kept.
+    carries the nearest heading as `context` unless `inline_headings`. A blank
+    answer keeps the input; `system` is `messages[0]`. Candidates are
+    disqualified truncated first, then for anchor damage (D32; `inline_anchors`
+    widens the guard). With a `scorer` the input competes (D20) and
+    `on_decision(chunk, context, candidates, scores, chosen_index, kept_input)`
+    fires per chunk, `chosen_index` None when the input was kept.
     """
     from stylebot.pairs import build_pair_content, pair_body
 
@@ -443,6 +444,7 @@ def rewrite_text(
         max_chars=max_chunk_chars,
         inline_headings=inline_headings,
         div_is_prose=div_is_prose,
+        html_comments=html_comments,
     )
     result = RewriteResult(text="")
     out_chunks: list[str] = []

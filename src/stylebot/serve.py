@@ -52,6 +52,7 @@ def prose_paragraphs(
     *,
     min_chars: int = 0,
     div_is_prose: markdown.DivIsProse | None = None,
+    html_comments: bool = False,
 ) -> list[dict]:
     """The scoreable prose paragraphs of a markdown document, with offsets.
 
@@ -67,7 +68,9 @@ def prose_paragraphs(
     to_utf16 = _utf16_mapper(text)
 
     lines = body.split("\n")
-    kinds = markdown.line_kinds(body, headings=True, div_is_prose=div_is_prose)
+    kinds = markdown.line_kinds(
+        body, headings=True, div_is_prose=div_is_prose, html_comments=html_comments
+    )
     starts: list[int] = []
     pos = 0
     for line in lines:
@@ -113,6 +116,7 @@ def handle_request(
     rewriter: Callable[..., dict] | None = None,
     prefer: Callable[[dict], None] | None = None,
     div_is_prose: markdown.DivIsProse | None = None,
+    html_comments: bool = False,
 ) -> dict:
     """Compute the response for one parsed request object; pure.
 
@@ -141,6 +145,7 @@ def handle_request(
                     text,
                     min_chars=int(request.get("min_chars") or 0),
                     div_is_prose=div_is_prose,
+                    html_comments=html_comments,
                 ),
             }
         if op == "rewrite":
@@ -182,6 +187,7 @@ def serve_loop(
     rewriter: Callable[..., dict] | None = None,
     prefer: Callable[[dict], None] | None = None,
     div_is_prose: markdown.DivIsProse | None = None,
+    html_comments: bool = False,
 ) -> None:
     """Serve NDJSON requests until EOF on `stdin`: one flushed line per
     response (the client blocks on it); blank lines ignored; an unparseable
@@ -205,6 +211,7 @@ def serve_loop(
                 rewriter=rewriter,
                 prefer=prefer,
                 div_is_prose=div_is_prose,
+                html_comments=html_comments,
             )
         stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
         stdout.flush()
@@ -234,6 +241,7 @@ def serve_sidecar(
     make_styler: Callable[[], Styler] | None,
     prefer: Callable[[dict], None] | None = None,
     div_is_prose: markdown.DivIsProse | None = None,
+    html_comments: bool = False,
     stdin: IO[str] | None = None,
     stdout: IO[str] | None = None,
 ) -> None:
@@ -274,4 +282,5 @@ def serve_sidecar(
         rewriter=rewriter,
         prefer=prefer,
         div_is_prose=div_is_prose,
+        html_comments=html_comments,
     )

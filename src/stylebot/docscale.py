@@ -154,6 +154,7 @@ def document_pass(
     manifest: dict,
     splits: dict | None,
     div_is_prose=None,
+    html_comments: bool = False,
     emit: Emitter = silent,
 ) -> DocumentPass:
     """`eval --documents` (D78): rewrite whole documents, say what to score.
@@ -181,6 +182,7 @@ def document_pass(
         "max_chunk_chars": max_chunk_chars,
         "inline_headings": inline_headings,
         "div_is_prose": div_is_prose,
+        "html_comments": html_comments,
     }
     result = rewrite_documents_file(
         pairs_path,

@@ -488,6 +488,7 @@ def rewrite_document(
     scorer: Callable[[str], float] | None = None,
     on_decision: Callable[..., None] | None = None,
     div_is_prose=None,
+    html_comments: bool = False,
     rewrite: Callable[..., RewriteResult] | None = None,
     source: Path | None = None,
     emit: Emitter = silent,
@@ -517,6 +518,7 @@ def rewrite_document(
         inline_headings=backend.headings(),
         inline_anchors=opts.strict_anchors,
         div_is_prose=div_is_prose,
+        html_comments=html_comments,
         system=backend.system(),
     )
     if scorer is not None or rewrite is not None:

@@ -1211,9 +1211,10 @@ store the edit verbatim, markers included. A `ViewPolicy.cut_sem_spans` clause r
 spans (and markers) from both sides of every record at build time, re-stamps `before_chars`,
 `after_chars` and `novel_after`, records `meta.sem_spans`, and excludes a record whose two
 sides are identical after the cut (`sem_only`). Synthesis strips the markers from a target and
-keeps the text. `line_kinds`/`infer._segment` gain `html_comments` (whole-line comments
-protected), off by default for segment parity; the blog wires it when its training does. The
-markers are one stylebot constant (`markdown.SEM_OPEN/CLOSE`);
+keeps the text. `html_comments` (whole-line comments protected) travels beside `div_is_prose`
+through `infer`, `backends`, `docscale` and `serve`, off by default for segment parity; the
+blog opts in (`PROTECT_HTML_COMMENTS`, since its training drops comment chunks). The markers
+are one stylebot constant (`markdown.SEM_OPEN/CLOSE`);
 a span never crosses a paragraph break, an unclosed opener runs to the paragraph's end and is
 counted, a stray closer is an ordinary comment. The editor shortcut is the voice-marker
 extension's `voiceMarker.markSemantic` (Cmd+K Cmd+M), a toggle over the selection.

@@ -165,7 +165,12 @@ def test_document_pass_hands_one_diet_to_both_halves(tmp_path, monkeypatch):
     assert passed.pairs_path == data_dir / "documents.jsonl"  # beside `out`
     assert passed.fields == ("slop", "target", "output") and passed.prune_orphans is False
     assert passed.chunk_scale["div_is_prose"] is hook
-    assert set(passed.chunk_scale) == {"max_chunk_chars", "inline_headings", "div_is_prose"}
+    assert set(passed.chunk_scale) == {
+        "max_chunk_chars",
+        "inline_headings",
+        "div_is_prose",
+        "html_comments",
+    }
     record = json.loads(passed.pairs_path.read_text().splitlines()[0])
     assert record["output"] == "BEFORE DOC, PROSE ENOUGH.\n"
     rewrote = f"rewrote 1 document(s) (1 chunks, 0 kept verbatim) -> {passed.pairs_path}"
