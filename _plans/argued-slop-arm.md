@@ -1,8 +1,19 @@
 # `argued` — a slop arm for concessive / justificatory structure
 
-**Status: specified 2026-09-03, not built; next up (Dan, 2026-09-05).** An open
-slice under the prompt ablation ([`OVERVIEW.md`](OVERVIEW.md) §"Open questions").
-Self-contained: a subagent can build stage 0 and stage 1 from this file.
+**Status: stage 0 built and stage 1 registered and auditioned twice 2026-09-07
+(D88). Stage 1 fails match (connectives) and separability with both prompt
+versions — [`findings.md`](findings.md) "The `argued` audition" — which is
+this file's stage-2 trigger; stage 2 is a new mechanism (P8) and Dan's call,
+as is any promotion.** An open slice under the prompt ablation
+([`OVERVIEW.md`](OVERVIEW.md) §"Open questions").
+
+**Three corrections made while building** (each is in D88's alternatives): the
+2026-09-03 table is *pooled* per-sentence rates, not medians — a median of a
+0.01-a-sentence rate is zero on every stratum — so every "median" below reads
+as the facet's pooled rate; the audition goes to a **scratch data-dir**, as
+RUNBOOK §4 has always run auditions, so `features` pools a scratch view beside
+the live one through a repeatable `--pairs`; and the separability folds are
+grouped by post, or the AUC reports topic.
 
 **What moved under it since it was written** (2026-09-05, after the two
 ship-shape rounds): the corpus is append-only `draws/` plus a view built under
@@ -68,14 +79,15 @@ Three readings, all load-bearing for the design:
 An arm counts as eliciting the structure when the real↔synth gap on the
 structural proxies closes *and* the pairs stay usable:
 
-- **Match**: on ≥120 audition pairs across ≥4 roster models, arm medians for
-  subordinators, commas and connectives are ≥ 90% of the real "same posts"
-  reference, and words/sentence lands in 22–27.
+- **Match**: on ≥120 audition pairs across ≥4 roster models, the arm's pooled
+  rates for subordinators, commas and connectives are ≥ 90% of the real
+  stratum's, and words/sentence lands in 22–27.
 - **Separability**: a cross-validated logistic regression on the *punctuation-
   free* proxy vector (subordinators, connectives, concession markers, words/
-  sentence, sentence-length variance, commas) distinguishing real captures from
-  the arm's slop has **AUC ≤ 0.70**, and is lower than the same model's AUC
-  against `measured` (the current best; measure it as the baseline in stage 0).
+  sentence, sentence-length variance, commas), folds grouped by post,
+  distinguishing real captures from the arm's slop has **AUC ≤ 0.70**, and is
+  lower than the same model's AUC against `measured` (the baseline stage 0
+  measured; `verbose` turned out marginally lower still — `findings.md`).
 - **Not degenerate**: identity / inflation / anchor gate drop rate ≤ 1.5× the
   roster median for the same run; detector gap (existing classifier, P(slop) on
   arm − P(slop) on Dan) ≥ 0.07, i.e. not collapsed from the 0.09 norm.
@@ -104,7 +116,13 @@ write call's prompt grows by the brief): ~1.6–2× per pair, i.e. ~$0.02 on
 Claude and under $0.005 on the open models. Budget for the whole slice through
 promotion: **< $30**, most of it the Claude arm.
 
-## Stage 0 — the proxy extractor (prerequisite, keyless, no spend)
+## Stage 0 — the proxy extractor (prerequisite, keyless, no spend) — BUILT 2026-09-07
+
+Shipped as specified below with the three corrections above: `stylebot.features`
+(`syntax_profile`, `profile_pairs`, `separability`, D88), `ai-style features`
+and `dan-style features`, `tests/test_features.py`. The table regenerates from
+`dan-style features --by slop_strategy --separability`; the baseline is in
+`findings.md`. The original specification follows, unchanged.
 
 The done-criteria above need a repeatable measurement. This is the minimal
 first cut of the eval harness's planned fifth capability, scoped to what this
@@ -145,11 +163,25 @@ distribution view per strategy/covariate. **Seam:** the `meta.synthetic` facet
   two strategies; separability on a synthetic separable/inseparable pair of
   facets hits AUC ≈ 1.0 / ≈ 0.5.
 
-Done: the table in this file regenerates from `dan-style features --pairs
-_training_pairs/pairs.jsonl --by slop_strategy` and the `measured` baseline AUC
-is recorded in `findings.md`.
+Done: the table in this file regenerates from `dan-style features --by
+slop_strategy` and the `measured` baseline AUC is recorded in `findings.md`.
 
-## Stage 1 — the `argued` strategy (single call, system prompt only)
+## Stage 1 — the `argued` strategy (single call, system prompt only) — REGISTERED 2026-09-07
+
+`STRATEGIES["argued"]` version 1 was the draft below with two words changed:
+"the obvious alternative" became "the alternative a reader would first reach
+for" (the draft quoted a stage-0 connective and failed its own test), and
+"argued rather than stated" became "argued instead of stated" ("rather than" is
+the subordinator Dan strips most, §"Risks"). It auditioned cartoonish (the
+staged objector converged on one phrase), so **version 2, the registry text
+today**, forbids an imagined reader, argues once a paragraph at most and asks
+for mixed sentence lengths; `prompts.jsonl` in each scratch dir archives both.
+The audition command is the scratch form: `direnv exec . uv run dan-style synth --data-dir
+_tmp/argued-audition --slop-strategy argued --session-turns 1 --sample-frac
+0.05 --limit 120` (the `--sample-frac` spreads 120 chunks over ~100 posts
+instead of the walk's first 16), then `ai-style build-view --draws
+_tmp/argued-audition/draws` and `dan-style features --pairs <view> --by
+slop_strategy --separability`. The original specification follows.
 
 Register in `stylebot.generators.STRATEGIES` as `"argued"`, version 1. It is a
 generic AI-prose flavour, not a Dan-specific catalogue, so it belongs in the

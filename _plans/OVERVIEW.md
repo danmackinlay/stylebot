@@ -22,7 +22,7 @@ once their work shipped and the code became the better description):
 | [`anchor-integrity.md`](retired/anchor-integrity.md) | retired 2026-09-04 (P7); the anchor guard/gate/audit (D32) — its open step 3 is `masking-placement.md` |
 | [`masking-placement.md`](masking-placement.md) | *where* masking goes (D33) — decided, not yet built |
 | [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md) | the mask *encoding* — the open half of the masking work |
-| [`argued-slop-arm.md`](argued-slop-arm.md) | a slop strategy for concessive/justificatory structure — the first prompt-ablation arm, specified 2026-09-03, not built |
+| [`argued-slop-arm.md`](argued-slop-arm.md) | a slop strategy for concessive/justificatory structure — the first prompt-ablation arm; stage 0 (`stylebot.features`, D88) built and stage 1 auditioned 2026-09-07, promotion open |
 | [`transcript-mining.md`](transcript-mining.md) | real pairs replayed from Claude Code session transcripts (with the objections Claude was answering) — specified 2026-09-03, not built |
 
 Narrative rationale (the "why") lives in the blog post
@@ -78,7 +78,7 @@ whole pipeline from its own build.
   the CLI. Build the function; the CLI is a shell over it.
 - **One entry point, subcommands** — `ai-style log | synth | make-splits |
   check-splits | extend-eval | train | train-clf | promote | run | serve | eval |
-  status | validate-pairs | export-table | merge-adapter` — not a scatter of
+  features | status | validate-pairs | export-table | merge-adapter` — not a scatter of
   loose scripts. Shared option parsing, one `--help` tree; loose scripts drift in
   flag conventions. Phase 1's logger is exempt from nothing: it shipped as a
   standalone `ai-style-log` console script until 2026-07-20 (history, not
@@ -265,18 +265,22 @@ record of what was measured then, not a claim about now.
 - **v3 data**: deliberate moderate-compression pairs (Dan compresses 1.5–2× in
   real edits) now that generator-accident inflation is gated at 3×.
 - **Synthetic↔real distribution match**: the fifth eval capability — a
-  feature/mannerism extractor over the synthetic vs real-slop strata. Spec:
-  [`argued-slop-arm.md`](argued-slop-arm.md) §"Stage 0" (moved there when
-  the eval-harness plan retired). Its minimal first cut (`stylebot.features`,
-  syntactic proxies + a separability AUC) is that stage of the `argued` arm
-  below.
+  feature/mannerism extractor over the synthetic vs real-slop strata. **Its
+  minimal first cut shipped 2026-09-07** as `stylebot.features` / `ai-style
+  features` (syntactic proxies pooled per stratum plus a post-grouped
+  separability AUC; D88, baseline in [`findings.md`](findings.md)). Still
+  open: the mannerism families (`_voices/slop_patterns.md`, hedges,
+  signposting, mixed metaphors) the 2026-06-28 spec named — the stage-0
+  section of [`argued-slop-arm.md`](argued-slop-arm.md) holds that spec.
 - **`argued` slop arm** ([`argued-slop-arm.md`](argued-slop-arm.md)): real
   captures carry more subordinate and justificatory structure than any synth
-  strategy on the same posts, and reasoning effort does not move it. A
-  single-call strategy prompt is the stage-1 test (zero cost delta; the
-  registry already spans a 3× range on these proxies by prompt alone); a
-  brief→write two-call arm is the contingent stage 2. Numeric elicitation
-  criteria and a < $30 budget are in the file.
+  strategy on the same posts, and reasoning effort does not move it. **Stage
+  1 shipped 2026-09-07**: `STRATEGIES["argued"]` (version 2) and two 120-pair
+  scratch auditions scored against the file's four criteria
+  ([`findings.md`](findings.md) "The `argued` audition"): a prompt elicits
+  subordination and concession but not the justificatory connective, and
+  stays separable (AUC 0.83). Open, Dan's call: stage 2 (brief→write, a new
+  mechanism under P8) or the transcript sidecar as its objection source.
 - **Transcript mining** ([`transcript-mining.md`](transcript-mining.md)):
   Claude Code transcripts record every `.qmd` edit as an explicit diff, so
   the real stratum can grow by replaying each session onto its base file and
@@ -344,9 +348,10 @@ Before farming out an open slice, confirm it has:
   prompts that explicitly target under-represented mannerisms (mixed metaphors,
   false definiteness).
 - Synthetic↔real slop **distribution match** — does synthetic slop resemble the
-  real output Dan cleans up? Eyeballing says it misses some mannerisms; no
-  distributional comparison exists yet. See
-  [`argued-slop-arm.md`](argued-slop-arm.md) §"Stage 0".
+  real output Dan cleans up? On syntactic proxies, measured since 2026-09-07
+  (`ai-style features`, D88): every arm is separable from real at AUC 0.72–0.92
+  on punctuation-free structure alone. Mannerisms beyond syntax are still
+  eyeball-only; see [`argued-slop-arm.md`](argued-slop-arm.md) §"Stage 0".
 - Single-source vs multi-source slop ablation — worth publishing? (post §"Whose
   slop?"; measurable now via `meta.generator`/`meta.gen`.)
 - Weighting real against synthetic pairs — **the mechanism shipped 2026-09-03
