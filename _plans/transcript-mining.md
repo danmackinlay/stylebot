@@ -185,6 +185,44 @@ print the real stratum's `novel_after` distribution beside its count.
 - [ ] The syntax-proxy table in `argued-slop-arm.md` re-derived over the
       grown real stratum (it is the reference the arm is judged against).
 
+## Continuation — 2026-09-07, after the first apply
+
+The miner shipped and its first `--apply` landed 28 pairs (`findings.md` "The
+first mined captures enter the corpus"); the dry-run table in the blog's private
+sizing note says where the other 190 windows went. Each step below is
+self-contained, in the order they unblock each other.
+
+1. **The hook, landed 2026-09-07.** `.claude/hooks/claude-left.sh` keeps each
+   `.qmd` as Claude left it per session; `ai-style log mine --claude-left
+   _training_pairs/claude-left` replays nothing for those windows (D89
+   amended). *Done when* the next mining pass reports `base from the hook's
+   copy` for every session run after the hook and zero replay failures among
+   them. Nothing retroactive: it fixes future sessions only.
+2. **Chain back-to-back sessions.** A quarter of windows were skipped because a
+   later session edited the same file before Dan's commit. Treat consecutive
+   sessions on one path with no commit between them as one window: replay B's
+   edits onto A's end state (or take B's hook copy), the touched set being the
+   union. *Inputs*: the same transcripts; *output*: a `chained` count in
+   `MineReport` and `meta.mined.session_ids` as a list; *done when* the dry run
+   over the real logs recovers a measured share of the skipped windows and the
+   fixture test covers a two-session chain. ~30 lines in `transcripts.py`.
+3. **Partial `Read`s as checkpoints — measure before building.** Claude Code
+   often reads a long file by `offset`/`limit`; each such result is exact for
+   its line range at its time. Count, over the failed windows, how many have a
+   partial read covering the failing `old_string`; build the splice only if the
+   count justifies it. Keyless, counts to the private sizing note.
+4. **`novel_after` on the old captures.** New real pairs carry the stamp;
+   the 395 older ones do not and pass the `NOVEL_AFTER_MAX` clause by default.
+   Under D84 the backfill is a `ViewPolicy` stamp computed from the record's two
+   bodies at build time (it moves the sha, so it is Dan's), and `dan-style
+   status` prints the real stratum's distribution beside its count.
+5. **Stage 2 of the `argued` arm from the sidecar.** `transcript_turns.jsonl`
+   now holds real objections (22 lines, growing with every apply). The
+   brief→write factory in `argued-slop-arm.md` stage 2 binds a sampled
+   objection to a passage; the bar is the embedding AUC (`features --embed`),
+   where every prompt-only arm sits at 0.96+. Needs its own D-entry (a new
+   generator mechanism) and a 40-pair probe before the factory.
+
 ## Non-goals
 
 - Paragraphs Dan deleted outright (most of the unmatched majority) are not pairs;

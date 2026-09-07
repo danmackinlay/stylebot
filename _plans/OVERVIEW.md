@@ -287,9 +287,12 @@ record of what was measured then, not a claim about now.
   `capture_pairs`, untouched paragraphs reverted, dry-run by default. The
   dry run over the real logs yields far fewer pairs than the 2026-09-03
   sizing estimated, because the logs are lossy where the tree was dirty at
-  session start (counts in the blog's private sizing note). Open, Dan's:
-  `--apply`, and the `pair_weight` policy over `meta.novel_after` that the
-  plan puts before any mined pair trains.
+  session start (counts in the blog's private sizing note). `--apply` ran
+  and the `NOVEL_AFTER_MAX` clause landed the same day; the blog's
+  `claude-left` hook fixes the base for every future session. What is
+  open is the file's "Continuation" section: chaining back-to-back sessions,
+  partial reads as checkpoints (measure first), the `novel_after` view stamp
+  on the old captures, and `argued` stage 2 from the objection sidecar.
 - ~~**`synth` option-surface retirements**~~ — **closed 2026-08-13.** `--sort`,
   `--report-max-rows`, `--all` and `--tag` retired (49 options); the substrate
   cluster and `--capture-reasoning` reviewed and kept, `--assign-seed` deferred
