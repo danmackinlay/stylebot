@@ -1128,3 +1128,26 @@ which real captures do not carry more of than synth, and not the scaffolding Dan
 (the plan's "Risks"). Match fails on connectives and separability fails in both versions
 (0.83 against the 0.70 bar and `measured`'s 0.73), which is the plan's stage-2 trigger.
 Not decided: stage 2 is a new mechanism and Dan's call.
+
+## The justificatory phrase, counted where it lives — 2026-09-07 (`argued-slop-arm.md` "Risks")
+
+`uv run python` over the live view and the two scratch audition views, two regexes:
+*self-ref* = "previous/earlier version|earlier draft|original text/version/draft|as stated
+above…"; *justif* = "exactly/precisely the reason|this/that/which is why|the reason is/that|
+precisely because|for exactly this reason". Per 1,000 sentences (`features.sentences`).
+
+| stratum | records | sentences | self-ref | justif | records with any self-ref |
+|---|---|---|---|---|---|
+| real captures, slop side | 395 | 3,675 | 0.5 | 7.6 | 2 |
+| real captures, Dan's side | 395 | 3,876 | 0.5 | 3.1 | 2 |
+| `measured` | 1,595 | 15,788 | 0.5 | 0.9 | 8 |
+| argued v1 | 110 | 783 | 0.0 | 37.0 | 0 |
+| argued v2 | 115 | 899 | 0.0 | 3.3 | 0 |
+
+The "exactly the reason" family is the arm's target and is bracketed, not hit: v1 at
+5× real as a tic, v2 at half. Dan's edit halves it, never removes it, so the styler's
+job on that structure is compression to ~3 per thousand, the number the risk watch
+should hold. "A previous version of this text asserted" is nearly absent from the
+captures themselves (2 of 395): it lives in Claude's chat-turn account of an edit, which
+is `transcript-mining.md`'s sidecar and no synth call's output. Decided: nothing; cited
+by the plan's "Risks" and the next-steps note of 2026-09-07.
