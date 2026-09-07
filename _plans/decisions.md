@@ -58,6 +58,7 @@ keep their numbers — the second index below is how you find them.
 | D85 | the blog's literals are a `SourcePolicy` parameter, not a fork | live |
 | D86 | `ruff format` is the formatter of record; D58's ceilings re-baseline once | live |
 | D87 | a judge refusal is unscored, never a guessed digit; `SCHEMA_VERSION` 3 → 4 | live |
+| D88 | `stylebot.features` is the fifth eval signal's first cut: pooled syntactic proxies and a grouped AUC | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D48)
 
@@ -1154,3 +1155,32 @@ be comparing different populations.
 
 **Re-evaluate if** the judge gains a structured output the parser can rely on, so that "no
 score" becomes a protocol error rather than a verdict.
+
+## D88: `stylebot.features` is the fifth eval signal's first cut: pooled syntactic proxies and a grouped AUC
+
+**Decision (2026-09-07, `argued-slop-arm.md` stage 0).** One new module, `stylebot.features`,
+under P2's 800 lines and paid for under `PROSE_CEILING` by cuts elsewhere in the same commit.
+Three functions: `syntax_profile(text)` is the per-text vector (per-sentence rates of commas,
+subordinators, em-dashes, semicolons, justificatory connectives and concession markers, words
+per sentence, sentence-length variance; regexes are module constants); `profile_pairs` pools
+counts per facet over one side of any number of corpora, the real stratum being `meta.synthetic`
+falsy; `separability` is the out-of-fold AUC of a logistic head on the punctuation-free vector,
+real vs one facet, folds grouped by `meta.source`. `ai-style features` is the shell.
+
+**Alternatives.** *Per-facet medians of per-record rates*, as the plan's text says — a
+connective rate of 0.01 a sentence is zero on most records, so the median is zero on every
+facet and the plan's own table (pooled) cannot be regenerated from it; medians stay per record,
+in the separability vector. *Ungrouped folds* — paragraphs of one post land on both sides of a
+fold and the AUC reports topic. *Score it through `eval`'s `scores.jsonl`* — the signal is over
+a stratum, not a passage, and the eval schema keys one passage; D39's rows have nowhere to put
+a stratum. *A second `--draws`* for the scratch audition — `--pairs` repeats instead: the
+audition's view is a scratch pairs path beside the live view, as RUNBOOK §4 already runs them.
+
+**Deciding constraint.** The `argued` criteria are numbers over two strata, one of them in a
+scratch corpus, so the tool must pool across corpora and must not trust an AUC that can see a
+post twice; the corpus was 8,142 records and 395 real when this was measured
+(`findings.md` "Syntactic proxies by stratum").
+
+**Re-evaluate if** the real stratum grows past a few thousand records (medians become
+meaningful and the pooled rate stops being the only estimator), or the transcript sidecar lands
+and the objection source stops being fabricated.
