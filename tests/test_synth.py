@@ -150,7 +150,7 @@ def test_argued_prompt_quotes_no_connective_it_is_measured_on():
     quoted = [c for c in ft.CONNECTIVES if c in prompt]
     assert not quoted, quoted
     assert "rather than" not in prompt  # the subordinator Dan strips most (the plan's "Risks")
-    assert synth.resolve_strategy("argued").version == 1
+    assert synth.resolve_strategy("argued").version == 2
 
 
 def test_draws_carry_the_runs_system_prompt(tmp_path):
