@@ -1266,3 +1266,39 @@ one property, two uses.
 
 **Re-evaluate if** a second formatting pass is ever needed for a reason other than a ruff
 version bump: that would mean the exception is being used as a routine escape from the budgets.
+
+## D95: D94's re-baseline follows the reformatting, not the formatting commit
+
+**Decision (2026-09-07).** D94 let a formatting commit re-take `test_budget.py` numbers and
+restricted that to "files the formatting commit actually touched". Three blog files were
+reformatted a commit early — by hand, in the working tree, riding along with the D93 wiring
+(`780e9a4ffe`, whose own message flags the entanglement) — so the formatting commit
+`af48c09a0e` found them already clean, touched nothing, and their re-baseline never happened.
+Four numbers stayed red against ceilings taken from hand-wrapped source. They are re-taken
+now, on the same bar: `ast.dump()` identical across the reformat.
+
+The bar is what the clause was protecting, not the commit boundary. Measured by reformatting
+each file's last pre-D93 revision in isolation: `bin/style_file.py` 209 → 328 lines,
+`style_cmd` 88 → 116; `workflow_style.py` 389 → 409, `run_style` 87 → 99;
+`training_targets.py` 793 → 815. Every pair is AST-identical. The D93 wiring itself adds
+2, 5 and 7 lines on top — a kwarg pass-through per call site. So of the 121-line growth in
+`bin/style_file.py`, 119 lines are the formatter rendering `@click.option(...)` one argument
+per line.
+
+**Alternatives.** *Leave them red* — D94's letter, and it makes the suite permanently red for
+a reason no future reader could reconstruct. *Cut code to pay for the whitespace* — the
+preferred remedy under D58, and wrong here: it deletes working code to fund the formatter's
+line breaks, and it cannot reach the target anyway. `bin/style_file.py` is ~200 lines of
+option declarations and has **zero** plain top-level defs, so F11's actual invariant (a bin
+module holds only click commands and `_opt*` helpers) already holds; extracting the one
+library-shaped block in `style_cmd` would leave the module at ~305 against a 250 budget and
+still need the entry.
+
+**Deciding constraint.** The budgets are a proxy for hand-written size, and the proxy is only
+credible while the one exception to "ceilings only shrink" stays independently checkable. AST
+equality is checkable; "was in the formatting commit" is a proxy for the proxy. Re-baseline on
+the property, keep the property strict.
+
+**Re-evaluate if** a third file turns up needing this. Twice is an accident of one entangled
+commit; a pattern would mean formatting is routinely landing inside feature commits, and the
+answer then is the pre-commit format gate (D86 amended), not another decision.
