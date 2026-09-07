@@ -117,7 +117,7 @@ whole pipeline from its own build.
      phase entry points accept callables — `selector: Callable[[dict], bool]`
      over frontmatter, defaulting to a bundled example, and at assembly
      `per_passage` (which pairs covering one stretch of prose to keep) and
-     `pair_weight` (record → integer replication of the train row). You swap a
+     `pair_weight` (record → the row's loss scale, D90). You swap a
      default by passing your own. **Ordering is *not* in scope**: there is no
      `sort_key` and no `sampler`. `--sort` retired in 0.3.1 because arms are
      assigned by content hash, so target order cannot change what the corpus
@@ -360,9 +360,9 @@ Before farming out an open slice, confirm it has:
 - Single-source vs multi-source slop ablation — worth publishing? (post §"Whose
   slop?"; measurable now via `meta.generator`/`meta.gen`.)
 - Weighting real against synthetic pairs — **the mechanism shipped 2026-09-03
-  (D43); the diet is still nobody's choice.** `pair_weight` stamps `meta.weight`
-  and `_write_conversations` honours it as integer replication of the train row
-  (val is never replicated). What made it urgent is that the corpus was already
+  (D43); the diet is still nobody's choice.** `pair_weight` stamps `meta.weight`,
+  a per-example loss scale on the train file (val stays at 1.0; D90 replaced the
+  original integer replication). What made it urgent is that the corpus was already
   weighted, by accident: the budget sweep cut every passage at up to four
   `merge_max_chars`, so run 4a walked each stretch of prose several times under
   a manifest claiming one epoch, while real captures went through once — the
