@@ -13,6 +13,7 @@ import pytest
 
 from stylebot import splits as sp
 from stylebot import train as tr
+from stylebot import train_data as td
 from stylebot.errors import ConfigError, RunError
 
 # The styler-corpus shape: contract-complete (assemble_training_corpus validates
@@ -156,42 +157,55 @@ def test_chunk_scale_reports_the_per_passage_weight_histogram(tmp_path):
     assert scale["pair_weights"] == {"1": 4} and scale["n_train_examples"] == 4
 
 
-def test_pair_weight_replicates_rows_in_the_train_file_only(tmp_path):
-    """`meta.weight` was promised from the first draft and stripped one line
-    before the trainer could see it (`_write_conversations`). It is integer
-    replication now, and val is never replicated."""
+def test_pair_weight_is_a_loss_scale_on_the_train_file_only(tmp_path):
+    """`meta.weight` rides into the work-dir JSONL as the row's loss scale, one
+    row per pair (D90); the val file carries 1.0 and no record is replicated."""
     corpus_path = _write(NESTED, tmp_path / "nested.jsonl")
 
-    def triple_the_unmerged(rec):
-        return 3 if (rec.get("meta") or {}).get("merge_max_chars") is None else 1
+    def quarter_the_unmerged(rec):
+        return 0.25 if (rec.get("meta") or {}).get("merge_max_chars") is None else 1
 
-    corpus = tr.assemble_training_corpus(corpus_path, pair_weight=triple_the_unmerged, val_frac=0)
-    assert [tr.pair_weight_of(r) for r in corpus.train] == [3, 1, 1, 3]
-    assert corpus.n_train == 4 and corpus.n_train_examples == 8
-    assert corpus.chunk_scale["pair_weights"] == {"1": 2, "3": 2}
+    corpus = tr.assemble_training_corpus(corpus_path, pair_weight=quarter_the_unmerged, val_frac=0)
+    assert [tr.pair_weight_of(r) for r in corpus.train] == [0.25, 1.0, 1.0, 0.25]
+    assert corpus.n_train == corpus.n_train_examples == 4 and corpus.weight_mass == 2.5
+    assert corpus.chunk_scale["pair_weights"] == {"0.25": 2, "1": 2}
+    assert "mass 2.5" in tr.format_passage_scale(corpus.chunk_scale)
 
     train_file = tmp_path / "train.jsonl"
-    assert tr._write_conversations(corpus.train, train_file) == 8
-    assert len(train_file.read_text(encoding="utf-8").splitlines()) == 8
-    # The val file takes the same records unreplicated: a weighted held-out loss
-    # is an average over a distribution nobody chose.
+    assert td.write_conversations(corpus.train, train_file) == 4
+    rows = [json.loads(ln) for ln in train_file.read_text(encoding="utf-8").splitlines()]
+    assert [r["weight"] for r in rows] == [0.25, 1.0, 1.0, 0.25] and "meta" not in rows[0]
     val_file = tmp_path / "val.jsonl"
-    assert tr._write_conversations(corpus.train, val_file, replicate=False) == 4
+    assert td.write_conversations(corpus.train, val_file, weighted=False) == 4
+    assert {json.loads(ln)["weight"] for ln in val_file.read_text().splitlines()} == {1.0}
 
-    # And the cost estimate follows the replication, because that is what gets
-    # paid for.
-    assert tr.estimate_tokens(corpus.train) > tr.estimate_tokens(
-        [{"messages": r["messages"]} for r in corpus.train]
-    )
+    # A weight of zero is a drop, and drops belong to the selector.
+    with pytest.raises(ConfigError):
+        tr.assemble_training_corpus(corpus_path, pair_weight=lambda rec: 0, val_frac=0)
+
+
+def test_scale_datum_multiplies_the_token_weights():
+    np = pytest.importorskip("numpy")
+    tinker = pytest.importorskip("tinker")
+
+    class Datum:
+        def __init__(self):
+            self.loss_fn_inputs = {"weights": tinker.TensorData.from_numpy(np.array([0.5, 0.5]))}
+
+    same = Datum()
+    assert td.scale_datum(same, 1.0) is same
+    scaled = td.scale_datum(Datum(), 0.25)
+    assert scaled.loss_fn_inputs["weights"].to_numpy().tolist() == [0.125, 0.125]
 
 
 def test_pair_weight_of_is_defensive_about_junk():
-    assert tr.pair_weight_of({"meta": {}}) == 1
-    assert tr.pair_weight_of({}) == 1
-    assert tr.pair_weight_of({"meta": {"weight": 0}}) == 1
-    assert tr.pair_weight_of({"meta": {"weight": -2}}) == 1
-    assert tr.pair_weight_of({"meta": {"weight": "nope"}}) == 1
-    assert tr.pair_weight_of({"meta": {"weight": 4}}) == 4
+    assert tr.pair_weight_of({"meta": {}}) == 1.0
+    assert tr.pair_weight_of({}) == 1.0
+    assert tr.pair_weight_of({"meta": {"weight": 0}}) == 1.0
+    assert tr.pair_weight_of({"meta": {"weight": -2}}) == 1.0
+    assert tr.pair_weight_of({"meta": {"weight": "nope"}}) == 1.0
+    assert tr.pair_weight_of({"meta": {"weight": 4}}) == 4.0
+    assert tr.pair_weight_of({"meta": {"weight": 0.25}}) == 0.25
 
 
 def test_val_split_deterministic_and_by_post(write_pairs_corpus):

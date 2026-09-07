@@ -71,8 +71,8 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     },
     "targets.py": {"functions": {"_post_targets": 82}},
     "train.py": {
-        "lines": 986,
-        "functions": {"run_training": 97, "_tinker_runner": 87, "assemble_training_corpus": 82},
+        "lines": 920,
+        "functions": {"run_training": 97, "_tinker_runner": 87, "assemble_training_corpus": 81},
     },
 }
 

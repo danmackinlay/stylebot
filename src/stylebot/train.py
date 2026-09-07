@@ -9,8 +9,8 @@ is lazy, so the module imports without the ``trainer`` extra.
 Data policy encoded here: near-copy pairs are kept (D18); records train as
 stored — `STYLE_SYSTEM` as `messages[0]`, heading context on both sides
 (D64); per-passage multiplicity is the caller's `per_passage` hook over a
-true grouping (`passage_groups`, D43); weight is integer replication of the
-train file only (D43). The manifest `write_manifest` writes is the committed
+true grouping (`passage_groups`, D43); `meta.weight` is a per-example loss
+scale on the train file only (D90). The manifest `write_manifest` writes is the committed
 reproducibility record (D42); a dry run writes nothing.
 """
 
@@ -32,10 +32,10 @@ from stylebot.ai_core import style_system
 from stylebot.cli_options import Emitter, bundle_options, opt, silent
 from stylebot.corpus import content_sha256
 from stylebot.errors import ConfigError, MissingExtra, RunError
-from stylebot.jsonl import dumps_line
 from stylebot.pairs import iter_pairs, system_sha, validate_pairs_file
 from stylebot.provenance import file_sha256, git_sha  # file_sha256 re-exported: public here
 from stylebot.status import promote as promote  # re-exported: the run's other verb
+from stylebot.train_data import make_presplit_builder, pair_weight_of, write_conversations
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +191,7 @@ class TrainCorpus:
             "passages": self.passage_scale,
             "pair_weights": _histogram(pair_weight_of(rec) for rec in self.train),
             "n_train_examples": self.n_train_examples,
+            "weight_mass": self.weight_mass,
         }
 
     @property
@@ -211,8 +212,13 @@ class TrainCorpus:
 
     @property
     def n_train_examples(self) -> int:
-        """Rows the trainer actually sees — `n_train` after weight replication."""
-        return sum(pair_weight_of(rec) for rec in self.train)
+        """Rows the trainer sees: `n_train`, one row per pair (D90)."""
+        return len(self.train)
+
+    @property
+    def weight_mass(self) -> float:
+        """Gradient mass of the train file: the sum of `meta.weight` (D90)."""
+        return round(sum(pair_weight_of(rec) for rec in self.train), 3)
 
 
 def _hook_name(hook: Callable | None) -> str | None:
@@ -221,11 +227,12 @@ def _hook_name(hook: Callable | None) -> str | None:
 
 
 def _histogram(values) -> dict[str, int]:
-    """Counter as a JSON-safe, numerically sorted `{str(value): count}`."""
-    counts: dict[int, int] = {}
+    """Counter as a JSON-safe, numerically sorted `{str(value): count}`; a
+    float key renders without a trailing `.0` so `1` stays `"1"`."""
+    counts: dict[float, int] = {}
     for value in values:
         counts[value] = counts.get(value, 0) + 1
-    return {str(k): counts[k] for k in sorted(counts)}
+    return {str(int(k) if float(k).is_integer() else k): counts[k] for k in sorted(counts)}
 
 
 def _target_body(rec: dict) -> str:
@@ -234,17 +241,6 @@ def _target_body(rec: dict) -> str:
     from stylebot.pairs import extract_target
 
     return extract_target(rec).strip()
-
-
-def pair_weight_of(rec: dict) -> int:
-    """A record's training weight: `meta.weight`, else 1 — a junk value reads
-    as 1 so a paid run's assembly never fails on an optimisation knob."""
-    raw = (rec.get("meta") or {}).get("weight")
-    try:
-        weight = int(raw)
-    except (TypeError, ValueError):
-        return 1
-    return weight if weight > 0 else 1
 
 
 def passage_groups(records: Sequence[dict]) -> list[list[dict]]:
@@ -295,7 +291,7 @@ def assemble_training_corpus(
     splits: dict | None = None,
     selector: Callable[[dict], bool] | None = None,
     per_passage: Callable[[list[dict]], list[dict]] | None = None,
-    pair_weight: Callable[[dict], int] | None = None,
+    pair_weight: Callable[[dict], float] | None = None,
     val_frac: float = DEFAULT_VAL_FRAC,
     seed: int = 0,
     validate: bool = True,
@@ -307,7 +303,7 @@ def assemble_training_corpus(
     the pair-level hook, default keep-all (D18); `per_passage` sees each
     `passage_groups` group in corpus order and returns the subset to keep
     (D43); `system_prompt` is what records are validated against (D64);
-    `pair_weight` stamps `meta.weight`, replicated in the train file only.
+    `pair_weight` stamps `meta.weight`, a loss scale applied to the train file only (D90).
     The val split holds out `max(1, round(n * val_frac))` posts shuffled by
     `random.Random(seed)` (0 with `val_frac=0`). Raises `RunError` on a
     malformed corpus.
@@ -348,8 +344,7 @@ def assemble_training_corpus(
         kept = capped
 
     if pair_weight is not None:
-        for rec in kept:
-            rec.setdefault("meta", {})["weight"] = max(1, int(pair_weight(rec)))
+        _stamp_weights(kept, pair_weight)
 
     posts = sorted({(rec.get("meta") or {}).get("source") or "?" for rec in kept})
     if val_frac > 0 and posts:
@@ -371,6 +366,15 @@ def assemble_training_corpus(
         source = (rec.get("meta") or {}).get("source") or "?"
         (corpus.val if source in val_posts else corpus.train).append(rec)
     return corpus
+
+
+def _stamp_weights(records: list[dict], pair_weight: Callable[[dict], float]) -> None:
+    """Stamp `meta.weight` (D90); a non-positive weight is a drop, and drops are the selector's."""
+    for rec in records:
+        weight = float(pair_weight(rec))
+        if not weight > 0:
+            raise ConfigError(f"pair_weight returned {weight!r}; a pair to drop is the selector's")
+        rec.setdefault("meta", {})["weight"] = round(weight, 4)
 
 
 def estimate_tokens(records: Sequence[dict]) -> int:
@@ -498,7 +502,8 @@ def format_passage_scale(chunk_scale: dict) -> str:
     weights = (chunk_scale or {}).get("pair_weights") or {}
     weighted = ""
     if examples is not None and set(weights) - {"1"}:
-        weighted = f"; weights {dict(weights)} -> {examples:,} training rows"
+        mass = (chunk_scale or {}).get("weight_mass")
+        weighted = f"; weights {dict(weights)} over {examples:,} rows, mass {mass}"
     return (
         f"{train['n_passages']:,} distinct passage(s), "
         f"{train['mean_pairs_per_passage']}x mean / "
@@ -804,77 +809,6 @@ def run_training_pass(
     return result
 
 
-def _write_conversations(records: Sequence[dict], path: Path, *, replicate: bool = True) -> int:
-    """Write records as bare `{"messages": ...}` JSONL for the run's work dir;
-    returns the row count. Meta is stripped, so `meta.weight` is consumed here
-    as `replicate` copies of the row (D43); `replicate=False` for the val file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    rows = 0
-    with path.open("w", encoding="utf-8") as fp:
-        for rec in records:
-            line = dumps_line({"messages": rec["messages"]}) + "\n"
-            for _ in range(pair_weight_of(rec) if replicate else 1):
-                fp.write(line)
-                rows += 1
-    return rows
-
-
-def _make_presplit_builder(
-    train_file: Path, val_file: Path | None, *, common_config, shuffle_seed: int
-):
-    """A ChatDatasetBuilder over our by-post pre-split files (D17), defined
-    lazily because `chz` needs the trainer extra. `shuffle_seed` is required so
-    the seed reaches the epoch shuffle (D23)."""
-    import chz
-    import datasets as hf_datasets
-    from tinker_cookbook.renderers import TrainOnWhat
-    from tinker_cookbook.supervised.data import (
-        SupervisedDatasetFromHFDataset,
-        conversation_to_datum,
-    )
-    from tinker_cookbook.supervised.types import ChatDatasetBuilder
-
-    @chz.chz
-    class PreSplitConversationFilesBuilder(ChatDatasetBuilder):
-        train_file: str
-        val_file: str | None = None
-        shuffle_seed: int = 0
-
-        def __call__(self):
-            def load(path: str) -> hf_datasets.Dataset:
-                text = Path(path).read_text(encoding="utf-8")
-                rows = [json.loads(ln) for ln in text.splitlines() if ln.strip()]
-                return hf_datasets.Dataset.from_list(rows)
-
-            train_on_what = (
-                TrainOnWhat(self.common_config.train_on_what)
-                if self.common_config.train_on_what
-                else TrainOnWhat.ALL_ASSISTANT_MESSAGES
-            )
-
-            def map_fn(row: dict):
-                return conversation_to_datum(
-                    row["messages"], self.renderer, self.common_config.max_length, train_on_what
-                )
-
-            train_ds = load(self.train_file).shuffle(seed=self.shuffle_seed)
-            train = SupervisedDatasetFromHFDataset(
-                train_ds, batch_size=self.common_config.batch_size, map_fn=map_fn
-            )
-            val = None
-            if self.val_file:
-                val_ds = load(self.val_file)
-                val = SupervisedDatasetFromHFDataset(val_ds, batch_size=len(val_ds), map_fn=map_fn)
-            return train, val
-
-    return PreSplitConversationFilesBuilder(
-        train_file=str(train_file),
-        val_file=str(val_file) if val_file else None,
-        shuffle_seed=shuffle_seed,
-        common_config=common_config,
-    )
-
-
 def _read_final_metrics(log_path: Path) -> dict:
     """Distil the cookbook's metrics.jsonl: final value per loss-ish key +
     total trained tokens."""
@@ -922,10 +856,10 @@ def _tinker_runner(
 
     data_dir = work_dir / "data"
     train_file = data_dir / "train.jsonl"
-    n_rows = _write_conversations(corpus.train, train_file)
+    n_rows = write_conversations(corpus.train, train_file)
     val_file = data_dir / "val.jsonl" if corpus.val else None
     if val_file is not None:
-        _write_conversations(corpus.val, val_file, replicate=False)
+        write_conversations(corpus.val, val_file, weighted=False)
     if n_rows != corpus.n_train:
         ratio = n_rows / corpus.n_train
         logger.info(
@@ -938,7 +872,7 @@ def _tinker_runner(
         max_length=hp.max_length,
         batch_size=hp.batch_size,
     )
-    builder = _make_presplit_builder(
+    builder = make_presplit_builder(
         train_file, val_file, common_config=common, shuffle_seed=hp.seed
     )
 
