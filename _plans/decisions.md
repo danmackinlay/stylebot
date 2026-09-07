@@ -62,7 +62,7 @@ keep their numbers — the second index below is how you find them.
 | D89 | `stylebot.transcripts` replays a Claude Code session and hands the differ two file states | live |
 | D90 | a pair weight is a per-example loss scale, not a replication | live |
 | D91 | the trainer's cookbook adapter is `stylebot.train_data` | live |
-| D92 | `argued2` is a brief→write composite over two generators, the objection real | live, probe |
+| D92 | `argued2` is a brief→write composite over two generators, the objection real | live; probe failed, library-only |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D48)
 
@@ -1284,6 +1284,9 @@ system prompt; this is two calls, so it is a `Generator` factory.
 captures at AUC 0.96+ and the phrase counts say a paraphrase call has nothing to argue from;
 the probe decides whether any synthesis can approach the regime the real captures come from.
 
-**Re-evaluate if** the probe's embedding AUC is no better than `argued` v2's 0.965 — then the
-real stratum is the only route and stage 2 retires — or if it is, in which case the CLI seam
-(`--brief-model`, `--objections`) is the next slice.
+**Verdict (same day, `findings.md` "The `argued2` probe").** Embedding AUC 0.978 against v2's
+0.962: no better. The brief landed the connective rate for the first time, so the mechanism
+stays, library-only and tested; no CLI seam, no promotion. The real stratum is the route.
+
+**Re-evaluate if** the real stratum passes ~1,000 pairs and a brief drawn from a *matched*
+session (the objection that produced that very passage) can be tested instead of a sampled one.

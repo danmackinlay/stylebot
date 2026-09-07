@@ -22,7 +22,7 @@ once their work shipped and the code became the better description):
 | [`anchor-integrity.md`](retired/anchor-integrity.md) | retired 2026-09-04 (P7); the anchor guard/gate/audit (D32) — its open step 3 is `masking-placement.md` |
 | [`masking-placement.md`](masking-placement.md) | *where* masking goes (D33) — decided, not yet built |
 | [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md) | the mask *encoding* — the open half of the masking work |
-| [`argued-slop-arm.md`](argued-slop-arm.md) | a slop strategy for concessive/justificatory structure — the first prompt-ablation arm; stage 0 (`stylebot.features`, D88) built and stage 1 auditioned 2026-09-07, promotion open |
+| [`argued-slop-arm.md`](argued-slop-arm.md) | a slop strategy for concessive/justificatory structure — done 2026-09-07: stage 0 (`stylebot.features`, D88), stage 1 auditioned and promoted as a diversity arm, stage 2 probed and retired (D92); the real regime is not synthesisable this way |
 | [`transcript-mining.md`](transcript-mining.md) | real pairs replayed from Claude Code session transcripts (with the objections Claude was answering) — built 2026-09-07 (`stylebot.transcripts`, `ai-style log mine`, D89); `--apply` and the `novel_after` weight policy are Dan's |
 
 Narrative rationale (the "why") lives in the blog post
@@ -279,8 +279,10 @@ record of what was measured then, not a claim about now.
   scratch auditions scored against the file's four criteria
   ([`findings.md`](findings.md) "The `argued` audition"): a prompt elicits
   subordination and concession but not the justificatory connective, and
-  stays separable (AUC 0.83). Open, Dan's call: stage 2 (brief→write, a new
-  mechanism under P8) or the transcript sidecar as its objection source.
+  stays separable (AUC 0.83). `argued` v2 is promoted as a diversity arm.
+  **Stage 2 probed the same day (D92)**: a brief from a real objection lands
+  the connective rate and is no closer on the style backbone, so it retires
+  library-only; the real stratum grows through transcript mining instead.
 - **Transcript mining** ([`transcript-mining.md`](transcript-mining.md)):
   **built 2026-09-07** (D89) — `ai-style log mine` replays each session onto
   the file as Claude saw it and diffs against Dan's next commit through

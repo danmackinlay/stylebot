@@ -1,11 +1,14 @@
 # `argued` — a slop arm for concessive / justificatory structure
 
-**Status: stage 0 built and stage 1 registered and auditioned twice 2026-09-07
-(D88). Stage 1 fails match (connectives) and separability with both prompt
-versions — [`findings.md`](findings.md) "The `argued` audition" — which is
-this file's stage-2 trigger; stage 2 is a new mechanism (P8) and Dan's call,
-as is any promotion.** An open slice under the prompt ablation
-([`OVERVIEW.md`](OVERVIEW.md) §"Open questions").
+**Status: done 2026-09-07, both stages tried (D88, D92).** Stage 1 fails
+match and separability with two prompts ([`findings.md`](findings.md) "The
+`argued` audition"); stage 2's probe lands the connective rate but is no
+closer on the style backbone ("The `argued2` probe"), which is D92's
+retirement condition. `argued` (v2) is promoted as a diversity arm; the
+`brief_then_write` composite stays library-only. **The write-up this file's
+"Done" asked for is D92's verdict: the real stratum cannot be synthesised
+this way, and grows instead through `transcript-mining.md`.** Retires to
+`_plans/retired/` under P7 once the promoted arm has run in a corpus batch.
 
 **Three corrections made while building** (each is in D88's alternatives): the
 2026-09-03 table is *pooled* per-sentence rates, not medians — a median of a
@@ -224,7 +227,13 @@ Promotion is the blog's deliberate act: append `"argued"` to
 comment, as `verbose` was promoted 2026-07-22. At a 1/7 rotation share the arm
 enters new generation at no cost multiplier.
 
-## Stage 2 — brief → write (contingent on stage 1 failing match/separability)
+## Stage 2 — brief → write (contingent on stage 1 failing match/separability) — PROBED 2026-09-07
+
+Built as `generators.brief_then_write` (D92), objections sampled from the mined
+`transcript_turns.jsonl`; a 35-pair probe on sonnet and qwen3.6 with a
+deepseek brief. Verdict in `findings.md` "The `argued2` probe": the only arm to
+land the connective rate, and no closer to the real captures on the embedding.
+The specification follows, unchanged.
 
 If a paraphrase-shaped call cannot argue because it has nothing to argue
 *from*, give it something: two calls per pair.

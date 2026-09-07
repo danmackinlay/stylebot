@@ -216,12 +216,12 @@ self-contained, in the order they unblock each other.
    Under D84 the backfill is a `ViewPolicy` stamp computed from the record's two
    bodies at build time (it moves the sha, so it is Dan's), and `dan-style
    status` prints the real stratum's distribution beside its count.
-5. **Stage 2 of the `argued` arm from the sidecar.** `transcript_turns.jsonl`
-   now holds real objections (22 lines, growing with every apply). The
-   brief→write factory in `argued-slop-arm.md` stage 2 binds a sampled
-   objection to a passage; the bar is the embedding AUC (`features --embed`),
-   where every prompt-only arm sits at 0.96+. Needs its own D-entry (a new
-   generator mechanism) and a 40-pair probe before the factory.
+5. ~~**Stage 2 of the `argued` arm from the sidecar.**~~ Probed 2026-09-07
+   (D92): the brief lands the connective rate and is no closer on the
+   embedding, so the composite stays library-only. What would reopen it is a
+   *matched* objection — the turn that produced the very passage — which the
+   hook plus the sidecar make possible once the real stratum is large enough
+   to spare passages for synthesis.
 
 ## Non-goals
 

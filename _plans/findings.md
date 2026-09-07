@@ -1221,3 +1221,27 @@ real pairs; the holdout, the reward-relevant number, is the one to watch from he
 before. Synthetic separation is saturated either way, which is the embedding result seen from
 the detector's side ("Separability on the style backbone"). Decided: nothing; the artifact is
 committed with the corpus that produced it.
+
+## The `argued2` probe — 2026-09-07 (D92, `argued-slop-arm.md` stage 2)
+
+`brief_then_write` over 40 chunks of the v2 audition's 5% sample (36 posts), brief by
+deepseek-v4-flash, write by claude-sonnet-4.6 and qwen3.6-35b, objections sampled from the
+69 user turns in `transcript_turns.jsonl`; scratch data-dir, then `dan-style features --pairs
+<v2 view> --pairs <probe view> --by slop_strategy --separability --embed`. Spend: $0.02.
+
+| arm | N | words/sent | sent-len var | commas | subordinators | connectives | concessions | justif/1k sent | AUC proxies | AUC embed | drops |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| real | 423 | 23.5 | 210 | 1.38 | 0.27 | 0.022 | 0.027 | 7.6 | — | — | — |
+| measured | 1595 | 20.5 | 116 | 1.21 | 0.25 | 0.015 | 0.090 | 0.9 | 0.732 | 0.998 | — |
+| argued v2 | 115 | 22.5 | 254 | 1.26 | 0.52 | 0.004 | 0.108 | 3.3 | 0.837 | 0.962 | 29% |
+| argued2 | 35 | 24.9 | 225 | 1.29 | 0.57 | **0.019** | 0.083 | 3.8 | 0.813 | 0.978 | 40% (qwen 52%, identity) |
+
+The brief did what stage 2 predicted: argued2 is the first arm to land the connective rate
+(86% of real) and the closest on sentence-length variance, so a write call with something to
+argue from argues. It still fails the criteria that matter: the proxy AUC stays above
+`measured`, and on the backbone it is no closer than v2 (0.978 against 0.962, N=35, so within
+noise, but not the direction), which is D92's retirement condition. The eyeball file shows why:
+the objection is narrated ("this objection fails because"), so the arm stages the collaborator
+the way v1 staged a reader, and qwen returns the input on half its draws — the brief is beyond
+it. Concessions run 3× real in every argued form; the justificatory phrase never passes half.
+Decided: D92's verdict — the real stratum is the route; the composite stays library-only.
