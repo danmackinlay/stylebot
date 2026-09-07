@@ -60,6 +60,8 @@ keep their numbers — the second index below is how you find them.
 | D87 | a judge refusal is unscored, never a guessed digit; `SCHEMA_VERSION` 3 → 4 | live |
 | D88 | `stylebot.features` is the fifth eval signal's first cut: pooled syntactic proxies and a grouped AUC | live |
 | D89 | `stylebot.transcripts` replays a Claude Code session and hands the differ two file states | live |
+| D90 | a pair weight is a per-example loss scale, not a replication | live |
+| D91 | the trainer's cookbook adapter is `stylebot.train_data` | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D48)
 
@@ -108,7 +110,7 @@ keep their numbers — the second index below is how you find them.
 | D40 | the eval interval clusters by post; the headline is the real facet | live |
 | D41 | the automation cap applies to synthetic pairs only | live |
 | D42 | the eval stratum is versioned and add-only | live |
-| D43 | a passage is a stretch of prose, not a string; weight is replication | live |
+| D43 | a passage is a stretch of prose, not a string; weight is replication | passage half live; weight half superseded by D90 |
 | D44 | the editor asks the sidecar where the prose is | live |
 | D45 | one corpus location, resolved once | live |
 | D46 | the synth walker's blog exclusions stay pinned | superseded by D80 |
@@ -1191,10 +1193,10 @@ and the objection source stops being fabricated.
 **Decision (2026-09-07, `transcript-mining.md`).** One new module, `stylebot.transcripts`, under
 P2's 800 lines, funded by e2b807a's density allowance. It parses Claude Code's session JSONL
 (the only format it claims), takes every `Edit`/`Write` on a `.qmd` under the session's `cwd`,
-reconstructs the file as Claude left it — base is the session's own last full `Read` result for
-that path, else `git show` at the last commit before the first edit; edits replay in order and
-the first `old_string` that does not apply stops that file — and pairs it with the file at the
-first commit after the session's last edit that touches the path. The two states go to
+reconstructs the file as Claude left it — base is the session's last full `Read` of that path,
+else `git show` at the last commit before the first edit; edits replay in order and the first
+`old_string` that does not apply stops that file — and pairs it with the file at the first
+commit after the session's last edit that touches the path. The two states go to
 `capture.capture_pairs`, the same call `log save` makes, with a `keep` predicate that admits only
 chunks whose before-side lies in a paragraph Claude's edits changed. `ai-style log mine` is the
 shell, dry-run by default; the user turns and Claude's text/thinking beside each edit go to a
@@ -1207,9 +1209,8 @@ the `Edit` result's `originalFile`* — empty on most 2026-09 edits, so a check,
 pairs; the `keep` predicate is D81's rule applied here. *Backfill `meta.novel_after` by
 migration* — D84 has none; new pairs carry it, old captures gain it as a view stamp.
 
-**Deciding constraint.** The captures are the only slop with an objection behind it, and the
-sessions that produced them record every edit as an exact diff; reading it off is the only way
-to grow the stratum without inventing pairs. Counts stay in the blog's private sizing note.
+**Deciding constraint.** The captures are the only slop with an objection behind it, and their
+sessions record every edit exactly; reading it off invents no pair. Counts: the blog's sizing note.
 
 **Amended 2026-09-07.** Most windows fell to a git base a dirty tree had made wrong, so the
 blog's `claude-left.sh` hook keeps each `.qmd` as Claude left it and `--claude-left DIR` takes
@@ -1217,3 +1218,45 @@ that copy as the before state, replaying nothing; the transcript is the record, 
 
 **Re-evaluate if** Claude Code's log format changes (the parser names its fields in one place),
 or the real stratum grows large enough that hand capture alone keeps pace.
+
+## D90: a pair weight is a per-example loss scale, not a replication
+
+**Decision (2026-09-07 by Dan).** `meta.weight` is a float, default 1.0, that `train`'s
+`map_fn` multiplies into the datum's per-token loss weights after the cookbook has normalised
+them to sum to one per example; the work-dir JSONL carries it as `"weight"` beside
+`"messages"`, the val file carries 1.0, and no row is replicated. `pair_weight` returns the
+float; a non-positive value is a `ConfigError`, since a pair to drop is the selector's. The
+manifest keeps the `pair_weights` histogram and gains `weight_mass`, the sum over the train
+file, printed beside the row count. The blog's `novel_after_weight` is the first policy over
+it: 1.0 to 0.2, linear to 0.25 at 0.6, dropped above (`transcript-mining.md`).
+
+**Alternatives.** *Keep D43's integer replication and add a second float knob* — proposed, and
+rejected by Dan: no manifest ever recorded a non-unit weight and no record carries one, so
+there were no semantics in use to preserve, and two knobs for one idea alias. *Replication
+only* — cannot express a down-weight below 1 without inflating every other row.
+
+**Deciding constraint.** Tinker's `Datum` already takes per-token float weights; the integer
+rule lived in stylebot's assembly layer alone, so it was a restriction the trainer never asked
+for.
+
+**Re-evaluate if** a run needs weights above 1: a scale of 3 on one appearance is not three
+shuffled appearances, and whichever paid run first uses a non-unit weight is the first with
+any weighting at all — its manifest should say so.
+
+## D91: the trainer's cookbook adapter is `stylebot.train_data`
+
+**Decision (2026-09-07).** The three functions that turn an assembled corpus into what
+tinker-cookbook consumes — `write_conversations` (the work-dir JSONL, one row per pair with its
+`weight`), `scale_datum` (D90's loss scale on a `Datum`) and `make_presplit_builder` (the
+by-post pre-split `ChatDatasetBuilder`, D17) — move from `train.py` into `stylebot.train_data`.
+`train.py` keeps assembly, hyperparameters, the manifest and the runner.
+
+**Alternatives.** *Cut 25 lines of prose from `train.py`* — the module's docstrings are already
+pointers; the cut would land on contracts. *Grow the allowlist* — it only shrinks (D58).
+
+**Deciding constraint.** D90 put `train.py` at 1,011 lines against its 986 allowance; the
+adapter is the one seam in it with a different dependency (the cookbook, lazily) and its own
+tests, so the split follows a boundary that was already there. The number it clears: `train.py`
+drops under its recorded ceiling and the entry is lowered to the new size.
+
+**Re-evaluate if** the runner itself outgrows `train.py`; the next seam is the manifest.
