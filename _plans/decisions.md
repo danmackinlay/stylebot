@@ -11,7 +11,7 @@ re-evaluate-if, ≤ 30 lines. A number is a **citation into**
 three lines. A `P…` entry is a *proposal* in the same shape, followed by its
 verdict. This file and `findings.md` are the two that keep dated numbers;
 everywhere else a count is a claim about the present that git cannot keep true
-(D52). **D1–D48 live in [`decisions-archive.md`](decisions-archive.md)** and
+(D52). **D1–D50 live in [`decisions-archive.md`](decisions-archive.md)** and
 keep their numbers — the second index below is how you find them.
 
 ## Index — this file
@@ -63,8 +63,9 @@ keep their numbers — the second index below is how you find them.
 | D90 | a pair weight is a per-example loss scale, not a replication | live |
 | D91 | the trainer's cookbook adapter is `stylebot.train_data` | live |
 | D92 | `argued2` is a brief→write composite over two generators, the objection real | live; probe failed, library-only |
+| D93 | `<!-- sem -->` marks content in a real edit; the view cuts it, the styler never sees it | live |
 
-## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D48)
+## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D50, plus P1)
 
 | # | title | status |
 |---|---|---|
@@ -119,95 +120,6 @@ keep their numbers — the second index below is how you find them.
 | D48 | `Styler` is a Protocol; it types the call, not the tokens | live |
 
 ---
-
-## D49: asyncio is deferred; the rest of the eager import block stays
-
-**Decision.** `stylebot.synth` imports `asyncio` inside the four coroutine
-functions that use it. Everything else in `bin/ai_style.py`'s import block stays
-eager. Timings: `findings.md` "`ai-style --help` import cost".
-
-**Alternatives.** A lazy-command group for `synth` — rejected: `synth_options()`
-is a decorator, so deferring it needs a `click.Group` subclass reimplementing
-`format_commands`, plus a second place the command list is written down, for
-~4 ms. Defer the rest of the block — rejected: `classify_train`, `splits`,
-`train` and `eval` are eager *on purpose*, so click owns their defaults instead
-of the triple declaration that preceded it, and `stylebot.lib` is unavoidable
-because `is_human_authored` is a click default here.
-
-**Deciding constraint.** W11.i's premise did not reproduce — `--help` was well
-under the claimed 70 ms and the two imports were a third of the claimed saving.
-The win is real and small; the item exists to say so rather than to ship churn.
-
-**Cost.** `synth.asyncio` is no longer an attribute, so one test patches
-`asyncio` directly.
-
-**Re-evaluate if** `--help` latency becomes a real irritation (it is far below
-the ~100 ms where a shell feels slow), or click gains lazy subcommands.
-
-**Reverted 2026-09-04 (T5):** the deferred import cost two docstrings (`_draw`,
-`_draw_past_gates` had `__doc__ is None`); the 4.9 ms is below the re-evaluate line.
-
-## P1: move `openai` to an `[api]` extra — PROPOSED 2026-08-10, REJECTED 2026-09-03
-
-**Proposal**: demote `openai` from `[project].dependencies` to an `api` extra
-beside `classifier` and `trainer`, and give the three lazy import sites a
-friendly "install `stylebot[api]`" error. The observation holds and was
-re-verified 2026-09-03 by blocking `openai` on `sys.meta_path`: every module
-still imports, so the whole `--help` tree survives without the SDK, and only
-`eval.openrouter_judge`, `infer.openai_backend` and `generators.openai_generator`
-raise. What breaks is `synth`, `eval --judge` and `--backend openai`; `log`,
-`make-splits`, `export-table`, `train`, `train-clf` and `classify` survive.
-
-**Rejected, on the balance rather than the facts.** Neither re-evaluate-if
-trigger has fired: still no installer other than livingthing, still no non-OpenAI
-generator backend. And D30's supersession moved the balance further — bare
-`stylebot` is now a hard livingthing dependency, but the blog declares `openai`
-itself and imports it in about nine of its own modules, so the extra would save
-that install exactly nothing. The only beneficiary is a third consumer wanting
-`stylebot.classify`'s runtime and nothing else, which is precisely the trigger
-that has not fired. The ergonomic cost is certain (`uv add stylebot` gives you a
-`synth` subcommand that cannot run) and the benefit is hypothetical.
-
-**Alternatives.** Finer-grained extras (`[judge]`/`[synth]`/`[serve-openai]`) —
-three extras for one wheel is worse than the problem. Declare `stylebot[api]` the
-documented default install — a way of admitting the extra is not wanted.
-`ruamel-yaml` is **not** the same case: eagerly imported at module top level, and
-the frontmatter path is core to `log`/`targets`/`synth`.
-
-**Re-evaluate if** either original trigger fires. The friendly-error half is
-cheap and can land alone: the three lazy sites would raise `MissingExtra` (D47),
-a strict improvement over a bare `ModuleNotFoundError` either way.
-
-## D50: a corpus is a directory of shards, split by producer and then by month
-
-**Decision (W6, 2026-09-03).** `pairs.jsonl` becomes `pairs/`: one
-`captures.jsonl` for real edit captures, one `synth-<YYYY-MM>.jsonl` per month of
-synthesis. `stylebot.corpus` owns the routing rule, the shard-aware `rewrite`,
-the one-per-corpus write lock and the manifest content hash. `config.pairs_path`
-— D45's single spelling — resolves to the directory when it exists and the single
-file otherwise, so **sharding is opt-in by existing**: a plain install never
-migrates. `iter_pairs` is the seam that makes every reader agnostic.
-
-*Why anything changed.* Committing the corpus is right — it is the backup story
-for irreplaceable human captures (D37) — but every append rewrote the whole file,
-so a hundred-odd commits carried gigabytes of logical blob content (`findings.md`
-"Corpus blob cost"). Sharding does not shrink the corpus; it shrinks *the file a
-write touches*, which is what the commit count multiplies.
-
-*Alternatives.* **git-lfs** — GitHub charges LFS bandwidth on every clone of a
-Pages repo whose build does not need the file, and it makes the corpus unreadable
-without the client. **Shard by generator** (the W6 brief's first offer) — a
-generator shard grows forever while a month shard is sealed when the month ends;
-generator identity is a *facet* already in `meta.gen.model`, and a filename copy
-is stranded by a retired arm and forked by a rename. **Route on read-identity** —
-routing by content makes `rewrite` idempotent and the migration free.
-
-*Constraint — the one thing sharding could have broken.* D36's no-duplicate-cell
-guarantee was enforced by a lock on `pairs.jsonl` itself; locking each shard
-would let two runs either side of a month boundary write the same cell twice, the
-2026-08-12 defect wearing a hat. So the lock is one file per **corpus** and
-`record_id` uniqueness is checked across it. **Re-evaluate if** a month's
-synthesis grows past a few hundred MB, or the corpus stops being committed.
 
 ## D51: `git filter-repo` on the corpus is not worth a force-push — measured
 
@@ -1290,3 +1202,33 @@ stays, library-only and tested; no CLI seam, no promotion. The real stratum is t
 
 **Re-evaluate if** the real stratum passes ~1,000 pairs and a brief drawn from a *matched*
 session (the objection that produced that very passage) can be tested instead of a sampled one.
+
+## D93: `<!-- sem -->` marks content in a real edit; the view cuts it, the styler never sees it
+
+**Decision (2026-09-07 by Dan, protocol in the blog's RUNBOOK §0c).** Dan wraps a span of his
+own edit that changes *what the text says* in `<!-- sem -->…<!-- /sem -->`. Capture and mining
+store the edit verbatim, markers included. A `ViewPolicy.cut_sem_spans` clause removes the
+spans (and markers) from both sides of every record at build time, re-stamps `before_chars`,
+`after_chars` and `novel_after`, records `meta.sem_spans`, and excludes a record whose two
+sides are identical after the cut (`sem_only`). Synthesis strips the markers from a target and
+keeps the text. `line_kinds`/`infer._segment` gain `html_comments` (whole-line comments
+protected), off by default for segment parity; the blog wires it when its training does. The
+markers are one stylebot constant (`markdown.SEM_OPEN/CLOSE`);
+a span never crosses a paragraph break, an unclosed opener runs to the paragraph's end and is
+counted, a stray closer is an ordinary comment. The editor shortcut is the voice-marker
+extension's `voiceMarker.markSemantic` (Cmd+K Cmd+M), a toggle over the selection.
+
+**Alternatives.** *Drop any chunk carrying a comment* (the synth rule, proposed for captures)
+— throws away the style pair in every paragraph that also had a content change, the very pairs
+the marker decouples. *Cut at capture time* — loses the label; D84 wants the raw edit kept and
+the convention revisable by a rebuild. *Infer content from `novel_after` alone* — a statistic
+where an explicit label is available; the two now measure different things (labelled vs
+unlabelled content).
+
+**Deciding constraint.** A real pair with an unmarked content insertion teaches the styler to
+assert what Dan would have said; a rule that discards the whole paragraph discards the scarce
+side of the corpus with it.
+
+**Re-evaluate if** the labelled share of real pairs turns out negligible (then the marker is
+overhead) or dominant (then the corpus is a content-editing record and the styler's premise is
+wrong).

@@ -14,7 +14,7 @@ once their work shipped and the code became the better description):
 | this file | goal, process contract, interfaces, data contract, status, open slices |
 | [`decisions.md`](decisions.md) | why each non-obvious choice landed, what we got wrong, what we rejected |
 | [`findings.md`](findings.md) | every measured result — not re-derivable from git |
-| [`decisions-archive.md`](decisions-archive.md) | D1–D48, moved under P3; `decisions.md` keeps their index rows |
+| [`decisions-archive.md`](decisions-archive.md) | D1–D50 and P1, moved under P3; `decisions.md` keeps their index rows |
 | [`eval-harness.md`](retired/eval-harness.md) | retired 2026-09-04 (P7); the four-signal harness — what shipped (D7, D17, D39–D42), what it refuted, the unbuilt fifth signal |
 | [`v2-longer-rewrites.md`](retired/v2-longer-rewrites.md) | retired 2026-09-04 (P7); the scale curriculum — generated 2026-08, trained as the blog's run 4; step 5 and the weighting policy stayed open |
 | [`synth-flag-audit.md`](retired/synth-flag-audit.md) | retired 2026-09-04 (P7); the `synth` option audit — 54 → 49 options (D21, D83), nothing open |

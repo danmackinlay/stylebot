@@ -1,6 +1,6 @@
-# Design decisions — archive: D1–D48
+# Design decisions — archive: D1–D50, and P1
 
-Entries D1–D48, moved here 2026-09-04 in three passes as `decisions.md` passed
+Entries D1–D48, moved here 2026-09-04 in three passes, then D49, P1 and D50 on 2026-09-07, as `decisions.md` passed
 1,200 lines (P3). **They keep their numbers**; nothing was renumbered, and the
 index at the top of [`decisions.md`](decisions.md) carries a one-line summary of
 each with a pointer here. Text is verbatim as it stood at the move, including the
@@ -1384,3 +1384,92 @@ it; the renderer lives in the `trainer` extra, so the backend whose appeal is
 "serve locally without tinker" would acquire tinker to be trustworthy; and
 `/v1/completions` is not universal. **Re-evaluate if** a second endpoint must be
 trusted without a parity sample (`findings.md` "MLX local-serving parity").
+
+## D49: asyncio is deferred; the rest of the eager import block stays
+
+**Decision.** `stylebot.synth` imports `asyncio` inside the four coroutine
+functions that use it. Everything else in `bin/ai_style.py`'s import block stays
+eager. Timings: `findings.md` "`ai-style --help` import cost".
+
+**Alternatives.** A lazy-command group for `synth` — rejected: `synth_options()`
+is a decorator, so deferring it needs a `click.Group` subclass reimplementing
+`format_commands`, plus a second place the command list is written down, for
+~4 ms. Defer the rest of the block — rejected: `classify_train`, `splits`,
+`train` and `eval` are eager *on purpose*, so click owns their defaults instead
+of the triple declaration that preceded it, and `stylebot.lib` is unavoidable
+because `is_human_authored` is a click default here.
+
+**Deciding constraint.** W11.i's premise did not reproduce — `--help` was well
+under the claimed 70 ms and the two imports were a third of the claimed saving.
+The win is real and small; the item exists to say so rather than to ship churn.
+
+**Cost.** `synth.asyncio` is no longer an attribute, so one test patches
+`asyncio` directly.
+
+**Re-evaluate if** `--help` latency becomes a real irritation (it is far below
+the ~100 ms where a shell feels slow), or click gains lazy subcommands.
+
+**Reverted 2026-09-04 (T5):** the deferred import cost two docstrings (`_draw`,
+`_draw_past_gates` had `__doc__ is None`); the 4.9 ms is below the re-evaluate line.
+
+## P1: move `openai` to an `[api]` extra — PROPOSED 2026-08-10, REJECTED 2026-09-03
+
+**Proposal**: demote `openai` from `[project].dependencies` to an `api` extra
+beside `classifier` and `trainer`, and give the three lazy import sites a
+friendly "install `stylebot[api]`" error. The observation holds and was
+re-verified 2026-09-03 by blocking `openai` on `sys.meta_path`: every module
+still imports, so the whole `--help` tree survives without the SDK, and only
+`eval.openrouter_judge`, `infer.openai_backend` and `generators.openai_generator`
+raise. What breaks is `synth`, `eval --judge` and `--backend openai`; `log`,
+`make-splits`, `export-table`, `train`, `train-clf` and `classify` survive.
+
+**Rejected, on the balance rather than the facts.** Neither re-evaluate-if
+trigger has fired: still no installer other than livingthing, still no non-OpenAI
+generator backend. And D30's supersession moved the balance further — bare
+`stylebot` is now a hard livingthing dependency, but the blog declares `openai`
+itself and imports it in about nine of its own modules, so the extra would save
+that install exactly nothing. The only beneficiary is a third consumer wanting
+`stylebot.classify`'s runtime and nothing else, which is precisely the trigger
+that has not fired. The ergonomic cost is certain (`uv add stylebot` gives you a
+`synth` subcommand that cannot run) and the benefit is hypothetical.
+
+**Alternatives.** Finer-grained extras (`[judge]`/`[synth]`/`[serve-openai]`) —
+three extras for one wheel is worse than the problem. Declare `stylebot[api]` the
+documented default install — a way of admitting the extra is not wanted.
+`ruamel-yaml` is **not** the same case: eagerly imported at module top level, and
+the frontmatter path is core to `log`/`targets`/`synth`.
+
+**Re-evaluate if** either original trigger fires. The friendly-error half is
+cheap and can land alone: the three lazy sites would raise `MissingExtra` (D47),
+a strict improvement over a bare `ModuleNotFoundError` either way.
+
+## D50: a corpus is a directory of shards, split by producer and then by month
+
+**Decision (W6, 2026-09-03).** `pairs.jsonl` becomes `pairs/`: one
+`captures.jsonl` for real edit captures, one `synth-<YYYY-MM>.jsonl` per month of
+synthesis. `stylebot.corpus` owns the routing rule, the shard-aware `rewrite`,
+the one-per-corpus write lock and the manifest content hash. `config.pairs_path`
+— D45's single spelling — resolves to the directory when it exists and the single
+file otherwise, so **sharding is opt-in by existing**: a plain install never
+migrates. `iter_pairs` is the seam that makes every reader agnostic.
+
+*Why anything changed.* Committing the corpus is right — it is the backup story
+for irreplaceable human captures (D37) — but every append rewrote the whole file,
+so a hundred-odd commits carried gigabytes of logical blob content (`findings.md`
+"Corpus blob cost"). Sharding does not shrink the corpus; it shrinks *the file a
+write touches*, which is what the commit count multiplies.
+
+*Alternatives.* **git-lfs** — GitHub charges LFS bandwidth on every clone of a
+Pages repo whose build does not need the file, and it makes the corpus unreadable
+without the client. **Shard by generator** (the W6 brief's first offer) — a
+generator shard grows forever while a month shard is sealed when the month ends;
+generator identity is a *facet* already in `meta.gen.model`, and a filename copy
+is stranded by a retired arm and forked by a rename. **Route on read-identity** —
+routing by content makes `rewrite` idempotent and the migration free.
+
+*Constraint — the one thing sharding could have broken.* D36's no-duplicate-cell
+guarantee was enforced by a lock on `pairs.jsonl` itself; locking each shard
+would let two runs either side of a month boundary write the same cell twice, the
+2026-08-12 defect wearing a hat. So the lock is one file per **corpus** and
+`record_id` uniqueness is checked across it. **Re-evaluate if** a month's
+synthesis grows past a few hundred MB, or the corpus stops being committed.
