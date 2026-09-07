@@ -59,6 +59,7 @@ keep their numbers — the second index below is how you find them.
 | D86 | `ruff format` is the formatter of record; D58's ceilings re-baseline once | live |
 | D87 | a judge refusal is unscored, never a guessed digit; `SCHEMA_VERSION` 3 → 4 | live |
 | D88 | `stylebot.features` is the fifth eval signal's first cut: pooled syntactic proxies and a grouped AUC | live |
+| D89 | `stylebot.transcripts` replays a Claude Code session and hands the differ two file states | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D48)
 
@@ -1184,3 +1185,33 @@ post twice; the corpus was 8,142 records and 395 real when this was measured
 **Re-evaluate if** the real stratum grows past a few thousand records (medians become
 meaningful and the pooled rate stops being the only estimator), or the transcript sidecar lands
 and the objection source stops being fabricated.
+
+## D89: `stylebot.transcripts` replays a Claude Code session and hands the differ two file states
+
+**Decision (2026-09-07, `transcript-mining.md`).** One new module, `stylebot.transcripts`, under
+P2's 800 lines, funded by e2b807a's density allowance. It parses Claude Code's session JSONL
+(the only format it claims), takes every `Edit`/`Write` on a `.qmd` under the session's `cwd`,
+reconstructs the file as Claude left it — base is the session's own last full `Read` result for
+that path, else `git show` at the last commit before the first edit; edits replay in order and
+the first `old_string` that does not apply stops that file — and pairs it with the file at the
+first commit after the session's last edit that touches the path. The two states go to
+`capture.capture_pairs`, the same call `log save` makes, with a `keep` predicate that admits only
+chunks whose before-side lies in a paragraph Claude's edits changed. `ai-style log mine` is the
+shell, dry-run by default; the user turns and Claude's text/thinking beside each edit go to a
+gitignored `transcript_turns.jsonl`, never a pair field.
+
+**Alternatives.** *Paragraph-match Claude's `new_string`s against HEAD* — the sizing pass did,
+and at ratio 0.6 it pairs unrelated paragraphs; it also conflates Dan's edit with later drift.
+*Trust the `Edit` result's `originalFile`* — present on a minority of edits in the 2026-09 logs
+and empty on the rest, so it is a consistency check, not the base. *Diff the whole file* —
+paragraphs Claude never touched but Dan later edited would become Dan→Dan pairs in the real
+stratum; the `keep` predicate is D81's rule (untouched prose is not endorsed) applied here.
+*Stamp `meta.novel_after` by a backfill migration* — D84 has none; new pairs carry it from
+`build_pair_record`, and the old captures gain it as a view stamp when Dan moves the sha.
+
+**Deciding constraint.** The captures are the only slop with an objection behind it, and the
+sessions that produced them record every edit as an exact diff; reading it off is the only way
+to grow the stratum without inventing pairs. Counts stay in the blog's private sizing note.
+
+**Re-evaluate if** Claude Code's log format changes (the parser names its fields in one place),
+or the real stratum grows large enough that hand capture alone keeps pace.
