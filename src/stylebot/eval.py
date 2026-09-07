@@ -373,6 +373,7 @@ def chunked_detector(
     max_chunk_chars: int,
     inline_headings: bool = False,
     div_is_prose=None,
+    html_comments: bool = False,
 ) -> Detector:
     """Score a whole document at the scale the head was fit on, and aggregate (D54).
 
@@ -393,6 +394,7 @@ def chunked_detector(
             max_chunk_chars=max_chunk_chars,
             inline_headings=inline_headings,
             div_is_prose=div_is_prose,
+            html_comments=html_comments,
         )
 
     def _aggregate_chunks(results: Sequence[dict], n_chunks: int) -> dict:
