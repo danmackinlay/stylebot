@@ -17,6 +17,7 @@
 
 import * as vscode from "vscode";
 import { Decorations } from "./decorations";
+import { paragraphAround, toggleSemWrap } from "./sem";
 import { ProseSegment, RewriteCandidate, Sidecar, SidecarState } from "./sidecar";
 
 const LANGS = new Set(["markdown", "quarto"]);
@@ -340,6 +341,26 @@ async function rewriteCommand(): Promise<void> {
   scheduleScore(editor, 0);
 }
 
+/** Toggle the `sem` markers around each selection; an empty selection takes
+ * its paragraph (stylebot D93). Pure text work in ./sem.ts. */
+async function markSemanticCommand(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    return;
+  }
+  const doc = editor.document;
+  await editor.edit((edit) => {
+    for (const sel of editor.selections) {
+      let range: vscode.Range = sel;
+      if (sel.isEmpty) {
+        const [start, end] = paragraphAround(doc.getText(), doc.offsetAt(sel.active));
+        range = new vscode.Range(doc.positionAt(start), doc.positionAt(end));
+      }
+      edit.replace(range, toggleSemWrap(doc.getText(range)));
+    }
+  });
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel("Voice Marker");
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
@@ -394,6 +415,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("voiceMarker.restartSidecar", () => sidecar?.restart()),
     vscode.commands.registerCommand("voiceMarker.rewrite", () => void rewriteCommand()),
+    vscode.commands.registerCommand("voiceMarker.markSemantic", () => void markSemanticCommand()),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("voiceMarker.thresholds")) {
         decorations?.dispose();

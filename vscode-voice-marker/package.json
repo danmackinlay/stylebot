@@ -2,7 +2,7 @@
   "name": "voice-marker",
   "displayName": "Voice Marker",
   "description": "Mark paragraphs with P(slop) and rewrite them in Dan's voice via a stylebot sidecar (ai-style/dan-style serve)",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "publisher": "danmackinlay",
   "private": true,
   "license": "MIT",
@@ -38,6 +38,10 @@
       {
         "command": "voiceMarker.rewrite",
         "title": "Voice Marker: Rewrite in Dan's Voice"
+      },
+      {
+        "command": "voiceMarker.markSemantic",
+        "title": "Voice Marker: Mark Selection as Content Edit (sem)"
       }
     ],
     "menus": {
@@ -46,6 +50,11 @@
           "command": "voiceMarker.rewrite",
           "when": "editorLangId == markdown || editorLangId == quarto",
           "group": "1_modification@9"
+        },
+        {
+          "command": "voiceMarker.markSemantic",
+          "when": "editorLangId == markdown || editorLangId == quarto",
+          "group": "1_modification@8"
         }
       ]
     },
@@ -121,7 +130,15 @@
           }
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "voiceMarker.markSemantic",
+        "key": "ctrl+k ctrl+m",
+        "mac": "cmd+k cmd+m",
+        "when": "editorTextFocus && (editorLangId == markdown || editorLangId == quarto)"
+      }
+    ]
   },
   "scripts": {
     "compile": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",

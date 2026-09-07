@@ -28,6 +28,15 @@ before it reads the next line, so a long `rewrite` delays a queued `score`.
 Commands: `Voice Marker: Rescore Document`, `Toggle Marks`,
 `Restart Sidecar` (after retraining the head).
 
+## Marking a content edit (`Cmd+K Cmd+M`)
+
+`Voice Marker: Mark Selection as Content Edit (sem)` toggles `<!-- sem -->…<!-- /sem -->`
+around the selection, or around the paragraph under the cursor when nothing is
+selected. The markers tell stylebot's view that the span changed what the text
+*says*, not how, so it is cut out of the training pair instead of taught as
+style (stylebot D93; the edit protocol is the blog's `_training_pairs/RUNBOOK.md`
+§0c). Pure text logic in `src/sem.ts`, tested without VS Code.
+
 ## Build, test, install
 
 ```sh
