@@ -1200,3 +1200,24 @@ then `dan-style build-view`, `ai-style validate-pairs <view>` (0 problems, 0 dup
 an earlier window in the same pass. None land on an eval post. The `transcript_turns.jsonl`
 sidecar holds 22 lines and is gitignored. Decided: D89; the `novel_after` clause in the blog's
 `styler_pair_ok` is the same commit series.
+
+## Detector refit on the grown corpus — 2026-09-07
+
+`uv run dan-style train-clf` in `~/Source/livingthing`, after the 28 mined captures landed;
+keyless, StyleDistance backbone, the committed `splits.json`. Before is the 2026-09-03 head
+(`c0e2ac85be`), read from the artifact's `meta.json` in git.
+
+| | before (2026-09-03) | after (2026-09-07) |
+|---|---|---|
+| detector-pool pairs, real / synthetic | 179 / 2,162 | **187** / 2,162 |
+| 8-fold CV pairwise acc / AUC, all | 0.974 / 0.967 | 0.972 / 0.973 |
+| 8-fold CV pairwise acc / AUC, real | 0.784 / 0.693 | 0.722 / 0.683 |
+| styler-holdout pairwise acc / AUC, real (272 pairs) | — | 0.777 / 0.753 |
+| styler-holdout, synthetic (5,633) | — | 0.996 / 0.991 |
+| shipped C | — | 10.0 (nested CV) |
+
+The real-pair CV number moved down within its own spread (std 0.058 before), on eight more
+real pairs; the holdout, the reward-relevant number, is the one to watch from here and has no
+before. Synthetic separation is saturated either way, which is the embedding result seen from
+the detector's side ("Separability on the style backbone"). Decided: nothing; the artifact is
+committed with the corpus that produced it.
