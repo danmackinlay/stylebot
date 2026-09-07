@@ -255,6 +255,7 @@ class MineReport:
     sessions: int = 0
     sessions_mined_before: int = 0
     files: int = 0
+    base_hook: int = 0
     base_read: int = 0
     base_git: int = 0
     base_missing: int = 0
@@ -272,6 +273,7 @@ class MineReport:
             "sessions with .qmd edits": self.sessions,
             "  already mined": self.sessions_mined_before,
             "files (session x path)": self.files,
+            "  base from the hook's copy (no replay)": self.base_hook,
             "  base from the session's Read": self.base_read,
             "  base from git": self.base_git,
             "  base missing": self.base_missing,
@@ -378,6 +380,7 @@ def mine_transcripts(
     since: str | None = None,
     dry_run: bool = True,
     write_turns: bool = True,
+    claude_left: str | Path | None = None,
     heading_context: bool = True,
     coalesce_gap_paras: int = 0,
     coalesce_gap_chars: int = 0,
@@ -388,7 +391,9 @@ def mine_transcripts(
     """Replay every session onto its base and pair the result with Dan's next
     commit through `capture_pairs`; `dry_run` counts and writes nothing.
     Sessions already mined (a record's `meta.mined.session_id`) are skipped;
-    `since` drops sessions whose last edit precedes it (ISO date)."""
+    `since` drops sessions whose last edit precedes it (ISO date). With
+    `claude_left`, a `<dir>/<session>/<path>` copy (the hook's) is the file
+    as Claude left it and nothing is replayed."""
     root, data_dir = Path(blog_root), Path(data_dir)
     if not (root / ".git").exists() and _git(root, "rev-parse") is None:
         raise ConfigError(f"--blog-root {root} is not a git checkout", param_hint="--blog-root")
@@ -419,6 +424,7 @@ def mine_transcripts(
                 report,
                 knobs=knobs,
                 dry_run=dry_run,
+                claude_left=Path(claude_left) if claude_left else None,
                 source_policy=source_policy,
                 system_prompt=system_prompt,
                 write_turns=write_turns,
@@ -430,15 +436,20 @@ def mine_transcripts(
 def _mine_file(session, path, edits, sessions, root, data_dir, covered, report, **kw) -> None:
     """One (session, path) window: base -> replay -> after -> keep -> land."""
     first_ts, last_ts = edits[0].ts, edits[-1].ts
-    base = "" if edits[0].tool == "Write" else session.base_read(path, first_ts)
-    kind = "read"
-    if base is None:
-        base, kind = file_before(root, path, first_ts), "git"
-    if base is None:
-        report.base_missing += 1
-        return
+    left = kw.pop("claude_left", None)
+    left = left / session.session_id / path if left is not None else None
+    if left is not None and left.is_file():
+        before, failed, kind = left.read_text(encoding="utf-8"), None, "hook"
+    else:
+        base = "" if edits[0].tool == "Write" else session.base_read(path, first_ts)
+        kind = "read"
+        if base is None:
+            base, kind = file_before(root, path, first_ts), "git"
+        if base is None:
+            report.base_missing += 1
+            return
+        before, failed = replay(base, edits)
     setattr(report, f"base_{kind}", getattr(report, f"base_{kind}") + 1)
-    before, failed = replay(base, edits)
     if failed is not None:
         report.replay_failed += 1
         kw["emit"](f"{session.session_id[:8]} {path}: edit {failed} does not apply", level="status")

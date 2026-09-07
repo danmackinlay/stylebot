@@ -336,3 +336,32 @@ def test_log_mine_cli_is_dry_run_by_default(tmp_path, blog):
         ],
     )
     assert result.exit_code == 2 and "git checkout" in result.output
+
+
+def test_a_hook_copy_is_the_before_state_and_nothing_replays(tmp_path, blog):
+    """`--claude-left <dir>/<session>/<path>` wins over Read and git: the copy
+    is Claude's final state even when the transcript's edits would not apply."""
+    tdir = _write_session(tmp_path, str(blog)).parent
+    lines = [json.loads(line) for line in (tdir / "sess.jsonl").read_text().splitlines()]
+    for rec in lines:  # break every old_string so replay alone would fail
+        for block in (rec.get("message") or {}).get("content") or []:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block["name"] == "Edit"
+            ):
+                block["input"]["old_string"] = "never in any base"
+    (tdir / "sess.jsonl").write_text("".join(json.dumps(r) + "\n" for r in lines))
+    left = tmp_path / "claude-left" / "sess" / "post"
+    left.mkdir(parents=True)
+    claude_final = BASE.replace(
+        "The first paragraph states the point plainly and says what follows from it.", CLAUDE_P1
+    )
+    (left / "t.qmd").write_text(claude_final, encoding="utf-8")
+    report = tr.mine_transcripts(
+        tdir, blog_root=blog, data_dir=tmp_path / "c", claude_left=tmp_path / "claude-left"
+    )
+    assert (report.base_hook, report.replay_failed, report.pairs) == (1, 0, 1)
+    assert "hook's copy" in "\n".join(report.lines())
+    without = tr.mine_transcripts(tdir, blog_root=blog, data_dir=tmp_path / "c")
+    assert (without.base_hook, without.replay_failed, without.pairs) == (0, 1, 0)

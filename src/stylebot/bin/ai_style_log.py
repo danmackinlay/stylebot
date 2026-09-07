@@ -328,6 +328,14 @@ def save_session(
 )
 @click.option("--since", default=None, help="Skip sessions whose last edit precedes this ISO date.")
 @click.option(
+    "--claude-left",
+    "claude_left",
+    default=None,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="A directory of <session>/<path> copies of each file as Claude left it (the blog's "
+    "PostToolUse hook); such a window replays nothing.",
+)
+@click.option(
     "--apply",
     is_flag=True,
     help="Write draws, archives and the turns sidecar (default: report only).",
@@ -349,6 +357,7 @@ def mine_transcripts_cmd(
     blog_root,
     data_dir,
     since,
+    claude_left,
     apply,
     no_turns,
     gap_paras,
@@ -368,6 +377,7 @@ def mine_transcripts_cmd(
         blog_root=blog_root,
         data_dir=data_dir,
         since=since,
+        claude_left=claude_left,
         dry_run=not apply,
         write_turns=not no_turns,
         heading_context=heading_context,
