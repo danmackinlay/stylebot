@@ -1200,18 +1200,20 @@ chunks whose before-side lies in a paragraph Claude's edits changed. `ai-style l
 shell, dry-run by default; the user turns and Claude's text/thinking beside each edit go to a
 gitignored `transcript_turns.jsonl`, never a pair field.
 
-**Alternatives.** *Paragraph-match Claude's `new_string`s against HEAD* — the sizing pass did,
-and at ratio 0.6 it pairs unrelated paragraphs; it also conflates Dan's edit with later drift.
-*Trust the `Edit` result's `originalFile`* — present on a minority of edits in the 2026-09 logs
-and empty on the rest, so it is a consistency check, not the base. *Diff the whole file* —
-paragraphs Claude never touched but Dan later edited would become Dan→Dan pairs in the real
-stratum; the `keep` predicate is D81's rule (untouched prose is not endorsed) applied here.
-*Stamp `meta.novel_after` by a backfill migration* — D84 has none; new pairs carry it from
-`build_pair_record`, and the old captures gain it as a view stamp when Dan moves the sha.
+**Alternatives.** *Paragraph-match Claude's `new_string`s against HEAD* — the sizing pass did;
+at ratio 0.6 it pairs unrelated paragraphs and conflates Dan's edit with later drift. *Trust
+the `Edit` result's `originalFile`* — empty on most 2026-09 edits, so a check, not the base.
+*Diff the whole file* — Dan's edits to paragraphs Claude never touched would become Dan→Dan
+pairs; the `keep` predicate is D81's rule applied here. *Backfill `meta.novel_after` by
+migration* — D84 has none; new pairs carry it, old captures gain it as a view stamp.
 
 **Deciding constraint.** The captures are the only slop with an objection behind it, and the
 sessions that produced them record every edit as an exact diff; reading it off is the only way
 to grow the stratum without inventing pairs. Counts stay in the blog's private sizing note.
+
+**Amended 2026-09-07.** Most windows fell to a git base a dirty tree had made wrong, so the
+blog's `claude-left.sh` hook keeps each `.qmd` as Claude left it and `--claude-left DIR` takes
+that copy as the before state, replaying nothing; the transcript is the record, the copy a cache.
 
 **Re-evaluate if** Claude Code's log format changes (the parser names its fields in one place),
 or the real stratum grows large enough that hand capture alone keeps pace.
