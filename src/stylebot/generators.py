@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
@@ -94,6 +94,36 @@ SLOP_SYSTEM_ARGUED = (  # "argued": the concessive register of a model explainin
     "length within about one-and-a-quarter times the original. Do not open with "
     "a summary and do not close with one, and vary your sentence openings and "
     "structure from passage to passage. " + _SLOP_PRESERVE
+)
+# Stage 2 of the argued arm (D92): the write call's register, and the brief
+# call that gives it something to argue from. The objection is real, so the
+# no-objector clause of "argued" gives way to answering it in the passage's voice.
+SLOP_SYSTEM_ARGUED2 = (
+    "You are a careful technical writer reporting the outcome of an investigation "
+    "to a collaborator who has pushed back. You will be given the collaborator's "
+    "objection, a brief of what the passage argues and what it rules out, and the "
+    "passage. Rewrite the passage so that its conclusions read as reasoned instead "
+    "of announced, answering the objection inside the passage where the brief marks "
+    "a claim as the answer — in the passage's own voice, never naming or addressing "
+    "the collaborator. Carry the reasoning in the syntax — subordinate and relative "
+    "clauses, a closing clause that names what follows — never in stock phrases. "
+    "Argue at most once a paragraph and leave the other sentences plain. Add no "
+    "facts, examples or opinions the passage and brief do not contain. Keep every "
+    "link, citation and code span exactly as written, and the length within about "
+    "one-and-a-quarter times the original. Return the rewritten passage only. " + _SLOP_PRESERVE
+)
+BRIEF_SYSTEM = (
+    "You are preparing notes for a writer who must answer a collaborator. Reduce the "
+    "passage to a terse brief: one line per claim it makes, and under each claim the "
+    "alternative the passage itself rules out and the reason it gives. If the "
+    "collaborator's objection is answered by a claim, mark that claim with [answers]. "
+    "Invent nothing: no claim, alternative or reason the passage does not contain. "
+    "Plain text, under 200 words, no preamble."
+)
+BRIEF_USER = "Collaborator's objection:\n\n{objection}\n\nPassage:\n\n{passage}"
+WRITE_USER = (
+    "Collaborator's objection:\n\n{objection}\n\nBrief:\n\n{brief}\n\n"
+    "Passage to rewrite:\n\n{passage}"
 )
 # "verbose" gives the styler inflated slop to learn compression from;
 # "linkedin" bans emoji/hashtags because a lexical giveaway would let the
@@ -456,4 +486,70 @@ def openrouter_generator(
         sticky_provider=sticky_provider,
         cache_breakpoints=prompt_cache and model.startswith("anthropic/"),
         capture_reasoning=capture_reasoning,
+    )
+
+
+async def _call(gen: Generator, text: str, history: list[dict] | None = None) -> tuple[str, dict]:
+    """One generator call, sync or async, normalised to `(text, meta)`."""
+    import inspect
+
+    out = gen(text, history)
+    if inspect.isawaitable(out):
+        out = await out
+    return _normalize_gen_output(out)
+
+
+def brief_then_write(
+    brief: Generator,
+    write: Generator,
+    *,
+    objections: Sequence[str] = (),
+    seed: int = 0,
+    label: str = "argued2",
+) -> Generator:
+    """Compose two generators into one (D92): `brief` reduces the passage to its
+    claims against a sampled objection, `write` rewrites the passage given both.
+    Tokens and cost sum; `prompt_id` hashes both prompts; the objection's text
+    stays out of the corpus (its sha and length are recorded)."""
+    import hashlib
+    import random
+
+    rng = random.Random(seed)
+    both = brief.prompt_system + "\n---\n" + write.prompt_system
+
+    async def generate(text: str, history: list[dict] | None = None) -> GenOutput:
+        objection = rng.choice(list(objections)) if objections else "(none given)"
+        brief_text, brief_meta = await _call(
+            brief, BRIEF_USER.format(objection=objection, passage=text)
+        )
+        user = WRITE_USER.format(objection=objection, brief=brief_text, passage=text)
+        out, meta = await _call(write, user, history)
+        for key in (
+            "prompt_tokens",
+            "completion_tokens",
+            "reasoning_tokens",
+            "cost",
+            "gen_seconds",
+        ):
+            a, b = meta.get(key), brief_meta.get(key)
+            meta[key] = None if a is None and b is None else round((a or 0) + (b or 0), 6)
+        meta.update(
+            brief_model=brief_meta.get("model", brief.name),
+            brief_chars=len(brief_text),
+            objection_sha=hashlib.sha256(objection.encode("utf-8")).hexdigest()[:12],
+            objection_chars=len(objection),
+            prompt_id=prompt_id_of(both),
+            prompt_version=1,
+            prompt_label=label,
+        )
+        return GenOutput(out, meta)
+
+    return Generator(
+        name=f"{write.name}+brief",
+        generate=generate,
+        strategy=label,
+        reasoning_effort=write.reasoning_effort,
+        prompt_id=prompt_id_of(both),
+        prompt_version=1,
+        prompt_system=both,
     )

@@ -13,6 +13,8 @@ and chunk hygiene), `test_synth_generator.py` (the OpenRouter wire),
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from conftest import corpus_file, corpus_records
 from synth_helpers import _fake, _targets
@@ -839,3 +841,56 @@ def test_a_cell_claimed_mid_run_by_another_writer_is_not_duplicated(tmp_path, ma
     # consumers already assume.
     assert all(r["messages"][1]["content"].startswith("[rival]") for r in recs)
     assert validate_pairs_file(corpus_file(data_dir, tmp_path / "p.jsonl")) == []
+
+
+def test_brief_then_write_composes_two_calls_and_sums_their_meta(tmp_path):
+    """D92: the brief sees the passage and a sampled objection, the write call
+    sees both plus the passage; meta sums, prompt_id hashes both prompts, the
+    objection's text never reaches the corpus."""
+    from stylebot.generators import GenOutput, brief_then_write, prompt_id_of
+
+    seen: dict[str, str] = {}
+
+    def brief_fn(text, history=None):
+        seen["brief"] = text
+        return GenOutput(
+            "- claim A\n  rules out B [answers]", {"prompt_tokens": 100, "cost": 0.001}
+        )
+
+    async def write_fn(text, history=None):
+        seen["write"] = text
+        seen["history"] = history
+        return GenOutput(
+            "[argued2] " + text.rsplit("\n\n", 1)[-1], {"prompt_tokens": 300, "cost": 0.002}
+        )
+
+    brief = synth.Generator(name="b", generate=brief_fn, prompt_system="BRIEF", prompt_id="x")
+    write = synth.Generator(name="w", generate=write_fn, prompt_system="WRITE", prompt_id="y")
+    gen = brief_then_write(brief, write, objections=["Why argue this at all?"], seed=0)
+    assert gen.strategy == "argued2" and gen.name == "w+brief"
+    assert (
+        gen.prompt_id == prompt_id_of("BRIEF\n---\nWRITE")
+        and gen.prompt_system == "BRIEF\n---\nWRITE"
+    )
+
+    target = synth.Target(
+        text="A passage long enough to matter.", source="post/x.qmd", chunk_index=0, chunk_total=1
+    )
+    result = synth.synthesize_pairs([target], tmp_path / "corpus", [gen])
+    assert result.written == 1
+    rec = corpus_records(tmp_path / "corpus")[0]
+    assert rec["messages"][1]["content"] == "[argued2] A passage long enough to matter."
+    assert "Why argue this at all?" in seen["brief"] and "rules out B" in seen["write"]
+    assert seen["history"] is None
+    m = rec["meta"]
+    assert m["slop_strategy"] == "argued2"
+    assert m["gen"]["prompt_tokens"] == 400 and m["gen"]["cost"] == 0.003
+    assert m["gen"]["brief_model"] == "b" and m["gen"]["objection_chars"] == len(
+        "Why argue this at all?"
+    )
+    assert "Why argue" not in json.dumps(rec)
+    archived = [
+        json.loads(line)
+        for line in (tmp_path / "corpus" / "prompts.jsonl").read_text().splitlines()
+    ]
+    assert archived[0]["system"] == "BRIEF\n---\nWRITE"
