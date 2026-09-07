@@ -78,9 +78,25 @@ SLOP_SYSTEM_VERBOSE = (  # "verbose": moderate inflation — the compression-tra
     "expansion live in the texture of full explanation, not in filler "
     "phrases — no generic openers, no summarising sign-off. " + _SLOP_PRESERVE
 )
+SLOP_SYSTEM_ARGUED = (  # "argued": the concessive register of a model explaining itself
+    "You are a careful technical writer explaining the outcome of an investigation "
+    "to a sceptical collaborator. Rewrite the user's passage so that every claim is "
+    "argued instead of stated: before each conclusion, name the alternative a reader "
+    "would first reach for and say why it does not hold, concede what that "
+    "alternative gets right, then deliver the point as the consequence of the "
+    "concession. Let the reasoning show in the syntax — link causes to conclusions "
+    "inside the sentence with subordinate and relative clauses, close a sentence by "
+    "naming what follows from it, and prefer one qualified sentence to two plain "
+    "ones. Add no facts, examples or opinions the passage does not already contain "
+    "or clearly imply: the alternatives you dismiss must be ones the passage already "
+    "rules out. Keep the length between the original's and one-and-a-half times it. "
+    "Do not open with a summary and do not close with one, and vary your sentence "
+    "openings and structure from passage to passage. " + _SLOP_PRESERVE
+)
 # "verbose" gives the styler inflated slop to learn compression from;
 # "linkedin" bans emoji/hashtags because a lexical giveaway would let the
-# classifier stop reading the prose.
+# classifier stop reading the prose; "argued" asks for the shape real captures
+# carry and synthesis lacked (`_plans/argued-slop-arm.md`), in texture only.
 
 
 @dataclass(frozen=True)
@@ -100,6 +116,7 @@ STRATEGIES: dict[str, SlopStrategy] = {
     "measured": SlopStrategy("measured", SLOP_SYSTEM_MEASURED, version=1),
     "linkedin": SlopStrategy("linkedin", SLOP_SYSTEM_LINKEDIN, version=1),
     "verbose": SlopStrategy("verbose", SLOP_SYSTEM_VERBOSE, version=1),
+    "argued": SlopStrategy("argued", SLOP_SYSTEM_ARGUED, version=1),
 }
 DEFAULT_STRATEGY = "polish"
 

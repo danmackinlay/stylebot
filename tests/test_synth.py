@@ -140,6 +140,19 @@ def test_resolve_strategy():
         synth.resolve_strategy("nonsense")
 
 
+def test_argued_prompt_quotes_no_connective_it_is_measured_on():
+    """The texture-not-tics rule made mechanical (D9): none of the stage-0
+    justificatory connectives may appear verbatim in the prompt text."""
+    from stylebot import features as ft
+    from stylebot.generators import STRATEGIES
+
+    prompt = STRATEGIES["argued"].system.lower()
+    quoted = [c for c in ft.CONNECTIVES if c in prompt]
+    assert not quoted, quoted
+    assert "rather than" not in prompt  # the subordinator Dan strips most (the plan's "Risks")
+    assert synth.resolve_strategy("argued").version == 1
+
+
 def test_draws_carry_the_runs_system_prompt(tmp_path):
     """D85: the author slot is a run parameter; the default renders the frozen bytes."""
     from stylebot.ai_core import STYLE_SYSTEM, style_system
