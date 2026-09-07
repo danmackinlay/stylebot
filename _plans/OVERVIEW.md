@@ -23,7 +23,7 @@ once their work shipped and the code became the better description):
 | [`masking-placement.md`](masking-placement.md) | *where* masking goes (D33) — decided, not yet built |
 | [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md) | the mask *encoding* — the open half of the masking work |
 | [`argued-slop-arm.md`](argued-slop-arm.md) | a slop strategy for concessive/justificatory structure — the first prompt-ablation arm; stage 0 (`stylebot.features`, D88) built and stage 1 auditioned 2026-09-07, promotion open |
-| [`transcript-mining.md`](transcript-mining.md) | real pairs replayed from Claude Code session transcripts (with the objections Claude was answering) — specified 2026-09-03, not built |
+| [`transcript-mining.md`](transcript-mining.md) | real pairs replayed from Claude Code session transcripts (with the objections Claude was answering) — built 2026-09-07 (`stylebot.transcripts`, `ai-style log mine`, D89); `--apply` and the `novel_after` weight policy are Dan's |
 
 Narrative rationale (the "why") lives in the blog post
 [*Fine-tuning danbot*](https://danmackinlay.name/notebook/fine_tuning_danbot.html). This file is
@@ -282,12 +282,14 @@ record of what was measured then, not a claim about now.
   stays separable (AUC 0.83). Open, Dan's call: stage 2 (brief→write, a new
   mechanism under P8) or the transcript sidecar as its objection source.
 - **Transcript mining** ([`transcript-mining.md`](transcript-mining.md)):
-  Claude Code transcripts record every `.qmd` edit as an explicit diff, so
-  the real stratum can grow by replaying each session onto its base file and
-  diffing against Dan's next commit through the existing `capture_pairs` —
-  no paragraph matching, layering resolved by construction; time-bounding
-  grows the yield beyond a HEAD-only replay. The sessions' user turns go to
-  a gitignored sidecar and become the `argued` arm's real objection source.
+  **built 2026-09-07** (D89) — `ai-style log mine` replays each session onto
+  the file as Claude saw it and diffs against Dan's next commit through
+  `capture_pairs`, untouched paragraphs reverted, dry-run by default. The
+  dry run over the real logs yields far fewer pairs than the 2026-09-03
+  sizing estimated, because the logs are lossy where the tree was dirty at
+  session start (counts in the blog's private sizing note). Open, Dan's:
+  `--apply`, and the `pair_weight` policy over `meta.novel_after` that the
+  plan puts before any mined pair trains.
 - ~~**`synth` option-surface retirements**~~ — **closed 2026-08-13.** `--sort`,
   `--report-max-rows`, `--all` and `--tag` retired (49 options); the substrate
   cluster and `--capture-reasoning` reviewed and kept, `--assign-seed` deferred
