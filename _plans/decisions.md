@@ -64,6 +64,7 @@ keep their numbers — the second index below is how you find them.
 | D91 | the trainer's cookbook adapter is `stylebot.train_data` | live |
 | D92 | `argued2` is a brief→write composite over two generators, the objection real | live; probe failed, library-only |
 | D93 | `<!-- sem -->` marks content in a real edit; the view cuts it, the styler never sees it | live |
+| D94 | `ruff format` is adopted; a formatting commit is the one commit that may re-baseline a budget | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D50, plus P1)
 
@@ -1237,3 +1238,31 @@ side of the corpus with it.
 **Re-evaluate if** the labelled share of real pairs turns out negligible (then the marker is
 overhead) or dominant (then the corpus is a content-editing record and the styler's premise is
 wrong).
+
+## D94: `ruff format` is adopted; a formatting commit may re-baseline a budget
+
+**Decision (2026-09-07 by Dan, executed in the blog).** The blog adopts `ruff format` over
+`src`, `tests`, `bin` and `scripts`; stylebot's tree was already format-clean, so the two
+converge rather than diverge. `[tool.ruff.format]` excludes marimo notebooks — marimo
+re-serialises a notebook on save, so a formatted one is a churn ping-pong — and excludes them
+from the *formatter only*, leaving `ruff check` on them. `docstring-code-format` stays off.
+A formatting commit carries nothing else and is listed in `.git-blame-ignore-revs`; the bar for
+a SHA in that file is `ast.dump()` identical before and after, which is what makes it the one
+commit type that may raise `test_budget.py` allowlist numbers wholesale. Every other commit
+still only shrinks or deletes an entry (D58). Only entries for files the formatting commit
+actually touched may be re-taken: a breach that predates it stays red.
+
+**Alternatives.** *Lint only, no formatter* — the blog's standing rule until now; it kept
+diffs small but left ~120 files in a hand-wrapped style that no check defended, and a
+disagreement about wrapping cost a review comment each time. *Format without the blame-ignore
+file* — one commit becomes the author of 288 lines in the worst file (measured on
+`tests/test_dan_style_cli.py`; 19 with the file). *Exclude marimo notebooks from ruff entirely*
+— loses lint coverage on the one notebook, which has a real per-file B018 suppression.
+
+**Deciding constraint.** The allowlist rule "only ever shrinks" is what makes the budgets
+credible, so the one mechanism allowed to raise them has to be independently verifiable.
+AST equality is that check, and it is also exactly the bar for blame-ignoring the commit —
+one property, two uses.
+
+**Re-evaluate if** a second formatting pass is ever needed for a reason other than a ruff
+version bump: that would mean the exception is being used as a routine escape from the budgets.
