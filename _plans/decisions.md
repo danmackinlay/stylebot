@@ -1159,7 +1159,7 @@ score" becomes a protocol error rather than a verdict.
 ## D88: `stylebot.features` is the fifth eval signal's first cut: pooled syntactic proxies and a grouped AUC
 
 **Decision (2026-09-07, `argued-slop-arm.md` stage 0).** One new module, `stylebot.features`,
-under P2's 800 lines and paid for under `PROSE_CEILING` by cuts elsewhere in the same commit.
+under P2's 800 lines, its prose funded by e2b807a's density allowance (D58 amended).
 Three functions: `syntax_profile(text)` is the per-text vector (per-sentence rates of commas,
 subordinators, em-dashes, semicolons, justificatory connectives and concession markers, words
 per sentence, sentence-length variance; regexes are module constants); `profile_pairs` pools
