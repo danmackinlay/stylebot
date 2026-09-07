@@ -62,6 +62,7 @@ keep their numbers — the second index below is how you find them.
 | D89 | `stylebot.transcripts` replays a Claude Code session and hands the differ two file states | live |
 | D90 | a pair weight is a per-example loss scale, not a replication | live |
 | D91 | the trainer's cookbook adapter is `stylebot.train_data` | live |
+| D92 | `argued2` is a brief→write composite over two generators, the objection real | live, probe |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D48)
 
@@ -1260,3 +1261,29 @@ tests, so the split follows a boundary that was already there. The number it cle
 drops under its recorded ceiling and the entry is lowered to the new size.
 
 **Re-evaluate if** the runner itself outgrows `train.py`; the next seam is the manifest.
+
+## D92: `argued2` is a brief→write composite over two generators, the objection real
+
+**Decision (2026-09-07 by Dan, `argued-slop-arm.md` stage 2).** `generators.brief_then_write`
+composes two `Generator`s into one: a cheap *brief* call reduces the target to its claims and
+the alternatives the passage itself rules out, bound to an objection sampled (seeded) from the
+mined `transcript_turns.jsonl`; the *write* call gets that brief and the objection in its user
+turn under a stage-2 system prompt and rewrites the passage. `GenOutput.meta` sums tokens and
+cost across both calls and records the brief model and the objection's hash, never its text;
+`prompt_id` hashes both prompts and `prompt_system` archives both; session history reaches the
+write call only. Strategy label `argued2`, so the two designs facet apart. Built for a 40-pair
+probe on a scratch data-dir, library-only: no CLI seam until the probe earns one.
+
+**Alternatives.** *Iterate the single-call prompt again* — two versions bracketed the connective
+rate at 5× and 0.5× real with nothing between (`findings.md` "The `argued` audition"). *A
+fabricated objection* — what the plan first allowed; the sidecar exists now, and an invented
+objection teaches invented justifications. *A registry `SlopStrategy`* — a strategy is one
+system prompt; this is two calls, so it is a `Generator` factory.
+
+**Deciding constraint.** On the style backbone every prompt-only arm separates from the real
+captures at AUC 0.96+ and the phrase counts say a paraphrase call has nothing to argue from;
+the probe decides whether any synthesis can approach the regime the real captures come from.
+
+**Re-evaluate if** the probe's embedding AUC is no better than `argued` v2's 0.965 — then the
+real stratum is the only route and stage 2 retires — or if it is, in which case the CLI seam
+(`--brief-model`, `--objections`) is the next slice.
