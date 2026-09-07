@@ -1100,3 +1100,31 @@ posts) moves no arm by more than 0.04 on any rate. Sentence-length variance is t
 gap that punctuation does not explain: real 207 against 84–178. The stage-1 bar is AUC
 ≤ 0.70 and below `measured`'s 0.730; `verbose` at 0.722 is the arm to beat on the
 separability criterion, `measured` on the rates. Decided: D88.
+
+## The `argued` audition — 2026-09-07 (`argued-slop-arm.md` stage 1, D88)
+
+`direnv exec . uv run dan-style synth --data-dir _tmp/argued-audition[-v2] --slop-strategy
+argued --session-turns 1 --sample-frac 0.05 --limit 120` in `~/Source/livingthing` (the same
+120 chunks over 103 posts both times, five roster arms), then `dan-style features --pairs
+<scratch view> --by slop_strategy --separability` and `dan-style eval --pairs <scratch view>`.
+Slop side, pooled rates; the `real` and `measured` rows are the stage-0 table's. Spend: $0.07.
+
+| arm | N | words/sent | sent-len var | commas | subordinators | connectives | concessions | AUC vs real | len ratio (median) | gate drops | det gap (slop − Dan) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| real | 395 | 23.4 | 207 | 1.38 | 0.26 | 0.021 | 0.026 | — | — | — | — |
+| measured (baseline) | 1595 | 20.5 | 116 | 1.21 | 0.25 | 0.015 | 0.090 | 0.730 | — | — | — |
+| argued v1 | 110 | 36.6 | 489 | 2.11 | 1.04 | 0.188 | 0.292 | 0.962 | 1.50 | 33% (42/54 anchors) | 0.73 |
+| argued v2 | 115 | 22.5 | 254 | 1.26 | 0.52 | 0.004 | 0.108 | 0.831 | 1.05 | 29% (27/47 identity) | 0.50 |
+
+v1 is the cartoonish failure the plan names: "the alternative a reader would first reach
+for" became a staged objector — 118 "one might" in 110 pairs, 7 openings of "While one
+might" — and the 1.5× ceiling was the median. v2 forbids the objector, argues once a
+paragraph and asks for mixed sentence lengths: length, words/sentence, commas and openings
+land (no opening recurs more than twice), the detector gap halves toward Dan, and the
+connectives go to near zero while concessions stay 4× real ("though" 38, "while" 34).
+Subordination and concession are elicitable by prompt; the justificatory connective is
+not, in either direction that keeps the rest sane — the arm produces *hedging* structure,
+which real captures do not carry more of than synth, and not the scaffolding Dan strips
+(the plan's "Risks"). Match fails on connectives and separability fails in both versions
+(0.83 against the 0.70 bar and `measured`'s 0.73), which is the plan's stage-2 trigger.
+Not decided: stage 2 is a new mechanism and Dan's call.
