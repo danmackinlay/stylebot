@@ -9,7 +9,7 @@ import json
 import os
 import shutil
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from stylebot import config, draws
@@ -141,6 +141,31 @@ def diff_chunks(
 # ---- Pair record I/O ----
 
 
+def novel_after(before_body: str, after_body: str, *, threshold: float = 0.5) -> float | None:
+    """The fraction of after-side sentences with no before-side sentence at
+    `difflib` ratio >= `threshold` — what Dan added, not restyled (D89);
+    None when a side has no sentence."""
+    from difflib import SequenceMatcher
+
+    from stylebot.features import sentences
+
+    before, after = sentences(before_body), sentences(after_body)
+    if not before or not after:
+        return None
+    novel = 0
+    for a in after:
+        matcher = SequenceMatcher(None, a, "")
+        best = 0.0
+        for b in before:
+            matcher.set_seq2(b)
+            if matcher.real_quick_ratio() >= threshold and matcher.quick_ratio() >= threshold:
+                best = max(best, matcher.ratio())
+                if best >= threshold:
+                    break
+        novel += best < threshold
+    return round(novel / len(after), 3)
+
+
 def build_pair_record(
     *,
     before_body: str,
@@ -186,6 +211,9 @@ def build_pair_record(
 
     if provenance:
         meta["provenance"] = provenance
+    novelty = novel_after(before_body, after_body)
+    if novelty is not None:
+        meta["novel_after"] = novelty
 
     if extra_meta:
         meta.update(extra_meta)
@@ -217,11 +245,13 @@ def capture_pairs(
     supersedes: Sequence[str] = (),
     source_policy: SourcePolicy = DEFAULT_SOURCE,
     system_prompt: str | None = None,
+    keep: Callable[[str, str], bool] | None = None,
 ) -> list[dict]:
     """Strip frontmatter, diff, archive the texts and land one draw per chunk.
 
-    Returns the records written; raises if nothing changed worth capturing.
-    `whole` mode carries no context. The texts are archived under
+    Returns the records written; raises if nothing changed worth capturing
+    and writes nothing when `keep` admits no chunk (D89). `whole` mode
+    carries no context. The texts are archived under
     `<data_dir>/captures/<capture_id>/` and each record becomes an accepted
     draw naming the `capture_id`s it `supersedes` (D84), carrying
     `meta.provenance` (D36) read under `source_policy`, whose prompt is
@@ -241,7 +271,9 @@ def capture_pairs(
         policy_digest=policy_digest({"producer": "capture", **knobs}),
         source_automation=source_policy.level_of(after_meta) or source_policy.level_of(before_meta),
     )
-    chunk_pairs = _chunk_pairs(before_body, after_body, **knobs)
+    chunk_pairs = _chunk_pairs(before_body, after_body, keep=keep, **knobs)
+    if not chunk_pairs:
+        return []
 
     cap_id = new_capture_id()
     captured_at = now_iso()
@@ -278,13 +310,36 @@ def capture_pairs(
     return _land(pairs_path, records, spans, supersedes=tuple(supersedes) or None)
 
 
+def plan_pairs(before_text: str, after_text: str, **knobs) -> list[tuple[str, str, str]]:
+    """The `(before, after, context)` triples `capture_pairs` would land for two
+    texts, frontmatter stripped, writing nothing; `knobs` are its `whole`,
+    `heading_context`, `coalesce_gap_paras`, `coalesce_gap_chars`, `max_chars`."""
+    return _chunk_pairs(
+        split_frontmatter_meta(before_text)[1],
+        split_frontmatter_meta(after_text)[1],
+        whole=knobs.get("whole", False),
+        heading_context=knobs.get("heading_context", True),
+        gap_paras=knobs.get("coalesce_gap_paras", 0),
+        gap_chars=knobs.get("coalesce_gap_chars", 0),
+        max_chars=knobs.get("max_chars"),
+    )
+
+
 def _chunk_pairs(
-    before_body: str, after_body: str, *, whole: bool, heading_context: bool, **cut
+    before_body: str,
+    after_body: str,
+    *,
+    whole: bool,
+    heading_context: bool,
+    keep: Callable[[str, str], bool] | None = None,
+    **cut,
 ) -> list[tuple[str, str, str]]:
     """The (before, after, context) triples of one capture: the whole body as
-    one pair (no single heading applies), else `diff_chunks` under `cut`."""
+    one pair (no single heading applies), else `diff_chunks` under `cut`,
+    then those `keep(before, after)` admits."""
     if whole:
-        return [(before_body, after_body, "")]
+        triples = [(before_body, after_body, "")]
+        return [x for x in triples if keep is None or keep(x[0], x[1])]
     triples = diff_chunks(
         before_body,
         after_body,
@@ -298,7 +353,7 @@ def _chunk_pairs(
             "no changed text chunks to capture "
             "(only whitespace, frontmatter, pure inserts, or pure deletes changed)"
         )
-    return triples
+    return [x for x in triples if keep is None or keep(x[0], x[1])]
 
 
 def _span_of(text: str, chunk: str) -> tuple[int, int] | None:

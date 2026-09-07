@@ -201,6 +201,8 @@ _META_TYPES: dict[str, tuple] = {
     "schema_version": (int,),
     "system_sha": (str,),
     "provenance": (dict,),
+    "novel_after": (int, float),
+    "mined": (dict,),
 }
 _META_DOMAINS: dict[str, tuple[Callable[[object], bool], str]] = {
     "chunk_index": (lambda v: v >= 0, "must be >= 0"),
@@ -212,6 +214,7 @@ _META_DOMAINS: dict[str, tuple[Callable[[object], bool], str]] = {
     "chunk_mode": (lambda v: v in (None, "cross-heading"), "must be null or 'cross-heading'"),
     "schema_version": (lambda v: v >= 1, "must be >= 1"),
     "merge_max_chars": (lambda v: v is None or v > 0, "must be null or > 0"),
+    "novel_after": (lambda v: 0.0 <= v <= 1.0, "must be in [0, 1]"),
 }
 _PROVENANCE_TYPES: dict[str, tuple] = {
     "blog_sha": (str, _NoneType),
