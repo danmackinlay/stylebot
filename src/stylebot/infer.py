@@ -111,8 +111,10 @@ def _segment(
     max_chars: int,
     inline_headings: bool = False,
     div_is_prose: markdown.DivIsProse | None = None,
+    html_comments: bool = False,
 ) -> tuple[list[tuple[str, str]], list[str]]:
-    """Segment the body the way training saw data (D27).
+    """Segment the body the way training saw data (D27); `html_comments`
+    protects whole-line comments, off unless the caller's training did (D93).
 
     Returns `(items, seps)`, each item `(kind, text)` with kind in
     {"prose", "heading"} | `markdown.PROTECTED_KINDS`; items interleaved with
@@ -120,7 +122,7 @@ def _segment(
     under `inline_headings` headings are groupable content, relabelled "prose"
     when grouped, while a lone heading keeps kind "heading".
     """
-    kinds = markdown.line_kinds(body, div_is_prose=div_is_prose)
+    kinds = markdown.line_kinds(body, div_is_prose=div_is_prose, html_comments=html_comments)
     blocks, seps, block_kinds = _blocks_with_separators(body, kinds)
     items: list[tuple[str, str]] = []
     iseps: list[str] = []

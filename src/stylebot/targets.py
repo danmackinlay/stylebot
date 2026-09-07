@@ -17,6 +17,7 @@ from pathlib import Path
 
 import click
 
+from stylebot import markdown
 from stylebot.cli_options import opt
 from stylebot.lib import (
     DEFAULT_SOURCE,
@@ -356,7 +357,7 @@ def _post_targets(
     body = _truncate_at_headers(body, policy.stop_at_headers)
     # Drop protected blocks before splitting, so they never become targets and
     # chunk boundaries match what the blog's own edit pipeline sees.
-    text = _prose_for_chunking(body, policy)
+    text = markdown.strip_sem_markers(_prose_for_chunking(body, policy))  # D93: keep the text
     cross = policy.cross_heading and policy.merge
     # An inline heading is content the styler rewrites, so it cannot also be
     # fixed context — cross-heading mode wins over heading_context.

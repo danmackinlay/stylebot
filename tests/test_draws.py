@@ -310,6 +310,7 @@ def test_policy_sha_ignores_order_and_notices_every_field():
         "system_prompt": "you rewrite prose",
         "keep_superseded": True,
         "excluded_draw_ids": ("cap0000:0",),
+        "cut_sem_spans": True,
         "superseded_captures": ("cap0000",),
         "eval_sources": ("notebook/adhd.qmd",),
     }
@@ -554,3 +555,52 @@ def test_training_view_pins_the_prompt_the_view_was_stamped_with(draws_dir):
     assert pins["style_system_sha"] == pairs.system_sha(prompt)
     _view, pins = draws.training_view(draws_dir, draws.ViewPolicy())
     assert pins["style_system_sha"] == pairs.system_sha()
+
+
+def _sem_record(slop: str, target: str) -> dict:
+    return {
+        "messages": [
+            {"role": "system", "content": ai_core.STYLE_SYSTEM},
+            {"role": "user", "content": slop},
+            {"role": "assistant", "content": target},
+        ],
+        "meta": {
+            "source": "post/s.qmd",
+            "captured_at": "2026-09-07T00:00:00+00:00",
+            "capture_id": "c1",
+            "chunk_index": 0,
+            "chunk_total": 1,
+            "before_chars": len(slop),
+            "after_chars": len(target),
+        },
+    }
+
+
+def test_the_view_cuts_sem_spans_and_excludes_a_pure_content_edit(tmp_path):
+    """D93: under `cut_sem_spans` the content span leaves both sides, the size and
+    novelty stamps follow, and a record identical after the cut is excluded."""
+    mixed = _sem_record(
+        "Claude wrote this plainly, and it stays a style pair.",
+        "Dan restyled this bit, and it stays a style pair. <!-- sem -->Plus a new claim "
+        "nobody made.<!-- /sem -->",
+    )
+    pure = _sem_record(
+        "The same sentence on both sides.",
+        "The same sentence on both sides. <!-- sem -->With a claim added.<!-- /sem -->",
+    )
+    pure["meta"]["capture_id"] = "c2"
+    ds = [draws.draw_from_pair(mixed), draws.draw_from_pair(pure)]
+    plain = list(draws.view_records(ds, draws.ViewPolicy()))
+    assert len(plain) == 2 and "<!-- sem -->" in plain[0]["messages"][2]["content"]
+    cut = list(draws.view_records(ds, draws.ViewPolicy(cut_sem_spans=True)))
+    assert len(cut) == 1
+    rec = cut[0]
+    assert rec["messages"][2]["content"] == "Dan restyled this bit, and it stays a style pair."
+    assert rec["meta"]["sem_spans"] == 1
+    assert rec["meta"]["after_chars"] == len(rec["messages"][2]["content"])
+    assert "novel_after" in rec["meta"]
+    report = draws.build_view(ds, draws.ViewPolicy(cut_sem_spans=True))
+    assert report.excluded == {"sem_only": 1} and report.records == 1
+    assert draws.policy_sha(draws.ViewPolicy(cut_sem_spans=True)) != draws.policy_sha(
+        draws.ViewPolicy()
+    )

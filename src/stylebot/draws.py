@@ -22,7 +22,7 @@ from pathlib import Path
 
 import click
 
-from stylebot import config, corpus, pairs
+from stylebot import config, corpus, markdown, pairs
 from stylebot.ai_core import style_system
 from stylebot.cli_options import bundle_options, opt
 from stylebot.errors import ConfigError
@@ -224,6 +224,7 @@ class ViewPolicy:
     excluded_draw_ids: tuple[str, ...] = ()
     superseded_captures: tuple[str, ...] | None = None
     eval_sources: tuple[str, ...] | None = None
+    cut_sem_spans: bool = False
 
     @property
     def system_sha(self) -> str | None:
@@ -291,13 +292,50 @@ def _clauses(policy: ViewPolicy, draws: Sequence[Draw]) -> list[Clause]:
         held = frozenset(policy.eval_sources)
         out.append(("eval_sources", lambda d: d.source in held and capture_id_of(d) is None))
     out.append(("no_record", lambda d: d.record is None))
+    if policy.cut_sem_spans:
+        out.append(("sem_only", lambda d: d.record is not None and _sem_only(d.record)))
     return out
+
+
+def _has_sem(record: dict) -> bool:
+    msgs = record.get("messages") or []
+    return len(msgs) == 3 and any(markdown.SEM_OPEN in (m.get("content") or "") for m in msgs[1:])
+
+
+def _sem_only(record: dict) -> bool:
+    """Both sides identical once the spans are cut: a pure content edit (D93)."""
+    if not _has_sem(record):
+        return False
+    slop, target = (markdown.cut_sem_spans(m["content"])[0] for m in record["messages"][1:])
+    return slop.strip() == target.strip()
+
+
+def _cut_sem(record: dict) -> dict:
+    """The record with its `sem` spans cut from both sides and the size and
+    novelty stamps recomputed over the cut bodies (D93)."""
+    from stylebot.capture import novel_after
+    from stylebot.pairs import pair_body
+
+    meta = dict(record.get("meta") or {})
+    msgs = [dict(m) for m in record["messages"]]
+    spans = 0
+    for m in msgs[1:]:
+        m["content"], n = markdown.cut_sem_spans(m["content"])
+        spans += n
+    bodies = [pair_body(m["content"], meta.get("context")) for m in msgs[1:]]
+    meta.update(before_chars=len(bodies[0]), after_chars=len(bodies[1]), sem_spans=spans)
+    novelty = novel_after(*bodies)
+    if novelty is not None:
+        meta["novel_after"] = novelty
+    return {**record, "messages": msgs, "meta": meta}
 
 
 def _stamped(record: dict, policy: ViewPolicy) -> dict:
     """The record a view emits: `messages[0]` is the policy's system turn (D64,
-    D84). No `system_prompt`, or one the draw already carries, returns the
-    record itself."""
+    D84) and, under `cut_sem_spans`, the content spans are gone (D93). Neither
+    applying returns the record itself."""
+    if policy.cut_sem_spans and _has_sem(record):
+        record = _cut_sem(record)
     msgs = record.get("messages")
     if not policy.system_prompt or not isinstance(msgs, list) or not msgs:
         return record

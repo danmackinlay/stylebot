@@ -239,3 +239,16 @@ def test_the_default_policy_packs_across_a_deleted_block(doc: str):
     assert any(before in c and after in c for c in packed)
     assert not any(before in c and after in c for c in split)
     assert not any(before in c and after in c for c in _serving_chunks(doc))
+
+
+def test_segment_protects_a_whole_line_comment_and_reassembles():
+    """D93: with `html_comments`, a comment on its own line is never handed to
+    the styler; an inline one rides inside its prose paragraph; off by default."""
+    body = "First paragraph of prose.\n\n<!-- vale off -->\n\nSecond, with <!-- sem --> inline."
+    assert md.HTML_COMMENT not in [k for k, _ in infer._segment(body, max_chars=10_000)[0]]
+    items, seps = infer._segment(body, max_chars=10_000, html_comments=True)
+    kinds = [k for k, _ in items]
+    assert md.HTML_COMMENT in kinds
+    assert [t for k, t in items if k == md.HTML_COMMENT] == ["<!-- vale off -->"]
+    rebuilt = items[0][1] + "".join(s + t for s, (_, t) in zip(seps, items[1:], strict=True))
+    assert rebuilt == body

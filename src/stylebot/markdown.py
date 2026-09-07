@@ -80,6 +80,35 @@ RAW_HTML_BLOCK_RE = re.compile(
 #: An HTML comment, at any indent, any number of lines, non-greedy. Apart from
 #: `RAW_HTML_BLOCK_RE` because a comment may open mid-line.
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+#: Dan's content annotation (D93): a span of a real edit that changes meaning, not
+#: style. The view cuts it from both sides of a pair; synthesis keeps the text and
+#: drops the markers; a span never crosses a paragraph break.
+SEM_OPEN = "<!-- sem -->"
+SEM_CLOSE = "<!-- /sem -->"
+_SEM_SPAN_RE = re.compile(
+    re.escape(SEM_OPEN) + r"(?:(?!\n\n).)*?" + re.escape(SEM_CLOSE) + r" ?", re.DOTALL
+)
+_SEM_UNCLOSED_RE = re.compile(re.escape(SEM_OPEN) + r"(?:(?!\n\n).)*", re.DOTALL)
+
+
+def cut_sem_spans(text: str) -> tuple[str, int]:
+    """`text` without its `SEM_OPEN…SEM_CLOSE` spans -> `(text, spans cut)`; an
+    unclosed opener is cut to the end of its paragraph and counted (D93)."""
+    text, closed = _SEM_SPAN_RE.subn("", text)
+    text, unclosed = _SEM_UNCLOSED_RE.subn("", text)
+    text = re.sub(r"(?<=\S) +(?=[.,;:!?])", "", text)
+    return re.sub(r" +(?=\n|$)", "", text), closed + unclosed
+
+
+def strip_sem_markers(text: str) -> str:
+    """`text` with the markers removed and the spans kept: a synthesis target."""
+    return (
+        text.replace(SEM_OPEN + " ", "")
+        .replace(SEM_OPEN, "")
+        .replace(" " + SEM_CLOSE, "")
+        .replace(SEM_CLOSE, "")
+    )
+
 
 #: Receives a div opener's attribute text (e.g. ``{.callout-note}``) and says
 #: whether the div's *contents* are prose. Policy, supplied by the caller.
@@ -255,10 +284,12 @@ def line_kinds(
     headings: bool = True,
     div_is_prose: DivIsProse | None = None,
     raw_html: bool = False,
+    html_comments: bool = False,
 ) -> list[str | None]:
     """One kind label per line of ``text.split("\\n")`` — `None` means prose.
     A per-line mask, so a consumer keeps its byte-exact reassembly; only
-    line-anchored (``block_only``) protection is reported."""
+    line-anchored (``block_only``) protection is reported; `html_comments`
+    protects whole-line comments (D93), an inline one stays prose."""
     lines = text.split("\n")
     kinds: list[str | None] = [None] * len(lines)
     starts: list[int] = []
@@ -268,15 +299,25 @@ def line_kinds(
         pos += len(line) + 1
 
     for span_start, span_end, kind in protected_spans(
-        text, block_only=True, div_is_prose=div_is_prose, raw_html=raw_html
+        text,
+        block_only=True,
+        div_is_prose=div_is_prose,
+        raw_html=raw_html,
+        html_comments=html_comments,
     ):
         for i, line in enumerate(lines):
             if starts[i] >= span_end:
                 break
             # The line owns [start, start + len + 1) — its own newline included,
-            # so a span that stops at a line boundary does not bleed onward.
-            if span_start < starts[i] + len(line) + 1 and kinds[i] is None:
-                kinds[i] = kind
+            # so a span that stops at a line boundary does not bleed onward. A
+            # comment protects a line only when it covers all of it (D93).
+            if span_start >= starts[i] + len(line) + 1 or kinds[i] is not None:
+                continue
+            if kind == HTML_COMMENT:
+                lead = len(line) - len(line.lstrip())
+                if span_start > starts[i] + lead or span_end < starts[i] + len(line.rstrip()):
+                    continue
+            kinds[i] = kind
     if headings:
         for i, line in enumerate(lines):
             if kinds[i] is None and is_heading_line(line):

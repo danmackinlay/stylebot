@@ -292,3 +292,29 @@ def test_line_kinds_pin_a_heading_inside_a_callout():
     doc = "::: {.callout-note}\n## Inner heading\ntext\n:::\n"
     policy = lambda attrs: "callout" in attrs  # noqa: E731
     assert md.line_kinds(doc, div_is_prose=policy) == [md.DIV, md.HEADING, None, md.DIV, None]
+
+
+def test_sem_spans_are_cut_or_stripped_and_never_cross_a_paragraph():
+    """D93: the cut removes span and markers and tidies the seam; the strip keeps
+    the text; an unclosed opener runs to its paragraph's end; a stray closer stays."""
+    text = (
+        "Kept sentence. <!-- sem -->An added claim.<!-- /sem --> Also kept.\n\n"
+        "<!-- sem -->Whole new paragraph.<!-- /sem -->\n\n"
+        "Unclosed <!-- sem -->runs to the end of this paragraph.\n\n"
+        "Next paragraph survives, even with a stray <!-- /sem --> in it."
+    )
+    cut, n = md.cut_sem_spans(text)
+    assert n == 3
+    assert cut == (
+        "Kept sentence. Also kept.\n\n\n\nUnclosed\n\n"
+        "Next paragraph survives, even with a stray <!-- /sem --> in it."
+    )
+    assert md.strip_sem_markers(text).startswith("Kept sentence. An added claim. Also kept.")
+    assert md.SEM_OPEN not in md.strip_sem_markers(text)
+    assert md.cut_sem_spans("no markers here") == ("no markers here", 0)
+
+
+def test_line_kinds_protects_whole_line_comments_only_when_asked():
+    text = "prose line\n<!-- vale off -->\nmore prose <!-- inline --> here"
+    assert md.line_kinds(text) == [None, None, None]
+    assert md.line_kinds(text, html_comments=True) == [None, md.HTML_COMMENT, None]
