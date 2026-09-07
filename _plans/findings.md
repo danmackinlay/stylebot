@@ -1181,3 +1181,22 @@ regime; and the head sees 768 dimensions from 395 positives, so the absolute num
 upper bound. Either way the fifth signal's instrument is the embedding, with the proxies as
 its readable explanation. Decided: D88 amended in spirit; a re-fit of `verbose`/`argued`
 against this instrument is the next audition's bar.
+
+## The first mined captures enter the corpus — 2026-09-07 (D89)
+
+`uv run ai-style log mine … --gap-paras 2 --gap-chars 800 --apply` in `~/Source/livingthing`,
+then `dan-style build-view`, `ai-style validate-pairs <view>` (0 problems, 0 duplicates) and
+`dan-style status`. The dry run's window counts are in the blog's private sizing note.
+
+| | before | after |
+|---|---|---|
+| records in the view | 8,142 | **8,170** |
+| real pairs, eval / styler / detector | 151 / 77 / 179 | 151 / **85** / **187** |
+| capture archives | 93 | **115** (22 mined windows) |
+| `draws_sha256` / `content_sha256` | `6f8081ba2cc917fd` / `9c57ef6777e5a63e` | **`79837ac841b56a40` / `70757f0f2658bae9`** |
+| `novel_after` of the mined pairs, median / q3 / p90 | — | 0.14 / 0.39 / 0.60 |
+
+28 pairs where the dry run counted 31: three later windows' targets were already captured by
+an earlier window in the same pass. None land on an eval post. The `transcript_turns.jsonl`
+sidecar holds 22 lines and is gitignored. Decided: D89; the `novel_after` clause in the blog's
+`styler_pair_ok` is the same commit series.
