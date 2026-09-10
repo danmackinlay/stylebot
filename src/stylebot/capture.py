@@ -9,14 +9,14 @@ import json
 import os
 import shutil
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 
 from stylebot import config, draws
 from stylebot.errors import RunError
 from stylebot.lib import DEFAULT_SOURCE, SourcePolicy, read_w_frontmatter_text, split_paragraphs
 from stylebot.markdown import is_heading_line
-from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content
+from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content, extract_slop, extract_target
 from stylebot.provenance import (  # `ai-style log` binds capture.now_iso
     now_iso,
     pair_provenance,
@@ -266,11 +266,6 @@ def capture_pairs(
         "gap_chars": coalesce_gap_chars,
         "max_chars": max_chars,
     }
-    provenance = pair_provenance(
-        repo_provenance(blog_root if blog_root is not None else pairs_path.parent),
-        policy_digest=policy_digest({"producer": "capture", **knobs}),
-        source_automation=source_policy.level_of(after_meta) or source_policy.level_of(before_meta),
-    )
     chunk_pairs = _chunk_pairs(before_body, after_body, keep=keep, **knobs)
     if not chunk_pairs:
         return []
@@ -287,7 +282,49 @@ def capture_pairs(
         after_text=after_text,
         captured_at=captured_at,
     )
-    records = [
+    records = _records(
+        chunk_pairs,
+        capture_id=cap_id,
+        source=source,
+        snapped_at=snapped_at,
+        frontmatter=(before_meta, after_meta),
+        system=system_prompt or source_policy.system_prompt,
+        extra_meta=extra_meta,
+        provenance=_provenance(
+            blog_root or pairs_path.parent, knobs, source_policy, before_meta, after_meta
+        ),
+        captured_at=captured_at,
+    )
+    spans = [_span_of(before_text, b) for b, _a, _c in chunk_pairs]
+    return _land(pairs_path, records, spans, supersedes=tuple(supersedes) or None)
+
+
+def _provenance(
+    root: Path | str, knobs: dict, source_policy: SourcePolicy, before_meta: dict, after_meta: dict
+) -> dict:
+    """`meta.provenance` (D36): the repo at `root`, the cut knobs' digest, the level."""
+    return pair_provenance(
+        repo_provenance(root),
+        policy_digest=policy_digest({"producer": "capture", **knobs}),
+        source_automation=source_policy.level_of(after_meta) or source_policy.level_of(before_meta),
+    )
+
+
+def _records(
+    chunk_pairs: Sequence[tuple[str, str, str]],
+    *,
+    capture_id: str,
+    source: str | None,
+    snapped_at: str | None,
+    frontmatter: tuple[dict, dict],
+    system: str,
+    extra_meta: dict | None,
+    provenance: dict,
+    captured_at: str,
+) -> list[dict]:
+    """One record per chunk; the frontmatter pair rides on chunk 0 only."""
+    before_meta, after_meta = frontmatter
+    return [
         build_pair_record(
             before_body=b,
             after_body=a,
@@ -295,10 +332,10 @@ def capture_pairs(
             snapped_at=snapped_at,
             before_frontmatter=before_meta if i == 0 else None,
             after_frontmatter=after_meta if i == 0 else None,
-            capture_id=cap_id,
+            capture_id=capture_id,
             chunk_index=i,
             chunk_total=len(chunk_pairs),
-            system=system_prompt or source_policy.system_prompt,
+            system=system,
             context=context,
             extra_meta=extra_meta,
             provenance=provenance,
@@ -306,8 +343,87 @@ def capture_pairs(
         )
         for i, (b, a, context) in enumerate(chunk_pairs)
     ]
-    spans = [_span_of(before_text, b) for b, _a, _c in chunk_pairs]
+
+
+def recut_archive(
+    archive_dir: Path,
+    *,
+    pairs_path: Path,
+    supersedes: Sequence[str] = (),
+    heading_context: bool = True,
+    coalesce_gap_paras: int = 0,
+    coalesce_gap_chars: int = 0,
+    max_chars: int | None = None,
+    blog_root: Path | str | None = None,
+    extra_meta: dict | None = None,
+    source_policy: SourcePolicy = DEFAULT_SOURCE,
+    system_prompt: str | None = None,
+) -> list[dict]:
+    """Re-land an edited archive as draws under a fresh `capture_id` (D96):
+    its own `whole`, `source` and `snapped_at`, `meta.archive_id` naming it,
+    `captured_at` the landing time; nothing under `captures/` is written."""
+    arch = read_archive(archive_dir)
+    if arch is None:
+        raise RunError(f"no readable capture archive at {archive_dir}")
+    before_meta, before_body = split_frontmatter_meta(arch["before_text"])
+    after_meta, after_body = split_frontmatter_meta(arch["after_text"])
+    if before_body == after_body:
+        raise RunError(
+            f"{archive_dir.name}: before and after are identical after the edit; "
+            "retire the capture by a policy clause instead"
+        )
+    knobs = {
+        "whole": bool(arch.get("whole")),
+        "heading_context": heading_context,
+        "gap_paras": coalesce_gap_paras,
+        "gap_chars": coalesce_gap_chars,
+        "max_chars": max_chars,
+    }
+    chunk_pairs = _chunk_pairs(before_body, after_body, **knobs)
+    records = _records(
+        chunk_pairs,
+        capture_id=new_capture_id(),
+        source=arch.get("source"),
+        snapped_at=arch.get("snapped_at"),
+        frontmatter=(before_meta, after_meta),
+        system=system_prompt or source_policy.system_prompt,
+        extra_meta={**(extra_meta or {}), "archive_id": archive_dir.name},
+        provenance=_provenance(
+            blog_root or pairs_path.parent, knobs, source_policy, before_meta, after_meta
+        ),
+        captured_at=now_iso(),
+    )
+    spans = [_span_of(arch["before_text"], b) for b, _a, _c in chunk_pairs]
     return _land(pairs_path, records, spans, supersedes=tuple(supersedes) or None)
+
+
+def archive_id_of(meta: Mapping) -> str | None:
+    """The archive a real record was cut from: `archive_id` after a recut, else `capture_id`."""
+    return meta.get("archive_id") or meta.get("capture_id")
+
+
+def drifted_archives(captures_dir: Path, records: Iterable[dict]) -> list[tuple[str, int]]:
+    """`(archive_id, n)`: `n` live records whose bodies are no longer substrings
+    of their archive — edited since landing, so `log recut` is due (D96).
+    Synthetic records and absent archives are not drift."""
+    archives: dict[str, dict | None] = {}
+    drift: dict[str, int] = {}
+    for rec in records:
+        meta = rec.get("meta") or {}
+        aid = archive_id_of(meta)
+        if meta.get("synthetic") or not aid:
+            continue
+        if aid not in archives:
+            archives[aid] = read_archive(captures_dir / aid)
+        arch = archives[aid]
+        if arch is None:
+            continue
+        if (
+            extract_slop(rec) not in arch["before_text"]
+            or extract_target(rec) not in arch["after_text"]
+        ):
+            drift[aid] = drift.get(aid, 0) + 1
+    return sorted(drift.items())
 
 
 def plan_pairs(before_text: str, after_text: str, **knobs) -> list[tuple[str, str, str]]:

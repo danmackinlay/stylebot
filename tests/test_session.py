@@ -517,3 +517,34 @@ def test_a_second_save_in_one_session_supersedes_the_first(store, post):
     report = draws.build_view(got, draws.ViewPolicy())
     assert (report.records, report.excluded) == (1, {"superseded": 1})
     assert draws.build_view(got, draws.ViewPolicy(keep_superseded=True)).records == 2
+
+
+# ---- recut: an edited archive is re-landed ---------------------------------
+
+
+def test_recut_supersedes_the_archives_earlier_landing(store, post):
+    """Edit `after.md`, `recut`: the fix is the live pair and the first landing
+    is superseded; a second recut supersedes the first recut, not the original
+    twice (D96)."""
+    session.open_session(store, post)
+    post.write_text("## S\n\nWe dig in, teh end.\n", encoding="utf-8")
+    session.save_session(store, post)
+    cid = session.read_pairs(store)[0]["meta"]["capture_id"]
+    after_md = store.captures_dir / cid / "after.md"
+    after_md.write_text(
+        after_md.read_text(encoding="utf-8").replace("teh", "the"), encoding="utf-8"
+    )
+
+    result = session.recut_capture(store, cid)
+    assert result.superseded == 1 and _bodies(store) == ["We dig in, the end."]
+    live = session.read_pairs(store)[0]["meta"]
+    assert live["archive_id"] == cid and live["capture_id"] != cid
+
+    again = session.recut_capture(store, cid)
+    assert again.superseded == 1 and len(_bodies(store)) == 1
+    assert session.read_pairs(store)[0]["meta"]["capture_id"] != live["capture_id"]
+
+
+def test_recut_without_an_archive_errors(store):
+    with pytest.raises(SessionError, match="no capture archive"):
+        session.recut_capture(store, "deadbeef")

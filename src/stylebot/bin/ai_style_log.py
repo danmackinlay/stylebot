@@ -500,5 +500,40 @@ def pair(
     _remind_open_sessions(ctx)
 
 
+@main.command(name="recut", cls=SectionedCommand)
+@click.argument("archive_id")
+@click.option(
+    "--gap-paras",
+    default=0,
+    show_default=True,
+    type=int,
+    help="Coalesce gap in paragraphs; use the landing's (`save`: 0, `mine`: the blog's).",
+)
+@click.option(
+    "--gap-chars", default=0, show_default=True, type=int, help="Coalesce gap in characters."
+)
+@capture_options(exclude=["whole"])
+@click.pass_context
+def recut(ctx: click.Context, archive_id: str, gap_paras: int, gap_chars: int, **kw):
+    """Re-land captures/ARCHIVE_ID after editing its before.md or after.md by
+    hand (D96): fresh draws supersede the earlier landing, the archive's
+    whole/chunked mode is kept, and nothing under captures/ changes."""
+    cap: CaptureOpts = bundles_from_kwargs(kw, {"capture": CaptureOpts})["capture"]
+    store = _store()
+    result = session.recut_capture(
+        store,
+        archive_id,
+        tags=cap.tags,
+        heading_context=cap.heading_context,
+        gap_paras=gap_paras,
+        gap_chars=gap_chars,
+        notify=click.echo,
+    )
+    new_id = result.written[0]["meta"]["capture_id"]
+    click.echo(f"re-landed {archive_id} as {len(result.written)} pair(s) under capture {new_id}")
+    click.echo(_corpus_confirmation(store))
+    _remind_open_sessions(ctx)
+
+
 if __name__ == "__main__":
     main()

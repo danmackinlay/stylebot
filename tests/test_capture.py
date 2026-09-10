@@ -409,3 +409,64 @@ def test_capture_reads_the_level_through_its_source_policy(tmp_path):
         source_policy=SourcePolicy(meta_field="ai_level"),
     )
     assert written[0]["meta"]["provenance"]["source_automation"] == 1
+
+
+def _archived_save(tmp_path, after="## S\n\nKept.\n\nWe dig in, teh end.\n"):
+    """One `capture_pairs` save in a fresh draws-layout data dir: (data_dir, records)."""
+    data_dir = tmp_path / "dd"
+    (data_dir / "draws").mkdir(parents=True)
+    before = "## S\n\nKept.\n\nIt is worth noting the rich tapestry.\n"
+    written = capture.capture_pairs(
+        before,
+        after,
+        pairs_path=data_dir / "pairs",
+        source="post/foo.qmd",
+        snapped_at="2026-09-05T00:00:00+00:00",
+    )
+    return data_dir, written
+
+
+def test_recut_archive_relands_an_edited_archive_under_a_fresh_capture_id(tmp_path):
+    """A hand edit to `after.md` shows up as drift; `recut_archive` lands new
+    draws naming the archive and superseding the first landing, and the view
+    then carries the fix (D96)."""
+    from stylebot import draws
+
+    data_dir, first = _archived_save(tmp_path)
+    cid = first[0]["meta"]["capture_id"]
+    captures = data_dir / "captures"
+    after_md = captures / cid / "after.md"
+    assert capture.drifted_archives(captures, first) == []
+    after_md.write_text(
+        after_md.read_text(encoding="utf-8").replace("teh", "the"), encoding="utf-8"
+    )
+    assert capture.drifted_archives(captures, first) == [(cid, 1)]
+
+    relanded = capture.recut_archive(
+        captures / cid, pairs_path=data_dir / "pairs", supersedes=(cid,)
+    )
+    meta = relanded[0]["meta"]
+    assert meta["archive_id"] == cid and meta["capture_id"] != cid
+    assert meta["snapped_at"] == "2026-09-05T00:00:00+00:00"
+    assert capture.drifted_archives(captures, relanded) == []
+    assert sorted(p.name for p in captures.iterdir()) == [cid]
+
+    got = list(draws.iter_draws(data_dir / "draws"))
+    assert got[-1].supersedes == (cid,) and got[-1].span == got[0].span
+    view = list(draws.view_records(got, draws.ViewPolicy()))
+    assert len(view) == 1 and "the end" in view[0]["messages"][2]["content"]
+
+
+def test_recut_archive_refuses_a_wholly_reverted_archive(tmp_path):
+    """Reverting every paragraph leaves no pair to land: a clause retires it."""
+    from stylebot import draws
+
+    data_dir, first = _archived_save(tmp_path)
+    cid = first[0]["meta"]["capture_id"]
+    archive = data_dir / "captures" / cid
+    (archive / "after.md").write_text(
+        (archive / "before.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    with pytest.raises(RunError, match="identical"):
+        capture.recut_archive(archive, pairs_path=data_dir / "pairs")
+    assert len(list(draws.iter_draws(data_dir / "draws"))) == 1

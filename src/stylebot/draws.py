@@ -344,14 +344,20 @@ def _stamped(record: dict, policy: ViewPolicy) -> dict:
     return {**record, "messages": [{**msgs[0], "content": policy.system_prompt}, *msgs[1:]]}
 
 
-def view_records(draws: Iterable[Draw], policy: ViewPolicy) -> Iterator[dict]:
-    """The records the view of `draws` under `policy` holds, in draw order."""
+def live_draws(draws: Iterable[Draw], policy: ViewPolicy) -> Iterator[Draw]:
+    """The draws no clause of `policy` excludes, in draw order."""
     draws = list(draws)
     clauses = _clauses(policy, draws)
     for draw in draws:
         if not any(hit(draw) for _name, hit in clauses):
-            assert draw.record is not None
-            yield _stamped(draw.record, policy)
+            yield draw
+
+
+def view_records(draws: Iterable[Draw], policy: ViewPolicy) -> Iterator[dict]:
+    """The records the view of `draws` under `policy` holds, in draw order."""
+    for draw in live_draws(draws, policy):
+        assert draw.record is not None
+        yield _stamped(draw.record, policy)
 
 
 def _bump(counts: dict[str, int], key: str) -> None:

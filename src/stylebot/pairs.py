@@ -196,6 +196,7 @@ _META_TYPES: dict[str, tuple] = {
     "tags": (list,),
     "gen": (dict,),
     "recut": (dict,),
+    "archive_id": (str,),
     "before_frontmatter": (dict,),
     "after_frontmatter": (dict,),
     "schema_version": (int,),

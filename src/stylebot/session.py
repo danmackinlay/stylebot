@@ -113,6 +113,11 @@ class SessionStore:
         """`<data_dir>/draws`, where a save lands (D84); may not exist yet."""
         return config.draws_path(self.data_dir)
 
+    @property
+    def captures_dir(self) -> Path:
+        """`<data_dir>/captures`, the archives a save writes and `recut` re-lands (D96)."""
+        return self.pairs_path.parent / "captures"
+
     def snapshot_path(self, source: Path | str) -> Path:
         """Where the snapshot for `source` lives: the source path mirrored under
         the snapshots dir, `post/foo.qmd` -> `snapshots/post/foo.qmd/`."""
@@ -604,6 +609,54 @@ def capture_pair(
     except RunError as exc:
         raise SessionError(str(exc)) from exc
     return PairResult(written=written, replaced=len(superseded), whole=whole)
+
+
+# ---- recut: re-land an edited archive --------------------------------------
+
+
+@dataclass(frozen=True)
+class RecutResult:
+    """What one `recut` did."""
+
+    archive_id: str
+    written: list[dict]
+    superseded: int
+
+
+def recut_capture(
+    store: SessionStore,
+    archive_id: str,
+    *,
+    tags: Sequence[str] = (),
+    heading_context: bool = True,
+    gap_paras: int = 0,
+    gap_chars: int = 0,
+    notify: Callable[[str], None] | None = None,
+) -> RecutResult:
+    """Re-land `captures/<archive_id>/` after a hand edit (D96): the archive's
+    live landings, original or an earlier recut, are superseded."""
+    say = notify or (lambda _line: None)
+    archive_dir = store.captures_dir / archive_id
+    if not archive_dir.is_dir():
+        raise SessionError(f"no capture archive {archive_id} under {store.captures_dir}")
+    prior = [
+        r for r in read_pairs(store) if capture.archive_id_of(r.get("meta") or {}) == archive_id
+    ]
+    if prior:
+        say(f"superseded {len(prior)} prior pair(s) landed from {archive_id}")
+    try:
+        written = capture.recut_archive(
+            archive_dir,
+            pairs_path=store.pairs_path,
+            supersedes=_capture_ids(prior),
+            heading_context=heading_context,
+            coalesce_gap_paras=gap_paras,
+            coalesce_gap_chars=gap_chars,
+            extra_meta={"tags": list(tags)} if tags else None,
+        )
+    except RunError as exc:
+        raise SessionError(str(exc)) from exc
+    return RecutResult(archive_id=archive_id, written=written, superseded=len(prior))
 
 
 # ---- list -----------------------------------------------------------------
