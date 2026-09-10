@@ -1,4 +1,4 @@
-# Design decisions — archive: D1–D55, and P1
+# Design decisions — archive: D1–D56, and P1
 
 Entries D1–D48, moved here 2026-09-04 in three passes, then D49, P1 and D50 on 2026-09-07, as `decisions.md` passed
 1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, and D53–D55 the same day to make room for D97–D98 (P3).
@@ -1600,3 +1600,34 @@ stratum supplies enough captured posts that the cluster count stops binding.
 **Superseded by D59 on 2026-09-04.** The child, its `ScoreJob` marshalling and
 the `classify` lock beside it are deleted: with the pool gone one task drives the
 embedder, so the process boundary buys only a second model load.
+
+## D56: `asyncio` first; threading must stringently justify itself
+
+**Decision (2026-09-03, Dan).** A standing project-level constraint, recorded
+here because later work has to be able to find and re-open it. `asyncio` is this
+project's concurrency mechanism for IO, and it is what `synth` already uses at
+scale (one event loop, an `asyncio.Semaphore` for the worker cap, one append
+handle, no locks). **New threading needs a measured substantial win in
+performance or complexity** — one of the two, with a number, and an entry here
+carrying it. The rule as written is in [`CLAUDE.md`](../CLAUDE.md).
+
+The precipitating case is D55: eight threads sharing one `SentenceTransformer`
+segfaulted the process deterministically once chunk-wise scoring raised the embed
+rate several-fold. It was latent for months, the first diagnosis was wrong
+(libomp double-load — refuted by isolating the pass in a torch-only child, where
+it still crashed), and the fix cost a lock plus a subprocess-isolation layer.
+
+*Alternatives.* **Ban threading outright** — `focus.py`'s daemon HTTP server and
+`library_archive`'s parallel downloads earn their keep, and a ban would push them
+into worse shapes. **Judgement case by case** — judgement is what produced the
+eval pool: `Judge` and `Detector` are plain sync callables and a pool is what one
+reaches for to wrap those. **Bar it on "no shared mutable state"** — too narrow;
+the pool shared a torch model and a Rust tokenizer, invisible at Python level.
+
+*The deciding constraint.* EITHER a substantial reduction in complexity OR a
+substantial increase in performance, **measured**. "Measured" rules out the eval
+pool, never timed and buying nothing (`findings.md` "Threading audit");
+"either/or" keeps the daemon threads. Corollaries in `CLAUDE.md`: never share a
+non-re-entrant native object across threads; **a lock as the answer means the
+threads were the wrong shape**; batching beats fan-out. **Re-evaluate if** a
+free-threaded interpreter becomes this project's runtime.

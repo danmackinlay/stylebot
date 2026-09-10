@@ -1313,3 +1313,24 @@ post's history in half of all pairs, and the typo band cannot be told from a
 small change of claim. Decided: the archive is the pair's moment and corrections
 happen inside it; the moving-post proposal is withdrawn (`capture-ux.md`, no D).
 
+## The Tinker roster, priced — 2026-08-25 (recovered 2026-09-10; D99)
+
+Tinker's live model table read on 2026-08-25, prices per 1M tokens; the "run 4a" column is the
+train price against run 4a's actual 3,518,325 train tokens (`runs/` manifest). LR is the
+cookbook's `hyperparam_utils.get_lr` calibration where one exists.
+
+| model | shape | train | run 4a | sample | calibrated LR |
+|---|---|---:|---:|---:|---:|
+| `Qwen/Qwen3.5-9B` (incumbent) | small dense, Hybrid, 64K | $1.463 | $5.15 | $1.995 | 4.730e-4 |
+| `Qwen/Qwen3.6-35B-A3B` | medium MoE, Hybrid, 64K | $1.177 | $4.14 | $1.335 | 4.991e-4 |
+| `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | medium MoE, Hybrid, 64K | $0.44* | $1.55* | $0.495* | none (`NotImplementedError`) |
+| `openai/gpt-oss-20b` | small MoE, Reasoning, 32K | $0.396 | $1.39 | $0.45 | none |
+| `Qwen/Qwen3.8-27B` | medium dense, Hybrid, 64K | $4.103 | $14.44 | $5.595 | 4.649e-4 |
+
+\* a limited-time 50% discount; the durable Nemotron price is $0.88 / $3.10 / $0.99.
+
+Training cost is not the constraint at this corpus size: the dearest row is $14 a run. Renderers:
+`tinker-cookbook` 0.5.2 raised `KeyError` on Qwen3.8-27B and Nemotron; 0.5.5 resolves all four
+(the floor was raised on main 2026-09-10). `Qwen3.6-27B`, the dense step-up D2 had named, retired
+2026-09-02. Decided: D99.
+

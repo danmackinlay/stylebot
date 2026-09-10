@@ -69,8 +69,9 @@ keep their numbers — the second index below is how you find them.
 | D96 | a real capture's archive is the editable truth; `log recut` re-lands it | live; amends D84 |
 | D97 | the coherence signal judges a boundary, not a document | live |
 | D98 | measure adherence before importing a capability-retention fix | live; nothing built |
+| D99 | the Tinker base-model roster, priced: Qwen3.6-35B-A3B queued, Nemotron second, gpt-oss-20b out | live; amends D2 |
 
-## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D55, plus P1)
+## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D56, plus P1)
 
 | # | title | status |
 |---|---|---|
@@ -125,37 +126,6 @@ keep their numbers — the second index below is how you find them.
 | D48 | `Styler` is a Protocol; it types the call, not the tokens | live |
 
 ---
-
-## D56: `asyncio` first; threading must stringently justify itself
-
-**Decision (2026-09-03, Dan).** A standing project-level constraint, recorded
-here because later work has to be able to find and re-open it. `asyncio` is this
-project's concurrency mechanism for IO, and it is what `synth` already uses at
-scale (one event loop, an `asyncio.Semaphore` for the worker cap, one append
-handle, no locks). **New threading needs a measured substantial win in
-performance or complexity** — one of the two, with a number, and an entry here
-carrying it. The rule as written is in [`CLAUDE.md`](../CLAUDE.md).
-
-The precipitating case is D55: eight threads sharing one `SentenceTransformer`
-segfaulted the process deterministically once chunk-wise scoring raised the embed
-rate several-fold. It was latent for months, the first diagnosis was wrong
-(libomp double-load — refuted by isolating the pass in a torch-only child, where
-it still crashed), and the fix cost a lock plus a subprocess-isolation layer.
-
-*Alternatives.* **Ban threading outright** — `focus.py`'s daemon HTTP server and
-`library_archive`'s parallel downloads earn their keep, and a ban would push them
-into worse shapes. **Judgement case by case** — judgement is what produced the
-eval pool: `Judge` and `Detector` are plain sync callables and a pool is what one
-reaches for to wrap those. **Bar it on "no shared mutable state"** — too narrow;
-the pool shared a torch model and a Rust tokenizer, invisible at Python level.
-
-*The deciding constraint.* EITHER a substantial reduction in complexity OR a
-substantial increase in performance, **measured**. "Measured" rules out the eval
-pool, never timed and buying nothing (`findings.md` "Threading audit");
-"either/or" keeps the daemon threads. Corollaries in `CLAUDE.md`: never share a
-non-re-entrant native object across threads; **a lock as the answer means the
-threads were the wrong shape**; batching beats fan-out. **Re-evaluate if** a
-free-threaded interpreter becomes this project's runtime.
 
 ## D57: the detector is batched out of the pool; the pool is kept for the judge alone
 
@@ -1261,10 +1231,41 @@ mitigations — LoRA rank 32 rather than FWFT, one epoch, no gradient through th
 prompt — plus inoculation prompting by accident of the frozen `STYLE_SYSTEM`
 (D14). The expected effect is small enough that measuring beats building.
 
-**Recorded against D33**: the paper's two-distribution arm came out worse than
-baseline. D33's masking dropout is a different construction, but it also
-partitions the input behind a marker — measure it rather than assume it free.
+**Recorded against D33**: the paper's two-distribution arm came out worse than baseline; D33's
+masking dropout also partitions the input behind a marker — measure it rather than assume it free.
 
 **Re-evaluate if** the probe shows the promoted adapter adhering *worse than its
 own base* on the frozen prompt's promises: degradation is then real, and the
 acceptance rule is pre-registered in the plan.
+
+## D99: the Tinker base-model roster, priced — Qwen3.6-35B-A3B queued, Nemotron second, gpt-oss-20b out
+
+**Decision (2026-08-25, recovered from an unmerged worktree 2026-09-10; amends D2).** Against
+Tinker's live table, four step-up candidates for the styler's base. *Queued first:*
+`Qwen/Qwen3.6-35B-A3B` — `get_recommended_renderer_names` returns the identical
+`qwen3_5_disable_thinking` run 4a trained with, so the base is the only variable and the result is
+readable; it is cheaper than the incumbent 9B on both train and sample at ~4× the parameters (3B
+active); the MLX shim (D8) carries over and Dan already runs it locally. *Second arm:*
+`nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` — durably the cheapest Hybrid row, carried by
+MLX (`mlx-community` conversions of the exact checkpoint), transformers (`nemotron_h`) and
+`tinker-cookbook ≥ 0.5.5` (`nemotron3_ultra_disable_thinking`); a Mamba-2/attention MoE whose
+SSM state and multi-token-prediction block are what D8's parity gate exists to catch, and whose
+cost profile favours the long prompts neighbour conditioning brings (`coherence-context.md`).
+*Held:* `Qwen/Qwen3.8-27B`, the dense fallback at 2.8× the cost (`Qwen3.6-27B` retired
+2026-09-02). *Ruled out:* `openai/gpt-oss-20b`, a Reasoning type no renderer can stop thinking.
+
+**Alternatives.** *Stay on Qwen3.5-9B* — voice is near ceiling on the instruments (judge 4.08 vs
+Dan's 4.20), so a bigger base is not the coherence fix; the fit judge (D97) showed coherence does
+not move on this base. *Vary base and context format in one run* — confounds two arms that now
+each have a coherence read. *Pick the cheapest row* — it is the one that cannot stop thinking.
+
+**Deciding constraint.** Training cost is not the constraint: run 4a's 3,518,325 train tokens
+cost $5.15 on the incumbent and $4.14 or $1.55 on the two queued arms (`findings.md` "The Tinker
+roster, priced"). What binds is experimental readability and the D8 parity gate every base change
+owes. Two traps for whoever trains: the cookbook has no calibrated LR for Nemotron, so that arm
+needs an explicit `--learning-rate` (by analogy to Qwen3.6-35B-A3B's, or a sweep) and the
+`NotImplementedError` wants translating at the CLI boundary; and as a slop *generator* the Qwen
+arm deleted links at 100% anchor rejection (D33), so watch `n_anchor_rejected` on it.
+
+**Re-evaluate if** a run is meant to fix the identity fallback or anchor damage at inference
+(7/127 on run 4a), where scale plausibly helps, or once neighbour conditioning lands (Nemotron).
