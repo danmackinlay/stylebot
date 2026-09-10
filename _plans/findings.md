@@ -1245,3 +1245,24 @@ the objection is narrated ("this objection fails because"), so the arm stages th
 the way v1 staged a reader, and qwen returns the input on half its draws — the brief is beyond
 it. Concessions run 3× real in every argued form; the justificatory phrase never passes half.
 Decided: D92's verdict — the real stratum is the route; the composite stays library-only.
+
+## A fresh cut reproduces 117 of 124 archived captures — 2026-09-10 (D96)
+
+`capture.plan_pairs` over every `captures/<id>/` with draws in
+`~/Source/livingthing/_training_pairs/draws/captures.jsonl` (228 capture ids; 124 archived, the
+other 104 predate the archive), `whole` from `meta.json`, each stored draw matched on its
+before-side text.
+
+| gap policy | archives fully matched | stored chunks unmatched | after side differs | fresh chunks with no draw |
+|---|---|---|---|---|
+| 0 / 0 (`log save`'s default) | 94 | 35 | 6 | 146 |
+| 2 / 800 (the retired `recut`'s) | 102 | 81 | 3 | 54 |
+| better of the two, per archive | 117 | 7 archives | 5 | — |
+
+No single policy re-cuts the stratum, so a build-time re-cut would change the view (D96's first
+alternative). The 28 that match only at 2/800 are not the mined captures (3 of 22 mined are among
+them). Two archives (`7d805943`, `f4702b94`) cut differently under both, and five (`0ceb874d`,
+`250dae35`, `4821f388`, `aed11f2b`, `b761eb17`) match on the before side while `after.md` carries
+prose the draw does not: edited after landing, under a manifest regenerated on 2026-09-04 that
+pinned the drift. Decided: D96.
+
