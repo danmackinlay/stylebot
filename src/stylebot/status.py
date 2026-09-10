@@ -119,6 +119,7 @@ class ViewStatus:
     content_sha256: str | None = None
     view_path: Path | None = None
     built: bool = False
+    drifted: list[tuple[str, int]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -180,12 +181,16 @@ def _view_status(path: Path | None, policy, views_root: Path | None) -> ViewStat
         return None
     if not path.is_dir():
         return ViewStatus(path=path, exists=False)
-    from stylebot import config
+    from stylebot import capture, config
     from stylebot import draws as draws_mod
 
     policy = policy or draws_mod.ViewPolicy()
     report = draws_mod.build_view(draws_mod.iter_draws(path), policy)
     draws_sha = draws_mod.content_sha256(path)
+    live = draws_mod.live_draws(draws_mod.iter_draws(path), policy)
+    drifted = capture.drifted_archives(
+        path.parent / "captures", (d.record for d in live if d.record is not None)
+    )
     view_path = (views_root or config.views_root(path.parent)) / config.view_name(report.policy_sha)
     side = draws_mod.read_sidecar(view_path) or {}
     return ViewStatus(
@@ -199,6 +204,7 @@ def _view_status(path: Path | None, policy, views_root: Path | None) -> ViewStat
         content_sha256=report.content_sha256,
         view_path=view_path,
         built=side.get("policy_sha") == report.policy_sha and side.get("draws_sha256") == draws_sha,
+        drifted=drifted,
     )
 
 
@@ -484,13 +490,21 @@ def _format_view(v: ViewStatus) -> list[str]:
     outcomes = ", ".join(f"{k} {_fmt_int(n)}" for k, n in sorted(v.by_outcome.items()))
     excluded = ", ".join(f"{k} {_fmt_int(n)}" for k, n in sorted(v.excluded.items()))
     on_disk = f"built {v.view_path}" if v.built else "unbuilt"
-    return [
+    lines = [
         f"view       {v.path} -> pairs-{v.policy_sha} {on_disk}",
         f"           {_fmt_int(v.records)} record(s) would render; draws by outcome: {outcomes}",
         f"           excluded: {excluded or 'none'}",
         f"           policy_sha={v.policy_sha}  draws_sha256={v.draws_sha256}",
         f"           content_sha256={v.content_sha256}",
     ]
+    if v.drifted:
+        names = ", ".join(f"{aid} ({n})" for aid, n in v.drifted[:8])
+        more = " …" if len(v.drifted) > 8 else ""
+        lines.append(
+            f"           archives edited since landing: {len(v.drifted)} — {names}{more}; "
+            "`ai-style log recut ID` re-lands"
+        )
+    return lines
 
 
 def format_status(status: Status) -> str:

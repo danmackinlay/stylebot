@@ -392,3 +392,27 @@ def test_an_offset_stamp_is_parsed_rather_than_compared_as_a_string(tmp_path):
         ],
     )
     assert [e.run_id for e in st.collect(runs_dir=runs).runs.entries] == ["verdict-b", "verdict-a"]
+
+
+def test_collect_over_a_draws_dir_lists_archives_edited_since_landing(tmp_path):
+    """An archive whose `after.md` moved after its landing is named, with its
+    live-record count, and the block says how to re-land it (D96)."""
+    from stylebot import capture
+
+    data_dir = tmp_path / "dd"
+    (data_dir / "draws").mkdir(parents=True)
+    written = capture.capture_pairs(
+        "## S\n\nslop here.\n",
+        "## S\n\nprose here.\n",
+        pairs_path=data_dir / "pairs",
+        source="post/a.qmd",
+        snapped_at=None,
+    )
+    cid = written[0]["meta"]["capture_id"]
+    assert st.collect(draws_dir=data_dir / "draws").view.drifted == []
+    (data_dir / "captures" / cid / "after.md").write_text(
+        "## S\n\nprose, revised.\n", encoding="utf-8"
+    )
+    got = st.collect(draws_dir=data_dir / "draws")
+    assert got.view.drifted == [(cid, 1)]
+    assert f"archives edited since landing: 1 — {cid} (1)" in st.format_status(got)
