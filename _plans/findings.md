@@ -1292,3 +1292,24 @@ them). Two archives (`7d805943`, `f4702b94`) cut differently under both, and fiv
 prose the draw does not: edited after landing, under a manifest regenerated on 2026-09-04 that
 pinned the drift. Decided: D96.
 
+## Captured after-paragraphs against today's posts — 2026-09-10 (`capture-ux.md`)
+
+Every live real record in the blog's view (`draws.live_draws` under
+`training_targets.view_policy()`), its Dan-side chunk located in the post's
+current text by best `difflib` ratio over a same-length paragraph window.
+
+| state of the captured after-paragraph in today's post | pairs | share |
+|---|---:|---:|
+| unrecognisable, best match below 0.5 | 132 | 31% |
+| rewritten, 0.5 to 0.85 | 86 | 20% |
+| typo-scale change, 0.95 or above | 80 | 19% |
+| identical | 64 | 15% |
+| light edit, 0.85 to 0.95 | 60 | 14% |
+| post deleted | 10 | 2% |
+
+Half the stratum has moved beyond recognition or been rewritten since capture,
+so an after side that followed the post would replace a style transform with the
+post's history in half of all pairs, and the typo band cannot be told from a
+small change of claim. Decided: the archive is the pair's moment and corrections
+happen inside it; the moving-post proposal is withdrawn (`capture-ux.md`, no D).
+
