@@ -9,6 +9,7 @@ non-CLI producer.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from conftest import corpus_file, corpus_records
@@ -129,6 +130,72 @@ def test_diff_chunks_oversized_merge_falls_back_to_parts():
     capped = capture.diff_chunks(before, after, max_chars=500, **kw)
     assert len(capped) == 2  # too big merged -> the two original regions
     assert all(big_gap.strip() not in after_ for _b, after_, _c in capped)
+
+
+# ---- protected blocks never enter a pair (D100) ----
+
+_FENCE = "```python\nx = 0\n```"
+_MATH = "$$\nE = mc^2\n$$"
+
+
+def test_diff_chunks_ignores_an_edit_inside_a_fence():
+    """A fence between two prose paragraphs, the edit inside the fence only:
+    no pair, and `capture_pairs` says so rather than landing code."""
+    before = f"Prose one.\n\n{_FENCE}\n\nProse two.\n"
+    after = before.replace("x = 0", "x = 1")
+    assert capture.diff_chunks(before, after) == []
+    with pytest.raises(RunError, match="no changed text chunks"):
+        capture.capture_pairs(
+            before, after, pairs_path=Path("unused"), source=None, snapped_at=None
+        )
+
+
+def test_diff_chunks_ignores_display_math_and_keeps_a_heading():
+    """Display math is protected like a fence; a heading paragraph is content (D64)."""
+    before = f"## Old title\n\nProse.\n\n{_MATH}\n"
+    after = f"## New title\n\nProse.\n\n{_MATH.replace('2', '3')}\n"
+    assert capture.diff_chunks(before, after) == [("## Old title", "## New title", "")]
+
+
+def test_diff_chunks_pairs_prose_either_side_of_an_edited_fence():
+    """Edits in the prose before and after a fence that also changed: two
+    prose pairs, the fence in neither, and coalescing never bridges it."""
+    before = f"Prose one.\n\n{_FENCE}\n\nProse two.\n"
+    after = f"Prose won.\n\n{_FENCE.replace('0', '1')}\n\nProse too.\n"
+    for kw in ({}, dict(coalesce_gap_paras=5, coalesce_gap_chars=5000)):
+        triples = capture.diff_chunks(before, after, **kw)
+        assert [(b, a) for b, a, _c in triples] == [
+            ("Prose one.", "Prose won."),
+            ("Prose two.", "Prose too."),
+        ]
+
+
+def test_diff_chunks_trims_a_fence_from_a_regions_edge():
+    """An edit spanning a prose paragraph and the adjacent fence keeps the
+    prose side only, still a byte-exact substring of the before text."""
+    before = f"Prose one.\n\n{_FENCE}\n"
+    after = f"Prose won.\n\n{_FENCE.replace('0', '1')}\n\nProse two.\n"
+    triples = capture.diff_chunks(before, after)
+    assert [(b, a) for b, a, _c in triples] == [("Prose one.", "Prose won.")]
+    assert capture._span_of(before, triples[0][0]) == (0, len("Prose one."))
+
+
+def test_diff_chunks_drops_a_region_a_block_left():
+    """A fence deleted while the prose around it was rewritten is a content
+    move, not a style transform: nothing is emitted for that region."""
+    before = f"Prose one.\n\n{_FENCE}\n\nProse two.\n"
+    after = "Prose won, then too.\n"
+    assert capture.diff_chunks(before, after) == []
+
+
+def test_diff_chunks_div_policy_decides_a_callout():
+    """Every div is protected by default; `div_is_prose` frees a callout's
+    prose while its `:::` lines stay structural."""
+    before = "::: {.callout-note}\n\nA note.\n\n:::\n"
+    after = before.replace("A note.", "The note.")
+    assert capture.diff_chunks(before, after) == []
+    freed = capture.diff_chunks(before, after, div_is_prose=lambda attrs: "callout" in attrs)
+    assert freed == [("A note.", "The note.", "")]
 
 
 def test_coalescing_preserves_pure_insert_delete_skip():

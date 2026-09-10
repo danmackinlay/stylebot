@@ -557,8 +557,9 @@ STAYS = (
 
 
 def test_plan_recut_reports_status_and_flags_without_writing(store, post):
-    """The dry run names a kept pair, a new pair, an identity-scale edit and a
-    chunk that lies inside a code fence, and appends no draw (D96)."""
+    """The dry run names a kept pair, a new pair and an identity-scale edit,
+    plans nothing for the edit inside the code fence (D100), and appends no
+    draw (D96)."""
     session.open_session(store, post)
     post.write_text(
         "## S\n\nWe dig in.\n\nGap one.\n\n" + STAYS + "\n\nGap two.\n\n```python\nx = 1\n```\n",
@@ -581,6 +582,21 @@ def test_plan_recut_reports_status_and_flags_without_writing(store, post):
         encoding="utf-8",
     )
     planned = session.plan_recut(store, cid)
-    assert [p.status for p in planned] == ["kept", "new", "kept"]
-    assert planned[1].flags == ("identity",) and planned[2].flags == ("in:fence",)
+    assert [p.status for p in planned] == ["kept", "new"]
+    assert planned[1].flags == ("identity",)
+    assert "x = 0" not in "".join(p.before for p in planned)
     assert len(list(session.read_pairs(store))) == n_draws
+
+
+def test_plan_recut_flags_a_whole_capture_that_is_not_prose(store, post):
+    """`whole` bypasses the differ, so the `non-prose` flag is the dry run's
+    only guard against a pair that lies inside a fence (D96, D100)."""
+    session.open_session(store, post)
+    post.write_text("```python\nx = 1\ny = 2\nz = 3\n```\n", encoding="utf-8")
+    snap = store.snapshot_path(post) / "content.md"
+    snap.write_text("```python\na = 0\nb = 0\nc = 0\n```\n", encoding="utf-8")
+    session.save_session(store, post, whole=True)
+    cid = session.read_pairs(store)[0]["meta"]["capture_id"]
+    planned = session.plan_recut(store, cid)
+    assert [p.status for p in planned] == ["kept"]
+    assert "in:fence" in planned[0].flags
