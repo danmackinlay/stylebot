@@ -1260,6 +1260,6 @@ segmenter's default, every div protected: `ai-style log` has no route for the bl
 `div_is_prose`, and 2 of the 6 are callout prose the blog's policy would keep — the number a
 `dan-style log` mirror carrying the policy would earn.
 
-**Re-evaluate if** a save inside a callout is lost often enough to want that route
-(`session.save_session` and a `dan-style log` mirror carry `div_is_prose`), or the interior-drop
-rule is seen to swallow a real style transform.
+**Amended 2026-09-10.** The route exists: `ai-style log --div-policy module:attr`, or
+`$STYLEBOT_DIV_POLICY`, reaches every landing and the dry run's flags; the blog sets it.
+**Re-evaluate if** the interior-drop rule is seen to swallow a real style transform.
