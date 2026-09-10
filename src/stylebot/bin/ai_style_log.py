@@ -20,7 +20,7 @@ from pathlib import Path
 
 import click
 
-from stylebot import session
+from stylebot import config, session
 from stylebot import splits as splits_mod
 from stylebot.capture import diff_chunks  # noqa: F401 — callers/tests reach it as log.diff_chunks
 from stylebot.cli_options import (
@@ -156,11 +156,20 @@ def _remind_open_sessions(ctx: click.Context) -> None:
     is_flag=True,
     help="Suppress the reminder of open sessions printed after each command.",
 )
+@click.option(
+    "--div-policy",
+    envvar=config.DIV_POLICY_ENV,
+    default=None,
+    help="module:attr of the differ's div policy — a callable over a `:::` line's attributes "
+    "that says whether the div's contents are prose (D100). Default: every div is protected. "
+    f"Also ${config.DIV_POLICY_ENV}.",
+)
 @click.pass_context
-def main(ctx: click.Context, quiet: bool):
+def main(ctx: click.Context, quiet: bool, div_policy: str | None):
     """Capture (slop -> Dan rewrite) training pairs for ai-style fine-tuning."""
     ctx.ensure_object(dict)
     ctx.obj["quiet"] = quiet
+    ctx.obj["div_is_prose"] = config.resolve_div_policy(div_policy)
 
 
 @main.command(name="open")
@@ -269,6 +278,7 @@ def save_session(
         whole=cap.whole,
         heading_context=cap.heading_context,
         notify=click.echo,
+        div_is_prose=ctx.obj.get("div_is_prose"),
     )
 
     _warn_if_eval_post(store, file)
@@ -352,7 +362,9 @@ def save_session(
     "--gap-chars", default=0, show_default=True, type=int, help="Coalesce gap in characters."
 )
 @click.option("--heading-context/--no-heading-context", default=True, help="As for save.")
+@click.pass_context
 def mine_transcripts_cmd(
+    ctx: click.Context,
     transcripts_dir,
     blog_root,
     data_dir,
@@ -383,6 +395,7 @@ def mine_transcripts_cmd(
         heading_context=heading_context,
         coalesce_gap_paras=gap_paras,
         coalesce_gap_chars=gap_chars,
+        div_is_prose=ctx.obj.get("div_is_prose"),
         emit=click_emitter(),
     )
     click.echo("\n".join(report.lines()))
@@ -489,6 +502,7 @@ def pair(
         whole=cap.whole,
         heading_context=cap.heading_context,
         notify=click.echo,
+        div_is_prose=ctx.obj.get("div_is_prose"),
     )
 
     mode = "whole-input" if result.whole else "chunk-by-chunk"
@@ -547,6 +561,7 @@ def recut(
             heading_context=cap.heading_context,
             gap_paras=gap_paras,
             gap_chars=gap_chars,
+            div_is_prose=ctx.obj.get("div_is_prose"),
         )
         _echo_recut_plan(planned)
         if full:
@@ -560,6 +575,7 @@ def recut(
         gap_paras=gap_paras,
         gap_chars=gap_chars,
         notify=click.echo,
+        div_is_prose=ctx.obj.get("div_is_prose"),
     )
     new_id = result.written[0]["meta"]["capture_id"]
     click.echo(f"re-landed {archive_id} as {len(result.written)} pair(s) under capture {new_id}")

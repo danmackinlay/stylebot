@@ -600,3 +600,16 @@ def test_plan_recut_flags_a_whole_capture_that_is_not_prose(store, post):
     planned = session.plan_recut(store, cid)
     assert [p.status for p in planned] == ["kept"]
     assert "in:fence" in planned[0].flags
+
+
+def test_save_pairs_a_callout_edit_only_under_a_div_policy(store, post):
+    """Every div is protected by default (D100); a policy that frees callouts
+    makes the edit inside one a pair."""
+    callout = "::: {.callout-note}\n\nIt is worth noting the rich tapestry.\n\n:::\n"
+    post.write_text(callout, encoding="utf-8")
+    session.open_session(store, post)
+    post.write_text(callout.replace("It is worth noting the rich tapestry.", "We dig in."))
+    with pytest.raises(SessionError, match="no changed text chunks"):
+        session.save_session(store, post)
+    session.save_session(store, post, div_is_prose=lambda attrs: "callout" in attrs)
+    assert _bodies(store) == ["We dig in."]

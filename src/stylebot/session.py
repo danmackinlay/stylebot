@@ -494,6 +494,7 @@ def save_session(
     whole: bool = False,
     heading_context: bool = True,
     notify: Callable[[str], None] | None = None,
+    div_is_prose=None,
 ) -> SaveResult:
     """Diff `source` against its session snapshot and land the pair(s) as draws.
 
@@ -529,6 +530,7 @@ def save_session(
             extra_meta={"tags": list(tags)} if tags else None,
             heading_context=heading_context,
             supersedes=_capture_ids(superseded),
+            div_is_prose=div_is_prose,
         )
     except RunError as exc:
         raise SessionError(str(exc)) from exc
@@ -578,6 +580,7 @@ def capture_pair(
     whole: bool = False,
     heading_context: bool = True,
     notify: Callable[[str], None] | None = None,
+    div_is_prose=None,
 ) -> PairResult:
     """One-shot pair capture from two texts, no session: appends by default;
     `replace` supersedes every prior pair for `source` (D84), and requires one."""
@@ -606,6 +609,7 @@ def capture_pair(
             extra_meta={"tags": list(tags)} if tags else None,
             heading_context=heading_context,
             supersedes=_capture_ids(superseded),
+            div_is_prose=div_is_prose,
         )
     except RunError as exc:
         raise SessionError(str(exc)) from exc
@@ -617,8 +621,7 @@ def capture_pair(
 
 @dataclass(frozen=True)
 class PlannedPair:
-    """One pair a recut would land: `status` against the archive's live landing
-    (`kept` | `changed` | `new`), `flags` the sanity marks a human should read."""
+    """A pair a recut would land: `status` vs the live landing (kept|changed|new), `flags`."""
 
     before: str
     after: str
@@ -637,9 +640,8 @@ def _word_similarity(a: str, b: str) -> float:
 
 
 def _pair_flags(before: str, after: str, span_kinds: list[str | None]) -> tuple[str, ...]:
-    """`identity` (near-unchanged); `in:<kind>` when the whole before side lies
-    in one protected block of the archive under stylebot's default policy, or
-    `mixed:<kinds>` when such a block sits inside it; `oversize`."""
+    """`identity` (near-unchanged); `in:<kind>` (the before side lies wholly in a
+    protected block) or `mixed:<kinds>` (one sits inside it); `oversize`."""
     flags: list[str] = []
     if _word_similarity(before, after) >= 0.95:
         flags.append("identity")
@@ -660,6 +662,7 @@ def plan_recut(
     heading_context: bool = True,
     gap_paras: int = 0,
     gap_chars: int = 0,
+    div_is_prose=None,
 ) -> list[PlannedPair]:
     """What `recut_capture` would land, writing nothing (D96): each planned pair
     against the archive's live landing, flagged for a human sanity check."""
@@ -680,28 +683,26 @@ def plan_recut(
             heading_context=heading_context,
             coalesce_gap_paras=gap_paras,
             coalesce_gap_chars=gap_chars,
+            div_is_prose=div_is_prose,
         )
     except RunError as exc:
         raise SessionError(str(exc)) from exc
-    kinds = markdown.line_kinds(arch["before_text"], headings=False)
+    kinds = markdown.line_kinds(arch["before_text"], headings=False, div_is_prose=div_is_prose)
     out: list[PlannedPair] = []
     for before, after, context in planned:
         status = "kept" if live.get(before) == after else ("changed" if before in live else "new")
-        start = arch["before_text"].find(before)
-        span_kinds = (
-            kinds[
-                arch["before_text"].count("\n", 0, start) : arch["before_text"].count(
-                    "\n", 0, start + len(before.rstrip("\n"))
-                )
-                + 1
-            ]
-            if start >= 0
-            else []
-        )
-        out.append(
-            PlannedPair(before, after, context, status, _pair_flags(before, after, span_kinds))
-        )
+        span_kinds = _kinds_under(kinds, arch["before_text"], before.rstrip("\n"))
+        flags = _pair_flags(before, after, span_kinds)
+        out.append(PlannedPair(before, after, context, status, flags))
     return out
+
+
+def _kinds_under(kinds: list[str | None], text: str, chunk: str) -> list[str | None]:
+    """The line kinds under `chunk`'s first occurrence in `text`; none when absent."""
+    start = text.find(chunk)
+    if start < 0:
+        return []
+    return kinds[text.count("\n", 0, start) : text.count("\n", 0, start + len(chunk)) + 1]
 
 
 @dataclass(frozen=True)
@@ -722,6 +723,7 @@ def recut_capture(
     gap_paras: int = 0,
     gap_chars: int = 0,
     notify: Callable[[str], None] | None = None,
+    div_is_prose=None,
 ) -> RecutResult:
     """Re-land `captures/<archive_id>/` after a hand edit (D96): the archive's
     live landings, original or an earlier recut, are superseded."""
@@ -743,6 +745,7 @@ def recut_capture(
             coalesce_gap_paras=gap_paras,
             coalesce_gap_chars=gap_chars,
             extra_meta={"tags": list(tags)} if tags else None,
+            div_is_prose=div_is_prose,
         )
     except RunError as exc:
         raise SessionError(str(exc)) from exc

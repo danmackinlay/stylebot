@@ -386,6 +386,7 @@ def mine_transcripts(
     coalesce_gap_chars: int = 0,
     source_policy: SourcePolicy = DEFAULT_SOURCE,
     system_prompt: str | None = None,
+    div_is_prose=None,
     emit: Emitter = silent,
 ) -> MineReport:
     """Replay every session onto its base and pair the result with Dan's next
@@ -404,6 +405,7 @@ def mine_transcripts(
         "heading_context": heading_context,
         "coalesce_gap_paras": coalesce_gap_paras,
         "coalesce_gap_chars": coalesce_gap_chars,
+        "div_is_prose": div_is_prose,
     }
     for session in sessions:
         if session.session_id in mined_before:

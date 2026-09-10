@@ -35,3 +35,23 @@ def test_require_key_missing_raises_actionable_error(monkeypatch):
     monkeypatch.delenv("NOPE_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="NOPE_API_KEY"):
         config.require_key("NOPE_API_KEY")
+
+
+def test_div_policy_flag_beats_env_and_env_beats_none(monkeypatch):
+    """`--div-policy` > $STYLEBOT_DIV_POLICY > None, each a module:attr (D100)."""
+    from stylebot import config
+
+    monkeypatch.delenv(config.DIV_POLICY_ENV, raising=False)
+    assert config.resolve_div_policy(None) is None
+    monkeypatch.setenv(config.DIV_POLICY_ENV, "operator:truth")
+    assert config.resolve_div_policy(None)("callout-note") is True
+    assert config.resolve_div_policy("operator:not_")("callout-note") is False
+
+
+def test_div_policy_bad_spec_is_a_config_error():
+    from stylebot import config
+    from stylebot.errors import ConfigError
+
+    for spec in ("nocolon", "operator:", "no.such.module:x", "operator:no_such_attr"):
+        with pytest.raises(ConfigError, match="--div-policy"):
+            config.resolve_div_policy(spec)

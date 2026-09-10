@@ -8,10 +8,33 @@ import os
 from pathlib import Path
 
 from stylebot import corpus
-from stylebot.errors import RunError
+from stylebot.errors import ConfigError, RunError
 
 #: The corpus directory's name under a project root, when nothing else says.
 DEFAULT_DATA_DIR_NAME = "_training_pairs"
+
+
+DIV_POLICY_ENV = "STYLEBOT_DIV_POLICY"
+
+
+def load_callable(spec: str, *, param_hint: str = "--div-policy"):
+    """`module:attr` -> the attribute, or ConfigError naming `param_hint`."""
+    import importlib
+
+    module, sep, attr = spec.partition(":")
+    if not sep or not module or not attr:
+        raise ConfigError(f"{param_hint} wants module:attr, got {spec!r}", param_hint=param_hint)
+    try:
+        return getattr(importlib.import_module(module), attr)
+    except (ImportError, AttributeError) as exc:
+        raise ConfigError(f"{param_hint} {spec!r}: {exc}", param_hint=param_hint) from exc
+
+
+def resolve_div_policy(flag: str | None = None):
+    """The capture differ's `div_is_prose` (D100): ``flag`` > ``$STYLEBOT_DIV_POLICY``
+    > None, each a `module:attr` naming a callable over a div's attribute string."""
+    spec = flag or os.environ.get(DIV_POLICY_ENV)
+    return load_callable(spec) if spec else None
 
 
 def resolve_data_dir(flag: str | os.PathLike | None = None) -> Path:

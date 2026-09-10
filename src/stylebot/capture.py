@@ -305,6 +305,7 @@ def capture_pairs(
     source_policy: SourcePolicy = DEFAULT_SOURCE,
     system_prompt: str | None = None,
     keep: Callable[[str, str], bool] | None = None,
+    div_is_prose: DivIsProse | None = None,
 ) -> list[dict]:
     """Strip frontmatter, diff, archive the texts and land one draw per chunk.
 
@@ -325,7 +326,9 @@ def capture_pairs(
         "gap_chars": coalesce_gap_chars,
         "max_chars": max_chars,
     }
-    chunk_pairs = _chunk_pairs(before_body, after_body, keep=keep, **knobs)
+    chunk_pairs = _chunk_pairs(
+        before_body, after_body, keep=keep, div_is_prose=div_is_prose, **knobs
+    )
     if not chunk_pairs:
         return []
 
@@ -417,6 +420,7 @@ def recut_archive(
     extra_meta: dict | None = None,
     source_policy: SourcePolicy = DEFAULT_SOURCE,
     system_prompt: str | None = None,
+    div_is_prose: DivIsProse | None = None,
 ) -> list[dict]:
     """Re-land an edited archive as draws under a fresh `capture_id` (D96):
     its own `whole`, `source` and `snapped_at`, `meta.archive_id` naming it,
@@ -438,7 +442,7 @@ def recut_archive(
         "gap_chars": coalesce_gap_chars,
         "max_chars": max_chars,
     }
-    chunk_pairs = _chunk_pairs(before_body, after_body, **knobs)
+    chunk_pairs = _chunk_pairs(before_body, after_body, div_is_prose=div_is_prose, **knobs)
     records = _records(
         chunk_pairs,
         capture_id=new_capture_id(),

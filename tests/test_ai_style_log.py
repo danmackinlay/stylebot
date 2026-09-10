@@ -238,3 +238,21 @@ def test_unready_world_is_a_click_exception(session_repo, tmp_path):
     code, out = _err("pair", "--before", str(same), "--after", str(same))
     assert code == 1
     assert "refusing to log" in out
+
+
+def test_div_policy_env_reaches_save(session_repo, temp_corpus, monkeypatch):
+    """$STYLEBOT_DIV_POLICY names the differ's div policy for the whole `log` group (D100)."""
+    from click.testing import CliRunner
+
+    from stylebot.bin import ai_style_log as log
+
+    post = session_repo / "post" / "callout.qmd"
+    callout = "::: {.callout-note}\n\nIt is worth noting the rich tapestry.\n\n:::\n"
+    post.write_text(callout, encoding="utf-8")
+    runner = CliRunner()
+    assert runner.invoke(log.main, ["-q", "open", "post/callout.qmd"]).exit_code == 0
+    post.write_text(callout.replace("rich tapestry", "plain weave"), encoding="utf-8")
+    monkeypatch.setenv("STYLEBOT_DIV_POLICY", "operator:truth")
+    result = runner.invoke(log.main, ["-q", "save", "post/callout.qmd"])
+    assert result.exit_code == 0, result.output
+    assert "saved 1 pair" in result.output or "1 pair" in result.output
