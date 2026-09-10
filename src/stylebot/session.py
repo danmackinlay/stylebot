@@ -689,7 +689,7 @@ def plan_recut(
         span_kinds = (
             kinds[
                 arch["before_text"].count("\n", 0, start) : arch["before_text"].count(
-                    "\n", 0, start + len(before)
+                    "\n", 0, start + len(before.rstrip("\n"))
                 )
                 + 1
             ]

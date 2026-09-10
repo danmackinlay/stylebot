@@ -15,7 +15,7 @@ from pathlib import Path
 from stylebot import config, draws
 from stylebot.errors import RunError
 from stylebot.lib import DEFAULT_SOURCE, SourcePolicy, read_w_frontmatter_text, split_paragraphs
-from stylebot.markdown import is_heading_line
+from stylebot.markdown import DivIsProse, is_heading_line, line_kinds
 from stylebot.pairs import PAIR_SCHEMA_VERSION, build_pair_content, extract_slop, extract_target
 from stylebot.provenance import (  # `ai-style log` binds capture.now_iso
     now_iso,
@@ -42,6 +42,9 @@ def split_frontmatter_meta(text: str) -> tuple[dict, str]:
 
 # ---- Paragraph-level diffing ----
 
+#: What every protected paragraph becomes for the matcher (D100).
+_PROTECTED = "\0protected"
+
 
 def _is_heading_paragraph(para: str) -> bool:
     """True if `para` is a standalone ATX header paragraph; a header glued to
@@ -61,15 +64,52 @@ def _nearest_heading(paras: list[str], idx: int) -> str:
     return ""
 
 
+def _protected_paragraphs(
+    body: str, paras: list[str], div_is_prose: DivIsProse | None
+) -> list[bool]:
+    """Per paragraph of `split_paragraphs(body)`, whether every line of it is
+    protected by the segmenter (D100); a heading stays content (D64)."""
+    kinds = line_kinds(body, headings=False, div_is_prose=div_is_prose)
+    out: list[bool] = []
+    pos = 0
+    for para in paras:
+        start = body.find(para, pos)
+        first = body.count("\n", 0, start)
+        out.append(all(k is not None for k in kinds[first : first + para.count("\n") + 1]))
+        pos = start + len(para)
+    return out
+
+
+def _prose_span(
+    span: tuple[int, int, int, int], before_prot: list[bool], after_prot: list[bool]
+) -> tuple[int, int, int, int] | None:
+    """`span` with protected paragraphs trimmed from both ends of both sides;
+    None when one remains inside (a block inserted or deleted amid edited
+    prose is no style transform, D100)."""
+    i1, i2, j1, j2 = span
+    while i1 < i2 and before_prot[i1]:
+        i1 += 1
+    while i1 < i2 and before_prot[i2 - 1]:
+        i2 -= 1
+    while j1 < j2 and after_prot[j1]:
+        j1 += 1
+    while j1 < j2 and after_prot[j2 - 1]:
+        j2 -= 1
+    if any(before_prot[i1:i2]) or any(after_prot[j1:j2]):
+        return None
+    return (i1, i2, j1, j2)
+
+
 def _coalesce_regions(
     regions: list[tuple[int, int, int, int]],
     after_paras: list[str],
     *,
     gap_paras: int,
     gap_chars: int,
+    after_prot: list[bool] | None = None,
 ) -> list[tuple[int, int, int, int]]:
     """Merge changed regions `(i1, i2, j1, j2)` separated by an unchanged run
-    within both tolerances (D81)."""
+    within both tolerances (D81), never across a protected paragraph (D100)."""
     if not regions or (gap_paras <= 0 and gap_chars <= 0):
         return regions
     out = [list(regions[0])]
@@ -77,7 +117,8 @@ def _coalesce_regions(
         prev_j2 = out[-1][3]
         gap = after_paras[prev_j2:j1]
         gap_len = sum(len(p) + 2 for p in gap)
-        if len(gap) <= gap_paras and gap_len <= gap_chars:
+        bridgeable = not any(after_prot[prev_j2:j1]) if after_prot else True
+        if bridgeable and len(gap) <= gap_paras and gap_len <= gap_chars:
             out[-1][1] = i2  # extend before-span across the gap
             out[-1][3] = j2  # extend after-span across the gap
         else:
@@ -93,26 +134,44 @@ def diff_chunks(
     coalesce_gap_paras: int = 0,
     coalesce_gap_chars: int = 0,
     max_chars: int | None = None,
+    div_is_prose: DivIsProse | None = None,
 ) -> list[tuple[str, str, str]]:
     """Return (before_chunk, after_chunk, context) triples per changed region.
 
     Paragraph-split both texts, run SequenceMatcher, emit a pair per contiguous
-    `replace` region. `coalesce_gap_paras` / `coalesce_gap_chars` bridge short
-    unchanged runs (D81); a merged region over `max_chars` falls back to its
-    parts. With `heading_context`, `context` is the nearest preceding heading
-    among the after paragraphs, `""` in the preamble.
+    `replace` region. A paragraph the segmenter protects (`div_is_prose` its
+    div policy) never enters a pair: the matcher sees every one as the same
+    token, so an edit inside a block is no change and a block aligns across
+    prose edits either side of it (D100). `coalesce_gap_paras` /
+    `coalesce_gap_chars` bridge short unchanged runs (D81); a merged region
+    over `max_chars` falls back to its parts. With `heading_context`, `context`
+    is the nearest preceding heading among the after paragraphs, `""` in the
+    preamble.
     """
     before_paras = split_paragraphs(before)
     after_paras = split_paragraphs(after)
+    before_prot = _protected_paragraphs(before, before_paras, div_is_prose)
+    after_prot = _protected_paragraphs(after, after_paras, div_is_prose)
+    masked = (
+        [_PROTECTED if p else para for para, p in zip(before_paras, before_prot, strict=True)],
+        [_PROTECTED if p else para for para, p in zip(after_paras, after_prot, strict=True)],
+    )
 
-    matcher = difflib.SequenceMatcher(None, before_paras, after_paras, autojunk=False)
+    matcher = difflib.SequenceMatcher(None, *masked, autojunk=False)
     raw = [(i1, i2, j1, j2) for tag, i1, i2, j1, j2 in matcher.get_opcodes() if tag != "equal"]
     regions = _coalesce_regions(
-        raw, after_paras, gap_paras=coalesce_gap_paras, gap_chars=coalesce_gap_chars
+        raw,
+        after_paras,
+        gap_paras=coalesce_gap_paras,
+        gap_chars=coalesce_gap_chars,
+        after_prot=after_prot,
     )
 
     def _emit(span: tuple[int, int, int, int]) -> tuple[str, str, str] | None:
-        i1, i2, j1, j2 = span
+        prose = _prose_span(span, before_prot, after_prot)
+        if prose is None:
+            return None
+        i1, i2, j1, j2 = prose
         before_chunk = "\n\n".join(before_paras[i1:i2])
         after_chunk = "\n\n".join(after_paras[j1:j2])
         if not before_chunk.strip() or not after_chunk.strip():
@@ -429,7 +488,8 @@ def drifted_archives(captures_dir: Path, records: Iterable[dict]) -> list[tuple[
 def plan_pairs(before_text: str, after_text: str, **knobs) -> list[tuple[str, str, str]]:
     """The `(before, after, context)` triples `capture_pairs` would land for two
     texts, frontmatter stripped, writing nothing; `knobs` are its `whole`,
-    `heading_context`, `coalesce_gap_paras`, `coalesce_gap_chars`, `max_chars`."""
+    `heading_context`, `coalesce_gap_paras`, `coalesce_gap_chars`, `max_chars`,
+    `div_is_prose`."""
     return _chunk_pairs(
         split_frontmatter_meta(before_text)[1],
         split_frontmatter_meta(after_text)[1],
@@ -438,6 +498,7 @@ def plan_pairs(before_text: str, after_text: str, **knobs) -> list[tuple[str, st
         gap_paras=knobs.get("coalesce_gap_paras", 0),
         gap_chars=knobs.get("coalesce_gap_chars", 0),
         max_chars=knobs.get("max_chars"),
+        div_is_prose=knobs.get("div_is_prose"),
     )
 
 
@@ -463,6 +524,7 @@ def _chunk_pairs(
         coalesce_gap_paras=cut["gap_paras"],
         coalesce_gap_chars=cut["gap_chars"],
         max_chars=cut["max_chars"],
+        div_is_prose=cut.get("div_is_prose"),
     )
     if not triples:
         raise RunError(
