@@ -37,14 +37,13 @@ def test_require_key_missing_raises_actionable_error(monkeypatch):
         config.require_key("NOPE_API_KEY")
 
 
-def test_div_policy_flag_beats_env_and_env_beats_none(monkeypatch):
-    """`--div-policy` > $STYLEBOT_DIV_POLICY > None, each a module:attr (D100)."""
+def test_div_policy_is_a_flag_only(monkeypatch):
+    """`--div-policy` is a module:attr or None; no environment variable feeds it (D101)."""
     from stylebot import config
 
-    monkeypatch.delenv(config.DIV_POLICY_ENV, raising=False)
+    monkeypatch.setenv("STYLEBOT_DIV_POLICY", "operator:truth")
     assert config.resolve_div_policy(None) is None
-    monkeypatch.setenv(config.DIV_POLICY_ENV, "operator:truth")
-    assert config.resolve_div_policy(None)("callout-note") is True
+    assert config.resolve_div_policy("operator:truth")("callout-note") is True
     assert config.resolve_div_policy("operator:not_")("callout-note") is False
 
 

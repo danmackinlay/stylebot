@@ -14,7 +14,7 @@ follow the package idiom (D47). The workflow is `_training_pairs/README.md`.
 from __future__ import annotations
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -71,8 +71,17 @@ def capture_options(**kw):
 # Root for all logged state, resolved through `stylebot.config` per command,
 # never at import (D45); `log` takes the env/default because a mistake is cheap.
 def _store() -> SessionStore:
-    """The session/corpus store for this invocation."""
-    return SessionStore.resolve()
+    """The session/corpus store: a policy-bearing shell's pinned `data_dir`
+    (D101), else the `stylebot.config` ladder."""
+    ctx = click.get_current_context(silent=True)
+    pinned = (ctx.obj or {}).get("data_dir") if ctx else None
+    return SessionStore(pinned) if pinned else SessionStore.resolve()
+
+
+def _policy(key: str):
+    """A pinned policy value off the group's context, None when the shell is bare."""
+    ctx = click.get_current_context(silent=True)
+    return (ctx.obj or {}).get(key) if ctx else None
 
 
 def _warn_if_eval_post(store: SessionStore, source: Path) -> None:
@@ -158,11 +167,10 @@ def _remind_open_sessions(ctx: click.Context) -> None:
 )
 @click.option(
     "--div-policy",
-    envvar=config.DIV_POLICY_ENV,
     default=None,
     help="module:attr of the differ's div policy — a callable over a `:::` line's attributes "
-    "that says whether the div's contents are prose (D100). Default: every div is protected. "
-    f"Also ${config.DIV_POLICY_ENV}.",
+    "that says whether the div's contents are prose (D100). Default: every div is protected; "
+    "a blog-side shell pins its own (D101).",
 )
 @click.pass_context
 def main(ctx: click.Context, quiet: bool, div_policy: str | None):
@@ -170,6 +178,23 @@ def main(ctx: click.Context, quiet: bool, div_policy: str | None):
     ctx.ensure_object(dict)
     ctx.obj["quiet"] = quiet
     ctx.obj["div_is_prose"] = config.resolve_div_policy(div_policy)
+
+
+def policy_group(name: str, pins: Callable[[], dict], *, help: str | None = None) -> click.Group:
+    """`main`'s subcommands under a group whose policy is `pins()` (D101): a dict
+    of `div_is_prose`, `source_policy`, `data_dir`, read when the group runs."""
+
+    @click.group(name=name, cls=ErrorTranslatingGroup, help=help or main.help)
+    @click.option("--quiet", "-q", is_flag=True, help="Suppress the open-sessions reminder.")
+    @click.pass_context
+    def group(ctx: click.Context, quiet: bool) -> None:
+        ctx.ensure_object(dict)
+        ctx.obj.update(pins())
+        ctx.obj["quiet"] = quiet
+
+    for sub_name, command in main.commands.items():
+        group.add_command(command, sub_name)
+    return group
 
 
 @main.command(name="open")
@@ -278,7 +303,8 @@ def save_session(
         whole=cap.whole,
         heading_context=cap.heading_context,
         notify=click.echo,
-        div_is_prose=ctx.obj.get("div_is_prose"),
+        div_is_prose=_policy("div_is_prose"),
+        source_policy=_policy("source_policy"),
     )
 
     _warn_if_eval_post(store, file)
@@ -395,7 +421,7 @@ def mine_transcripts_cmd(
         heading_context=heading_context,
         coalesce_gap_paras=gap_paras,
         coalesce_gap_chars=gap_chars,
-        div_is_prose=ctx.obj.get("div_is_prose"),
+        div_is_prose=_policy("div_is_prose"),
         emit=click_emitter(),
     )
     click.echo("\n".join(report.lines()))
@@ -502,7 +528,8 @@ def pair(
         whole=cap.whole,
         heading_context=cap.heading_context,
         notify=click.echo,
-        div_is_prose=ctx.obj.get("div_is_prose"),
+        div_is_prose=_policy("div_is_prose"),
+        source_policy=_policy("source_policy"),
     )
 
     mode = "whole-input" if result.whole else "chunk-by-chunk"
@@ -561,7 +588,8 @@ def recut(
             heading_context=cap.heading_context,
             gap_paras=gap_paras,
             gap_chars=gap_chars,
-            div_is_prose=ctx.obj.get("div_is_prose"),
+            div_is_prose=_policy("div_is_prose"),
+            source_policy=_policy("source_policy"),
         )
         _echo_recut_plan(planned)
         if full:
@@ -575,7 +603,8 @@ def recut(
         gap_paras=gap_paras,
         gap_chars=gap_chars,
         notify=click.echo,
-        div_is_prose=ctx.obj.get("div_is_prose"),
+        div_is_prose=_policy("div_is_prose"),
+        source_policy=_policy("source_policy"),
     )
     new_id = result.written[0]["meta"]["capture_id"]
     click.echo(f"re-landed {archive_id} as {len(result.written)} pair(s) under capture {new_id}")

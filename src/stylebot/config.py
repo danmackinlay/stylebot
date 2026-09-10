@@ -14,9 +14,6 @@ from stylebot.errors import ConfigError, RunError
 DEFAULT_DATA_DIR_NAME = "_training_pairs"
 
 
-DIV_POLICY_ENV = "STYLEBOT_DIV_POLICY"
-
-
 def load_callable(spec: str, *, param_hint: str = "--div-policy"):
     """`module:attr` -> the attribute, or ConfigError naming `param_hint`."""
     import importlib
@@ -31,10 +28,9 @@ def load_callable(spec: str, *, param_hint: str = "--div-policy"):
 
 
 def resolve_div_policy(flag: str | None = None):
-    """The capture differ's `div_is_prose` (D100): ``flag`` > ``$STYLEBOT_DIV_POLICY``
-    > None, each a `module:attr` naming a callable over a div's attribute string."""
-    spec = flag or os.environ.get(DIV_POLICY_ENV)
-    return load_callable(spec) if spec else None
+    """The capture differ's `div_is_prose` (D100) from a `module:attr` flag; None
+    means every div is protected. A policy-bearing shell pins it instead (D101)."""
+    return load_callable(flag) if flag else None
 
 
 def resolve_data_dir(flag: str | os.PathLike | None = None) -> Path:

@@ -1,12 +1,7 @@
-"""Rewrite-session state for `ai-style log`, as a library (D35).
-
-`stylebot.capture` owns the capture mechanism; this module owns what
-surrounds it: where state lives (`SessionStore`), snapshot persistence
-(archived on close, so `reopen` / `save --redo` work), symlink
-canonicalisation, and `save`'s disposition rule. `SessionError` (a
-`RunError`) means the world is not ready, a `ValueError` that the arguments
-contradict (D47). Nothing here prints or exits.
-"""
+"""Rewrite-session state for `ai-style log`, as a library (D35): the store,
+snapshot persistence (archived on close for `reopen`/`--redo`), symlink
+canonicalisation and `save`'s disposition rule. `SessionError` means the world
+is not ready, `ValueError` that the arguments contradict (D47)."""
 
 from __future__ import annotations
 
@@ -255,8 +250,7 @@ def canonical_source(value: Path | None, *, cwd: Path | None = None) -> Path | N
 
 
 def read_pairs(store: SessionStore) -> list[dict]:
-    """The live pair records: the identity view of the draws (superseded
-    saves excluded, D84); [] while nothing has been saved."""
+    """The live pair records: the identity view of the draws (D84); [] before a save."""
     if not store.draws_dir.is_dir():
         return []
     return list(draws.view_records(draws.iter_draws(store.draws_dir), draws.ViewPolicy()))
@@ -495,6 +489,7 @@ def save_session(
     heading_context: bool = True,
     notify: Callable[[str], None] | None = None,
     div_is_prose=None,
+    source_policy=None,
 ) -> SaveResult:
     """Diff `source` against its session snapshot and land the pair(s) as draws.
 
@@ -531,6 +526,7 @@ def save_session(
             heading_context=heading_context,
             supersedes=_capture_ids(superseded),
             div_is_prose=div_is_prose,
+            **({"source_policy": source_policy} if source_policy else {}),
         )
     except RunError as exc:
         raise SessionError(str(exc)) from exc
@@ -581,6 +577,7 @@ def capture_pair(
     heading_context: bool = True,
     notify: Callable[[str], None] | None = None,
     div_is_prose=None,
+    source_policy=None,
 ) -> PairResult:
     """One-shot pair capture from two texts, no session: appends by default;
     `replace` supersedes every prior pair for `source` (D84), and requires one."""
@@ -610,6 +607,7 @@ def capture_pair(
             heading_context=heading_context,
             supersedes=_capture_ids(superseded),
             div_is_prose=div_is_prose,
+            **({"source_policy": source_policy} if source_policy else {}),
         )
     except RunError as exc:
         raise SessionError(str(exc)) from exc
@@ -724,6 +722,7 @@ def recut_capture(
     gap_chars: int = 0,
     notify: Callable[[str], None] | None = None,
     div_is_prose=None,
+    source_policy=None,
 ) -> RecutResult:
     """Re-land `captures/<archive_id>/` after a hand edit (D96): the archive's
     live landings, original or an earlier recut, are superseded."""
@@ -746,6 +745,7 @@ def recut_capture(
             coalesce_gap_chars=gap_chars,
             extra_meta={"tags": list(tags)} if tags else None,
             div_is_prose=div_is_prose,
+            **({"source_policy": source_policy} if source_policy else {}),
         )
     except RunError as exc:
         raise SessionError(str(exc)) from exc

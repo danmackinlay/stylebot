@@ -240,19 +240,48 @@ def test_unready_world_is_a_click_exception(session_repo, tmp_path):
     assert "refusing to log" in out
 
 
-def test_div_policy_env_reaches_save(session_repo, temp_corpus, monkeypatch):
-    """$STYLEBOT_DIV_POLICY names the differ's div policy for the whole `log` group (D100)."""
-    from click.testing import CliRunner
-
-    from stylebot.bin import ai_style_log as log
-
+def _callout_session(session_repo):
     post = session_repo / "post" / "callout.qmd"
     callout = "::: {.callout-note}\n\nIt is worth noting the rich tapestry.\n\n:::\n"
     post.write_text(callout, encoding="utf-8")
-    runner = CliRunner()
-    assert runner.invoke(log.main, ["-q", "open", "post/callout.qmd"]).exit_code == 0
+    assert CliRunner().invoke(log.main, ["-q", "open", "post/callout.qmd"]).exit_code == 0
     post.write_text(callout.replace("rich tapestry", "plain weave"), encoding="utf-8")
-    monkeypatch.setenv("STYLEBOT_DIV_POLICY", "operator:truth")
-    result = runner.invoke(log.main, ["-q", "save", "post/callout.qmd"])
+
+
+def test_div_policy_flag_reaches_save(session_repo, temp_corpus):
+    """`--div-policy` on the `log` group names the differ's div policy (D100)."""
+    _callout_session(session_repo)
+    result = CliRunner().invoke(
+        log.main, ["-q", "--div-policy", "operator:truth", "save", "post/callout.qmd"]
+    )
     assert result.exit_code == 0, result.output
-    assert "saved 1 pair" in result.output or "1 pair" in result.output
+    assert "1 pair" in result.output
+
+
+def test_policy_group_pins_div_policy_source_policy_and_data_dir(session_repo, tmp_path):
+    """A `policy_group` runs every log subcommand under the caller's pins (D101):
+    the callout pairs, the record carries the pinned prompt, the draws land in
+    the pinned data dir."""
+    from dataclasses import replace
+
+    from stylebot.lib import DEFAULT_SOURCE
+
+    pinned_dir = tmp_path / "pinned-corpus"
+    policy = replace(DEFAULT_SOURCE, author="Pinned Author")
+    group = log.policy_group(
+        "log",
+        lambda: {
+            "div_is_prose": lambda attrs: True,
+            "source_policy": policy,
+            "data_dir": pinned_dir,
+        },
+    )
+    post = session_repo / "post" / "callout.qmd"
+    callout = "::: {.callout-note}\n\nIt is worth noting the rich tapestry.\n\n:::\n"
+    post.write_text(callout, encoding="utf-8")
+    assert CliRunner().invoke(group, ["-q", "open", "post/callout.qmd"]).exit_code == 0
+    post.write_text(callout.replace("rich tapestry", "plain weave"), encoding="utf-8")
+    result = CliRunner().invoke(group, ["-q", "save", "post/callout.qmd"])
+    assert result.exit_code == 0, result.output
+    records = corpus_records(pinned_dir)
+    assert len(records) == 1 and "Pinned Author" in records[0]["messages"][0]["content"]
