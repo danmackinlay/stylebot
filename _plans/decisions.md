@@ -71,6 +71,7 @@ keep their numbers — the second index below is how you find them.
 | D98 | measure adherence before importing a capability-retention fix | live; nothing built |
 | D99 | the Tinker base-model roster, priced: Qwen3.6-35B-A3B queued, Nemotron second, gpt-oss-20b out | live; amends D2 |
 | D100 | the differ never pairs a protected paragraph; affected landings are recut | live |
+| D101 | `dan-style log` is the blog's capture shell; `ai-style log` carries no policy | live |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D58, plus P1)
 
@@ -1260,6 +1261,31 @@ segmenter's default, every div protected: `ai-style log` has no route for the bl
 `div_is_prose`, and 2 of the 6 are callout prose the blog's policy would keep — the number a
 `dan-style log` mirror carrying the policy would earn.
 
-**Amended 2026-09-10.** The route exists: `ai-style log --div-policy module:attr`, or
-`$STYLEBOT_DIV_POLICY`, reaches every landing and the dry run's flags; the blog sets it.
+**Amended 2026-09-11.** The route is `dan-style log` (D101), which pins the blog's div policy.
 **Re-evaluate if** the interior-drop rule is seen to swallow a real style transform.
+
+## D101: `dan-style log` is the blog's capture shell; `ai-style log` carries no policy
+
+**Decision (2026-09-11 by Dan).** Capture joins the mirror rule (D78): `dan-style log` is
+`ai-style log` with the blog's policy pinned — `training_targets.div_is_prose` for the differ
+(D100), `SOURCE` for the record's prompt and automation level (D85), and `data_dir(None, ROOT)`
+for the store — and every log subcommand runs under it unchanged. The mechanism is one factory,
+`ai_style_log.policy_group(name, pins)`, whose group callback reads `pins()` into the click
+context; the subcommands ask `_policy(key)` and `_store()` off that context, so a bare
+`ai-style log` and a pinned `dan-style log` share one command body. `--div-policy module:attr`
+stays on the bare group as the generic hook. The environment variable that briefly carried the
+div policy (`STYLEBOT_DIV_POLICY`, 2026-09-10) is removed: no `STYLEBOT_*` variable names a
+policy, only a location.
+
+**Alternatives.** *Keep the env var* — one policy leaks through a side channel while the source
+policy and store still do not, and nothing else in the ladder is policy. *A `dan-style log` that
+re-declares each subcommand* — the D35 copy that drifts. *Pass policy on every `ai-style log`
+call from the RUNBOOK* — the VS Code tasks would carry it and a bare shell would silently not.
+
+**Deciding constraint.** `log` was the one command Dan ran generically from the blog, so every
+hand capture landed under stylebot's default source policy and, after D100, would have lost its
+callout edits; the mirror rule already had the shape and the test (`test_dan_style_cli`) to
+close both at once. Cost: ~25 lines in the shell, one group in the blog, no new module.
+
+**Re-evaluate if** a second consumer wants a pinned `log` — then `pins` should become a
+`SourcePolicy`-shaped object rather than a dict.
