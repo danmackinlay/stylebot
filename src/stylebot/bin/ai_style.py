@@ -23,6 +23,7 @@ from stylebot import classify_cli as cc
 from stylebot import classify_train as ct
 from stylebot import eval as ev
 from stylebot import features as ft
+from stylebot import fit_judge as fj
 from stylebot import splits as sp
 from stylebot import train as tr
 from stylebot.backends import BACKEND_PARAMS, BackendOpts, backend_options
@@ -719,6 +720,25 @@ def validate_pairs_cmd(pairs_file: Path | None, limit: int, **kw) -> None:
         click.echo(f"  ... and {len(problems) - limit} more")
     if problems:
         raise SystemExit(1)
+
+
+@main.command("judge-fit", cls=SectionedCommand)
+@fj.fit_options()
+def judge_fit_cmd(**kw) -> None:
+    """Compare two arms at CHUNK BOUNDARIES: does each rewrite fit its neighbours?
+
+    The fifth signal (D97). The styler rewrites a document chunk by chunk, each
+    call blind to the others; every glue point is where a renamed referent or a
+    restarted metaphor shows up, and the other four signals each score one
+    passage with no neighbours. This shows a judge the fixed prose either side
+    of a span and both arms' middles, and asks which fits — forced choice, ties
+    allowed, order randomised per case and recorded. Offline only: never wire
+    it into inference. Run --field-a target --field-b slop as the control.
+    """
+    parsed = bundles_from_kwargs(kw, fj.FIT_PARAMS)
+    text = fj.judge_fit_pass(parsed["fit"], parsed["view"], emit=click_emitter())
+    if text:
+        click.echo(text)
 
 
 if __name__ == "__main__":
