@@ -54,7 +54,7 @@ keep their numbers — the second index below is how you find them.
 | D81 | captures are gap-coalesced, not windowed — untouched prose is not endorsed | live |
 | D82 | the scale arms are nested — three honest analyses, and the stamp is not a facet | live |
 | D83 | the synth flag audit closed 2026-08-13 — four retired, four kept, one deferred | live |
-| D84 | the corpus is append-only draws plus derived views | live |
+| D84 | the corpus is append-only draws plus derived views | live; the real stratum relaxed by D96 |
 | D85 | the blog's literals are a `SourcePolicy` parameter, not a fork | live |
 | D86 | `ruff format` is the formatter of record; D58's ceilings re-baseline once | live |
 | D87 | a judge refusal is unscored, never a guessed digit; `SCHEMA_VERSION` 3 → 4 | live |
@@ -65,8 +65,10 @@ keep their numbers — the second index below is how you find them.
 | D92 | `argued2` is a brief→write composite over two generators, the objection real | live; probe failed, library-only |
 | D93 | `<!-- sem -->` marks content in a real edit; the view cuts it, the styler never sees it | live |
 | D94 | `ruff format` is adopted; a formatting commit is the one commit that may re-baseline a budget | live |
+| D95 | D94's re-baseline follows the reformatting, not the formatting commit | live |
+| D96 | a real capture's archive is the editable truth; `log recut` re-lands it | live; amends D84 |
 
-## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D50, plus P1)
+## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D52, plus P1)
 
 | # | title | status |
 |---|---|---|
@@ -121,64 +123,6 @@ keep their numbers — the second index below is how you find them.
 | D48 | `Styler` is a Protocol; it types the call, not the tokens | live |
 
 ---
-
-## D51: `git filter-repo` on the corpus is not worth a force-push — measured
-
-**Decision (W6, 2026-09-03).** Do not rewrite livingthing's history to purge old
-`pairs.jsonl` blobs. Delete `.git/subtree-cache` instead.
-
-*The measurement that decided it* (`findings.md` "Corpus blob cost"). The W6
-brief's figure — the corpus as ~85% of the repository — is **logical
-(uncompressed) blob size**. On disk, in the packfile, an append-only JSONL
-deltifies almost perfectly and the same versions cost a small fraction of that;
-everything under `_training_pairs/` is under 5% of packed blob content.
-Meanwhile `.git/subtree-cache` — a `git subtree` scratch directory, not history
-at all — is an order of magnitude larger than anything filter-repo could reclaim,
-and `rm -rf` on it needs no rewrite, no force-push and no coordination with
-anyone holding a clone.
-
-*Alternatives.* Run the pass anyway: tens of MiB reclaimed for a force-push to a
-GitHub Pages repo, every commit sha in the blog's own prose and in stylebot's run
-manifests invalidated (manifests pin `blog_sha` — D36), and every existing clone
-and worktree needing re-cloning. The script is written and reviewable in the W6
-handover, so the option stays open; it is simply not worth exercising.
-
-**Re-evaluate if** the corpus stops deltifying — a change that reorders or
-rewrites records wholesale on every commit would defeat it, which is exactly what
-D50's shard-level rewrite avoids — or if a genuinely large binary (a merged
-adapter, a `.joblib`) is committed by accident, where a targeted filter-repo on
-that one path is the right tool and this argument does not apply.
-
-## D52: documentation carries no mutable operational state — `status` answers instead
-
-**Decision (W7, 2026-09-03).** stylebot's prose — `CLAUDE.md`, `README.md` and
-`_plans/OVERVIEW.md` — states **no** corpus count, run number, "serving default"
-or artifact sha. Those facts move under git's feet, so `status.collect()`
-computes them on demand, sweeping the five artifacts that answer "where is this
-pipeline?" — corpus, `splits.json`, runs directory, detector artifact, and *the
-cross-checks between them*.
-
-`findings.md` and `decisions.md` are explicitly **exempt**, and the distinction
-is the whole design. A dated measurement records what was true then; a status
-sentence claims to be true now and cannot stay so. The W7 brief's done-criterion
-— grep the plans for the live numbers and find nothing — is wrong as written:
-satisfying it deletes the measurements the file exists to hold. Applied instead:
-every surviving number is attached to its measurement date.
-
-**Why `ai-style status` and not only the blog mirror.** stylebot cannot discover
-where a blog, a runs directory or a detector artifact is — the one-way dependency
-arrow — so the generic command takes each as an explicit flag and reports absence
-rather than raising. **The cross-checks are why this is one function**: each
-number is printable alone, but what no artifact can see is the disagreement
-between them (D39, D42), which is also why the `promoted` rule moved into the
-library rather than staying the blog's.
-*Alternatives.* **A section of `ai-style log list`** — `log` is the capture
-session group. **Keep the numbers and add a CI check** — it can only run where
-the blog is checked out, the coupling the arrow forbids. **A generated section
-written back into the docs** — stale between runs, a merge conflict on every
-capture. *Deciding constraint*: a document that cannot be kept true is worse than
-none, because it is believed. **Re-evaluate if** corpus and tooling ever live in
-one repo, or `status` grows past one screen — the split is then by artifact.
 
 ## D53: the orphan prune is built and declined; the eval prune is applied and now needs a second pass
 
@@ -1302,3 +1246,34 @@ the property, keep the property strict.
 **Re-evaluate if** a third file turns up needing this. Twice is an accident of one entangled
 commit; a pattern would mean formatting is routinely landing inside feature commits, and the
 answer then is the pre-commit format gate (D86 amended), not another decision.
+
+## D96: a real capture's archive is the editable truth; `log recut` re-lands it
+
+**Decision (2026-09-10 by Dan).** D84's "nothing edits a draw" holds for a synthetic draw — a paid
+generator event — and is relaxed for the real stratum. `captures/<id>/{before,after}.md` is the
+record of a human edit, git is its ledger, and a human corrects it in place: a typo, a misplaced
+`sem` marker, a paragraph reverted to retract its pair. `ai-style log recut ARCHIVE_ID` re-lands
+the edited archive as draws under a fresh `capture_id`, `meta.archive_id` naming the archive and
+`supersedes` naming every earlier landing, so identity (`capture_id:chunk_index`), the supersession
+clause and session partitioning are untouched; the archive's `whole`, `source` and `snapped_at` are
+kept. `draws/captures.jsonl` stays append-only, a draw's `record` being the cut at landing time.
+`status --draws` lists archives whose live records are no longer substrings of them ("edited since
+landing"), which replaces the blog's `MANIFEST.json`, its hook stage and its byte-pinning test — all
+deleted. `corpus_provenance` follows `archive_id`.
+
+**Alternatives.** *Re-cut at view build* — a fresh cut reproduces 117 of 124 archives only by
+choosing between two gap policies per archive, and seven not at all (`findings.md` "A fresh cut
+reproduces"), so a build-time cut changes the view silently. *Reuse the capture id with
+`meta.recut`* — the clause supersedes per capture id, so a later `--redo` would leave the recut's
+draws standing. *Keep the manifest, add an edit command* — a byte pin the command must regenerate
+is the burden being removed; the drift line catches the same mutation, and the five archives the
+pin had frozen already drifted.
+
+**Deciding constraint.** A real draw's identity was never a text hash, so the pin protected nothing
+the code reads; archives were edited anyway (`c0f8fbfa6b`, and five by hand after landing); the
+guard was red and unrun; and every correction past the last save cost a four-place hand edit or a
+deletion. Measured: `findings.md` "A fresh cut reproduces 117 of 124 archived captures".
+
+**Re-evaluate if** the real stratum needs a whole-document re-cut under a new chunk policy (then a
+landing should record its knobs), or a recut is wanted on the 104 pre-archive captures (a
+chunk-scale archive would have to be minted from the draw).

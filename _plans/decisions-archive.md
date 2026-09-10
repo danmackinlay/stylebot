@@ -1,7 +1,7 @@
-# Design decisions — archive: D1–D50, and P1
+# Design decisions — archive: D1–D52, and P1
 
 Entries D1–D48, moved here 2026-09-04 in three passes, then D49, P1 and D50 on 2026-09-07, as `decisions.md` passed
-1,200 lines (P3). **They keep their numbers**; nothing was renumbered, and the
+1,200 lines, and D51–D52 on 2026-09-10 as it passed 1,300 (P3). **They keep their numbers**; nothing was renumbered, and the
 index at the top of [`decisions.md`](decisions.md) carries a one-line summary of
 each with a pointer here. Text is verbatim as it stood at the move, including the
 supersession notes several of them already carried.
@@ -1473,3 +1473,61 @@ would let two runs either side of a month boundary write the same cell twice, th
 2026-08-12 defect wearing a hat. So the lock is one file per **corpus** and
 `record_id` uniqueness is checked across it. **Re-evaluate if** a month's
 synthesis grows past a few hundred MB, or the corpus stops being committed.
+
+## D51: `git filter-repo` on the corpus is not worth a force-push — measured
+
+**Decision (W6, 2026-09-03).** Do not rewrite livingthing's history to purge old
+`pairs.jsonl` blobs. Delete `.git/subtree-cache` instead.
+
+*The measurement that decided it* (`findings.md` "Corpus blob cost"). The W6
+brief's figure — the corpus as ~85% of the repository — is **logical
+(uncompressed) blob size**. On disk, in the packfile, an append-only JSONL
+deltifies almost perfectly and the same versions cost a small fraction of that;
+everything under `_training_pairs/` is under 5% of packed blob content.
+Meanwhile `.git/subtree-cache` — a `git subtree` scratch directory, not history
+at all — is an order of magnitude larger than anything filter-repo could reclaim,
+and `rm -rf` on it needs no rewrite, no force-push and no coordination with
+anyone holding a clone.
+
+*Alternatives.* Run the pass anyway: tens of MiB reclaimed for a force-push to a
+GitHub Pages repo, every commit sha in the blog's own prose and in stylebot's run
+manifests invalidated (manifests pin `blog_sha` — D36), and every existing clone
+and worktree needing re-cloning. The script is written and reviewable in the W6
+handover, so the option stays open; it is simply not worth exercising.
+
+**Re-evaluate if** the corpus stops deltifying — a change that reorders or
+rewrites records wholesale on every commit would defeat it, which is exactly what
+D50's shard-level rewrite avoids — or if a genuinely large binary (a merged
+adapter, a `.joblib`) is committed by accident, where a targeted filter-repo on
+that one path is the right tool and this argument does not apply.
+
+## D52: documentation carries no mutable operational state — `status` answers instead
+
+**Decision (W7, 2026-09-03).** stylebot's prose — `CLAUDE.md`, `README.md` and
+`_plans/OVERVIEW.md` — states **no** corpus count, run number, "serving default"
+or artifact sha. Those facts move under git's feet, so `status.collect()`
+computes them on demand, sweeping the five artifacts that answer "where is this
+pipeline?" — corpus, `splits.json`, runs directory, detector artifact, and *the
+cross-checks between them*.
+
+`findings.md` and `decisions.md` are explicitly **exempt**, and the distinction
+is the whole design. A dated measurement records what was true then; a status
+sentence claims to be true now and cannot stay so. The W7 brief's done-criterion
+— grep the plans for the live numbers and find nothing — is wrong as written:
+satisfying it deletes the measurements the file exists to hold. Applied instead:
+every surviving number is attached to its measurement date.
+
+**Why `ai-style status` and not only the blog mirror.** stylebot cannot discover
+where a blog, a runs directory or a detector artifact is — the one-way dependency
+arrow — so the generic command takes each as an explicit flag and reports absence
+rather than raising. **The cross-checks are why this is one function**: each
+number is printable alone, but what no artifact can see is the disagreement
+between them (D39, D42), which is also why the `promoted` rule moved into the
+library rather than staying the blog's.
+*Alternatives.* **A section of `ai-style log list`** — `log` is the capture
+session group. **Keep the numbers and add a CI check** — it can only run where
+the blog is checked out, the coupling the arrow forbids. **A generated section
+written back into the docs** — stale between runs, a merge conflict on every
+capture. *Deciding constraint*: a document that cannot be kept true is worse than
+none, because it is believed. **Re-evaluate if** corpus and tooling ever live in
+one repo, or `status` grows past one screen — the split is then by artifact.
