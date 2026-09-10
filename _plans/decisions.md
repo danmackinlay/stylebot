@@ -11,7 +11,7 @@ re-evaluate-if, ≤ 30 lines. A number is a **citation into**
 three lines. A `P…` entry is a *proposal* in the same shape, followed by its
 verdict. This file and `findings.md` are the two that keep dated numbers;
 everywhere else a count is a claim about the present that git cannot keep true
-(D52). **D1–D50 live in [`decisions-archive.md`](decisions-archive.md)** and
+(D52). **D1–D55 live in [`decisions-archive.md`](decisions-archive.md)** and
 keep their numbers — the second index below is how you find them.
 
 ## Index — this file
@@ -67,8 +67,10 @@ keep their numbers — the second index below is how you find them.
 | D94 | `ruff format` is adopted; a formatting commit is the one commit that may re-baseline a budget | live |
 | D95 | D94's re-baseline follows the reformatting, not the formatting commit | live |
 | D96 | a real capture's archive is the editable truth; `log recut` re-lands it | live; amends D84 |
+| D97 | the coherence signal judges a boundary, not a document | live |
+| D98 | measure adherence before importing a capability-retention fix | live; nothing built |
 
-## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D52, plus P1)
+## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D55, plus P1)
 
 | # | title | status |
 |---|---|---|
@@ -123,74 +125,6 @@ keep their numbers — the second index below is how you find them.
 | D48 | `Styler` is a Protocol; it types the call, not the tokens | live |
 
 ---
-
-## D53: the orphan prune is built and declined; the eval prune is applied and now needs a second pass
-
-**Decision (W12, 2026-09-03).** `ai-style data prune-stale` ships, dry-runs by
-default, keeps a `.bak` and carries a test. Its **eval-contamination** half was
-applied (blog `c0e2ac85be`); its **orphan** half was measured and **not run**,
-and that is the decision rather than a postponement. Numbers: `findings.md`
-"What a stale-corpus prune would cost and buy".
-
-**W12's stated premise turned out false, and that is what settled it.** The item
-expected W2's segmentation change to have orphaned cells the corpus would keep
-paying for; it orphaned none. Four fifths of the orphans are prose Dan has edited
-since the pair was generated — the corpus being a frozen record of prose that
-moved, which is neither damage nor a reason to delete anything. Most of the rest
-is `div_is_prose` charged against the **section-bounded** arm, which is frozen
-policy: no future synth run refills those cells, so pruning is permanent loss.
-
-**And it would not have bought what it was wanted for**: the prune barely moves
-the effective per-passage weight D43 measured, because orphans are spread across
-posts roughly in proportion to the corpus. *Alternatives*: prune anyway on
-tidiness grounds — hundreds of paid-for pairs, half unregenerable, for a change
-of 0.02; or delete the command — but unlike D38's migrations this is a
-*measuring* instrument, and its question is worth asking before every retrain.
-
-**The open half: the eval stratum is synthetic again.** The two changes landed in
-the order that undoes one of them — the prune took the stratum to 0% synthetic
-and eval_v2 then grew it with a post carrying synthetic pairs. Nothing computed
-is wrong (D40's real facet is the headline), but the invariant is not held and
-`extend-eval` does not prune; the durable fix is for it to offer the prune for
-the posts it is about to freeze, since the two are one intent.
-**Re-evaluate if** `--skip-covered` accounting starts disagreeing with the corpus.
-
-## D54: a document-scale verdict is a mean over serving-scale chunks, unaligned across fields
-
-**Decision (2026-09-03, the same day as the measurement that forced it).** The
-detector is never handed a whole document. `eval.chunked_detector` wraps any
-`Detector` so a passage is first segmented exactly the way serving segments it
-(`infer.prose_chunks` — the promoted diet, the same protected blocks, the same
-budget), each chunk is scored on its own, and the passage's number is the
-**unweighted mean over its chunks**, in the ordinary detector slot with
-`n_chunks` and `sd` beside it so nothing downstream changes. **The chunks are not
-aligned across fields.** Before/after: `findings.md` "Document-scale eval".
-
-*Alternatives.* **Pair the chunks across fields**, which the first write-up
-assumed — rejected on the data: an edit is not a rewrite, Dan moves paragraph
-boundaries, so the three variants cut to different chunk counts and field *i*'s
-chunk *k* is often not field *j*'s; a chunk-index join buys a tighter interval by
-pairing things that are not pairs. **Segment at the detector's training scale** —
-scoring at a scale the styler never worked at reintroduces the gap `--documents`
-closes. **A max** — turns the verdict into "the worst paragraph", a good editing
-signal and a bad comparison one.
-
-*The deciding constraint.* An instrument has a range, and a StyleDistance
-embedding of a whole document is outside it — the shared ninety-odd percent of two
-variants dominates the vector and the difference washes out. Nothing knew that,
-because the detector had been built, validated and always used at chunk scale.
-Scale is therefore part of the instrument's *identity*: `chunked_detector`
-appends it to the head's `name`, so D39's mixing guard refuses to blend a
-whole-document reading with a chunk-wise one on a resume. `sd` is recorded
-because a mean with no spread hides the case it exists to expose.
-**Re-evaluate if** the backbone's context window covers a whole post, or the eval
-stratum supplies enough captured posts that the cluster count stops binding.
-
-## D55: the scoring pass runs in a child — and the crash it was built for was a different bug
-
-**Superseded by D59 on 2026-09-04.** The child, its `ScoreJob` marshalling and
-the `classify` lock beside it are deleted: with the pool gone one task drives the
-embedder, so the process boundary buys only a second model load.
 
 ## D56: `asyncio` first; threading must stringently justify itself
 
@@ -1256,13 +1190,12 @@ kept. `draws/captures.jsonl` stays append-only, a draw's `record` being the cut 
 landing"), which replaces the blog's `MANIFEST.json`, its hook stage and its byte-pinning test — all
 deleted. `corpus_provenance` follows `archive_id`.
 
-**Alternatives.** *Re-cut at view build* — a fresh cut reproduces 117 of 124 archives only by
-choosing between two gap policies per archive, and seven not at all (`findings.md` "A fresh cut
-reproduces"), so a build-time cut changes the view silently. *Reuse the capture id with
-`meta.recut`* — the clause supersedes per capture id, so a later `--redo` would leave the recut's
-draws standing. *Keep the manifest, add an edit command* — a byte pin the command must regenerate
-is the burden being removed; the drift line catches the same mutation, and the five archives the
-pin had frozen already drifted.
+**Alternatives.** *Re-cut at view build* — a fresh cut reproduces 117 of 124 archives only by choosing
+between two gap policies per archive, and seven not at all (`findings.md` "A fresh cut reproduces"), so a
+build-time cut changes the view silently. *Reuse the capture id with `meta.recut`* — the clause supersedes
+per capture id, so a later `--redo` would leave the recut's draws standing. *Keep the manifest, add an edit
+command* — a byte pin the command must regenerate is the burden being removed; the drift line catches the
+same mutation, and the five archives the pin had frozen already drifted.
 
 **Deciding constraint.** Edit data is valuable, but keeping every scrap is not the goal when it
 slows the collection of new edits: a burden of perfection on each save lowers the total (Dan). And
@@ -1273,3 +1206,65 @@ save cost a four-place hand edit or a deletion. `findings.md` "A fresh cut repro
 **Re-evaluate if** the real stratum needs a whole-document re-cut under a new chunk policy (then a
 landing should record its knobs), or a recut is wanted on the 104 pre-archive captures (a
 chunk-scale archive would have to be minted from the draw).
+
+## D97: the coherence signal judges a boundary, not a document
+
+**Decision (2026-08-21, ported to main 2026-09-10).** Measure cross-chunk
+coherence with a **paired forced-choice judge** over `(para_before, span_a,
+span_b, para_after)`. The other four signals score a passage in isolation, so a
+rewrite that strands a pronoun or restarts a metaphor is not scored badly — it
+is outside the range. Two modules under P2: `stylebot.fit` builds the cases,
+`stylebot.fit_judge` runs the comparison and the summary, `ai-style judge-fit`
+is the shell. Design and strata: [`fit-judge.md`](fit-judge.md).
+
+**Alternatives.** *A whole-document 1–5 judge* — not paired, so no score
+attributes to a chunk decision; n collapses from chunks to posts; and it scores
+whole-document rewriting, which is not the workflow. *One-sided context, by
+analogy with autoregressive decoding* — an incremental rewrite must also fit the
+paragraph downstream, so the context slot is two-sided. *An inference-time
+reranker* — three paragraphs of prompt and a round trip behind a keystroke.
+*No positive control* — a judge that ties everything reads exactly like a wash.
+
+**Deciding constraint.** The live unit of work is a span selected in the editor
+with Dan's own fixed prose either side, so the boundary is the unit that matches
+how the styler is used — and the neighbours are always Dan's prose, never the
+other arm's, or the comparison is uncontrolled. Presentation order is randomised
+per case and recorded, or the judge's position bias folds into the verdict. The
+control is part of the instrument, not an extra: [`findings.md`](findings.md),
+"The fit judge (coherence)".
+
+**Re-evaluate if** a verdict comes back a wash *with the control also soft* —
+the stratum, not the framing, has then stopped carrying signal, and it shrinks
+as pre-archive captures come to dominate the eval split.
+
+## D98: measure adherence before importing a capability-retention fix
+
+**Decision (2026-08-28, ported to main 2026-09-10).** Treat off-model-SFT
+capability degradation as an open **measurement**, not an accepted diagnosis:
+build a keyless adherence probe over `STYLE_SYSTEM`'s own promises first, and
+gate "reminder training" on what it shows. The audition and where the paper does
+and does not transfer: [`capability-retention.md`](capability-retention.md).
+Raised via Michael Clark (wassname).
+
+**Alternatives.** *Adopt reminder training on the paper's evidence* — it needs
+resume-from-checkpoint plumbing `run_training` does not have, and every prior
+failure of this shape here was a corpus defect fixed by corpus surgery.
+*Borrow MATH-500 as the capability metric* — we do not want a chatbot, we want a
+styler that keeps its own four promises. *Assume no degradation* — the identity
+fallback, an out-of-distribution chunk returning byte-identical, is the one
+failure on record shaped like it.
+
+**Deciding constraint.** The paper's trade runs the other way: a blue team
+removes a behaviour, so pulling back toward the base is nearly free; we install
+one, and the base is where the slop lives. We already carry three of its
+mitigations — LoRA rank 32 rather than FWFT, one epoch, no gradient through the
+prompt — plus inoculation prompting by accident of the frozen `STYLE_SYSTEM`
+(D14). The expected effect is small enough that measuring beats building.
+
+**Recorded against D33**: the paper's two-distribution arm came out worse than
+baseline. D33's masking dropout is a different construction, but it also
+partitions the input behind a marker — measure it rather than assume it free.
+
+**Re-evaluate if** the probe shows the promoted adapter adhering *worse than its
+own base* on the frozen prompt's promises: degradation is then real, and the
+acceptance rule is pre-registered in the plan.
