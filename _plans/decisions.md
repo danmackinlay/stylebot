@@ -70,8 +70,9 @@ keep their numbers — the second index below is how you find them.
 | D97 | the coherence signal judges a boundary, not a document | live |
 | D98 | measure adherence before importing a capability-retention fix | live; nothing built |
 | D99 | the Tinker base-model roster, priced: Qwen3.6-35B-A3B queued, Nemotron second, gpt-oss-20b out | live; amends D2 |
+| D100 | the differ never pairs a protected paragraph; affected landings are recut | live |
 
-## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D56, plus P1)
+## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D58, plus P1)
 
 | # | title | status |
 |---|---|---|
@@ -126,44 +127,6 @@ keep their numbers — the second index below is how you find them.
 | D48 | `Styler` is a Protocol; it types the call, not the tokens | live |
 
 ---
-
-## D57: the detector is batched out of the pool; the pool is kept for the judge alone
-
-**Superseded by D59 on 2026-09-04.** The batched detector pre-pass stands
-unchanged; the pool it was kept beside does not — the judge moved to an
-`asyncio.Semaphore` at parity, the rewrite this entry had rejected as buying
-nothing.
-
-## D58: size budgets are a test with a shrinking allowlist, and each "why" has one layer
-
-**Decision (2026-09-04)**: adopt P1–P8 of the blog's 2026-09 seam follow-up as
-CLAUDE.md "Budgets and layers"; `tests/test_budget.py` enforces the sizes, P3's
-and P6's doc budgets, and an allowlist of everything over budget as measured.
-
-**Alternatives considered**:
-- **An unenforced guideline in `CLAUDE.md`** — already there in spirit, and one
-  day's seam pass (2026-09-03) showed what it held.
-- **Hard budgets with no allowlist** — red on day one, so the first agent to meet
-  it deletes the test rather than the bloat.
-- **One budget module shared by both repos** — a test-only module in stylebot's
-  public API, and a blog suite that goes red on a stale git pin.
-
-**Deciding constraint**: the bloat was a good instinct (say why) applied at four
-layers at once, so one paragraph exists three or four times and every reader
-pays for all of them; review misses that, a line count does not. The allowlist
-is a ratchet, not a cliff, and a deleted entry is the only progress it records.
-
-**Re-evaluate if** an allowlist entry must *grow* for a plainly right change: the
-budget is then wrong; write the new budget, not the exception.
-
-**Amended 2026-09-04 (M1b, M1c)**: a module that comes under budget still fails
-the test; the allowlist edit rides in the commit that earns it (P5); rejected
-hint-not-fail, since an unread hint is how the allowlist stops shrinking.
-`findings.md` is gated the same way (`FINDINGS_ALLOWLIST`, prose ≤ 12 after the table).
-
-**Amended 2026-09-05 (R0, then the same day)**: the ratio failed on a five-line
-de-duplication; a fall-only `PROSE_CEILING` then priced out a new module within a day.
-Allowance: `PROSE_CEILING + 0.20 × new code` — deletion never fails, growth funds its contracts.
 
 ## D59: one mechanism in the scoring path — the judge awaits, everything else batches
 
@@ -1240,19 +1203,18 @@ acceptance rule is pre-registered in the plan.
 
 ## D99: the Tinker base-model roster, priced — Qwen3.6-35B-A3B queued, Nemotron second, gpt-oss-20b out
 
-**Decision (2026-08-25, recovered from an unmerged worktree 2026-09-10; amends D2).** Against
-Tinker's live table, four step-up candidates for the styler's base. *Queued first:*
-`Qwen/Qwen3.6-35B-A3B` — `get_recommended_renderer_names` returns the identical
-`qwen3_5_disable_thinking` run 4a trained with, so the base is the only variable and the result is
-readable; it is cheaper than the incumbent 9B on both train and sample at ~4× the parameters (3B
-active); the MLX shim (D8) carries over and Dan already runs it locally. *Second arm:*
-`nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` — durably the cheapest Hybrid row, carried by
-MLX (`mlx-community` conversions of the exact checkpoint), transformers (`nemotron_h`) and
-`tinker-cookbook ≥ 0.5.5` (`nemotron3_ultra_disable_thinking`); a Mamba-2/attention MoE whose
-SSM state and multi-token-prediction block are what D8's parity gate exists to catch, and whose
-cost profile favours the long prompts neighbour conditioning brings (`coherence-context.md`).
-*Held:* `Qwen/Qwen3.8-27B`, the dense fallback at 2.8× the cost (`Qwen3.6-27B` retired
-2026-09-02). *Ruled out:* `openai/gpt-oss-20b`, a Reasoning type no renderer can stop thinking.
+**Decision (2026-08-25, recovered from an unmerged worktree 2026-09-10; amends D2).** Against Tinker's
+live table, four step-up candidates for the styler's base. *Queued first:* `Qwen/Qwen3.6-35B-A3B` —
+`get_recommended_renderer_names` returns the identical `qwen3_5_disable_thinking` run 4a trained with,
+so the base is the only variable and the result is readable; it is cheaper than the incumbent 9B on both
+train and sample at ~4× the parameters (3B active); the MLX shim (D8) carries over and Dan already runs
+it locally. *Second arm:* `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` — durably the cheapest
+Hybrid row, carried by MLX (`mlx-community` conversions of the exact checkpoint), transformers
+(`nemotron_h`) and `tinker-cookbook ≥ 0.5.5` (`nemotron3_ultra_disable_thinking`); a Mamba-2/attention
+MoE whose SSM state and multi-token-prediction block are what D8's parity gate exists to catch, and
+whose cost profile favours the long prompts neighbour conditioning brings (`coherence-context.md`).
+*Held:* `Qwen/Qwen3.8-27B`, the dense fallback at 2.8× the cost (`Qwen3.6-27B` retired 2026-09-02).
+*Ruled out:* `openai/gpt-oss-20b`, a Reasoning type no renderer can stop thinking.
 
 **Alternatives.** *Stay on Qwen3.5-9B* — voice is near ceiling on the instruments (judge 4.08 vs
 Dan's 4.20), so a bigger base is not the coherence fix; the fit judge (D97) showed coherence does
@@ -1269,3 +1231,35 @@ arm deleted links at 100% anchor rejection (D33), so watch `n_anchor_rejected` o
 
 **Re-evaluate if** a run is meant to fix the identity fallback or anchor damage at inference
 (7/127 on run 4a), where scale plausibly helps, or once neighbour conditioning lands (Nemotron).
+
+## D100: the differ never pairs a protected paragraph; affected landings are recut
+
+**Decision (2026-09-10).** `capture.diff_chunks` asks the one segmenter (`markdown.line_kinds`,
+headings kept as content, D64) which paragraphs are wholly protected — fenced code, display math,
+a blockquote, a div under `div_is_prose` — *before* pairing: the matcher sees every such
+paragraph as one token, so an edit inside a block is no change and a block aligns across prose
+edits either side of it; coalescing (D81) never bridges one; a region is trimmed of protected
+paragraphs at its ends and dropped when one remains inside, a block inserted or deleted amid
+rewritten prose being a content move. Every pair stays a byte-exact substring of `before.md`, so
+`span` and D96's drift line hold. Existing landings are not rewritten (D84): the affected archives
+are re-landed by `ai-style log recut`, which now cuts under the fix; `plan_recut`'s `non-prose`
+and `mixed` flags stay the guard for a `whole` capture, which bypasses the differ.
+
+**Alternatives.** *A `ViewPolicy` clause dropping such pairs at build time* — the view has no
+archive, and a record alone cannot see a fence whose markers lie outside the chunk (`0ceb874d:5` is
+bare Python); `excluded_draw_ids` already names a draw when a recut is unwanted. *Cut the protected
+paragraphs out of a region and pair the rest* — a non-contiguous chunk has no `span` and reads as
+drifted forever. *Pair the prose runs either side of an inserted or deleted block positionally* —
+a guess about what merged. *Filter at landing instead* — a pair with the code inside is what 6 of
+199 located pairs are today.
+
+**Deciding constraint.** `findings.md` "Protected blocks in the live real pairs": 6 of 199 located
+pairs lie wholly inside a block and 14 more carry a wholly protected paragraph; "The affected
+archives under the fixed differ": 72 pairs become 69, 14 trimmed, 8 gone. The div policy is the
+segmenter's default, every div protected: `ai-style log` has no route for the blog's
+`div_is_prose`, and 2 of the 6 are callout prose the blog's policy would keep — the number a
+`dan-style log` mirror carrying the policy would earn.
+
+**Re-evaluate if** a save inside a callout is lost often enough to want that route
+(`session.save_session` and a `dan-style log` mirror carry `div_is_prose`), or the interior-drop
+rule is seen to swallow a real style transform.

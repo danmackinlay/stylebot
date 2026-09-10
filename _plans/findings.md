@@ -1334,3 +1334,51 @@ Training cost is not the constraint at this corpus size: the dearest row is $14 
 (the floor was raised on main 2026-09-10). `Qwen3.6-27B`, the dense step-up D2 had named, retired
 2026-09-02. Decided: D99.
 
+## Protected blocks in the live real pairs — 2026-09-10 (D100)
+
+Every live real record in the blog's view (`draws.live_draws` under
+`training_targets.view_policy()`), its before side located in its archive's
+`before.md` and read against `markdown.line_kinds(headings=False)`; the second
+column under the blog's `div_is_prose`, the first under the segmenter's default.
+
+| before side of the pair | default | blog div policy |
+|---|---:|---:|
+| no archive (landed before D96's archive) | 233 | 233 |
+| not found in its archive (edited since landing) | 3 | 3 |
+| prose | 167 | 167 |
+| protected lines glued into a prose paragraph, no blank line | 9 | 13 |
+| a wholly protected paragraph among prose | 14 | 12 |
+| wholly inside a protected block | 6 | 4 |
+
+The differ split on blank lines only (`lib.split_paragraphs`) and never asked
+the segmenter, so 20 of 199 located pairs carry a code fence, display math, a
+blockquote or a div; `0ceb874d:5` is bare Python with its fence markers outside
+the chunk, invisible to any record-only clause. The two pairs the policies
+disagree on are callout prose. Decided: D100.
+
+## The affected archives under the fixed differ — 2026-09-10 (D100)
+
+`capture.plan_pairs` over the 11 archives above, default knobs, the old differ
+(`main` at `d3bb9e7`) against the fix; "trimmed" is a new pair that is a
+substring of an old one, "gone" an old pair no new pair lies inside.
+
+| archive | old | new | same | trimmed | gone | of which wholly protected |
+|---|---:|---:|---:|---:|---:|---:|
+| `0ceb874d` | 16 | 16 | 11 | 5 | 2 | 2 |
+| `13d37eaf` | 3 | 2 | 2 | 0 | 1 | 1 |
+| `4afc6010` | 6 | 6 | 6 | 0 | 0 | 0 |
+| `603a9fef` | 1 | 0 | 0 | 0 | 1 | 1 |
+| `a48d2c5d` | 1 | 1 | 0 | 1 | 0 | 0 |
+| `abba8682` | 7 | 7 | 6 | 1 | 0 | 0 |
+| `aed11f2b` | 6 | 6 | 1 | 5 | 2 | 2 |
+| `c48abc7b` | 2 | 1 | 1 | 0 | 1 | 0 |
+| `ca32f59c` | 17 | 18 | 16 | 2 | 0 | 0 |
+| `e4721c01` | 12 | 12 | 12 | 0 | 0 | 0 |
+| `f33f75d5` | 1 | 0 | 0 | 0 | 1 | 1 |
+| total | 72 | 69 | 55 | 14 | 8 | 7 |
+
+Every new pair is a substring of its `before.md`. The one gone pair that was
+not wholly protected (`c48abc7b`) had a blockquote Dan un-quoted and rewrote
+around: the interior-drop rule. `603a9fef` and `f33f75d5` are a callout and a
+blockquote edit with nothing else changed, so a recut of them lands nothing and
+their live pairs retire by `excluded_draw_ids`. Decided: D100.

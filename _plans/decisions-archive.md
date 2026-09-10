@@ -1,7 +1,7 @@
-# Design decisions — archive: D1–D56, and P1
+# Design decisions — archive: D1–D58, and P1
 
 Entries D1–D48, moved here 2026-09-04 in three passes, then D49, P1 and D50 on 2026-09-07, as `decisions.md` passed
-1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, and D53–D55 the same day to make room for D97–D98 (P3).
+1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, D53–D55 the same day to make room for D97–D98, and D57–D58 for D100 (P3).
 **They keep their numbers**; nothing was renumbered, and the
 index at the top of [`decisions.md`](decisions.md) carries a one-line summary of
 each with a pointer here. Text is verbatim as it stood at the move, including the
@@ -1631,3 +1631,41 @@ pool, never timed and buying nothing (`findings.md` "Threading audit");
 non-re-entrant native object across threads; **a lock as the answer means the
 threads were the wrong shape**; batching beats fan-out. **Re-evaluate if** a
 free-threaded interpreter becomes this project's runtime.
+
+## D57: the detector is batched out of the pool; the pool is kept for the judge alone
+
+**Superseded by D59 on 2026-09-04.** The batched detector pre-pass stands
+unchanged; the pool it was kept beside does not — the judge moved to an
+`asyncio.Semaphore` at parity, the rewrite this entry had rejected as buying
+nothing.
+
+## D58: size budgets are a test with a shrinking allowlist, and each "why" has one layer
+
+**Decision (2026-09-04)**: adopt P1–P8 of the blog's 2026-09 seam follow-up as
+CLAUDE.md "Budgets and layers"; `tests/test_budget.py` enforces the sizes, P3's
+and P6's doc budgets, and an allowlist of everything over budget as measured.
+
+**Alternatives considered**:
+- **An unenforced guideline in `CLAUDE.md`** — already there in spirit, and one
+  day's seam pass (2026-09-03) showed what it held.
+- **Hard budgets with no allowlist** — red on day one, so the first agent to meet
+  it deletes the test rather than the bloat.
+- **One budget module shared by both repos** — a test-only module in stylebot's
+  public API, and a blog suite that goes red on a stale git pin.
+
+**Deciding constraint**: the bloat was a good instinct (say why) applied at four
+layers at once, so one paragraph exists three or four times and every reader
+pays for all of them; review misses that, a line count does not. The allowlist
+is a ratchet, not a cliff, and a deleted entry is the only progress it records.
+
+**Re-evaluate if** an allowlist entry must *grow* for a plainly right change: the
+budget is then wrong; write the new budget, not the exception.
+
+**Amended 2026-09-04 (M1b, M1c)**: a module that comes under budget still fails
+the test; the allowlist edit rides in the commit that earns it (P5); rejected
+hint-not-fail, since an unread hint is how the allowlist stops shrinking.
+`findings.md` is gated the same way (`FINDINGS_ALLOWLIST`, prose ≤ 12 after the table).
+
+**Amended 2026-09-05 (R0, then the same day)**: the ratio failed on a five-line
+de-duplication; a fall-only `PROSE_CEILING` then priced out a new module within a day.
+Allowance: `PROSE_CEILING + 0.20 × new code` — deletion never fails, growth funds its contracts.
