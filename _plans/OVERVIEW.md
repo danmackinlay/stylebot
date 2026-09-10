@@ -14,7 +14,9 @@ once their work shipped and the code became the better description):
 | this file | goal, process contract, interfaces, data contract, status, open slices |
 | [`decisions.md`](decisions.md) | why each non-obvious choice landed, what we got wrong, what we rejected |
 | [`findings.md`](findings.md) | every measured result — not re-derivable from git |
-| [`decisions-archive.md`](decisions-archive.md) | D1–D50 and P1, moved under P3; `decisions.md` keeps their index rows |
+| [`decisions-archive.md`](decisions-archive.md) | D1–D55 and P1, moved under P3; `decisions.md` keeps their index rows |
+| [`fit-judge.md`](fit-judge.md) | the coherence signal — a paired fit judge over `(before, span_a, span_b, after)`; built 2026-08-21 in an unmerged worktree, ported to main 2026-09-10 (D97) |
+| [`capability-retention.md`](capability-retention.md) | off-model-SFT degradation — the adherence probe that gates reminder training; opened 2026-08-28 in an unmerged worktree, ported 2026-09-10 (D98), nothing built |
 | [`eval-harness.md`](retired/eval-harness.md) | retired 2026-09-04 (P7); the four-signal harness — what shipped (D7, D17, D39–D42), what it refuted, the unbuilt fifth signal |
 | [`v2-longer-rewrites.md`](retired/v2-longer-rewrites.md) | retired 2026-09-04 (P7); the scale curriculum — generated 2026-08, trained as the blog's run 4; step 5 and the weighting policy stayed open |
 | [`synth-flag-audit.md`](retired/synth-flag-audit.md) | retired 2026-09-04 (P7); the `synth` option audit — 54 → 49 options (D21, D83), nothing open |
@@ -196,7 +198,7 @@ has a durable document, it is linked.
 | 1 · Pair capture | `stylebot.capture`, `ai-style log`; a save archives to `captures/` and appends draws (`stylebot.draws`, D84); `log recut` re-lands an edited archive (D96); mechanics in `_training_pairs/README.md` | ✅ shipped, daily use; heading context on both producers (immediate depth) |
 | 2 · Synthetic pairs | `stylebot.synth`, `stylebot.targets`, `ai-style synth` | ✅ shipped, behind the identity + inflation gates (`--max-transform-sim` / `--max-length-ratio`) and the anchor gate (D32) |
 | 3 · LoRA training | `stylebot.train`, `ai-style train --draws`; `ai-style promote` | ✅ shipped — paid runs, with `per_passage` / `pair_weight` hooks and a per-passage histogram in the manifest (D43); the manifest pins `data.policy_sha` / `data.draws_sha256`, and a run serves only once promoted (D74, D84). **Which runs exist and which one serves: `dan-style status`**, never this table |
-| E · Eval harness | `stylebot.eval`, `ai-style eval` — [`eval-harness.md`](retired/eval-harness.md) | ✅ built; all four signals live, detector = the trained voice classifier, verdicts carrying the detector identity that produced them and clustered by post (D39/D40) |
+| E · Eval harness | `stylebot.eval`, `ai-style eval` — [`eval-harness.md`](retired/eval-harness.md) | ✅ built; all four signals live, detector = the trained voice classifier, verdicts carrying the detector identity that produced them and clustered by post (D39/D40). The fifth is `stylebot.fit`/`fit_judge`, `ai-style judge-fit` — coherence at a boundary, with a mandatory positive control ([`fit-judge.md`](fit-judge.md), D97) |
 | 4 · Inference CLI | `stylebot.infer`, `ai-style run` / `dan-style run` | ✅ built; the backend surface is `stylebot.backends` (D35); Tinker-sampling v1, MLX exit verified, Fireworks open |
 | — · VS Code marker | `stylebot.serve`, `vscode-voice-marker/` — [`vscode-marker.md`](retired/vscode-marker.md) | ✅ built — sidecar + extension marking paragraphs with `P(slop)` and offering best-of rewrites; the extension segments through the sidecar's `segment` op rather than porting the segmenter (D44) |
 | — · Pipeline state | `stylebot.status`, `ai-style status` / `dan-style status` | ✅ built 2026-09-03 — corpus composition, splits health, promoted run, detector sha, and the cross-checks between them (D52) |

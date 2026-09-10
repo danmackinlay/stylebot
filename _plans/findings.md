@@ -721,6 +721,32 @@ pairs are **3.09% of train pairs but 12.2% of train passages** — which the by-
 val split cannot show, since val inflates identically. Capping at one pair per
 passage leaves 982 pairs; at 2, 1,660; at 3, 2,212. **No run has been re-cut.** D43.
 
+## The fit judge (coherence) — first verdict 2026-08-21
+
+`ai-style judge-fit` over the frozen 127-chunk eval stratum, both arms' existing
+rewrites, neighbours held fixed and identical across arms, presentation order
+randomised per case:
+
+| comparison | n | decided | A wins | B wins | ties | A-win rate (Wilson 95%) | verdict |
+|---|---:|---:|---:|---:|---:|---|---|
+| run 4a vs run 2 | 62 | 18 | 8 | 10 | 44 | 0.44 [0.246, 0.663] | **wash** |
+| run 4a vs run 2, interior only | 41 | 10 | 4 | 6 | 31 | 0.40 [0.168, 0.687] | wash |
+| **control**: Dan vs slop | 62 | 43 | 31 | 12 | 19 | **0.72 [0.573, 0.833]** | **decisive** |
+| control, interior only | 41 | 28 | 22 | 6 | 13 | 0.79 [0.605, 0.898] | decisive |
+
+The control is the instrument's own check: a judge that ties everything produces
+the top row whether or not the arms differ. The tie rate is the sharper tell —
+71% between the adapters against 31% in the control — so the wash is a property
+of the adapters, not of the judge. Position bias is not driving it: order is a
+hash of the case id, so arm A led 23 times of 62 in both runs, and in the control
+`slop` led 39 times and still lost 12–31. Run 4a closes more of the detector's
+slop→Dan gap than run 2 while being indistinguishable at boundaries; those agree
+once the detector is read as the paragraph-scale voice head it is.
+
+The stratum placed 62 of 127 (41 interior): 43 by corpus sibling, 7 by capture
+archive, 12 by matching the live post. The 65 dropped are overwhelmingly
+pre-2026-07-22 captures, which have no archive. Decided: D97.
+
 ## Inference and serving
 
 **Full eval against baseline** (2026-07-22, 40 val pairs, three signals agree):

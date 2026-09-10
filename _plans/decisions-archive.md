@@ -1,7 +1,8 @@
-# Design decisions — archive: D1–D52, and P1
+# Design decisions — archive: D1–D55, and P1
 
 Entries D1–D48, moved here 2026-09-04 in three passes, then D49, P1 and D50 on 2026-09-07, as `decisions.md` passed
-1,200 lines, and D51–D52 on 2026-09-10 as it passed 1,300 (P3). **They keep their numbers**; nothing was renumbered, and the
+1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, and D53–D55 the same day to make room for D97–D98 (P3).
+**They keep their numbers**; nothing was renumbered, and the
 index at the top of [`decisions.md`](decisions.md) carries a one-line summary of
 each with a pointer here. Text is verbatim as it stood at the move, including the
 supersession notes several of them already carried.
@@ -1531,3 +1532,71 @@ written back into the docs** — stale between runs, a merge conflict on every
 capture. *Deciding constraint*: a document that cannot be kept true is worse than
 none, because it is believed. **Re-evaluate if** corpus and tooling ever live in
 one repo, or `status` grows past one screen — the split is then by artifact.
+
+## D53: the orphan prune is built and declined; the eval prune is applied and now needs a second pass
+
+**Decision (W12, 2026-09-03).** `ai-style data prune-stale` ships, dry-runs by
+default, keeps a `.bak` and carries a test. Its **eval-contamination** half was
+applied (blog `c0e2ac85be`); its **orphan** half was measured and **not run**,
+and that is the decision rather than a postponement. Numbers: `findings.md`
+"What a stale-corpus prune would cost and buy".
+
+**W12's stated premise turned out false, and that is what settled it.** The item
+expected W2's segmentation change to have orphaned cells the corpus would keep
+paying for; it orphaned none. Four fifths of the orphans are prose Dan has edited
+since the pair was generated — the corpus being a frozen record of prose that
+moved, which is neither damage nor a reason to delete anything. Most of the rest
+is `div_is_prose` charged against the **section-bounded** arm, which is frozen
+policy: no future synth run refills those cells, so pruning is permanent loss.
+
+**And it would not have bought what it was wanted for**: the prune barely moves
+the effective per-passage weight D43 measured, because orphans are spread across
+posts roughly in proportion to the corpus. *Alternatives*: prune anyway on
+tidiness grounds — hundreds of paid-for pairs, half unregenerable, for a change
+of 0.02; or delete the command — but unlike D38's migrations this is a
+*measuring* instrument, and its question is worth asking before every retrain.
+
+**The open half: the eval stratum is synthetic again.** The two changes landed in
+the order that undoes one of them — the prune took the stratum to 0% synthetic
+and eval_v2 then grew it with a post carrying synthetic pairs. Nothing computed
+is wrong (D40's real facet is the headline), but the invariant is not held and
+`extend-eval` does not prune; the durable fix is for it to offer the prune for
+the posts it is about to freeze, since the two are one intent.
+**Re-evaluate if** `--skip-covered` accounting starts disagreeing with the corpus.
+
+## D54: a document-scale verdict is a mean over serving-scale chunks, unaligned across fields
+
+**Decision (2026-09-03, the same day as the measurement that forced it).** The
+detector is never handed a whole document. `eval.chunked_detector` wraps any
+`Detector` so a passage is first segmented exactly the way serving segments it
+(`infer.prose_chunks` — the promoted diet, the same protected blocks, the same
+budget), each chunk is scored on its own, and the passage's number is the
+**unweighted mean over its chunks**, in the ordinary detector slot with
+`n_chunks` and `sd` beside it so nothing downstream changes. **The chunks are not
+aligned across fields.** Before/after: `findings.md` "Document-scale eval".
+
+*Alternatives.* **Pair the chunks across fields**, which the first write-up
+assumed — rejected on the data: an edit is not a rewrite, Dan moves paragraph
+boundaries, so the three variants cut to different chunk counts and field *i*'s
+chunk *k* is often not field *j*'s; a chunk-index join buys a tighter interval by
+pairing things that are not pairs. **Segment at the detector's training scale** —
+scoring at a scale the styler never worked at reintroduces the gap `--documents`
+closes. **A max** — turns the verdict into "the worst paragraph", a good editing
+signal and a bad comparison one.
+
+*The deciding constraint.* An instrument has a range, and a StyleDistance
+embedding of a whole document is outside it — the shared ninety-odd percent of two
+variants dominates the vector and the difference washes out. Nothing knew that,
+because the detector had been built, validated and always used at chunk scale.
+Scale is therefore part of the instrument's *identity*: `chunked_detector`
+appends it to the head's `name`, so D39's mixing guard refuses to blend a
+whole-document reading with a chunk-wise one on a resume. `sd` is recorded
+because a mean with no spread hides the case it exists to expose.
+**Re-evaluate if** the backbone's context window covers a whole post, or the eval
+stratum supplies enough captured posts that the cluster count stops binding.
+
+## D55: the scoring pass runs in a child — and the crash it was built for was a different bug
+
+**Superseded by D59 on 2026-09-04.** The child, its `ScoreJob` marshalling and
+the `classify` lock beside it are deleted: with the pool gone one task drives the
+embedder, so the process boundary buys only a second model load.
