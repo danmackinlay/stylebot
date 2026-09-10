@@ -260,6 +260,9 @@ record of what was measured then, not a claim about now.
   opened 2026-09-10): two-sided, mixed-state neighbour conditioning, measured
   by the fit judge (D97) and a priced semantic-fidelity signal. Resurrects step
   5 of the retired v2 plan and the 2026-08-21 work found unmerged.
+- **Capture UX** ([`capture-ux.md`](capture-ux.md), opened 2026-09-10): the
+  correction path by source, not hash — per-post listing and recut, a
+  jump-to-archive editor command, and a per-post replay diff.
 - **Fireworks serving**: PEFT upload + scale-to-zero, retry on
   `503 DEPLOYMENT_SCALING_UP`; acceptance is the same chat-template parity test
   the MLX exit passed (D8 / `findings.md`).

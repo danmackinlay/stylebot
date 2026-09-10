@@ -84,6 +84,10 @@ decision with its own latency and spend numbers.
 - Ablation for free: the "absent" arm of the state mix is today's format, so
   one adapter yields the conditioned-vs-bare contrast at inference by
   withholding neighbours.
+- Per-post replay ([`capture-ux.md`](capture-ux.md) item 3): slop, Dan's edit,
+  the model's rewrite, side by side for one post — the one reading that does
+  not route through a number, and the plan exists partly because Dan's eye
+  disagreed with the detector on run 4a.
 
 ## Steps
 
