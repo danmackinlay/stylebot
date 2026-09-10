@@ -98,7 +98,8 @@ measurement and repairs, the blog's `_plans/stylebot-seam-followup-2026-09.md`.
 - **Nothing rewrites the corpus: draws are appended, views are built** (D84).
   A prune, re-cut or restamp is a policy clause plus a rebuild. A one-off
   migration is a hidden command deleted once its corpus has run it (D38) —
-  none exists today.
+  none exists today. **Except a real capture's archive**: fix
+  `captures/<id>/{before,after}.md` in place; `ai-style log recut ID` re-lands it (D96).
 - **Explicit paths, precedence `--flag` > `$STYLEBOT_DATA_DIR` > default**,
   resolved in `stylebot.config`. Two distinct inputs, never collapsed:
   `--blog-root` (read source) vs `--data-dir` (read/write state) — D45, D50.

@@ -170,8 +170,8 @@ notify downstream.
 
 | Artifact | Producer | Consumer | Format |
 |----------|----------|----------|--------|
-| `captures/<id>/` | Phase 1 | Phase 1 (re-cuts), the view | the real edit, verbatim: `before.md`, `after.md`, `meta.json`; append-only, guarded blog-side by `MANIFEST.json` and the pre-commit hook |
-| draws (`draws/captures.jsonl`, `draws/synth-<YYYY-MM>.jsonl`) | Phase 1 (human saves), Phase 2 (generator calls) | `stylebot.draws.build_view` | append-only JSONL, one record per generator call or save, accepted or not: `draw_id`, `source`, `blog_sha`, `span`, `outcome` (`accepted` / `gate:<name>` / `error:<class>`), the raw output, `supersedes`/`superseded_by` for a session's interim saves; committed (D84) |
+| `captures/<id>/` | Phase 1 (a save) | `log recut`, `docscale`, `status` | the real edit, verbatim: `before.md`, `after.md`, `meta.json`; git-versioned and **edited in place** — the editable truth of a real pair, re-landed by `ai-style log recut` (D96) |
+| draws (`draws/captures.jsonl`, `draws/synth-<YYYY-MM>.jsonl`) | Phase 1 (human saves), Phase 2 (generator calls) | `stylebot.draws.build_view` | append-only JSONL, one record per generator call or save, accepted or not: `draw_id`, `source`, `blog_sha`, `span`, `outcome` (`accepted` / `gate:<name>` / `error:<class>`), the raw output, `supersedes` for a session's interim saves and for a recut's earlier landing (`meta.archive_id`, D96); committed (D84) |
 | the view (`views/pairs-<policy_sha>/`) | `build_view` under a `ViewPolicy` | Phase 3, eval, `status` | chat-completion JSONL, `{messages:[system,user,assistant], meta:{...}}`, `pairs/`-shaped shards plus a `VIEW.json` naming `policy_sha` and `draws_sha256`; schema, types and `record_id` uniqueness enforced by `stylebot.pairs.validate_pairs_file`; built on first use, never committed; a manifest pins both shas (D84); mechanics in `_training_pairs/README.md` |
 | trained adapter | Phase 3 | Phase 4, eval | LoRA weights (Tinker-trained → HF export; Fireworks-hosted or local MLX) |
 | candidate text | Phase 4 | eval harness | plain prose in, plain prose out |
@@ -182,7 +182,8 @@ schema**, chunked the same way, so training data from real edits and synthetic
 paraphrase is shape-compatible and mixable with a weight column. Sharding is
 below that line: `shard_of` routes by record content, so which file a record
 sits in is never part of its meaning — and so is the view: a prune, re-cut or
-restamp is a `ViewPolicy` change plus a rebuild, never an edit to a draw (D84).
+restamp is a `ViewPolicy` change plus a rebuild, never an edit to a draw (D84);
+a real capture is corrected in its archive and re-landed (D96).
 
 ## Phase map & status
 
@@ -192,7 +193,7 @@ has a durable document, it is linked.
 | Phase | Where it lives in code | Status |
 |-------|------------------------|--------|
 | 0 · Scaffolding | pyproject / `stylebot.config` | ✅ done |
-| 1 · Pair capture | `stylebot.capture`, `ai-style log`; a save archives to `captures/` and appends draws (`stylebot.draws`, D84); mechanics in `_training_pairs/README.md` | ✅ shipped, daily use; heading context on both producers (immediate depth) |
+| 1 · Pair capture | `stylebot.capture`, `ai-style log`; a save archives to `captures/` and appends draws (`stylebot.draws`, D84); `log recut` re-lands an edited archive (D96); mechanics in `_training_pairs/README.md` | ✅ shipped, daily use; heading context on both producers (immediate depth) |
 | 2 · Synthetic pairs | `stylebot.synth`, `stylebot.targets`, `ai-style synth` | ✅ shipped, behind the identity + inflation gates (`--max-transform-sim` / `--max-length-ratio`) and the anchor gate (D32) |
 | 3 · LoRA training | `stylebot.train`, `ai-style train --draws`; `ai-style promote` | ✅ shipped — paid runs, with `per_passage` / `pair_weight` hooks and a per-passage histogram in the manifest (D43); the manifest pins `data.policy_sha` / `data.draws_sha256`, and a run serves only once promoted (D74, D84). **Which runs exist and which one serves: `dan-style status`**, never this table |
 | E · Eval harness | `stylebot.eval`, `ai-style eval` — [`eval-harness.md`](retired/eval-harness.md) | ✅ built; all four signals live, detector = the trained voice classifier, verdicts carrying the detector identity that produced them and clustered by post (D39/D40) |
