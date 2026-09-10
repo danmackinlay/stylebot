@@ -1269,10 +1269,11 @@ draws standing. *Keep the manifest, add an edit command* — a byte pin the comm
 is the burden being removed; the drift line catches the same mutation, and the five archives the
 pin had frozen already drifted.
 
-**Deciding constraint.** A real draw's identity was never a text hash, so the pin protected nothing
-the code reads; archives were edited anyway (`c0f8fbfa6b`, and five by hand after landing); the
-guard was red and unrun; and every correction past the last save cost a four-place hand edit or a
-deletion. Measured: `findings.md` "A fresh cut reproduces 117 of 124 archived captures".
+**Deciding constraint.** Edit data is valuable, but keeping every scrap is not the goal when it
+slows the collection of new edits: a burden of perfection on each save lowers the total (Dan). And
+the pin bought nothing: a real draw's identity was never a text hash; archives were edited anyway
+(`c0f8fbfa6b`, five by hand after landing); the guard was red and unrun; a correction past the last
+save cost a four-place hand edit or a deletion. `findings.md` "A fresh cut reproduces 117 of 124".
 
 **Re-evaluate if** the real stratum needs a whole-document re-cut under a new chunk policy (then a
 landing should record its knobs), or a recut is wanted on the 104 pre-archive captures (a
