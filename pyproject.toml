@@ -23,7 +23,7 @@ classifier = [
 ]
 trainer = [
     "tinker>=0.25.0",
-    "tinker-cookbook>=0.5.2",
+    "tinker-cookbook>=0.5.5",
 ]
 
 [project.scripts]
