@@ -1382,3 +1382,29 @@ not wholly protected (`c48abc7b`) had a blockquote Dan un-quoted and rewrote
 around: the interior-drop rule. `603a9fef` and `f33f75d5` are a callout and a
 blockquote edit with nothing else changed, so a recut of them lands nothing and
 their live pairs retire by `excluded_draw_ids`. Decided: D100.
+
+## The styler selector on the real stratum — 2026-09-10
+
+`livingthing.training_targets.styler_pair_ok` over every live real record in the blog's view
+(`draws.live_draws` under `view_policy()`), each drop attributed to its clause in the selector's
+order; "hand" is a `log save`, "mined" a D89 capture (`meta.mined`).
+
+| clause | pairs | hand | mined | after chars |
+|---|---:|---:|---:|---:|
+| `novel_after` > 0.6 | 4 | 2 | 2 | 9,739 |
+| identity, char similarity ≥ 0.95 | 30 | 20 | 10 | 34,466 |
+| anchor lost | 38 | 35 | 3 | 42,365 |
+| anchor invented | 41 | 37 | 4 | 86,689 |
+| anchor lost and invented | 11 | 9 | 2 | 20,519 |
+| **dropped, any clause** | **121** | 102 | 19 | **181,573** |
+| live real, total | 432 | 404 | 28 | 587,604 |
+
+The selector drops 28% of the real pairs and 31% of their characters; the symmetric anchor rule
+alone takes 90 pairs, 21% of the stratum, against the 15% its docstring measured on 2026-08-17.
+What Dan "invents" is mostly his own notebook: 51 of 81 added anchors are `./page.qmd` wiki-links
+and 19 are citations, cross-referencing while he edits; the lost-and-invented rows include a
+spelling normalisation of a link target, which the rule reads as one anchor lost and another
+invented. Whether 21% of the scarce side is worth its purity is the question
+`styler_pair_ok_keep_anchor_damage` exists to answer and has not been run; under the D96 premise
+it is the next ablation. Decided: nothing yet; input to the next retrain.
+
