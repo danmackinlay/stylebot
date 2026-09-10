@@ -256,6 +256,10 @@ record of what was measured then, not a claim about now.
   consumer consistency alone cannot fix. Folding the blog-side masker into
   stylebot is now load-bearing rather than tidy, since `ai-style run` ships no
   masker and a mask-first corpus would otherwise yield a blog-only adapter.
+- **Coherence context** ([`coherence-context.md`](coherence-context.md),
+  opened 2026-09-10): two-sided, mixed-state neighbour conditioning, measured
+  by the fit judge (D97) and a priced semantic-fidelity signal. Resurrects step
+  5 of the retired v2 plan and the 2026-08-21 work found unmerged.
 - **Fireworks serving**: PEFT upload + scale-to-zero, retry on
   `503 DEPLOYMENT_SCALING_UP`; acceptance is the same chat-template parity test
   the MLX exit passed (D8 / `findings.md`).
