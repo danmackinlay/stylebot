@@ -548,3 +548,36 @@ def test_recut_supersedes_the_archives_earlier_landing(store, post):
 def test_recut_without_an_archive_errors(store):
     with pytest.raises(SessionError, match="no capture archive"):
         session.recut_capture(store, "deadbeef")
+
+
+STAYS = "The second paragraph stays exactly as it was, word for word, unchanged."
+
+
+def test_plan_recut_reports_status_and_flags_without_writing(store, post):
+    """The dry run names a kept pair, a new pair, an identity-scale edit and a
+    chunk that lies inside a code fence, and appends no draw (D96)."""
+    session.open_session(store, post)
+    post.write_text(
+        "## S\n\nWe dig in.\n\nGap one.\n\n" + STAYS + "\n\nGap two.\n\n```python\nx = 1\n```\n",
+        encoding="utf-8",
+    )
+    # The before side needs the same fence and a second paragraph to diff against.
+    snap = store.snapshot_path(post) / "content.md"
+    snap.write_text(
+        "## S\n\nIt is worth noting the rich tapestry.\n\nGap one.\n\n"
+        + STAYS
+        + "\n\nGap two.\n\n```python\nx = 0\n```\n",
+        encoding="utf-8",
+    )
+    session.save_session(store, post)
+    cid = session.read_pairs(store)[0]["meta"]["capture_id"]
+    n_draws = len(list(session.read_pairs(store)))
+    after_md = store.captures_dir / cid / "after.md"
+    after_md.write_text(
+        after_md.read_text(encoding="utf-8").replace(STAYS, STAYS[:-1] + "!"),
+        encoding="utf-8",
+    )
+    planned = session.plan_recut(store, cid)
+    assert [p.status for p in planned] == ["kept", "new", "kept"]
+    assert planned[1].flags == ("identity",) and planned[2].flags == ("non-prose",)
+    assert len(list(session.read_pairs(store))) == n_draws

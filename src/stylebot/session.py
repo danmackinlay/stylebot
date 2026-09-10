@@ -10,6 +10,7 @@ contradict (D47). Nothing here prints or exits.
 
 from __future__ import annotations
 
+import difflib
 import json
 import shutil
 from collections.abc import Callable, Sequence
@@ -18,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from stylebot import capture, config, draws
+from stylebot import capture, config, draws, markdown, pairs
 from stylebot.errors import ConfigError, RunError
 
 __all__ = [
@@ -612,6 +613,93 @@ def capture_pair(
 
 
 # ---- recut: re-land an edited archive --------------------------------------
+
+
+@dataclass(frozen=True)
+class PlannedPair:
+    """One pair a recut would land: `status` against the archive's live landing
+    (`kept` | `changed` | `new`), `flags` the sanity marks a human should read."""
+
+    before: str
+    after: str
+    context: str
+    status: str
+    flags: tuple[str, ...]
+
+    @property
+    def similarity(self) -> float:
+        return difflib.SequenceMatcher(None, self.before, self.after).ratio()
+
+
+def _pair_flags(before: str, after: str, span_kinds: list[str | None]) -> tuple[str, ...]:
+    """`identity` (near-unchanged), `replaced` (little shared text), `non-prose`
+    (the whole before side lies in a protected block of the archive), `mixed`
+    (a protected block sits inside it), `oversize`."""
+    sim = difflib.SequenceMatcher(None, before, after).ratio()
+    flags: list[str] = []
+    if sim >= 0.98:
+        flags.append("identity")
+    elif sim < 0.3:
+        flags.append("replaced")
+    protected = [kind is not None for kind in span_kinds]
+    if protected and all(protected):
+        flags.append("non-prose")
+    elif any(protected):
+        flags.append("mixed")
+    if len(before) > 4500 or len(after) > 4500:
+        flags.append("oversize")
+    return tuple(flags)
+
+
+def plan_recut(
+    store: SessionStore,
+    archive_id: str,
+    *,
+    heading_context: bool = True,
+    gap_paras: int = 0,
+    gap_chars: int = 0,
+) -> list[PlannedPair]:
+    """What `recut_capture` would land, writing nothing (D96): each planned pair
+    against the archive's live landing, flagged for a human sanity check."""
+    archive_dir = store.captures_dir / archive_id
+    arch = capture.read_archive(archive_dir)
+    if arch is None:
+        raise SessionError(f"no capture archive {archive_id} under {store.captures_dir}")
+    live = {
+        pairs.extract_slop(r): pairs.extract_target(r)
+        for r in read_pairs(store)
+        if capture.archive_id_of(r.get("meta") or {}) == archive_id
+    }
+    try:
+        planned = capture.plan_pairs(
+            arch["before_text"],
+            arch["after_text"],
+            whole=bool(arch.get("whole")),
+            heading_context=heading_context,
+            coalesce_gap_paras=gap_paras,
+            coalesce_gap_chars=gap_chars,
+        )
+    except RunError as exc:
+        raise SessionError(str(exc)) from exc
+    kinds = markdown.line_kinds(arch["before_text"], headings=False)
+    out: list[PlannedPair] = []
+    for before, after, context in planned:
+        status = "kept" if live.get(before) == after else ("changed" if before in live else "new")
+        start = arch["before_text"].find(before)
+        span_kinds = (
+            kinds[
+                arch["before_text"].count("\n", 0, start) : arch["before_text"].count(
+                    "\n", 0, start + len(before)
+                )
+                + 1
+            ]
+            if start >= 0
+            else []
+        )
+        out.append(
+            PlannedPair(before, after, context, status, _pair_flags(before, after, span_kinds))
+        )
+    return out
 
 
 @dataclass(frozen=True)

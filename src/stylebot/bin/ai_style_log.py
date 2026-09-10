@@ -512,14 +512,31 @@ def pair(
 @click.option(
     "--gap-chars", default=0, show_default=True, type=int, help="Coalesce gap in characters."
 )
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Print the pairs the recut would land — status against the live landing, sizes, "
+    "similarity, sanity flags, first words — and write nothing.",
+)
 @capture_options(exclude=["whole"])
 @click.pass_context
-def recut(ctx: click.Context, archive_id: str, gap_paras: int, gap_chars: int, **kw):
+def recut(ctx: click.Context, archive_id: str, gap_paras: int, gap_chars: int, dry_run: bool, **kw):
     """Re-land captures/ARCHIVE_ID after editing its before.md or after.md by
     hand (D96): fresh draws supersede the earlier landing, the archive's
     whole/chunked mode is kept, and nothing under captures/ changes."""
     cap: CaptureOpts = bundles_from_kwargs(kw, {"capture": CaptureOpts})["capture"]
     store = _store()
+    if dry_run:
+        _echo_recut_plan(
+            session.plan_recut(
+                store,
+                archive_id,
+                heading_context=cap.heading_context,
+                gap_paras=gap_paras,
+                gap_chars=gap_chars,
+            )
+        )
+        return
     result = session.recut_capture(
         store,
         archive_id,
@@ -533,6 +550,25 @@ def recut(ctx: click.Context, archive_id: str, gap_paras: int, gap_chars: int, *
     click.echo(f"re-landed {archive_id} as {len(result.written)} pair(s) under capture {new_id}")
     click.echo(_corpus_confirmation(store))
     _remind_open_sessions(ctx)
+
+
+def _echo_recut_plan(planned: list[session.PlannedPair]) -> None:
+    """The dry-run table: one line per pair, flags spelled out, a summary."""
+    click.echo(f"{'#':>2} {'status':8} {'before':>6} {'after':>6} {'sim':>5}  flags / first words")
+    for i, pair in enumerate(planned):
+        first = (pair.after.strip().splitlines() or [""])[0][:60]
+        flags = ",".join(pair.flags) or "-"
+        click.echo(
+            f"{i:>2} {pair.status:8} {len(pair.before):>6} {len(pair.after):>6} "
+            f"{pair.similarity:>5.2f}  {flags:<22} {first!r}"
+        )
+    by_status = {s: sum(1 for p in planned if p.status == s) for s in ("kept", "changed", "new")}
+    flagged = sum(1 for p in planned if p.flags)
+    click.echo(
+        f"dry run: would land {len(planned)} pair(s) — {by_status['kept']} kept, "
+        f"{by_status['changed']} changed, {by_status['new']} new; {flagged} flagged. "
+        "Nothing written."
+    )
 
 
 if __name__ == "__main__":
