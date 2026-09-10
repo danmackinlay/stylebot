@@ -628,24 +628,26 @@ class PlannedPair:
 
     @property
     def similarity(self) -> float:
-        return difflib.SequenceMatcher(None, self.before, self.after).ratio()
+        """Word-level shared fraction; a number, not a verdict on style vs content."""
+        return _word_similarity(self.before, self.after)
+
+
+def _word_similarity(a: str, b: str) -> float:
+    return difflib.SequenceMatcher(None, a.split(), b.split()).ratio()
 
 
 def _pair_flags(before: str, after: str, span_kinds: list[str | None]) -> tuple[str, ...]:
-    """`identity` (near-unchanged), `replaced` (little shared text), `non-prose`
-    (the whole before side lies in a protected block of the archive), `mixed`
-    (a protected block sits inside it), `oversize`."""
-    sim = difflib.SequenceMatcher(None, before, after).ratio()
+    """`identity` (near-unchanged); `in:<kind>` when the whole before side lies
+    in one protected block of the archive under stylebot's default policy, or
+    `mixed:<kinds>` when such a block sits inside it; `oversize`."""
     flags: list[str] = []
-    if sim >= 0.98:
+    if _word_similarity(before, after) >= 0.95:
         flags.append("identity")
-    elif sim < 0.3:
-        flags.append("replaced")
-    protected = [kind is not None for kind in span_kinds]
-    if protected and all(protected):
-        flags.append("non-prose")
-    elif any(protected):
-        flags.append("mixed")
+    kinds = sorted({kind for kind in span_kinds if kind is not None})
+    if kinds and all(kind is not None for kind in span_kinds):
+        flags.append("in:" + "+".join(kinds))
+    elif kinds:
+        flags.append("mixed:" + "+".join(kinds))
     if len(before) > 4500 or len(after) > 4500:
         flags.append("oversize")
     return tuple(flags)

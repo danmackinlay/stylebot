@@ -516,26 +516,41 @@ def pair(
     "--dry-run",
     is_flag=True,
     help="Print the pairs the recut would land — status against the live landing, sizes, "
-    "similarity, sanity flags, first words — and write nothing.",
+    "word similarity, flags, first words — and write nothing. The cut is the one the real "
+    "run makes; the flags are annotations under stylebot's default protection.",
+)
+@click.option(
+    "--full",
+    is_flag=True,
+    help="With --dry-run: after the table, print every pair as a line diff, before to after.",
 )
 @capture_options(exclude=["whole"])
 @click.pass_context
-def recut(ctx: click.Context, archive_id: str, gap_paras: int, gap_chars: int, dry_run: bool, **kw):
+def recut(
+    ctx: click.Context,
+    archive_id: str,
+    gap_paras: int,
+    gap_chars: int,
+    dry_run: bool,
+    full: bool,
+    **kw,
+):
     """Re-land captures/ARCHIVE_ID after editing its before.md or after.md by
     hand (D96): fresh draws supersede the earlier landing, the archive's
     whole/chunked mode is kept, and nothing under captures/ changes."""
     cap: CaptureOpts = bundles_from_kwargs(kw, {"capture": CaptureOpts})["capture"]
     store = _store()
     if dry_run:
-        _echo_recut_plan(
-            session.plan_recut(
-                store,
-                archive_id,
-                heading_context=cap.heading_context,
-                gap_paras=gap_paras,
-                gap_chars=gap_chars,
-            )
+        planned = session.plan_recut(
+            store,
+            archive_id,
+            heading_context=cap.heading_context,
+            gap_paras=gap_paras,
+            gap_chars=gap_chars,
         )
+        _echo_recut_plan(planned)
+        if full:
+            _echo_recut_diffs(planned)
         return
     result = session.recut_capture(
         store,
@@ -550,6 +565,22 @@ def recut(ctx: click.Context, archive_id: str, gap_paras: int, gap_chars: int, d
     click.echo(f"re-landed {archive_id} as {len(result.written)} pair(s) under capture {new_id}")
     click.echo(_corpus_confirmation(store))
     _remind_open_sessions(ctx)
+
+
+def _echo_recut_diffs(planned: list[session.PlannedPair]) -> None:
+    """Every planned pair as a unified line diff, before to after; the blog's
+    prose is one sentence per line, so a line is a sentence."""
+    import difflib
+
+    for i, pair in enumerate(planned):
+        flags = ",".join(pair.flags) or "-"
+        click.echo(f"\n===== #{i} {pair.status} sim={pair.similarity:.2f} flags={flags} =====")
+        if pair.context:
+            click.echo(f"context: {pair.context}")
+        diff = difflib.unified_diff(
+            pair.before.splitlines(), pair.after.splitlines(), "before", "after", lineterm="", n=1
+        )
+        click.echo("\n".join(list(diff)[2:]))
 
 
 def _echo_recut_plan(planned: list[session.PlannedPair]) -> None:

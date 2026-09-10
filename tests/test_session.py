@@ -550,7 +550,10 @@ def test_recut_without_an_archive_errors(store):
         session.recut_capture(store, "deadbeef")
 
 
-STAYS = "The second paragraph stays exactly as it was, word for word, unchanged."
+STAYS = (
+    "The second paragraph stays exactly as it was, word for word, sentence for sentence, "
+    "clause for clause, with every comma where the author left it, unchanged."
+)
 
 
 def test_plan_recut_reports_status_and_flags_without_writing(store, post):
@@ -579,5 +582,5 @@ def test_plan_recut_reports_status_and_flags_without_writing(store, post):
     )
     planned = session.plan_recut(store, cid)
     assert [p.status for p in planned] == ["kept", "new", "kept"]
-    assert planned[1].flags == ("identity",) and planned[2].flags == ("non-prose",)
+    assert planned[1].flags == ("identity",) and planned[2].flags == ("in:fence",)
     assert len(list(session.read_pairs(store))) == n_draws
