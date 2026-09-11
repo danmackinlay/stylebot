@@ -44,6 +44,12 @@ PROSE_CODE_BASE = 11175
 #: code never fails and a new module funds its own contract docstrings.
 PROSE_DENSITY = 0.20
 
+#: How far above its recorded `lines` an allowlisted module may sit before the
+#: ratchet fails; the recorded number itself only falls, so creep is capped at
+#: the slack for good, not at zero per commit (D102). Functions and docstrings
+#: keep zero slack: a long function that grows is a refactor owed.
+ALLOWLIST_SLACK = 0.03
+
 # module -> the budgets it is over today, at their exact current size.
 # "functions" maps each over-budget function's qualified name (`Class.method`,
 # `outer.inner`) to its size, so a swap for a smaller function under a new name
@@ -159,8 +165,9 @@ def _check_scalar(name: str, key: str, budget: int, actual: int, allowed: dict) 
     if actual > budget:
         if ceiling is None:
             return [f"{name}: {key} is {actual} (budget {budget}) and is not allowlisted"]
-        if actual > ceiling:
-            return [f"{name}: {key} grew {ceiling} -> {actual}; the allowlist only shrinks"]
+        room = ceiling + (int(ceiling * ALLOWLIST_SLACK) if key == "lines" else 0)
+        if actual > room:
+            return [f"{name}: {key} grew {ceiling} -> {actual}, past {room}; the allowlist only shrinks"]
         if actual < ceiling:
             return [f"{name}: {key} is {actual}, under its allowance {ceiling} — lower the entry"]
     elif ceiling is not None:
@@ -310,6 +317,16 @@ def _decision_entries(path: Path) -> dict[str, int]:
     if current:
         entries[current] = n
     return entries
+
+
+def test_module_lines_may_sit_within_slack_of_their_allowance() -> None:
+    """An allowlisted module may exceed its recorded lines by ALLOWLIST_SLACK and no
+    more; below the record it must be lowered; a function ceiling has no slack (D102)."""
+    allowed = {"lines": 1000, "module_docstring": 40}
+    assert _check_scalar("m.py", "lines", MODULE_LINES, 1030, allowed) == []
+    assert "past 1030" in _check_scalar("m.py", "lines", MODULE_LINES, 1031, allowed)[0]
+    assert "lower the entry" in _check_scalar("m.py", "lines", MODULE_LINES, 999, allowed)[0]
+    assert "past 40" in _check_scalar("m.py", "module_docstring", MODULE_DOCSTRING_LINES, 41, allowed)[0]
 
 
 def test_decisions_stay_indexed_and_short() -> None:
