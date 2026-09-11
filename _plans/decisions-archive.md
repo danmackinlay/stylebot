@@ -1,4 +1,4 @@
-# Design decisions — archive: D1–D58, and P1
+# Design decisions — archive: D1–D60, and P1
 
 Entries D1–D48, moved here 2026-09-04 in three passes, then D49, P1 and D50 on 2026-09-07, as `decisions.md` passed
 1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, D53–D55 the same day to make room for D97–D98, and D57–D58 for D100 (P3).
@@ -1669,3 +1669,41 @@ hint-not-fail, since an unread hint is how the allowlist stops shrinking.
 **Amended 2026-09-05 (R0, then the same day)**: the ratio failed on a five-line
 de-duplication; a fall-only `PROSE_CEILING` then priced out a new module within a day.
 Allowance: `PROSE_CEILING + 0.20 × new code` — deletion never fails, growth funds its contracts.
+
+## D59: one mechanism in the scoring path — the judge awaits, everything else batches
+
+**Decision (2026-09-04).** `eval.score_pairs_file` has exactly one concurrency
+mechanism: an `asyncio.Semaphore` over the judge. A slice runs one pre-pass per
+signal — Vale batched, the detector batched, then the judge gathered
+`max_workers` calls at a time — and assembling records is bookkeeping.
+Deleted: the `ThreadPoolExecutor`, the `threading.Lock` in `classify`, the
+fallback-into-the-pool in `_detector_prepass`, and the `ScoreJob` child with the
+`-m stylebot.eval` entry point it spawned. Added: `openrouter_judge_async`, the
+judge a corpus pass takes, and `score_pairs_file_async` under the unchanged sync
+signature. `detect_many` moves to `classify`, so `serve` stops importing `eval`.
+
+**Alternatives.**
+
+- **Keep the pool for the judge alone** (D57's position, reversed here):
+  rejected on the measurement — parity, in fact 1.15x better, because the
+  semaphore gates calls where the pool gated records.
+- **Keep the child for loud failures**: rejected. Its diagnosis was disproved
+  (D55), the segfault it made legible was the pool's, and no pipe launders an
+  exit status any more.
+- **Run a sync judge under `asyncio.to_thread`**: rejected — the pool in an
+  async hat; >1 worker now refuses one, and the async client is per pass (F19c).
+
+**Deciding constraint**: D56's bar is a measured win in performance *or*
+complexity, and the pool cleared neither once the detector left it
+([`findings.md`](findings.md) "Threading audit", table 6). Four mechanisms had
+been stacked on one path in a day, each containing the previous one's failure.
+
+**Re-evaluate if** a second remote signal joins the judge (the gate then belongs
+per signal), or if anything drives the embedder from more than one thread again.
+
+## D60: a rewrite is a writer — it takes the corpus lock, and appenders re-check the inode
+
+**Superseded by D84 on 2026-09-05 (W4 step 4).** Nothing rewrites the corpus —
+a save is a draw, a prune a policy clause plus a rebuild — so there is no
+writer lock: `corpus.rewrite`, `rewrite_with`, `corpus_lock` and `PairsWriter`'s
+inode re-check are deleted.

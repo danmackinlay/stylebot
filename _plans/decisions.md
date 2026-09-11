@@ -72,8 +72,9 @@ keep their numbers — the second index below is how you find them.
 | D99 | the Tinker base-model roster, priced: Qwen3.6-35B-A3B queued, Nemotron second, gpt-oss-20b out | live; amends D2 |
 | D100 | the differ never pairs a protected paragraph; affected landings are recut | live |
 | D101 | `dan-style log` is the blog's capture shell; `ai-style log` carries no policy | live |
+| D102 | the allowlist has bounded slack; policy tables are data in their own module | live; amends D58 |
 
-## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D58, plus P1)
+## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D60, plus P1)
 
 | # | title | status |
 |---|---|---|
@@ -128,44 +129,6 @@ keep their numbers — the second index below is how you find them.
 | D48 | `Styler` is a Protocol; it types the call, not the tokens | live |
 
 ---
-
-## D59: one mechanism in the scoring path — the judge awaits, everything else batches
-
-**Decision (2026-09-04).** `eval.score_pairs_file` has exactly one concurrency
-mechanism: an `asyncio.Semaphore` over the judge. A slice runs one pre-pass per
-signal — Vale batched, the detector batched, then the judge gathered
-`max_workers` calls at a time — and assembling records is bookkeeping.
-Deleted: the `ThreadPoolExecutor`, the `threading.Lock` in `classify`, the
-fallback-into-the-pool in `_detector_prepass`, and the `ScoreJob` child with the
-`-m stylebot.eval` entry point it spawned. Added: `openrouter_judge_async`, the
-judge a corpus pass takes, and `score_pairs_file_async` under the unchanged sync
-signature. `detect_many` moves to `classify`, so `serve` stops importing `eval`.
-
-**Alternatives.**
-
-- **Keep the pool for the judge alone** (D57's position, reversed here):
-  rejected on the measurement — parity, in fact 1.15x better, because the
-  semaphore gates calls where the pool gated records.
-- **Keep the child for loud failures**: rejected. Its diagnosis was disproved
-  (D55), the segfault it made legible was the pool's, and no pipe launders an
-  exit status any more.
-- **Run a sync judge under `asyncio.to_thread`**: rejected — the pool in an
-  async hat; >1 worker now refuses one, and the async client is per pass (F19c).
-
-**Deciding constraint**: D56's bar is a measured win in performance *or*
-complexity, and the pool cleared neither once the detector left it
-([`findings.md`](findings.md) "Threading audit", table 6). Four mechanisms had
-been stacked on one path in a day, each containing the previous one's failure.
-
-**Re-evaluate if** a second remote signal joins the judge (the gate then belongs
-per signal), or if anything drives the embedder from more than one thread again.
-
-## D60: a rewrite is a writer — it takes the corpus lock, and appenders re-check the inode
-
-**Superseded by D84 on 2026-09-05 (W4 step 4).** Nothing rewrites the corpus —
-a save is a draw, a prune a policy clause plus a rebuild — so there is no
-writer lock: `corpus.rewrite`, `rewrite_with`, `corpus_lock` and `PairsWriter`'s
-inode re-check are deleted.
 
 ## D61: the executables package holds no libraries — `synth_cli` left `bin/`
 
@@ -1289,3 +1252,31 @@ close both at once. Cost: ~25 lines in the shell, one group in the blog, no new 
 
 **Re-evaluate if** a second consumer wants a pinned `log` — then `pins` should become a
 `SourcePolicy`-shaped object rather than a dict.
+
+## D102: the allowlist has bounded slack, and policy tables are data in their own module
+
+**Decision (2026-09-11 by Dan; D58's re-evaluate clause fired).** *One:* an allowlisted module
+may sit up to `ALLOWLIST_SLACK` (3%) above its recorded line count before the ratchet fails; the
+recorded number still only falls, so creep is capped at the slack for good rather than at zero
+per commit. Functions and docstrings keep zero slack. The change is in the checker's comparing
+half, so it lands in both repos' copies at once (`test_budget_conformance`). *Two:* the blog's
+policy tables — `SUPERSEDED_CAPTURES`, `EXCLUDED_DRAW_IDS`, the retired arms and degenerate
+cells, the roster and curriculum constants — leave `training_targets.py` (828 lines, allowlisted
+at 825) for `livingthing/corpus_policy.py`, a data module that grows one line per clause and sits
+far under budget; `training_targets` re-exports the names, so `view_policy()` and every importer
+are unchanged.
+
+**Alternatives.** *Trim three lines of prose to land three lines of policy* — the tax that fired
+the clause: D84 makes a prune a clause in code and D58 forbade the module to grow, so the most
+routine corpus act needed an unrelated edit. *Raise the recorded number* — the exception D58
+refused. *Exempt data modules in the checker* — a checker change for a module that will not
+near 800 for years. *Split only, no slack* — the next legacy module hits the wall on its next
+clause.
+
+**Deciding constraint.** Dan: an arbitrary limit must not block fulfilling another policy. The
+budgets have earned their keep (the seam pass, the prose ceiling) and stay; what goes is zero
+tolerance on modules that were over budget when the rule arrived, and the co-location of clause
+tables with mechanism.
+
+**Re-evaluate if** a legacy module rides the slack to its cap and stays there — the split was
+owed and the slack is hiding it — or a policy table comes to need mechanism beside it.
