@@ -1,7 +1,7 @@
-# Design decisions — archive: D1–D62, and P1
+# Design decisions — archive: D1–D64, and P1
 
 Entries D1–D48, moved here 2026-09-04 in three passes, then D49, P1 and D50 on 2026-09-07, as `decisions.md` passed
-1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, D53–D55 the same day to make room for D97–D98, D57–D58 for D100, and D59–D60 for D102; then D61–D62 on 2026-09-15 for D103 (P3).
+1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, D53–D55 the same day to make room for D97–D98, D57–D58 for D100, and D59–D60 for D102; then D61–D62 on 2026-09-15 for D103 and D63–D64 the same day for D105 (P3).
 **They keep their numbers**; nothing was renumbered, and the
 index at the top of [`decisions.md`](decisions.md) carries a one-line summary of
 each with a pointer here. Text is verbatim as it stood at the move, including the
@@ -1754,3 +1754,58 @@ buys a split the callers never see.
 
 **Re-evaluate if:** the blog imports from the owning modules directly, at which
 point the map is dead weight and should be deleted rather than maintained.
+
+## D63: orphan score rows are pruned where they are read
+
+**Decision.** `scoring.prune_orphan_scores` drops score rows whose pair is no
+longer in the corpus, at read time, rather than leaving them for a caller to
+filter. Scale: `findings.md` "`scores.jsonl` orphan rot".
+
+**Alternatives.** Leave them and filter per consumer — rejected: a stranded row
+inflates every `summarize_scores` mean silently, and puts a phantom row in a
+committed `covariate_table`, which is a number someone acts on. Refuse to score
+against a corpus whose ids have moved — rejected: a prune is the ordinary
+consequence of `data prune-stale` and should not be an error.
+
+**Deciding constraint.** A score file outlives the corpus it scored; the join is
+by `record_id` and nothing else re-checks it. This is distinct from D53, which
+prunes the **corpus**, not its scores.
+
+**Re-evaluate if:** score rows ever carry the corpus hash they were computed
+against, which would let a mismatch be detected rather than silently repaired.
+
+**Amended 2026-09-05 (W4 step 5 item 5, D39).** One stranded record is now one
+row per `(record_id, field, signal)`, so the returned count — and the line
+`run_eval` prints — is **rows, not records**. The join key and the read-time
+placement are unchanged.
+
+## D64: `STYLE_SYSTEM` is frozen text with an author slot; a re-stamp is a rebuild
+
+**Decision (2026-08-04, recorded 2026-09-04).** The frozen system prompt dropped
+`headings` from its "preserve … verbatim" list and gained *"Section headings may
+be restyled, but keep each heading's level and meaning."* Every existing record's
+`messages[0]` was re-stamped by a one-off script the same day — the only edit
+ever made to the string every pair in the corpus is keyed on.
+
+**Why it was permitted.** Cross-heading chunking (D15's consequence) packs
+heading lines into the chunk as rewritable **content**, so a prompt demanding
+they be preserved verbatim contradicts what the data teaches; the change is
+forced by the diet, not taste (`findings.md` "Section length", "Chunk yield by
+budget and mode"). It moved the instruction the pair is *conditioned on* and
+never the (slop, Dan) transform, which is what makes it legitimate.
+
+**Alternatives.** Keeping `headings` and forbidding cross-heading chunks caps the
+diet at the section wall (D15); forking a v2 prompt splits the corpus on the one
+field the validator pins. **Deciding constraint**: a corpus is conditioned on one
+prompt, so that prompt must have exactly one value, and it must be nameable.
+
+**Amended 2026-09-05 (W4 step 5).** The text stays frozen; the **author** is a
+slot — `ai_core.style_system(author)` renders `STYLE_SYSTEM_TEMPLATE`, and the
+default renders the 2026-08-04 string byte for byte. Which prompt a corpus
+carries is `ViewPolicy.system_prompt`: the view stamps `messages[0]` from the
+policy, the draw's own turn becomes history nothing reads, and validation takes
+the prompt as an argument. **Superseded**: "amending the string fails the whole
+corpus until every record is re-stamped by a one-off" — a re-stamp is now a
+policy change plus a view rebuild (D84), and there is still no migration.
+
+**Re-evaluate if** a masked corpus is generated: settle its placeholders first.

@@ -75,8 +75,9 @@ keep their numbers — the second index below is how you find them.
 | D102 | the allowlist has bounded slack; policy tables are data in their own module | live; amends D58 |
 | D103 | the detector's vector stays the bare embedding; the stylometric side-channel is closed by number | live |
 | D104 | the near-identity gate computes `transform_sim` at assembly when a record stamps none | live; amends D18 |
+| D105 | marker thresholds are a command over the eval stratum's scores; the quantile rule is policy | live |
 
-## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D62, plus P1)
+## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D64, plus P1)
 
 | # | title | status |
 |---|---|---|
@@ -131,61 +132,6 @@ keep their numbers — the second index below is how you find them.
 | D48 | `Styler` is a Protocol; it types the call, not the tokens | live |
 
 ---
-
-## D63: orphan score rows are pruned where they are read
-
-**Decision.** `scoring.prune_orphan_scores` drops score rows whose pair is no
-longer in the corpus, at read time, rather than leaving them for a caller to
-filter. Scale: `findings.md` "`scores.jsonl` orphan rot".
-
-**Alternatives.** Leave them and filter per consumer — rejected: a stranded row
-inflates every `summarize_scores` mean silently, and puts a phantom row in a
-committed `covariate_table`, which is a number someone acts on. Refuse to score
-against a corpus whose ids have moved — rejected: a prune is the ordinary
-consequence of `data prune-stale` and should not be an error.
-
-**Deciding constraint.** A score file outlives the corpus it scored; the join is
-by `record_id` and nothing else re-checks it. This is distinct from D53, which
-prunes the **corpus**, not its scores.
-
-**Re-evaluate if:** score rows ever carry the corpus hash they were computed
-against, which would let a mismatch be detected rather than silently repaired.
-
-**Amended 2026-09-05 (W4 step 5 item 5, D39).** One stranded record is now one
-row per `(record_id, field, signal)`, so the returned count — and the line
-`run_eval` prints — is **rows, not records**. The join key and the read-time
-placement are unchanged.
-
-## D64: `STYLE_SYSTEM` is frozen text with an author slot; a re-stamp is a rebuild
-
-**Decision (2026-08-04, recorded 2026-09-04).** The frozen system prompt dropped
-`headings` from its "preserve … verbatim" list and gained *"Section headings may
-be restyled, but keep each heading's level and meaning."* Every existing record's
-`messages[0]` was re-stamped by a one-off script the same day — the only edit
-ever made to the string every pair in the corpus is keyed on.
-
-**Why it was permitted.** Cross-heading chunking (D15's consequence) packs
-heading lines into the chunk as rewritable **content**, so a prompt demanding
-they be preserved verbatim contradicts what the data teaches; the change is
-forced by the diet, not taste (`findings.md` "Section length", "Chunk yield by
-budget and mode"). It moved the instruction the pair is *conditioned on* and
-never the (slop, Dan) transform, which is what makes it legitimate.
-
-**Alternatives.** Keeping `headings` and forbidding cross-heading chunks caps the
-diet at the section wall (D15); forking a v2 prompt splits the corpus on the one
-field the validator pins. **Deciding constraint**: a corpus is conditioned on one
-prompt, so that prompt must have exactly one value, and it must be nameable.
-
-**Amended 2026-09-05 (W4 step 5).** The text stays frozen; the **author** is a
-slot — `ai_core.style_system(author)` renders `STYLE_SYSTEM_TEMPLATE`, and the
-default renders the 2026-08-04 string byte for byte. Which prompt a corpus
-carries is `ViewPolicy.system_prompt`: the view stamps `messages[0]` from the
-policy, the draw's own turn becomes history nothing reads, and validation takes
-the prompt as an argument. **Superseded**: "amending the string fails the whole
-corpus until every record is re-stamped by a one-off" — a re-stamp is now a
-policy change plus a view rebuild (D84), and there is still no migration.
-
-**Re-evaluate if** a masked corpus is generated: settle its placeholders first.
 
 ## D65: `--include-real` defaults off — the two strata invent different things
 
@@ -1295,3 +1241,31 @@ at the layer that defines it; `classify_train.py` stays inside its D102 slack.
 styler selector) — then stamping new captures at `log`, with no recut, is the cheaper path; or
 `transform_similarity` changes definition, when stamped and computed values diverge and the gate
 should recompute for all.
+
+## D105: marker thresholds are a command over the eval stratum's detector scores; the quantile rule is policy
+
+**Decision (2026-09-15, Dan's ask).** `classify.calibrate_thresholds` scores the real, gated
+pairs of one splits role with a detector and cuts thresholds at named quantiles of the two
+sides' scores; `ai-style calibrate` is the shell, `dan-style calibrate` the blog mirror with
+the artifact, view and splits pinned and `--write` landing the edges in `.vscode/settings.json`.
+The population is the **eval role** by default — the only real pairs the head never saw — gated
+by the D18/D104 rule, so the slop side of a near-verbatim pair does not drag the slop quantiles
+toward Dan's. The rule (Dan p75, slop p50, p75, p95) is stylebot's default as an example and the
+blog's `MARKER_THRESHOLD_RULE` as policy, the selector idiom (D43). RUNBOOK §3a.
+
+**Alternatives.** *Quantiles from `scores.jsonl`* — the 2026-07-06 recipe: two steps, a
+resumable file that silently mixes instruments unless pointed at a fresh `--out` (the README's
+gotcha), and the training pool in the population. *All real pairs* — most are the head's own
+training rows, optimistic on the Dan side. *Ungated eval pairs* — a large share are
+near-verbatim, so both sides look like Dan and the slop quantiles collapse (D104's count).
+*Equal-width edges* — refuted 2026-07-06 (`findings.md` "The voice classifier"). *A calibration
+layer in the head* (`head.json` has the slot) — puts the marker's buckets in the artifact,
+where a refit would silently re-bucket the editor.
+
+**Deciding constraint.** Every refit moves the score distribution, and the thresholds had been
+recut by hand from a scratch file twice and then not at all across two refits; a recut that
+costs a runbook paragraph does not happen "fairly regularly", a command does. Numbers:
+`findings.md` "Marker thresholds recalibrated".
+
+**Re-evaluate if** the eval role's gated real stratum falls under ~50 pairs (a p95 over fewer
+is one pair), or the marker grows a per-document baseline that makes fixed edges moot.
