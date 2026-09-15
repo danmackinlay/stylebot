@@ -1408,3 +1408,41 @@ invented. Whether 21% of the scarce side is worth its purity is the question
 `styler_pair_ok_keep_anchor_damage` exists to answer and has not been run; under the D96 premise
 it is the next ablation. Decided: nothing yet; input to the next retrain.
 
+## Stylometric blocks beside the embedding — 2026-09-15 (D103)
+
+A scratch probe over the trainer's own harness — `assemble_dataset` under the blog's
+`detector_pair_ok`, the splits roles, `evaluate` (nested C), `evaluate_holdout`, and
+`verdict.paired_delta` clustered by post on the real pairs — from the blog root:
+`uv run --with wordfreq python probe_features.py --blog-root . --out probe` over view
+`pairs-b40e2eb2c8e23de9`: detector pool 2,348 pairs (186 real) on 185 posts, styler holdout
+3,563 pairs (100 real). Four per-passage blocks: **S** = `features.syntax_profile` (8);
+**L** = 14 lexical (`wordfreq` zipf mean/p10/rare/OOV, MATTR-50, hapax, mean and long word
+length, function-word, contraction, I/we/you and numeral rates); **C** = 12 cohesion (adjacent
+content-stem overlap mean/min, givenness, causal/contrastive/additive/exemplifying connective
+rates, sentence-initial connective and This/It/There rates, pronoun rate, paragraphs, sentences
+per paragraph); **M** = 5 markup (links, emphasis, code, footnotes, `@`-cites per sentence).
+Blocks standardised on detector-pool moments, embedding raw; `E+Fa` rescales the block to the
+embedding's coordinate scale. Δ is the paired per-pair correctness against E, 95% cluster
+bootstrap; "real" columns are the real facet.
+
+| arm | CV pairwise | CV AUC | CV pairwise real | CV AUC real | holdout pairwise real | holdout AUC real | Δ real, CV | Δ real, holdout |
+|---|---|---|---|---|---|---|---|---|
+| E (embedding) | 0.9731 | 0.9727 | 0.682 | 0.646 | 0.820 | 0.760 | — | — |
+| F (S+L+C+M) | 0.9321 | 0.8371 | 0.654 | 0.570 | 0.770 | 0.641 | −0.029 [−0.109, +0.086] | −0.050 [−0.177, +0.071] |
+| E+F | 0.9702 | 0.9683 | 0.667 | 0.643 | 0.780 | 0.769 | −0.011 [−0.057, +0.026] | −0.040 [−0.085, +0.009] |
+| E+F−M | 0.9702 | 0.9685 | 0.663 | 0.645 | 0.810 | 0.771 | −0.011 [−0.052, +0.025] | −0.010 [−0.053, +0.034] |
+| E+F−L | 0.9711 | 0.9717 | 0.657 | 0.641 | 0.790 | 0.760 | −0.008 [−0.041, +0.032] | −0.030 [−0.067, +0.000] |
+| E+F−C | 0.9694 | 0.9708 | 0.642 | 0.648 | 0.830 | 0.763 | −0.027 [−0.068, +0.010] | +0.010 [−0.023, +0.049] |
+| E+S | 0.9706 | 0.9718 | 0.679 | 0.648 | 0.790 | 0.763 | −0.004 [−0.035, +0.034] | −0.030 [−0.067, +0.000] |
+| E+Fa | 0.9711 | 0.9709 | 0.654 | 0.656 | 0.830 | 0.771 | −0.020 [−0.055, +0.017] | +0.010 [−0.035, +0.058] |
+
+No arm clears the rule written before the run (≥ +0.03 real AUC on both CV and holdout with
+the interval clear of zero): every interval straddles zero and no point delta reaches +0.01 on
+both. Cost was never the obstacle — S 0.15, L 0.59, C 0.31, M 0.07 ms per passage against the
+encoder's 8.2 ms batched (MPS). The head's largest feature weights are contraction rate (+),
+first-person and `we` rates (−) and adjacent overlap (−): the obvious, found and useless.
+**Where the real facet's ceiling is:** arm E's real-pair accuracy by `synth.transform_similarity`
+of the pair — ≤0.5: 0.75 CV (n 12) / 0.91 holdout (n 11); 0.5–0.7: 0.71 (34) / 0.87 (30);
+0.7–0.85: 0.84 (54) / 0.88 (32); **>0.85: 0.56 (51) / 0.67 (27)**. A third of the real pairs the
+CV grades sit above the D18 gate, which never fires on captures because `log` stamps no
+`transform_sim`; on those the detector is at chance, on the rest at 0.84–0.91. Decided: D103.
