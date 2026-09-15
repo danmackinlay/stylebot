@@ -390,8 +390,9 @@ def test_holdout_eval_facets_by_provenance():
 
 
 def test_assemble_drops_near_identity_pairs(tmp_path):
-    # Near-identical slop/author sides with opposite labels are label noise;
-    # the transform_sim gate drops them (None-covariate pairs are kept).
+    # Near-identical slop/author sides with opposite labels are label noise (D18).
+    # A stamped `transform_sim` is used as recorded; a record without one — every
+    # real capture — has it computed from its two sides at assembly (D104).
     import json
 
     from stylebot.classify_train import assemble_dataset
@@ -409,6 +410,12 @@ def test_assemble_drops_near_identity_pairs(tmp_path):
             "meta": meta,
         }
 
+    draft = (
+        "It is worth noting that the estimator delves into the rich tapestry of "
+        "the data, leveraging a robust framework to unlock key insights."
+    )
+    edited = "The estimator overfits. I would not trust it past the first decile."
+    tweaked = draft.replace("rich tapestry", "tapestry")  # a one-word capture
     path = tmp_path / "pairs.jsonl"
     path.write_text(
         "\n".join(
@@ -416,16 +423,19 @@ def test_assemble_drops_near_identity_pairs(tmp_path):
             for r in [
                 rec("proper slop text", "proper author text", sim=0.3),
                 rec("nearly identical text", "nearly identical text!", sim=0.97),  # dropped
-                rec("legacy pair no covariate", "legacy author no covariate"),  # kept
+                rec(draft, edited),  # a capture with a real edit: kept
+                rec(draft, tweaked),  # a capture that barely changed: dropped
+                rec(draft, tweaked, sim=0.3),  # a stamp is trusted over the texts
             ]
         )
         + "\n",
         encoding="utf-8",
     )
     ds = assemble_dataset(path)
-    assert ds.n_pairs == 2
+    assert ds.n_pairs == 3
+    assert [t for t in ds.texts if t == tweaked] == [tweaked]  # the stamped copy only
     ds_all = assemble_dataset(path, max_transform_sim=None)  # gate off
-    assert ds_all.n_pairs == 3
+    assert ds_all.n_pairs == 5
 
 
 def test_assemble_dataset_pair_ok_is_the_callers_policy(write_pairs_corpus):

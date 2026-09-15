@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from stylebot import classify
+from stylebot import classify, synth
 from stylebot.errors import ConfigError, MissingExtra
 from stylebot.pairs import extract_slop, extract_target, iter_pairs
 from stylebot.provenance import git_sha
@@ -138,7 +138,8 @@ def assemble_dataset(
 
     Each pair contributes both sides, heading-context stripped, grouped by
     `meta.source`; a pair over `max_transform_sim` is dropped as label noise
-    (D18; None disables the gate). `extra_positives` (`synth.Target`s or
+    (D18; None disables the gate), the value computed from the two sides when
+    the record stamps none (D104). `extra_positives` (`synth.Target`s or
     `(text, source)` tuples) are flagged `is_free` and kept out of the metric.
     `pair_ok` is the caller's pair-level policy hook, never hardcoded (D85).
     """
@@ -154,10 +155,13 @@ def assemble_dataset(
             n_selector += 1
             continue
         meta = rec.get("meta") or {}
-        sim = meta.get("transform_sim")
-        if max_transform_sim is not None and sim is not None and sim > max_transform_sim:
-            n_near_identity += 1
-            continue
+        if max_transform_sim is not None:
+            sim = meta.get("transform_sim")
+            if sim is None:  # a capture stamps none (D104)
+                sim = synth.transform_similarity(slop, author)
+            if sim > max_transform_sim:
+                n_near_identity += 1
+                continue
         source = meta.get("source") or "?"
         ds._add_pair(slop, author, source, synthetic=bool(meta.get("synthetic")))
     if n_near_identity:
