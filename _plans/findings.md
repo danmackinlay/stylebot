@@ -1481,3 +1481,22 @@ four folds and negative in one, against a fold std of 0.10. The gated head is no
 it is the same head on an honest metric. Its nested C is 100 in seven folds of eight and for the
 shipped head, the grid's top — a boundary chosen, not searched (`C_GRID`'s own comment). The
 synthetic facets are unmoved (0.995 / 0.989 CV, 0.997 / 0.993 holdout). Decided: D104.
+
+## Marker thresholds recalibrated — 2026-09-15 (D105)
+
+`uv run dan-style calibrate` from the blog root: the D104-gated head (`voice-clf@7fcae49e97`)
+scored on the eval role's real pairs — the stratum it never saw — gated at
+`transform_sim ≤ 0.85`: 107 pairs on 12 posts, 214 passages, keyless, one local encode.
+
+| side | p5 | p25 | p50 | p75 | p95 |
+|---|---|---|---|---|---|
+| dan | 0.003 | 0.012 | 0.079 | 0.270 | 0.725 |
+| slop | 0.013 | 0.105 | 0.322 | 0.765 | 0.968 |
+
+Rule Dan-p75, slop p50/p75/p95 gives edges **[0.27, 0.32, 0.77, 0.97]**; the committed edges
+`[0.51, 0.55, 0.59, 0.65]` were cut 2026-07-06 from a distribution that sat in ≈[0.32, 0.68]
+("The voice classifier"). Under the stale edges half the slop side sits below the first mark and
+only a tenth of Dan's prose is marked at all. The distribution is no longer narrow: the head's C
+is at the grid top (100, seven of eight folds — the D104 report), so scores run to the rails and
+a twentieth of Dan's own prose scores above 0.72. The rule still ascends; whether a near-binary
+head is what the marker wants is the open C-grid question, not the calibration's. Decided: D105.
