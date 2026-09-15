@@ -190,10 +190,10 @@ Other settings: `voiceMarker.minChars` (skip short/noisy paragraphs, default
 
 **Thresholds are calibrated quantiles, not equal-width bins.** Raw detector
 scores cluster in a narrow band (≈[0.32, 0.68] on Dan's corpus), so naive
-0.2/0.4/0.6/0.8 edges would leave every bucket empty or full. Score your
-corpus with `ai-style eval --detector-model`, take quantiles of the two
-sides' detector scores, and set the edges at roughly human-p75 (floor of the
-first mark), slop-p50, slop-p75, slop-p95. The quantiles the current edges
+0.2/0.4/0.6/0.8 edges would leave every bucket empty or full. `ai-style calibrate`
+cuts them from quantiles of the two sides' detector scores — human-p75 (floor
+of the first mark), slop-p50, slop-p75, slop-p95 by default — on the real
+pairs the head never trained on (D105). The quantiles the current edges
 were cut from: [`_plans/findings.md`](_plans/findings.md) "The voice classifier".
 
 ### Updating after retraining the classifier
@@ -211,10 +211,10 @@ the extension:
    `embed_model`, and the dim-mismatch guard in `stylebot.classify` fails
    loudly if head and embedder disagree.
 3. **Recalibrate `voiceMarker.thresholds`** — the score distribution moves
-   with every retrain. Gotcha: `scores.jsonl` is resumable (already-scored
-   `(record_id, field, signal)` keys are skipped), so point the recalibration
-   run at a *fresh* `--out` — `scoring.scores_filename` names one per head —
-   or you'll silently compute quantiles over the old model's scores.
+   with every retrain. `ai-style calibrate --detector-model DIR --pairs …
+   --splits …` scores the eval role's real pairs (the ones the head never
+   saw) with the fresh artifact and prints the edges under the quantile
+   rule (`--rule`, default Dan-p75, slop p50/p75/p95); paste them in.
    Threshold changes apply live, no restart.
 
 Rebuilding/reinstalling the `.vsix` is needed only when the **wire protocol**

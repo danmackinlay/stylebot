@@ -18,7 +18,7 @@ import click
 
 # Library modules import at module scope so click can own their defaults; all
 # import free. `infer` stays lazy (D49).
-from stylebot import backends, config, draws, pairs, synth, synth_cli
+from stylebot import backends, classify, config, draws, pairs, synth, synth_cli
 from stylebot import classify_cli as cc
 from stylebot import classify_train as ct
 from stylebot import eval as ev
@@ -679,6 +679,19 @@ def status_cmd(
         click.echo(json.dumps(asdict(report), indent=2, default=str))
         return
     click.echo(st.format_status(report))
+
+
+@main.command("calibrate", cls=SectionedCommand)
+@cc.calibrate_options()
+def calibrate_cmd(**kw) -> None:
+    """Cut the editor marker's P(slop) bucket edges from a detector's score
+    quantiles on real pairs it never trained on (D105). Keyless; one local
+    encode. Paste `thresholds` into the extension's `voiceMarker.thresholds`."""
+    opts = bundles_from_kwargs(kw, cc.CALIBRATE_PARAMS)["opts"]
+    cal = cc.calibrate(opts)
+    click.echo(
+        json.dumps(cal, indent=2) if opts.as_json else "\n".join(classify.format_calibration(cal))
+    )
 
 
 @main.command("build-view", cls=SectionedCommand)

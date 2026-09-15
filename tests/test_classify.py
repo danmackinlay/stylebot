@@ -149,3 +149,88 @@ def test_detect_many_falls_back_when_the_detector_has_no_batch_path():
 
     assert [r["score"] for r in classify.detect_many(plain, ["a", "b", "c"])] == [0.5] * 3
     assert calls == [1, 1, 1]  # the obvious loop; the caller never had to ask
+
+
+# ---------------------------------------------------------------------------
+# Marker-threshold calibration (D105): real pairs of one role, gated, quantile-cut
+# ---------------------------------------------------------------------------
+
+
+def _calibration_corpus(tmp_path):
+    """Three real posts + one synthetic, two edited pairs each; slop sides say
+    'slop', Dan sides say 'dan', and a stub detector reads the word."""
+    from stylebot import splits as sp
+    from stylebot.ai_core import STYLE_SYSTEM
+
+    path = tmp_path / "pairs.jsonl"
+    posts = ["post/a.qmd", "post/b.qmd", "post/c.qmd", "post/z.qmd"]
+    with path.open("w", encoding="utf-8") as fp:
+        for i, post in enumerate(posts):
+            for c in range(2):
+                slop = f"slop {i}{c}: the model wrote an even, tidy paragraph about {post}."
+                dan = (
+                    f"dan {i}{c}: I'd say {post} is odd, though — it wanders off, and that is fine."
+                )
+                rec = {
+                    "messages": [
+                        {"role": "system", "content": STYLE_SYSTEM},
+                        {"role": "user", "content": slop},
+                        {"role": "assistant", "content": dan},
+                    ],
+                    "meta": {"source": post, "synthetic": post == "post/z.qmd"},
+                }
+                fp.write(json.dumps(rec) + "\n")
+    splits = sp.make_splits(posts, eval_frac=0.5, eval_candidates=posts[:2], seed=0)
+
+    def stub_detector(prose: str) -> dict:
+        n = int(prose.split(":")[0].split()[-1])  # the pair index, for spread
+        return {"score": (0.6 if prose.startswith("slop") else 0.3) + n / 100, "configured": True}
+
+    stub_detector.identity = {"name": "stub", "git_sha": "abc123"}
+    return path, splits, stub_detector
+
+
+def test_calibrate_scores_only_the_roles_real_pairs(tmp_path):
+    path, splits, det = _calibration_corpus(tmp_path)
+    cal = classify.calibrate_thresholds(det, path, splits=splits, role="eval")
+    assert set(splits["eval_posts"]) == {"post/a.qmd", "post/b.qmd"}
+    assert cal["n_pairs"] == 4 and cal["n_posts"] == 2 and cal["role"] == "eval"
+    assert cal["instrument"]["name"] == "stub"
+    # Every dan score sits below every slop score, so the rule's edges ascend.
+    assert cal["quantiles"]["dan"][95] < cal["quantiles"]["slop"][5]
+    assert cal["thresholds"] == sorted(cal["thresholds"]) and cal["ascending"]
+    assert cal["rule"] == [["dan", 75], ["slop", 50], ["slop", 75], ["slop", 95]]
+
+
+def test_calibrate_without_splits_takes_every_real_pair_never_synthetic(tmp_path):
+    path, _, det = _calibration_corpus(tmp_path)
+    cal = classify.calibrate_thresholds(det, path)
+    assert cal["n_pairs"] == 6 and cal["n_posts"] == 3 and cal["role"] is None
+
+
+def test_calibrate_refuses_an_empty_population(tmp_path):
+    from stylebot.errors import ConfigError
+
+    path, splits, det = _calibration_corpus(tmp_path)
+    with pytest.raises(ConfigError, match="nothing to calibrate"):
+        classify.calibrate_thresholds(det, path, splits=splits, role="eval", max_transform_sim=0.0)
+
+
+def test_threshold_rule_parses_and_rejects():
+    from stylebot.errors import ConfigError
+
+    assert classify.parse_threshold_rule("dan:75, slop:50") == (("dan", 75), ("slop", 50))
+    for bad in ("human:75", "dan:0", "dan:100", "dan", "slop:x"):
+        with pytest.raises(ConfigError):
+            classify.parse_threshold_rule(bad)
+
+
+def test_format_calibration_warns_when_edges_do_not_ascend(tmp_path):
+    path, splits, det = _calibration_corpus(tmp_path)
+    cal = classify.calibrate_thresholds(det, path, splits=splits, rule=(("slop", 95), ("dan", 5)))
+    lines = classify.format_calibration(cal)
+    assert lines[0].startswith(
+        "stub@abc123 on 4 real pairs (eval role, transform_sim ≤ 0.85), 2 posts"
+    )
+    assert any(line.startswith("thresholds [") for line in lines)
+    assert any("WARNING" in line for line in lines) and not cal["ascending"]

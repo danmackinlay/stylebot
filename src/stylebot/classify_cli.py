@@ -9,11 +9,12 @@ from pathlib import Path
 
 import click
 
+from stylebot import classify
 from stylebot import classify_train as ct
 from stylebot import splits as sp
 from stylebot.cli_options import Emitter, bundle_options, opt, silent
 from stylebot.draws import ViewOpts
-from stylebot.errors import ConfigError
+from stylebot.errors import ConfigError, MissingExtra
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,77 @@ TRAIN_CLF_PARAMS: dict[str, type] = {"opts": TrainClfOpts, "view": ViewOpts}
 def train_clf_options(**kw):
     """The whole `train-clf` surface as one decorator; `kw` is `bundle_options`'."""
     return bundle_options([TrainClfOpts, ViewOpts], **kw)
+
+
+@dataclass(frozen=True)
+class CalibrateOpts:
+    """The `calibrate` surface: which artifact, whose real pairs, which rule (D105)."""
+
+    cli_section = "Calibrate"
+
+    detector_dir: Path | None = opt(
+        None,
+        "--detector-model",
+        "detector_dir",
+        required=True,
+        type=click.Path(file_okay=False, path_type=Path),
+        help="The artifact whose editor buckets to cut (head.json + meta.json).",
+    )
+    pairs_path: Path | None = opt(
+        None,
+        "--pairs",
+        "pairs_path",
+        required=True,
+        type=click.Path(path_type=Path),
+        help="The corpus: a pairs.jsonl, a pairs/ shard directory or a built view.",
+    )
+    splits_path: Path | None = opt(
+        None,
+        "--splits",
+        "splits_path",
+        type=click.Path(dir_okay=False, path_type=Path),
+        help="splits.json; with it only --role's real pairs are scored (D105).",
+    )
+    role: str = opt(
+        "eval",
+        "--role",
+        show_default=True,
+        type=click.Choice(["eval", "styler", "detector"]),
+        help="Whose real pairs to score; eval is the stratum the head never saw.",
+    )
+    rule: str = opt(
+        classify.DEFAULT_THRESHOLD_RULE_SPEC,
+        "--rule",
+        show_default=True,
+        help="Ascending edges as side:percentile, sides dan|slop; an example, re-pin it as policy.",
+    )
+    as_json: bool = opt(
+        False, "--json", "as_json", is_flag=True, help="Emit the calibration as JSON."
+    )
+
+
+CALIBRATE_PARAMS: dict[str, type] = {"opts": CalibrateOpts}
+
+
+def calibrate_options(**kw):
+    """The whole `calibrate` surface as one decorator."""
+    return bundle_options([CalibrateOpts], **kw)
+
+
+def calibrate(opts: CalibrateOpts) -> dict:
+    """The command body: the detector rebuilt from the artifact, then
+    `classify.calibrate_thresholds` over the role's real pairs (D105)."""
+    try:
+        detector = classify.sklearn_detector(opts.detector_dir)
+    except ImportError as exc:
+        raise MissingExtra(f"--detector-model needs the embedder installed: {exc}") from exc
+    return classify.calibrate_thresholds(
+        detector,
+        opts.pairs_path,
+        splits=sp.load_splits(opts.splits_path) if opts.splits_path is not None else None,
+        role=opts.role,
+        rule=classify.parse_threshold_rule(opts.rule),
+    )
 
 
 def format_clf_metrics(metrics: dict, indent: str = "") -> list[str]:
