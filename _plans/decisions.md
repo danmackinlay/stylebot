@@ -73,8 +73,9 @@ keep their numbers — the second index below is how you find them.
 | D100 | the differ never pairs a protected paragraph; affected landings are recut | live |
 | D101 | `dan-style log` is the blog's capture shell; `ai-style log` carries no policy | live |
 | D102 | the allowlist has bounded slack; policy tables are data in their own module | live; amends D58 |
+| D103 | the detector's vector stays the bare embedding; the stylometric side-channel is closed by number | live |
 
-## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D60, plus P1)
+## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D62, plus P1)
 
 | # | title | status |
 |---|---|---|
@@ -129,53 +130,6 @@ keep their numbers — the second index below is how you find them.
 | D48 | `Styler` is a Protocol; it types the call, not the tokens | live |
 
 ---
-
-## D61: the executables package holds no libraries — `synth_cli` left `bin/`
-
-**Decision (2026-08-11, recorded 2026-09-04).** 1000+ lines of synth
-orchestration moved from `bin/` to `stylebot.synth_cli`, raising its own
-`SynthConfigError` / `SynthRunError` / `SynthGenerationError`; `bin/ai_style.py`
-translates them to exit codes at the boundary (now `cli_options.translate_errors`,
-D47).
-
-**Alternatives.** Leave it and re-export from a library module — rejected:
-`bin/` is not an importable contract, and a re-export advertises one that the
-package layout denies. Split it across `synth` / `targets` — rejected: it is one
-orchestration, and cutting it along module lines would put the run loop in two
-files.
-
-**Deciding constraint.** A library reachable only through `CliRunner` gets
-copied rather than imported. D35 is the case that proved it: the blog
-reimplemented `build_styler` because it lived in `bin/`, and the copy lost
-`max_tokens`, truncating every blog rewrite at the 2000-token floor while the
-promoted run served a 4500-char diet.
-
-**Re-evaluate if:** never, in this shape — `bin/` is the click shell. Recorded
-late because the CLAUDE.md diet (F7a) found this was the one rationale in that
-file with no home in any other layer; the rule survived the cut, the why did
-not.
-
-## D62: `stylebot.eval` keeps a lazy re-export map after the split
-
-**Decision (2026-09-04, F8).** `eval.py` split into `eval` (the four signals),
-`scoring`, `verdict`, `docscale` and `covariates`. `eval` keeps a module-level
-`__getattr__` that resolves the 28 names that moved, so every existing
-`from stylebot.eval import X` and `ev.X` lookup still works.
-
-**Alternatives.** Update the callers — rejected for the blog's, which stylebot
-cannot edit and which import `verdict_options` at module scope plus ten `ev.*`
-lookups; a public API that breaks on a refactor the caller cannot see is the
-D35 defect from the other direction. Re-export eagerly at the top of `eval`
-— rejected: `scoring` imports `eval`, so a top-level import back is a cycle.
-Leave `eval.py` at 1,965 lines — rejected: it was the largest module in the
-package and the thing F8 exists to fix.
-
-**Deciding constraint.** The blog pins stylebot by git source, so a name that
-disappears breaks a repo on a different commit clock. 25 lines of `__getattr__`
-buys a split the callers never see.
-
-**Re-evaluate if:** the blog imports from the owning modules directly, at which
-point the map is dead weight and should be deleted rather than maintained.
 
 ## D63: orphan score rows are pruned where they are read
 
@@ -1280,3 +1234,33 @@ tables with mechanism.
 
 **Re-evaluate if** a legacy module rides the slack to its cap and stays there — the split was
 owed and the slack is hiding it — or a policy table comes to need mechanism beside it.
+
+## D103: the detector's vector stays the bare embedding; the stylometric side-channel is closed by number
+
+**Decision (2026-09-15).** No hand-crafted feature block joins the StyleDistance embedding, and
+the research report's TAALES/TAACO/SciBERT stack is not built. A stage-0 probe put four blocks —
+the D88 syntax profile, a lexical block (`wordfreq` frequency, MATTR, function-word and pronoun
+rates), a sentence-level cohesion block (adjacent content overlap, givenness, four connective
+classes) and a markdown-markup block — beside the embedding under the trainer's own harness, with
+block ablations and a D40 cluster bootstrap on the real facet. No arm beat the bare embedding;
+every paired interval straddles zero (`findings.md` "Stylometric blocks beside the embedding").
+Cost was never the obstacle: the four blocks together are a tenth of the encoder's time.
+
+**Alternatives.** *SciBERT as a second encoder* — a semantic, uncased, domain encoder; the
+2026-06-30 bake-off already showed a semantic embedding losing the AUC column, and content is
+held fixed within a pair by construction. *Late fusion of two heads* — two instruments for a
+signal the concatenation already failed to find. *Features alone* — worse than the embedding on
+every facet. *LM surprisal, the backbone's intermediate layers, an end-to-end feature model
+(Neurobiber's Biber tags), a backbone re-bake-off against STEB 2026's leaders* — not probed;
+each is a probe under the same rule, not a build.
+
+**Deciding constraint.** The rule was written before the run — build only on ≥ 0.03 real-facet
+AUC on both the detector-pool CV and the styler holdout with the interval clear of zero — and
+what the probe found instead is where the real facet's ceiling is: arm E is at chance on the
+pairs the D18 near-identity gate would drop and well above it on the rest, and the gate is a
+no-op on the real stratum because captures carry no `transform_sim`. A third of the graded real
+pairs are label noise by the corpus's own definition; no feature set moves that.
+
+**Re-evaluate if** the real stratum is gated — `log` stamps `transform_sim`, or assembly computes
+it — so the metric grades edited pairs only (the floor moves; the block earns one re-run, not a
+rebuild), or a backbone probe under the same rule beats the embedding on the gated real facet.

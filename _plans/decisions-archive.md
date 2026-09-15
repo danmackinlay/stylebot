@@ -1,7 +1,7 @@
-# Design decisions — archive: D1–D60, and P1
+# Design decisions — archive: D1–D62, and P1
 
 Entries D1–D48, moved here 2026-09-04 in three passes, then D49, P1 and D50 on 2026-09-07, as `decisions.md` passed
-1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, D53–D55 the same day to make room for D97–D98, and D57–D58 for D100 (P3).
+1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, D53–D55 the same day to make room for D97–D98, D57–D58 for D100, and D59–D60 for D102; then D61–D62 on 2026-09-15 for D103 (P3).
 **They keep their numbers**; nothing was renumbered, and the
 index at the top of [`decisions.md`](decisions.md) carries a one-line summary of
 each with a pointer here. Text is verbatim as it stood at the move, including the
@@ -1707,3 +1707,50 @@ per signal), or if anything drives the embedder from more than one thread again.
 a save is a draw, a prune a policy clause plus a rebuild — so there is no
 writer lock: `corpus.rewrite`, `rewrite_with`, `corpus_lock` and `PairsWriter`'s
 inode re-check are deleted.
+
+## D61: the executables package holds no libraries — `synth_cli` left `bin/`
+
+**Decision (2026-08-11, recorded 2026-09-04).** 1000+ lines of synth
+orchestration moved from `bin/` to `stylebot.synth_cli`, raising its own
+`SynthConfigError` / `SynthRunError` / `SynthGenerationError`; `bin/ai_style.py`
+translates them to exit codes at the boundary (now `cli_options.translate_errors`,
+D47).
+
+**Alternatives.** Leave it and re-export from a library module — rejected:
+`bin/` is not an importable contract, and a re-export advertises one that the
+package layout denies. Split it across `synth` / `targets` — rejected: it is one
+orchestration, and cutting it along module lines would put the run loop in two
+files.
+
+**Deciding constraint.** A library reachable only through `CliRunner` gets
+copied rather than imported. D35 is the case that proved it: the blog
+reimplemented `build_styler` because it lived in `bin/`, and the copy lost
+`max_tokens`, truncating every blog rewrite at the 2000-token floor while the
+promoted run served a 4500-char diet.
+
+**Re-evaluate if:** never, in this shape — `bin/` is the click shell. Recorded
+late because the CLAUDE.md diet (F7a) found this was the one rationale in that
+file with no home in any other layer; the rule survived the cut, the why did
+not.
+
+## D62: `stylebot.eval` keeps a lazy re-export map after the split
+
+**Decision (2026-09-04, F8).** `eval.py` split into `eval` (the four signals),
+`scoring`, `verdict`, `docscale` and `covariates`. `eval` keeps a module-level
+`__getattr__` that resolves the 28 names that moved, so every existing
+`from stylebot.eval import X` and `ev.X` lookup still works.
+
+**Alternatives.** Update the callers — rejected for the blog's, which stylebot
+cannot edit and which import `verdict_options` at module scope plus ten `ev.*`
+lookups; a public API that breaks on a refactor the caller cannot see is the
+D35 defect from the other direction. Re-export eagerly at the top of `eval`
+— rejected: `scoring` imports `eval`, so a top-level import back is a cycle.
+Leave `eval.py` at 1,965 lines — rejected: it was the largest module in the
+package and the thing F8 exists to fix.
+
+**Deciding constraint.** The blog pins stylebot by git source, so a name that
+disappears breaks a repo on a different commit clock. 25 lines of `__getattr__`
+buys a split the callers never see.
+
+**Re-evaluate if:** the blog imports from the owning modules directly, at which
+point the map is dead weight and should be deleted rather than maintained.
