@@ -1452,3 +1452,32 @@ of the pair — ≤0.5: 0.75 CV (n 12) / 0.91 holdout (n 11); 0.5–0.7: 0.71 (3
 0.7–0.85: 0.84 (54) / 0.88 (32); **>0.85: 0.56 (51) / 0.67 (27)**. A third of the real pairs the
 CV grades sit above the D18 gate, which never fires on captures because `log` stamps no
 `transform_sim`; on those the detector is at chance, on the rest at 0.84–0.91. Decided: D103.
+
+## The real stratum gated at assembly — 2026-09-15 (D104)
+
+`cd ~/Source/livingthing && uv run dan-style train-clf` (after `--dry-run`) under D104, over
+view `pairs-b40e2eb2c8e23de9`, splits `05b495adac68cdc4`, blog `7fcae49e97`; the artifact is
+`_models/voice-clf/meta.json` `trained_at 2026-09-15T03:32Z`. The gate now fires on captures:
+detector pool 186 → 127 real pairs, styler holdout 100 → 73, eval role 182 → 107 (synthetic
+counts unchanged). The decomposition rows come from a scratch script over the same library
+calls — both heads fit under the harness's nested C on the harness's eight folds, then graded
+on each other's pairs — the "gated head → gated pairs" row reproducing the artifact exactly.
+CV is the per-fold mean ± std; the holdout is the styler role.
+
+| head → graded on | CV pairwise real | CV AUC real | holdout pairwise real | holdout AUC real |
+|---|---|---|---|---|
+| pre-gate head → ungated pairs (186 pool / 100 holdout) | 0.675 ± 0.072 | 0.644 ± 0.063 | 0.820 | 0.761 |
+| pre-gate head → gated pairs (127 / 73) | 0.716 ± 0.090 | 0.704 ± 0.088 | 0.877 | 0.811 |
+| **gated head → gated pairs** (the shipped artifact) | **0.738 ± 0.103** | **0.715 ± 0.091** | **0.863** | **0.811** |
+| gated head → ungated pairs | 0.688 ± 0.078 | 0.649 ± 0.064 | 0.810 | 0.758 |
+
+The first row is the pre-gate baseline (arm E in "Stylometric blocks beside the embedding" above:
+0.682 / 0.646 and 0.820 / 0.760; the per-bin accuracies there predicted a gated floor near 0.79).
+Which part is the denominator: on the holdout, all of it — the pre-gate head scores the same 73
+edited pairs one pair *better* than the gated head (63 pairs right under both, 1 under the old head
+only, 0 under the new, 9 under neither) and the AUC is identical to four places. In CV, of the
++0.063 pairwise rise, +0.041 is the denominator and +0.022 the head, the per-fold delta zero in
+four folds and negative in one, against a fold std of 0.10. The gated head is not a better head;
+it is the same head on an honest metric. Its nested C is 100 in seven folds of eight and for the
+shipped head, the grid's top — a boundary chosen, not searched (`C_GRID`'s own comment). The
+synthetic facets are unmoved (0.995 / 0.989 CV, 0.997 / 0.993 holdout). Decided: D104.
