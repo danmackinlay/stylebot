@@ -1250,9 +1250,10 @@ Cost was never the obstacle: the four blocks together are a tenth of the encoder
 2026-06-30 bake-off already showed a semantic embedding losing the AUC column, and content is
 held fixed within a pair by construction. *Late fusion of two heads* — two instruments for a
 signal the concatenation already failed to find. *Features alone* — worse than the embedding on
-every facet. *LM surprisal, the backbone's intermediate layers, an end-to-end feature model
-(Neurobiber's Biber tags), a backbone re-bake-off against STEB 2026's leaders* — not probed;
-each is a probe under the same rule, not a build.
+every facet. *Neurobiber's 96 Biber tags as an end-to-end feature block* — probed at Dan's
+question: at chance on the real facet alone, nothing beside the embedding, the encoder's cost
+again. *LM surprisal, the backbone's intermediate layers, a re-bake-off against STEB 2026's
+operational leaders (STAR, LUAR)* — not probed; each is a probe under the same rule, not a build.
 
 **Deciding constraint.** The rule was written before the run — build only on ≥ 0.03 real-facet
 AUC on both the detector-pool CV and the styler holdout with the interval clear of zero — and

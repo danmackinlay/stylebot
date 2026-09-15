@@ -1420,7 +1420,9 @@ A scratch probe over the trainer's own harness — `assemble_dataset` under the 
 length, function-word, contraction, I/we/you and numeral rates); **C** = 12 cohesion (adjacent
 content-stem overlap mean/min, givenness, causal/contrastive/additive/exemplifying connective
 rates, sentence-initial connective and This/It/There rates, pronoun rate, paragraphs, sentences
-per paragraph); **M** = 5 markup (links, emphasis, code, footnotes, `@`-cites per sentence).
+per paragraph); **M** = 5 markup (links, emphasis, code, footnotes, `@`-cites per sentence); **N** = the 96
+sigmoid outputs of `Blablablab/neurobiber` (a RoBERTa fine-tune tagging Biber features; 10.9 ms
+per passage batched), run after the fact at Dan's question.
 Blocks standardised on detector-pool moments, embedding raw; `E+Fa` rescales the block to the
 embedding's coordinate scale. Δ is the paired per-pair correctness against E, 95% cluster
 bootstrap; "real" columns are the real facet.
@@ -1435,10 +1437,14 @@ bootstrap; "real" columns are the real facet.
 | E+F−C | 0.9694 | 0.9708 | 0.642 | 0.648 | 0.830 | 0.763 | −0.027 [−0.068, +0.010] | +0.010 [−0.023, +0.049] |
 | E+S | 0.9706 | 0.9718 | 0.679 | 0.648 | 0.790 | 0.763 | −0.004 [−0.035, +0.034] | −0.030 [−0.067, +0.000] |
 | E+Fa | 0.9711 | 0.9709 | 0.654 | 0.656 | 0.830 | 0.771 | −0.020 [−0.055, +0.017] | +0.010 [−0.035, +0.058] |
+| N (Neurobiber) | 0.9071 | 0.8762 | 0.530 | 0.531 | 0.750 | 0.675 | −0.172 [−0.231, −0.095] | −0.070 [−0.167, +0.032] |
+| E+N | 0.9748 | 0.9718 | 0.672 | 0.614 | 0.800 | 0.757 | +0.037 [−0.008, +0.071] | −0.020 [−0.078, +0.033] |
+| E+Na | 0.9727 | 0.9731 | 0.645 | 0.634 | 0.820 | 0.777 | +0.009 [−0.029, +0.051] | +0.000 [−0.052, +0.051] |
+| N+F | 0.9419 | 0.9067 | 0.518 | 0.532 | 0.790 | 0.711 | −0.086 [−0.199, −0.021] | −0.030 [−0.131, +0.057] |
 
 No arm clears the rule written before the run (≥ +0.03 real AUC on both CV and holdout with
-the interval clear of zero): every interval straddles zero and no point delta reaches +0.01 on
-both. Cost was never the obstacle — S 0.15, L 0.59, C 0.31, M 0.07 ms per passage against the
+the interval clear of zero): no interval clears zero upward, and Neurobiber alone is at chance
+on the real facet. Cost was never the obstacle — S 0.15, L 0.59, C 0.31, M 0.07 ms per passage against the
 encoder's 8.2 ms batched (MPS). The head's largest feature weights are contraction rate (+),
 first-person and `we` rates (−) and adjacent overlap (−): the obvious, found and useless.
 **Where the real facet's ceiling is:** arm E's real-pair accuracy by `synth.transform_similarity`
