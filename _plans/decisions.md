@@ -74,6 +74,7 @@ keep their numbers — the second index below is how you find them.
 | D101 | `dan-style log` is the blog's capture shell; `ai-style log` carries no policy | live |
 | D102 | the allowlist has bounded slack; policy tables are data in their own module | live; amends D58 |
 | D103 | the detector's vector stays the bare embedding; the stylometric side-channel is closed by number | live |
+| D104 | the near-identity gate computes `transform_sim` at assembly when a record stamps none | live; amends D18 |
 
 ## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D62, plus P1)
 
@@ -1265,3 +1266,32 @@ pairs are label noise by the corpus's own definition; no feature set moves that.
 **Re-evaluate if** the real stratum is gated — `log` stamps `transform_sim`, or assembly computes
 it — so the metric grades edited pairs only (the floor moves; the block earns one re-run, not a
 rebuild), or a backbone probe under the same rule beats the embedding on the gated real facet.
+
+## D104: the near-identity gate computes `transform_sim` at assembly when a record stamps none
+
+**Decision (2026-09-15).** `classify_train.assemble_dataset` applies D18's gate to every pair. A
+stamped `meta.transform_sim` is used as recorded; when the record carries none — every real
+capture, since `capture` and `log` stamp nothing — the gate computes `synth.transform_similarity`
+over the two context-stripped sides at read time. Nothing is written to the corpus, and a synthetic
+draw's stamp is never recomputed. The gate is a property of the reader, where D18 put it, and the
+real facet of the detector's metric grades edited pairs only (`findings.md` "The real stratum
+gated at assembly").
+
+**Alternatives.** *`log` stamps the field on new captures and `log recut` re-lands the old ones* —
+every reader would see it (the D40 report's `sim` column is blank on real rows today), but that is
+a corpus rewrite to add a field the gate can derive, it supersedes every landing without changing
+a view's text, and the pre-archive captures cannot be recut at all (D96). *Gate in the blog's
+`detector_pair_ok`* — the threshold is D18's, the detector's own policy; the blog's hook carries
+what only the blog knows. *Recompute for every pair* — the stamp is the synth gate's record
+(`ViewPolicy.gate_thresholds`); a divergence would be a finding, not a silent replacement, and a
+difflib pass over every synthetic pair buys nothing.
+
+**Deciding constraint.** D84: draws are appended, views are built, and a covariate derivable from
+the pair's own text is a view of the pair, not a draw. Under D103's number a third of the graded
+real pairs are label noise by the corpus's own definition, and the reader closes that in five lines
+at the layer that defines it; `classify_train.py` stays inside its D102 slack.
+
+**Re-evaluate if** a second reader needs the value on real records (the report's `sim` column, a
+styler selector) — then stamping new captures at `log`, with no recut, is the cheaper path; or
+`transform_similarity` changes definition, when stamped and computed values diverge and the gate
+should recompute for all.
