@@ -23,6 +23,7 @@ from typing import Protocol
 
 # One definition of "which head scored this"; `classify` is import-light.
 from stylebot.classify import DETECTOR_IDENTITY_KEYS
+from stylebot.errors import ConfigError, MissingExtra, RunError
 
 #: 3 -> 4 when a judge refusal became `None` and `n_unscored` joined the summary (D87).
 SCHEMA_VERSION = 4
@@ -440,6 +441,180 @@ def chunked_detector(
 
         detect.batch_detect = batch_detect
     return detect
+
+
+# ---------------------------------------------------------------------------
+# Signal 3, hosted kinds — Sapling, the cache, the one factory (D106)
+# ---------------------------------------------------------------------------
+
+#: Every `--detector KIND`; `build_detector` is the factory behind the flag.
+DETECTOR_KINDS = ("voice-clf", "sapling")
+
+SAPLING_URL = "https://api.sapling.ai/api/v1/aidetect"
+#: Pinned: a version bump is a new instrument (new `name`, so new thresholds).
+SAPLING_VERSION = "20251027"
+#: Sapling's per-request caps: texts in a batch, and their combined length.
+SAPLING_BATCH = 10
+SAPLING_MAX_CHARS = 200_000
+#: Sapling's own floor; a shorter text abstains unsent (`score: None`).
+SAPLING_MIN_CHARS = 300
+
+
+def _urllib_post_json(url: str, payload: dict, headers: dict, *, timeout: float = 30.0) -> dict:
+    """One JSON POST over stdlib urllib; an HTTP or transport failure is a
+    `RunError` naming the status and the body's head, never a silent score."""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310 - fixed https
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")[:200]
+        raise RunError(f"{url}: HTTP {exc.code}: {body}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RunError(f"{url}: {exc}") from exc
+
+
+def _sapling_batches(texts: Sequence[str]) -> Iterable[list[int]]:
+    """Index batches under Sapling's per-request caps, in input order."""
+    batch: list[int] = []
+    chars = 0
+    for i, text in enumerate(texts):
+        if batch and (len(batch) >= SAPLING_BATCH or chars + len(text) > SAPLING_MAX_CHARS):
+            yield batch
+            batch, chars = [], 0
+        batch.append(i)
+        chars += len(text)
+    if batch:
+        yield batch
+
+
+def sapling_detector(
+    *,
+    api_key: str | None = None,
+    version: str = SAPLING_VERSION,
+    min_chars: int = SAPLING_MIN_CHARS,
+    timeout: float = 30.0,
+    post: Callable[[str, dict, dict], dict] | None = None,
+) -> Detector:
+    """Sapling's hosted human-vs-AI detector as a `Detector` (D106): the batch
+    form, ``score`` its 0-human…1-AI number unchanged (the house polarity). A
+    text under `min_chars` abstains and is never sent. `post` is the transport
+    seam; ``.stats`` counts the spend. Needs `SAPLING_API_KEY` unless given."""
+    from stylebot import config
+
+    key = api_key or config.require_key("SAPLING_API_KEY")
+
+    def _post(url: str, payload: dict, headers: dict) -> dict:
+        return _urllib_post_json(url, payload, headers, timeout=timeout)
+
+    transport = post or _post
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
+    identity = dict.fromkeys(DETECTOR_IDENTITY_KEYS) | {"name": f"sapling-{version}"}
+    stats = {"requests": 0, "texts_scored": 0, "chars_sent": 0}
+
+    def _result(score: float | None) -> dict:
+        p_dan = None if score is None else 1.0 - score
+        return {"score": score, "p_dan": p_dan, "configured": True, **identity}
+
+    def batch_detect(texts: Sequence[str]) -> list[dict]:
+        texts = list(texts)
+        out = [_result(None) for _ in texts]
+        sendable = [i for i, t in enumerate(texts) if len(t) >= min_chars]
+        for batch in _sapling_batches([texts[i] for i in sendable]):
+            idx = [sendable[j] for j in batch]
+            payload = {"texts": [texts[i] for i in idx], "sent_scores": False, "version": version}
+            body = transport(SAPLING_URL, payload, headers)
+            results = body.get("results") if isinstance(body, dict) else None
+            if not isinstance(results, list) or len(results) != len(idx):
+                raise RunError(f"sapling: expected {len(idx)} results, got {str(body)[:200]!r}")
+            stats["requests"] += 1
+            stats["texts_scored"] += len(idx)
+            stats["chars_sent"] += sum(len(texts[i]) for i in idx)
+            for i, item in zip(idx, results, strict=True):
+                score = item.get("score") if isinstance(item, dict) else None
+                out[i] = _result(None if score is None else float(score))
+        return out
+
+    def detect(prose: str) -> dict:
+        return batch_detect([prose])[0]
+
+    detect.identity = dict(identity)
+    detect.batch_detect = batch_detect
+    detect.stats = stats
+    return detect
+
+
+def cached_detector(detector: Detector) -> Detector:
+    """Memoise `detector` by text hash, in process (D106): a rescore of an
+    unchanged paragraph costs nothing; misses go through in one batch, deduped.
+    Keeps ``.identity``; ``.stats`` is the inner's plus ``cache_hits``."""
+    import hashlib
+
+    memo: dict[str, dict] = {}
+    inner_batch = getattr(detector, "batch_detect", None)
+    stats = getattr(detector, "stats", None)
+    if not isinstance(stats, dict):
+        stats = {}
+    stats["cache_hits"] = 0
+
+    def batch_detect(texts: Sequence[str]) -> list[dict]:
+        keys = [hashlib.sha256(t.encode("utf-8")).hexdigest() for t in texts]
+        todo: dict[str, str] = {}
+        for key, text in zip(keys, texts, strict=True):
+            if key not in memo:
+                todo.setdefault(key, text)
+        if todo:
+            fresh = list(todo.values())
+            results = inner_batch(fresh) if inner_batch else [detector(t) for t in fresh]
+            memo.update(zip(todo, results, strict=True))
+        stats["cache_hits"] += len(keys) - len(todo)  # every text answered without a send
+        return [dict(memo[k]) for k in keys]
+
+    def detect(prose: str) -> dict:
+        return batch_detect([prose])[0]
+
+    detect.identity = detector_identity(detector)
+    detect.batch_detect = batch_detect
+    detect.stats = stats
+    return detect
+
+
+def build_detector(kind: str, model_dir: str | Path | None = None, **kw) -> Detector:
+    """The factory behind `--detector KIND` (D106): ``voice-clf`` rebuilds the
+    artifact at `model_dir`, ``sapling`` dials the hosted API; `kw` reaches
+    the kind's constructor (a test's ``post=``)."""
+    if kind == "voice-clf":
+        if model_dir is None:
+            raise ConfigError("--detector voice-clf needs --detector-model (head.json + meta.json)")
+        from stylebot import classify
+
+        try:
+            return classify.sklearn_detector(model_dir, **kw)
+        except ImportError as exc:
+            raise MissingExtra(f"--detector-model needs the embedder installed: {exc}") from exc
+    if kind == "sapling":
+        return sapling_detector(**kw)
+    raise ConfigError(f"unknown detector kind {kind!r} (expected one of {DETECTOR_KINDS})")
+
+
+def arm_detectors(kinds: Sequence[str], model_dir: str | Path | None = None) -> dict[str, Detector]:
+    """`build_detector` over `kinds`, keyed by identity name in the given order
+    (the sidecar's default is the first); hosted kinds sit behind
+    `cached_detector`. A repeated kind is a `ConfigError`."""
+    if len(set(kinds)) != len(kinds):
+        raise ConfigError(f"--detector repeats a kind: {list(kinds)}")
+    armed: dict[str, Detector] = {}
+    for kind in kinds:
+        detector = build_detector(kind, model_dir)
+        if kind != "voice-clf":
+            detector = cached_detector(detector)
+        armed[detector_identity(detector)["name"]] = detector
+    return armed
 
 
 # ---------------------------------------------------------------------------

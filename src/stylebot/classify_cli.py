@@ -14,7 +14,8 @@ from stylebot import classify_train as ct
 from stylebot import splits as sp
 from stylebot.cli_options import Emitter, bundle_options, opt, silent
 from stylebot.draws import ViewOpts
-from stylebot.errors import ConfigError, MissingExtra
+from stylebot.errors import ConfigError
+from stylebot.eval import DETECTOR_KINDS, build_detector
 
 
 @dataclass(frozen=True)
@@ -127,13 +128,21 @@ class CalibrateOpts:
 
     cli_section = "Calibrate"
 
+    detector: str = opt(
+        "voice-clf",
+        "--detector",
+        show_default=True,
+        type=click.Choice(list(DETECTOR_KINDS)),
+        help="Which instrument's buckets to cut: the trained head at --detector-model, or a "
+        "hosted detector (sapling: $SAPLING_API_KEY, spends per character).",
+    )
     detector_dir: Path | None = opt(
         None,
         "--detector-model",
         "detector_dir",
-        required=True,
         type=click.Path(file_okay=False, path_type=Path),
-        help="The artifact whose editor buckets to cut (head.json + meta.json).",
+        help="The artifact whose editor buckets to cut (head.json + meta.json); "
+        "required for --detector voice-clf.",
     )
     pairs_path: Path | None = opt(
         None,
@@ -177,12 +186,9 @@ def calibrate_options(**kw):
 
 
 def calibrate(opts: CalibrateOpts) -> dict:
-    """The command body: the detector rebuilt from the artifact, then
+    """The command body: the detector from `--detector`/`--detector-model`, then
     `classify.calibrate_thresholds` over the role's real pairs (D105)."""
-    try:
-        detector = classify.sklearn_detector(opts.detector_dir)
-    except ImportError as exc:
-        raise MissingExtra(f"--detector-model needs the embedder installed: {exc}") from exc
+    detector = build_detector(opts.detector, opts.detector_dir)
     return classify.calibrate_thresholds(
         detector,
         opts.pairs_path,

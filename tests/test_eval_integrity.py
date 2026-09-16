@@ -783,3 +783,115 @@ def test_the_callout_policy_crosses_the_document_scale_seam(tmp_path):
             rec_h["scores"][field]["detector"]["n_chunks"]
             > rec_w["scores"][field]["detector"]["n_chunks"]
         )
+
+
+# ---------------------------------------------------------------------------
+# hosted detectors on the seam (D106): Sapling, the cache, the one factory
+# ---------------------------------------------------------------------------
+
+
+def _sapling_transport(posted: list, score: float = 0.83):
+    def post(url, payload, headers):
+        posted.append((url, payload, headers))
+        return {"results": [{"score": score} for _ in payload["texts"]]}
+
+    return post
+
+
+def test_sapling_scores_the_batch_form_under_the_house_polarity():
+    posted: list = []
+    det = ev.sapling_detector(api_key="k", post=_sapling_transport(posted))
+    long = "prose " * 80
+    result = det(long)
+    assert result["score"] == pytest.approx(0.83)  # 1 = AI, as P(slop) is
+    assert result["p_dan"] == pytest.approx(0.17)
+    assert result["name"] == "sapling-20251027" and result["configured"]
+    assert det.identity == {
+        "name": "sapling-20251027",
+        "embed_model": None,
+        "git_sha": None,
+        "trained_at": None,
+        "n_pairs": None,
+    }
+    url, payload, headers = posted[0]
+    assert url == ev.SAPLING_URL
+    assert payload == {"texts": [long], "sent_scores": False, "version": "20251027"}
+    assert headers["Authorization"] == "Bearer k" and "key" not in payload
+    assert det.stats == {"requests": 1, "texts_scored": 1, "chars_sent": len(long)}
+
+
+def test_sapling_abstains_unsent_under_its_floor_and_chunks_by_ten():
+    posted: list = []
+    det = ev.sapling_detector(api_key="k", post=_sapling_transport(posted), min_chars=10)
+    texts = ["short"] + [f"long enough text {i}" for i in range(23)] + ["tiny"]
+    out = det.batch_detect(texts)
+    assert out[0]["score"] is None and out[-1]["score"] is None
+    assert all(r["score"] == pytest.approx(0.83) for r in out[1:-1])
+    assert [len(p["texts"]) for _, p, _ in posted] == [10, 10, 3]
+    assert det.stats["texts_scored"] == 23 and det.stats["requests"] == 3
+
+
+def test_sapling_raises_on_a_short_or_shapeless_reply_rather_than_scoring():
+    from stylebot.errors import RunError
+
+    det = ev.sapling_detector(api_key="k", post=lambda *a: {"results": [{"score": 0.1}]})
+    with pytest.raises(RunError, match="expected 2 results"):
+        det.batch_detect(["x" * 300, "y" * 300])
+    det = ev.sapling_detector(api_key="k", post=lambda *a: {"error": "quota"})
+    with pytest.raises(RunError, match="quota"):
+        det("z" * 300)
+
+
+def test_sapling_needs_its_key(monkeypatch):
+    from stylebot.errors import RunError
+
+    monkeypatch.delenv("SAPLING_API_KEY", raising=False)
+    with pytest.raises(RunError, match="SAPLING_API_KEY"):
+        ev.sapling_detector(post=lambda *a: {})
+
+
+def test_cached_detector_dedupes_and_never_resends_a_seen_text():
+    posted: list = []
+    inner = ev.sapling_detector(api_key="k", post=_sapling_transport(posted), min_chars=1)
+    det = ev.cached_detector(inner)
+    a, b = "alpha text", "beta text"
+    first = det.batch_detect([a, b, a])
+    assert [r["score"] for r in first] == [pytest.approx(0.83)] * 3
+    assert posted[0][1]["texts"] == [a, b]  # the repeat was deduped in-batch
+    again = det.batch_detect([b, "gamma text"])
+    assert len(posted) == 2 and posted[1][1]["texts"] == ["gamma text"]
+    assert again[0]["score"] == pytest.approx(0.83)
+    assert det(a)["score"] == pytest.approx(0.83) and len(posted) == 2
+    assert det.stats["cache_hits"] == 3 and det.stats["texts_scored"] == 3
+    assert det.identity["name"] == "sapling-20251027"
+    first[0]["score"] = 0.0  # a caller's edit must not poison the memo
+    assert det(a)["score"] == pytest.approx(0.83)
+
+
+def test_build_detector_names_its_kinds_and_their_needs(monkeypatch):
+    from stylebot.errors import ConfigError
+
+    with pytest.raises(ConfigError, match="--detector-model"):
+        ev.build_detector("voice-clf", None)
+    with pytest.raises(ConfigError, match="unknown detector kind"):
+        ev.build_detector("gptzero")
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    assert ev.build_detector("sapling", post=lambda *a: {}).identity["name"] == "sapling-20251027"
+
+
+def test_arm_detectors_orders_names_and_caches_only_the_hosted(monkeypatch):
+    from stylebot import classify
+    from stylebot.errors import ConfigError
+
+    def head(prose: str) -> dict:
+        return {"score": 0.5, "configured": True}
+
+    head.identity = {"name": "voice-clf"}
+    monkeypatch.setattr(classify, "sklearn_detector", lambda p: head)
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    armed = ev.arm_detectors(["sapling", "voice-clf"], "some/dir")
+    assert list(armed) == ["sapling-20251027", "voice-clf"]
+    assert "cache_hits" in armed["sapling-20251027"].stats
+    assert armed["voice-clf"] is head  # bare, not cached
+    with pytest.raises(ConfigError, match="repeats"):
+        ev.arm_detectors(["sapling", "sapling"])

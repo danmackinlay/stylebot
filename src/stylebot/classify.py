@@ -259,8 +259,14 @@ def calibrate_thresholds(
         )
     scored = detect_many(detector, [ds.texts[r] for r in rows])
     by_side: dict[str, list[float]] = {side: [] for side in SIDES}
+    abstained = 0
     for r, rec in zip(rows, scored, strict=True):
+        if rec["score"] is None:  # a hosted detector abstains under its floor (D106)
+            abstained += 1
+            continue
         by_side["slop" if ds.labels[r] == LABEL_SLOP else "dan"].append(float(rec["score"]))
+    if not all(by_side.values()):
+        raise ConfigError(f"the detector abstained on every text of one side ({abstained} in all)")
     points = sorted({*QUANTILE_POINTS, *(p for _, p in rule)})
     quantiles = {side: _percentiles(sorted(v), points) for side, v in by_side.items()}
     thresholds = [round(quantiles[side][p], 2) for side, p in rule]
@@ -269,6 +275,7 @@ def calibrate_thresholds(
         "role": role if splits is not None else None,
         "n_pairs": len(rows) // 2,
         "n_posts": len({ds.groups[r] for r in rows}),
+        "n_abstained": abstained,
         "max_transform_sim": max_transform_sim,
         "points": points,
         "quantiles": quantiles,
@@ -289,8 +296,9 @@ def format_calibration(cal: dict) -> list[str]:
         else "ungated"
     )
     who = f"{ident.get('name', '?')}@{(ident.get('git_sha') or '?')[:10]}"
+    abstained = f", {cal['n_abstained']} texts abstained" if cal.get("n_abstained") else ""
     lines = [
-        f"{who} on {cal['n_pairs']} real pairs ({role}{gate}), {cal['n_posts']} posts",
+        f"{who} on {cal['n_pairs']} real pairs ({role}{gate}), {cal['n_posts']} posts{abstained}",
         "side  " + "  ".join(f"p{p:<3}" for p in cal["points"]),
     ]
     for side in SIDES:

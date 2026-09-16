@@ -216,6 +216,28 @@ def test_calibrate_refuses_an_empty_population(tmp_path):
         classify.calibrate_thresholds(det, path, splits=splits, role="eval", max_transform_sim=0.0)
 
 
+def test_calibrate_skips_abstentions_and_refuses_a_side_with_none(tmp_path):
+    """A hosted detector abstains (`score: None`) under its floor (D106): the
+    text leaves the population and is counted, rather than crashing the cut or
+    being read as certainly-Dan; a side with no scores at all is an error."""
+    from stylebot.errors import ConfigError
+
+    path, splits, det = _calibration_corpus(tmp_path)
+
+    def abstaining(prose: str) -> dict:
+        return {"score": None, "configured": True} if prose.endswith("post/a.qmd.") else det(prose)
+
+    cal = classify.calibrate_thresholds(abstaining, path, splits=splits, role="eval")
+    assert cal["n_abstained"] == 2 and cal["n_pairs"] == 4
+    assert "2 texts abstained" in classify.format_calibration(cal)[0]
+
+    def mute(prose: str) -> dict:
+        return {"score": None if prose.startswith("dan") else 0.7, "configured": True}
+
+    with pytest.raises(ConfigError, match="abstained on every text"):
+        classify.calibrate_thresholds(mute, path, splits=splits, role="eval")
+
+
 def test_threshold_rule_parses_and_rejects():
     from stylebot.errors import ConfigError
 

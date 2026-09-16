@@ -22,7 +22,7 @@ from stylebot.classify import DETECTOR_IDENTITY_KEYS
 from stylebot.cli_options import Emitter, opt, silent
 from stylebot.draws import ViewOpts
 from stylebot.errors import ConfigError
-from stylebot.eval import DEFAULT_JUDGE_MODEL, SCHEMA_VERSION
+from stylebot.eval import DEFAULT_JUDGE_MODEL, DETECTOR_KINDS, SCHEMA_VERSION
 from stylebot.scoring import (
     DEFAULT_MAX_WORKERS,
     _identity_label,
@@ -140,6 +140,15 @@ class EvalOpts:
         "--judge-model",
         show_default=True,
         help="OpenRouter model id for the judge.",
+    )
+    detector: str = opt(
+        "voice-clf",
+        "--detector",
+        show_default=True,
+        type=click.Choice(list(DETECTOR_KINDS)),
+        help="Which instrument scores detector.score: the trained head at --detector-model "
+        "(null when none is given), or a hosted one (sapling: $SAPLING_API_KEY, spends per "
+        "character).",
     )
     detector_model: Path | None = opt(
         None,
