@@ -6,6 +6,12 @@
  * SIDECAR which spans are prose, score them, and paint graded decorations.
  * See stylebot/_plans/vscode-marker.md.
  *
+ * The sidecar may arm several detectors (stylebot D106): `voiceMarker.detector`
+ * (or *Switch Detector*) picks which one marks, its edges come from
+ * `voiceMarker.thresholds` keyed by name, and `voiceMarker.trigger` decides
+ * whether a keystroke, a save or only a command sends text — a hosted
+ * detector spends per character, so the default idle rescoring is a choice.
+ *
  * There is no segmenter in this package. There was one — a TypeScript port of
  * stylebot's splitter, pinned by a fixture — and it drifted in the three ways a
  * port always drifts: it had no `div_is_prose` hook (so callout prose was never
@@ -19,8 +25,10 @@ import * as vscode from "vscode";
 import { Decorations } from "./decorations";
 import { paragraphAround, toggleSemWrap } from "./sem";
 import { ProseSegment, RewriteCandidate, Sidecar, SidecarState } from "./sidecar";
+import { activeDetector, armedDetectors, thresholdsFor, ThresholdsSetting } from "./thresholds";
 
 const LANGS = new Set(["markdown", "quarto"]);
+type Trigger = "idle" | "save" | "manual";
 
 /** Virtual documents backing the live rewrite-preview diff. */
 class RewritePreview implements vscode.TextDocumentContentProvider {
@@ -46,13 +54,19 @@ let statusBar: vscode.StatusBarItem;
 let output: vscode.OutputChannel;
 let debounceTimer: NodeJS.Timeout | undefined;
 let scoreGeneration = 0;
+/** The instrument currently marking (null until the sidecar's handshake). */
+let activeName: string | null = null;
+/** The last `score` reply's spend counters, for the status-bar tooltip. */
+let lastStats: Record<string, number> | null = null;
 
 function config() {
   const cfg = vscode.workspace.getConfiguration("voiceMarker");
   return {
     command: cfg.get<string[]>("command", []),
     cwd: cfg.get<string>("cwd", "") || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-    thresholds: cfg.get<number[]>("thresholds", [0.5, 0.55, 0.6, 0.65]),
+    thresholds: cfg.get<ThresholdsSetting>("thresholds", [0.5, 0.55, 0.6, 0.65]),
+    detector: cfg.get<string>("detector", ""),
+    trigger: cfg.get<Trigger>("trigger", "idle"),
     minChars: cfg.get<number>("minChars", 80),
     debounceMs: cfg.get<number>("debounceMs", 500),
     enabled: cfg.get<boolean>("enabled", true),
@@ -71,11 +85,13 @@ function setStatus(state: SidecarState, detail?: string): void {
       statusBar.tooltip = "Voice Marker: loading the classifier…";
       break;
     case "ready": {
-      const name = sidecar?.meta?.name ?? "voice-clf";
-      statusBar.text = "$(pulse) voice";
-      statusBar.tooltip = `Voice Marker: ${name} ready (${sidecar?.meta?.embed_model ?? "?"})`;
-      // First paint once the model is up.
-      scheduleScore(vscode.window.activeTextEditor, 0);
+      lastStats = null;
+      applyDetector();
+      // First paint once the model is up — only when keystrokes may score
+      // anyway; under `save`/`manual` nothing goes over the wire unasked.
+      if (config().trigger === "idle") {
+        scheduleScore(vscode.window.activeTextEditor, 0);
+      }
       break;
     }
     case "failed":
@@ -88,6 +104,42 @@ function setStatus(state: SidecarState, detail?: string): void {
       break;
   }
   statusBar.show();
+}
+
+/** Resolve which armed detector marks, rebuild its decorations from its own
+ * edges (an uncalibrated one gets none and marks nothing), and say so. */
+function applyDetector(): void {
+  const cfg = config();
+  const armed = armedDetectors(sidecar?.meta);
+  activeName = activeDetector(cfg.detector, sidecar?.meta);
+  decorations?.dispose();
+  decorations = null;
+  const edges = activeName ? thresholdsFor(cfg.thresholds, activeName) : null;
+  if (edges) {
+    decorations = new Decorations(edges);
+  }
+  statusBar.text = `$(pulse) voice: ${activeName ?? "?"}`;
+  refreshTooltip(edges === null ? "uncalibrated — no voiceMarker.thresholds entry" : null, armed);
+}
+
+function refreshTooltip(note: string | null, armed?: string[]): void {
+  const lines = [`Voice Marker: ${activeName ?? "?"} ready`];
+  const others = (armed ?? armedDetectors(sidecar?.meta)).filter((n) => n !== activeName);
+  if (others.length > 0) {
+    lines.push(`also armed: ${others.join(", ")} (Voice Marker: Switch Detector)`);
+  }
+  if (note) {
+    lines.push(note);
+  }
+  if (lastStats) {
+    const s = lastStats;
+    lines.push(
+      `${s.texts_scored ?? 0} texts / ${s.chars_sent ?? 0} chars sent this session` +
+        (s.cache_hits !== undefined ? `, ${s.cache_hits} cache hits` : ""),
+    );
+  }
+  lines.push(`trigger: ${config().trigger}`);
+  statusBar.tooltip = lines.join("\n");
 }
 
 function scheduleScore(editor: vscode.TextEditor | undefined, delayMs?: number): void {
@@ -125,9 +177,17 @@ async function scoreEditor(editor: vscode.TextEditor): Promise<void> {
     }
     return;
   }
-  let scores: number[];
+  let scores: (number | null)[];
   try {
-    scores = await sidecar.score(segments.map((s) => text.slice(s.start, s.end)));
+    const resp = await sidecar.score(
+      segments.map((s) => text.slice(s.start, s.end)),
+      activeName ?? undefined,
+    );
+    scores = resp.scores;
+    if (resp.stats) {
+      lastStats = resp.stats;
+      refreshTooltip(null);
+    }
   } catch (err) {
     output.appendLine(`[score] ${err}`);
     return;
@@ -138,9 +198,39 @@ async function scoreEditor(editor: vscode.TextEditor): Promise<void> {
   }
   const scored = segments.map((s, i) => ({
     range: new vscode.Range(document.positionAt(s.start), document.positionAt(s.end)),
-    score: scores[i],
+    score: scores[i] ?? null,
   }));
-  decorations.apply(editor, scored, sidecar.meta?.name ?? "voice-clf");
+  decorations.apply(editor, scored, activeName ?? "voice-clf");
+}
+
+/** *Voice Marker: Switch Detector* — pick among what the sidecar armed; the
+ * choice lands in workspace settings and repaints at once (an explicit ask,
+ * so it scores regardless of `trigger`). */
+async function switchDetectorCommand(): Promise<void> {
+  const armed = armedDetectors(sidecar?.meta);
+  if (armed.length === 0) {
+    void vscode.window.showWarningMessage("Voice Marker: the sidecar is not ready yet.");
+    return;
+  }
+  const cfg = config();
+  const pick = await vscode.window.showQuickPick(
+    armed.map((name) => ({
+      label: name,
+      description: name === activeName ? "marking now" : undefined,
+      detail: thresholdsFor(cfg.thresholds, name)
+        ? undefined
+        : "uncalibrated: add a voiceMarker.thresholds entry (dan-style calibrate --detector …)",
+    })),
+    { placeHolder: "Which detector marks paragraphs?" },
+  );
+  if (!pick) {
+    return;
+  }
+  await vscode.workspace
+    .getConfiguration("voiceMarker")
+    .update("detector", pick.label, vscode.ConfigurationTarget.Workspace);
+  applyDetector();
+  scheduleScore(vscode.window.activeTextEditor, 0);
 }
 
 /** The rewrite target and its heading context, from the sidecar's segments:
@@ -377,30 +467,45 @@ export function activate(context: vscode.ExtensionContext): void {
     return;
   }
 
-  decorations = new Decorations(cfg.thresholds);
-  sidecar = new Sidecar(cfg.command, cfg.cwd, {
-    onState: setStatus,
-    onStderr: (chunk) => output.append(chunk),
-  }, cfg.timeouts);
+  const spawnSidecar = (): void => {
+    const c = config();
+    sidecar?.dispose();
+    sidecar = new Sidecar(c.command, c.cwd, {
+      onState: setStatus,
+      onStderr: (chunk) => output.append(chunk),
+    }, c.timeouts);
+    sidecar.start();
+  };
+  spawnSidecar();
   context.subscriptions.push({
     dispose: () => {
       sidecar?.dispose();
       decorations?.dispose();
     },
   });
-  sidecar.start();
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((e) => {
       const editor = vscode.window.activeTextEditor;
-      if (editor && e.document === editor.document) {
+      if (editor && e.document === editor.document && config().trigger === "idle") {
         scheduleScore(editor);
       }
     }),
-    vscode.window.onDidChangeActiveTextEditor((editor) => scheduleScore(editor, 0)),
+    vscode.workspace.onDidSaveTextDocument((doc) => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor && doc === editor.document && config().trigger === "save") {
+        scheduleScore(editor, 0);
+      }
+    }),
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (config().trigger === "idle") {
+        scheduleScore(editor, 0);
+      }
+    }),
     vscode.commands.registerCommand("voiceMarker.rescore", () =>
       scheduleScore(vscode.window.activeTextEditor, 0),
     ),
+    vscode.commands.registerCommand("voiceMarker.switchDetector", () => void switchDetectorCommand()),
     vscode.commands.registerCommand("voiceMarker.toggle", async () => {
       const now = !config().enabled;
       await vscode.workspace
@@ -417,10 +522,21 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("voiceMarker.rewrite", () => void rewriteCommand()),
     vscode.commands.registerCommand("voiceMarker.markSemantic", () => void markSemanticCommand()),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("voiceMarker.thresholds")) {
-        decorations?.dispose();
-        decorations = new Decorations(config().thresholds);
+      if (e.affectsConfiguration("voiceMarker.command") || e.affectsConfiguration("voiceMarker.cwd")) {
+        output.appendLine("voiceMarker.command changed; respawning the sidecar");
+        spawnSidecar();
+        return;
+      }
+      if (
+        e.affectsConfiguration("voiceMarker.thresholds") ||
+        e.affectsConfiguration("voiceMarker.detector")
+      ) {
+        // Edges or instrument changed: repaint. Unchanged paragraphs answer
+        // from the sidecar's cache, so this spends nothing on a hosted one.
+        applyDetector();
         scheduleScore(vscode.window.activeTextEditor, 0);
+      } else if (e.affectsConfiguration("voiceMarker.trigger")) {
+        refreshTooltip(null);
       }
     }),
   );

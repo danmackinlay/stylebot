@@ -40,6 +40,16 @@ export interface RewriteCandidate {
   identity?: boolean;
 }
 
+/** The `score` op reply (stylebot.serve._score_op). */
+export interface ScoreResponse {
+  scores: (number | null)[];
+  /** Which armed detector answered; absent from a pre-D106 sidecar. */
+  detector?: string;
+  /** Session spend counters (requests, texts_scored, chars_sent, cache_hits) —
+   * present only for a detector that keeps them (a hosted one). */
+  stats?: Record<string, number>;
+}
+
 export interface RewriteResponse {
   input_score: number | null;
   /** Draws taken; the server dedupes identical samples, so
@@ -171,10 +181,15 @@ export class Sidecar {
     return resp.segments;
   }
 
-  /** Score texts; resolves to one P(slop) per text, in order. */
-  async score(texts: string[]): Promise<number[]> {
-    const resp = await this.request<{ scores: number[] }>({ op: "score", texts });
-    return resp.scores;
+  /** Score texts with the named detector (the sidecar's default when omitted;
+   * stylebot D106): one P(slop) per text, in order, null where it abstained;
+   * `stats` is the detector's running spend when it keeps one. */
+  async score(texts: string[], detector?: string): Promise<ScoreResponse> {
+    const body: Record<string, any> = { op: "score", texts };
+    if (detector) {
+      body.detector = detector;
+    }
+    return this.request<ScoreResponse>(body);
   }
 
   /** Best-of candidates for one prose chunk (server needs a styler armed). */

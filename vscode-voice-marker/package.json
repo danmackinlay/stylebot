@@ -2,7 +2,7 @@
   "name": "voice-marker",
   "displayName": "Voice Marker",
   "description": "Mark paragraphs with P(slop) and rewrite them in Dan's voice via a stylebot sidecar (ai-style/dan-style serve)",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "publisher": "danmackinlay",
   "private": true,
   "license": "MIT",
@@ -34,6 +34,10 @@
       {
         "command": "voiceMarker.restartSidecar",
         "title": "Voice Marker: Restart Sidecar"
+      },
+      {
+        "command": "voiceMarker.switchDetector",
+        "title": "Voice Marker: Switch Detector"
       },
       {
         "command": "voiceMarker.rewrite",
@@ -75,9 +79,18 @@
           "description": "Working directory for the sidecar spawn (so relative --detector-model paths resolve). Empty = first workspace folder."
         },
         "voiceMarker.thresholds": {
-          "type": "array",
+          "type": [
+            "array",
+            "object"
+          ],
           "items": {
             "type": "number"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
           },
           "default": [
             0.5,
@@ -85,7 +98,27 @@
             0.6,
             0.65
           ],
-          "description": "Ascending P(slop) bucket edges; a paragraph below the first edge gets no mark. Calibrate to your detector's score distribution (quantiles), not equal-width bins."
+          "markdownDescription": "Ascending P(slop) bucket edges; a paragraph below the first edge gets no mark. Calibrate to the detector's score distribution (quantiles), not equal-width bins. An array applies to every detector; an object keys edges by detector name (`{\"voice-clf\": [...], \"sapling-20251027\": [...]}`), and a detector without an entry marks nothing (`dan-style calibrate --detector …` cuts them)."
+        },
+        "voiceMarker.detector": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Which of the sidecar's armed detectors marks paragraphs (the `--detector` names it was started with). Empty = the sidecar's default, its first. *Voice Marker: Switch Detector* sets this."
+        },
+        "voiceMarker.trigger": {
+          "type": "string",
+          "enum": [
+            "idle",
+            "save",
+            "manual"
+          ],
+          "enumDescriptions": [
+            "Rescore after every edit, once the buffer is idle (debounceMs); also on open and on switching editors.",
+            "Rescore only when the document is saved.",
+            "Rescore only on the Rescore Document command (or Switch Detector / a rewrite)."
+          ],
+          "default": "idle",
+          "description": "When text goes to the detector. A hosted detector spends per character sent, so prefer save or manual with one armed; unchanged paragraphs are answered from the sidecar's cache either way."
         },
         "voiceMarker.minChars": {
           "type": "number",

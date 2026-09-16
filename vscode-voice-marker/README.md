@@ -26,7 +26,32 @@ model loads, ~5 s), restarted with backoff if it crashes, and killed on
 window close. One request is in flight at a time: the sidecar writes a reply
 before it reads the next line, so a long `rewrite` delays a queued `score`.
 Commands: `Voice Marker: Rescore Document`, `Toggle Marks`,
-`Restart Sidecar` (after retraining the head).
+`Restart Sidecar` (after retraining the head), `Switch Detector`.
+
+## Several detectors, one marking (stylebot D106)
+
+`ai-style serve --detector voice-clf --detector sapling` arms both the local
+voice head and Sapling's hosted human-vs-AI detector (`$SAPLING_API_KEY`).
+The sidecar's `info` lists what it armed; `voiceMarker.detector` (or the
+*Switch Detector* command) picks which one marks, and its edges come from
+`voiceMarker.thresholds` keyed by name — a detector with no entry is
+*uncalibrated* and marks nothing. Sapling spends per character sent, so set
+`voiceMarker.trigger` to `save` or `manual`; the sidecar answers unchanged
+paragraphs from a cache, and the status-bar tooltip shows the session's spend.
+The two instruments are never blended: *Rewrite in Dan's Voice* is reranked by
+the voice head only, whichever one is marking.
+
+```jsonc
+{
+  "voiceMarker.command": ["direnv", "exec", ".", "uv", "run", "dan-style", "serve",
+                          "--detector", "voice-clf", "--detector", "sapling"],
+  "voiceMarker.trigger": "save",
+  "voiceMarker.thresholds": {
+    "voice-clf": [0.27, 0.32, 0.77, 0.97],
+    "sapling-20251027": [0.5, 0.7, 0.9, 0.97]
+  }
+}
+```
 
 ## Marking a content edit (`Cmd+K Cmd+M`)
 

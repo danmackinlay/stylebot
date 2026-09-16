@@ -17,7 +17,8 @@ const BUCKET_STYLES = [
 
 export interface ScoredRange {
   range: vscode.Range;
-  score: number;
+  /** Null = the detector abstained (too short for it): no mark, not bucket 0. */
+  score: number | null;
 }
 
 export class Decorations {
@@ -51,6 +52,9 @@ export class Decorations {
   apply(editor: vscode.TextEditor, scored: ScoredRange[], modelName: string): void {
     const perBucket: vscode.DecorationOptions[][] = this.types.map(() => []);
     for (const { range, score } of scored) {
+      if (score === null) {
+        continue; // abstained, not "certainly fine"
+      }
       const b = this.bucket(score);
       if (b === 0) {
         continue;
