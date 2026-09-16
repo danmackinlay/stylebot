@@ -76,8 +76,9 @@ keep their numbers — the second index below is how you find them.
 | D103 | the detector's vector stays the bare embedding; the stylometric side-channel is closed by number | live |
 | D104 | the near-identity gate computes `transform_sim` at assembly when a record stamps none | live; amends D18 |
 | D105 | marker thresholds are a command over the eval stratum's scores; the quantile rule is policy | live |
+| D106 | hosted detectors join the Detector seam; the marker picks its instrument per request; the reranker stays the voice head | live |
 
-## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D64, plus P1)
+## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D65, plus P1)
 
 | # | title | status |
 |---|---|---|
@@ -132,36 +133,6 @@ keep their numbers — the second index below is how you find them.
 | D48 | `Styler` is a Protocol; it types the call, not the tokens | live |
 
 ---
-
-## D65: `--include-real` defaults off — the two strata invent different things
-
-**Decision (2026-08-12, recorded 2026-09-04).** The anchor-invention cull
-dropped **synthetic** pairs only unless `--include-real` was passed, and real
-pairs are excluded from *training* by `infer.is_anchor_faithful` (D32) rather
-than culled from disk. The cull itself is deleted (D73); the training-side half
-of this entry is the part still live.
-
-**Why, part one: regenerability.** A culled synthetic cell leaves its `synth_key`
-missing, so the next `ai-style synth` refills it — under the gate this time, and
-with `--gate-retries` most cells clear on a redraw (D32). A captured pair records
-an edit Dan actually made, and nothing but git brings it back.
-
-**Why, part two: the two strata fail differently**, which is the argument D32 was
-missing. Measured 2026-08-12 (`findings.md` "Anchor provenance by stratum"): what
-the *synthetic* stratum "invents" is mostly an external URL — a generator artifact
-of the reverse-edit swap. What the *real* stratum shows is Dan wiring a note into
-his own graph while editing: internal cross-references and citation keys
-dominate. So the same gate reads as "the generator hallucinated a destination" on
-one side and "the author added a cross-reference" on the other — genuine
-practice, even though the styler has no way to know Dan's note graph.
-
-**Alternatives.** *Cull both strata* — the flag exists and is never the default;
-on the v1 corpus it took several hundred more pairs, all unregenerable. *Gate
-neither and filter only at assembly* — wrong for the synthetic side, because a
-cell left filled is never refilled under the gate (D32's amendment).
-**Deciding constraint**: a synthetic pair is a draw and a captured pair is
-evidence. **Re-evaluate if** real captures become numerous enough that a few
-hundred are affordable to lose, or the synthesis gate gains its loss mirror.
 
 ## D66: the `anthropic/` arms bill through OpenRouter BYOK
 
@@ -1269,3 +1240,34 @@ costs a runbook paragraph does not happen "fairly regularly", a command does. Nu
 
 **Re-evaluate if** the eval role's gated real stratum falls under ~50 pairs (a p95 over fewer
 is one pair), or the marker grows a per-document baseline that makes fixed edges moot.
+
+## D106: hosted detectors join the Detector seam; the marker picks its instrument per request; the reranker stays the voice head
+
+**Decision (2026-09-17, Dan's ask).** A hosted human-vs-AI detector is one more `eval.Detector`
+— `sapling_detector` first, behind `build_detector(kind, model_dir)` and the `--detector KIND`
+flag that `eval`, `calibrate` and `serve` share. `serve` arms every kind named, the first is the
+default, `score` picks one by name, and the hosted ones sit behind `cached_detector` so an idle
+rescore of an unchanged paragraph costs nothing; a text under Sapling's 300-char floor abstains
+(`score: None`) unsent. **The instruments are never blended**: Sapling answers "human vs AI",
+the voice head "Dan vs slop", and only the voice head reranks `rewrite` — a hosted reranker would
+be the wrong question and would spend per candidate. A hosted detector's `name` carries its
+pinned model version, so a bump is a new instrument: new thresholds, new scores file (D39).
+The research behind the choice of Sapling: [`detector-backends.md`](detector-backends.md).
+
+**Alternatives.** *A separate extension (`sloggle`) calling Sapling from TypeScript* — needs a
+second segmenter, the drift D44 deleted; shelved. *A pygls language server* — LSP carries no
+decoration, D20. *One detector per sidecar, switched by restart* — loses `rewrite` while
+marking with Sapling, and every switch is a settings edit. *Sapling's sentence scores* — its
+docs say they are cut by a different method and do not average to the document score; deferred.
+*Pangram* — its endpoint moved to an async task API and it saturated on Dan's prose
+(`findings.md` "Pangram cross-check"); Sapling is synchronous, batched and ~10× cheaper.
+
+**Deciding constraint.** Everything the editor needs — segmenter, sidecar, calibration, the
+extension — already existed behind the `Detector` protocol; the only new mechanism is one
+function per hosted kind plus a name on the `score` op. A hosted call spends, so the seam has to
+make "which instrument, and what did it cost" explicit: `meta.detectors`, `score.detector`,
+`score.stats`, and the extension's `save`/`manual` trigger.
+
+**Re-evaluate if** Sapling saturates on Dan's prose the way Pangram did (the calibrate table in
+`findings.md`, once run), or a local hosted-quality detector (Fast-DetectGPT on MLX) lands —
+the same seam takes it.

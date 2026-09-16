@@ -1,7 +1,7 @@
-# Design decisions — archive: D1–D64, and P1
+# Design decisions — archive: D1–D65, and P1
 
 Entries D1–D48, moved here 2026-09-04 in three passes, then D49, P1 and D50 on 2026-09-07, as `decisions.md` passed
-1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, D53–D55 the same day to make room for D97–D98, D57–D58 for D100, and D59–D60 for D102; then D61–D62 on 2026-09-15 for D103 and D63–D64 the same day for D105 (P3).
+1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, D53–D55 the same day to make room for D97–D98, D57–D58 for D100, and D59–D60 for D102; then D61–D62 on 2026-09-15 for D103 and D63–D64 the same day for D105, then D65 on 2026-09-17 for D106 (P3).
 **They keep their numbers**; nothing was renumbered, and the
 index at the top of [`decisions.md`](decisions.md) carries a one-line summary of
 each with a pointer here. Text is verbatim as it stood at the move, including the
@@ -1809,3 +1809,33 @@ corpus until every record is re-stamped by a one-off" — a re-stamp is now a
 policy change plus a view rebuild (D84), and there is still no migration.
 
 **Re-evaluate if** a masked corpus is generated: settle its placeholders first.
+
+## D65: `--include-real` defaults off — the two strata invent different things
+
+**Decision (2026-08-12, recorded 2026-09-04).** The anchor-invention cull
+dropped **synthetic** pairs only unless `--include-real` was passed, and real
+pairs are excluded from *training* by `infer.is_anchor_faithful` (D32) rather
+than culled from disk. The cull itself is deleted (D73); the training-side half
+of this entry is the part still live.
+
+**Why, part one: regenerability.** A culled synthetic cell leaves its `synth_key`
+missing, so the next `ai-style synth` refills it — under the gate this time, and
+with `--gate-retries` most cells clear on a redraw (D32). A captured pair records
+an edit Dan actually made, and nothing but git brings it back.
+
+**Why, part two: the two strata fail differently**, which is the argument D32 was
+missing. Measured 2026-08-12 (`findings.md` "Anchor provenance by stratum"): what
+the *synthetic* stratum "invents" is mostly an external URL — a generator artifact
+of the reverse-edit swap. What the *real* stratum shows is Dan wiring a note into
+his own graph while editing: internal cross-references and citation keys
+dominate. So the same gate reads as "the generator hallucinated a destination" on
+one side and "the author added a cross-reference" on the other — genuine
+practice, even though the styler has no way to know Dan's note graph.
+
+**Alternatives.** *Cull both strata* — the flag exists and is never the default;
+on the v1 corpus it took several hundred more pairs, all unregenerable. *Gate
+neither and filter only at assembly* — wrong for the synthetic side, because a
+cell left filled is never refilled under the gate (D32's amendment).
+**Deciding constraint**: a synthetic pair is a draw and a captured pair is
+evidence. **Re-evaluate if** real captures become numerous enough that a few
+hundred are affordable to lose, or the synthesis gate gains its loss mirror.

@@ -21,6 +21,7 @@ once their work shipped and the code became the better description):
 | [`v2-longer-rewrites.md`](retired/v2-longer-rewrites.md) | retired 2026-09-04 (P7); the scale curriculum — generated 2026-08, trained as the blog's run 4; step 5 and the weighting policy stayed open |
 | [`synth-flag-audit.md`](retired/synth-flag-audit.md) | retired 2026-09-04 (P7); the `synth` option audit — 54 → 49 options (D21, D83), nothing open |
 | [`vscode-marker.md`](retired/vscode-marker.md) | retired 2026-09-04 (P7); the editor marker — `ai-style serve` + extension shipped, alternative B parked (D44) |
+| [`detector-backends.md`](detector-backends.md) | research note behind the hosted detectors (D106): Sapling first, the local zero-shot options, the prior art; moved from the shelved `sloggle` repo 2026-09-17 |
 | [`anchor-integrity.md`](retired/anchor-integrity.md) | retired 2026-09-04 (P7); the anchor guard/gate/audit (D32) — its open step 3 is `masking-placement.md` |
 | [`masking-placement.md`](masking-placement.md) | *where* masking goes (D33) — decided, not yet built |
 | [`placeholder-design-2026-08.md`](placeholder-design-2026-08.md) | the mask *encoding* — the open half of the masking work |
