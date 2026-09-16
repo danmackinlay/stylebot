@@ -103,6 +103,12 @@ are untouched.
 
 ### Changed
 
+- **`ai-style serve --detector-model` is optional** (required only with
+  `--detector voice-clf`, the default), and `calibrate`'s likewise; the `score`
+  reply carries two new keys, `detector` and `stats`, so a strict client
+  comparing whole objects must allow them. `serve.serve_sidecar` takes
+  `detectors=` (a name→detector mapping, or one callable) and an explicit
+  `reranker=`; `detector=` is gone (D106).
 - **`--skip-covered` matches on a normalised coverage key, not exact text.**
   The corpus is a frozen record, so cosmetic drift since a pair was generated
   should not buy that passage a second pair — and two-thirds of measured blog
@@ -192,6 +198,17 @@ are untouched.
 
 ### Added
 
+- **Hosted detectors on the `Detector` seam (D106).** `eval.sapling_detector`
+  wraps Sapling's AI-text API (`$SAPLING_API_KEY`, batch form, house
+  polarity, abstains unsent under 300 chars), `eval.cached_detector` memoises
+  any detector by text hash and counts the spend in `.stats`, and
+  `eval.build_detector(kind, model_dir)` / `eval.arm_detectors(kinds, …)` are
+  the factory behind a new **`--detector KIND`** flag on `eval`, `calibrate`
+  and `serve` (`voice-clf` default, `sapling`). `serve --detector` repeats:
+  every kind named is armed, the first is the default, and the `score` op
+  takes `"detector": name` and answers `detector` and `stats` beside `scores`;
+  `info` meta lists `detectors`. Only the voice head ever reranks `rewrite`.
+  `calibrate_thresholds` skips abstentions and reports `n_abstained`.
 - **`ai-style run --anchor-log PATH`** — appends per-chunk anchor accounting to
   a JSONL sidecar (`infer.write_anchor_audit`, populated from
   `RewriteResult.anchor_audit`). Anchor keys and lengths only, never candidate

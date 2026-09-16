@@ -44,7 +44,7 @@ def run_lines(*requests: object, rewriter=None, prefer=None, div_is_prose=None) 
 
 def test_score_roundtrip_preserves_order_and_id():
     (resp,) = run_lines({"id": 7, "op": "score", "texts": ["pure slop here", "plain prose"]})
-    assert resp == {"id": 7, "scores": [0.9, 0.1]}
+    assert resp == {"id": 7, "scores": [0.9, 0.1], "detector": "stub-clf"}
 
 
 def test_info_returns_meta_as_ready_handshake():
@@ -54,7 +54,7 @@ def test_info_returns_meta_as_ready_handshake():
 
 def test_empty_texts_is_valid_and_cheap():
     (resp,) = run_lines({"id": 2, "op": "score", "texts": []})
-    assert resp == {"id": 2, "scores": []}
+    assert resp == {"id": 2, "scores": [], "detector": "stub-clf"}
 
 
 def test_malformed_lines_error_without_killing_the_loop():
@@ -71,7 +71,7 @@ def test_malformed_lines_error_without_killing_the_loop():
     assert responses[1] == {"id": 3, "error": "'texts' must be a list of strings"}
     assert responses[2]["id"] == 4 and "unknown op" in responses[2]["error"]
     assert responses[3] == {"id": 5, "error": "'text' must be a string"}
-    assert responses[4] == {"id": 6, "scores": [0.9]}
+    assert responses[4] == {"id": 6, "scores": [0.9], "detector": "stub-clf"}
 
 
 def test_rewrite_and_prefer_unarmed_error_politely():
@@ -95,7 +95,7 @@ def test_rewrite_rejects_blank_text_and_survives_rewriter_errors():
     )
     assert "'text' must be a non-empty string" in responses[0]["error"]
     assert "select prose only" in responses[1]["error"]
-    assert responses[2] == {"id": 6, "scores": [0.9]}  # loop survived
+    assert responses[2] == {"id": 6, "scores": [0.9], "detector": "stub-clf"}  # loop survived
 
 
 def test_prefer_hands_decision_to_sink():
@@ -254,8 +254,49 @@ def test_score_op_uses_the_detector_batch_path_when_there_is_one():
     resp = serve.handle_request(
         {"id": 1, "op": "score", "texts": ["one", "two", "three"]}, detect, {}
     )
-    assert resp == {"id": 1, "scores": [0.5, 0.5, 0.5]}
+    assert resp == {"id": 1, "scores": [0.5, 0.5, 0.5], "detector": "detector"}
     assert sizes == [3]
+
+
+def test_score_op_picks_the_named_detector_and_reports_its_stats():
+    """Several instruments armed at once (D106): `score` picks one by name,
+    else the first; `stats` rides along when the detector keeps any; a name
+    nobody armed is an error that lists who is."""
+
+    def hosted(prose: str) -> dict:
+        return {"score": 0.7, "configured": True}
+
+    hosted.stats = {"requests": 3, "chars_sent": 1200}
+    detectors = {"stub-clf": stub_detector, "sapling-x": hosted}
+    meta = serve.sidecar_meta(detectors, {"embed_model": "e"})
+    assert meta == {
+        "embed_model": "e",
+        "name": "stub-clf",
+        "detectors": ["stub-clf", "sapling-x"],
+        "detector": "stub-clf",
+    }
+    stdin = io.StringIO(
+        "".join(
+            json.dumps(r) + "\n"
+            for r in (
+                {"id": 1, "op": "score", "texts": ["slop"]},
+                {"id": 2, "op": "score", "texts": ["slop"], "detector": "sapling-x"},
+                {"id": 3, "op": "score", "texts": ["slop"], "detector": "nobody"},
+            )
+        )
+    )
+    stdout = io.StringIO()
+    serve.serve_loop(detectors, stdin, stdout, meta=meta)
+    first, named, unknown = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    assert first == {"id": 1, "scores": [0.9], "detector": "stub-clf"}
+    assert named == {
+        "id": 2,
+        "scores": [0.7],
+        "detector": "sapling-x",
+        "stats": {"requests": 3, "chars_sent": 1200},
+    }
+    assert unknown["id"] == 3 and "'nobody'" in unknown["error"]
+    assert "['stub-clf', 'sapling-x']" in unknown["error"]
 
 
 def test_serve_answers_a_failed_styler_build_and_lives(monkeypatch, tmp_path):
@@ -282,8 +323,84 @@ def test_serve_answers_a_failed_styler_build_and_lives(monkeypatch, tmp_path):
     replies = [json.loads(line) for line in result.output.splitlines()]
     assert replies == [
         {"id": 1, "error": "RunError: TINKER_API_KEY is not set"},
-        {"id": 2, "scores": [0.9]},
+        {"id": 2, "scores": [0.9], "detector": "stub_detector"},
     ]
+
+
+def _fake_sapling(posted: list) -> object:
+    """A Sapling transport that records payloads and scores everything 0.42;
+    stands in for `_urllib_post_json`, so it takes its `timeout=`."""
+
+    def post(url, payload, headers, **_):
+        posted.append((url, payload, headers))
+        return {"results": [{"score": 0.42} for _ in payload["texts"]]}
+
+    return post
+
+
+def test_serve_arms_sapling_alone_and_never_rewrites_with_it(monkeypatch):
+    """`--detector sapling` without the voice head: the marker scores through
+    the hosted API, and `rewrite` stays unarmed even with a --backend — the
+    hosted instrument is never the reranker (D106)."""
+    from stylebot import eval as ev
+
+    posted: list = []
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    monkeypatch.setattr(ev, "_urllib_post_json", _fake_sapling(posted))
+    monkeypatch.setattr(backends, "build_styler", lambda opts: lambda m, num_samples=1: ["x"])
+    long = "prose " * 80
+    requests = [
+        {"id": 1, "op": "info"},
+        {"id": 2, "op": "score", "texts": [long, "short"]},
+        {"id": 3, "op": "rewrite", "text": long},
+    ]
+    result = CliRunner().invoke(
+        ai_style.main,
+        ["serve", "--detector", "sapling", "--backend", "tinker"]
+        + ["--sampler-path", "s", "--base-model", "b"],
+        input="".join(json.dumps(r) + "\n" for r in requests),
+    )
+    assert result.exit_code == 0, result.output
+    info, scores, rewrite = [json.loads(line) for line in result.output.splitlines()]
+    assert info["meta"]["detectors"] == ["sapling-20251027"]
+    assert info["meta"]["name"] == "sapling-20251027"
+    assert scores["scores"] == [0.42, None]  # the short text abstained, unsent
+    assert scores["stats"]["texts_scored"] == 1 and scores["stats"]["cache_hits"] == 0
+    assert [len(p["texts"]) for _, p, _ in posted] == [1]
+    assert "without a styler" in rewrite["error"]
+
+
+def test_serve_marks_with_sapling_but_reranks_with_the_voice_head(monkeypatch, tmp_path):
+    """Both armed, Sapling first: `score` defaults to Sapling, `rewrite` ranks
+    candidates by the voice head and sends nothing to the API (D106)."""
+    from stylebot import eval as ev
+
+    posted: list = []
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    monkeypatch.setattr(ev, "_urllib_post_json", _fake_sapling(posted))
+    monkeypatch.setattr(classify, "load_artifact_meta", lambda p: {"name": "stub"})
+    monkeypatch.setattr(classify, "sklearn_detector", lambda p: stub_detector)
+    monkeypatch.setattr(
+        backends, "build_styler", lambda opts: lambda m, num_samples=1: ["slop"] * num_samples
+    )
+    long = "prose " * 80
+    requests = [
+        {"id": 1, "op": "score", "texts": [long]},
+        {"id": 2, "op": "score", "texts": [long]},
+        {"id": 3, "op": "rewrite", "text": "Plain prose here.", "best_of": 2},
+    ]
+    result = CliRunner().invoke(
+        ai_style.main,
+        ["serve", "--detector", "sapling", "--detector", "voice-clf", "--detector-model"]
+        + [str(tmp_path), "--backend", "tinker", "--sampler-path", "s", "--base-model", "b"],
+        input="".join(json.dumps(r) + "\n" for r in requests),
+    )
+    assert result.exit_code == 0, result.output
+    first, again, rewrite = [json.loads(line) for line in result.output.splitlines()]
+    assert first["detector"] == "sapling-20251027" and first["scores"] == [0.42]
+    assert again["stats"]["cache_hits"] == 1 and len(posted) == 1  # the rescore was free
+    assert rewrite["candidates"][0]["score"] == 0.9  # the stub head, not 0.42
+    assert len(posted) == 1  # the rewrite spent nothing
 
 
 # ---------------------------------------------------------------------------
@@ -299,9 +416,10 @@ def sidecar_lines(
     stdout = io.StringIO()
     serve.serve_sidecar(
         backend or backends.BackendOpts(),
-        detector=stub_detector,
+        detectors=stub_detector,
         meta={"name": "stub-clf"},
         make_styler=make_styler,
+        reranker=stub_detector,
         prefer=prefer,
         div_is_prose=div_is_prose,
         stdin=stdin,
@@ -320,7 +438,7 @@ def test_serve_sidecar_scores_and_segments_without_a_styler():
         div_is_prose=callout_is_prose,
     )
     assert info == {"id": 1, "meta": {"name": "stub-clf"}}
-    assert scores == {"id": 2, "scores": [0.9, 0.1]}
+    assert scores == {"id": 2, "scores": [0.9, 0.1], "detector": "stub-clf"}
     assert "without a styler" in unarmed["error"]
     # The div policy reaches the `segment` op — the loop — and nothing else.
     assert [document[s["start"] : s["end"]] for s in segments["segments"]] == ["Callout prose."]
@@ -342,14 +460,15 @@ def test_serve_sidecar_builds_the_styler_lazily_and_once():
 
     serve.serve_sidecar(
         backends.BackendOpts(max_chunk_chars=400),
-        detector=stub_detector,
+        detectors=stub_detector,
         meta={},
         make_styler=make_styler,
+        reranker=stub_detector,
         stdin=stdin,
         stdout=stdout,
     )
     scored, first, second = [json.loads(line) for line in stdout.getvalue().splitlines()]
-    assert scored == {"id": 1, "scores": [0.1]}
+    assert scored == {"id": 1, "scores": [0.1], "detector": "detector"}
     assert answered_before_build == [1]  # built once, and only after scoring was answered
     assert first["n_sampled"] == 2 and first["input_score"] == 0.1
     assert {c["text"] for c in first["candidates"]} == {"Rewritten slop."}
@@ -386,7 +505,7 @@ def test_serve_sidecar_hands_a_failed_build_to_the_client_and_lives():
         make_styler=unready,
     )
     assert failed == {"id": 1, "error": "RunError: TINKER_API_KEY is not set"}
-    assert alive == {"id": 2, "scores": [0.9]}
+    assert alive == {"id": 2, "scores": [0.9], "detector": "stub-clf"}
 
 
 def test_preference_recorder_stamps_the_record_and_creates_the_directory(tmp_path):

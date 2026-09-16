@@ -4,7 +4,8 @@
 line over stdin/stdout:
 
     -> {"id": 1, "op": "info"}                       <- {"id": 1, "meta": {...}}
-    -> {"id": 2, "op": "score", "texts": [...]}      <- {"id": 2, "scores": [...]}
+    -> {"id": 2, "op": "score", "texts": [...], "detector": "sapling-20251027"}
+    <- {"id": 2, "scores": [...], "detector": ..., "stats": {...}}
     -> {"id": 5, "op": "segment", "text": ..., "min_chars": 80}
     <- {"id": 5, "segments": [{"start", "end", "kind", "context"}, ...]}
     -> {"id": 3, "op": "rewrite", "text": ..., "context": ..., "best_of": 4}
@@ -13,10 +14,12 @@ line over stdin/stdout:
     -> {"id": 4, "op": "prefer", "decision": {...}}  <- {"id": 4, "ok": true}
 
 `segment` answers from `stylebot.markdown` under the sidecar's `div_is_prose`.
-`rewrite` and `prefer` arm only when their seam is injected; `info` is the
-ready handshake. One request in flight at a time; an error never kills the
-loop; EOF shuts down; all ML is injected. `serve_sidecar` is the command body
-as a library, `preference_recorder` its `prefer` sink (D78).
+Several detectors may be armed, named in `meta.detectors`; `score` picks one
+by name, else the first (D106). `rewrite` and `prefer` arm only when their
+seam is injected; `info` is the ready handshake. One request in flight at a
+time; an error never kills the loop; EOF shuts down; all ML is injected.
+`serve_sidecar` is the command body as a library, `preference_recorder` its
+`prefer` sink (D78).
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ from __future__ import annotations
 import bisect
 import json
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import cache
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
@@ -108,9 +111,49 @@ def prose_paragraphs(
     return out
 
 
+Detectors = Mapping[str, Callable[[str], dict]]
+
+
+def as_detectors(detectors: Detectors | Callable[[str], dict], meta: dict | None = None) -> dict:
+    """Normalise one detector or a name->detector mapping to the ordered
+    mapping the sidecar serves; a bare callable is named by `meta["name"]`."""
+    if callable(detectors):
+        return {(meta or {}).get("name") or "detector": detectors}
+    return dict(detectors)
+
+
+def sidecar_meta(detectors: Detectors, base: dict | None = None) -> dict:
+    """The `info` handshake: `base` plus `detectors` (armed names, in order)
+    and `detector` (the default, the first); `name` stays for old clients."""
+    names = list(detectors)
+    return {**(base or {}), "name": names[0], "detectors": names, "detector": names[0]}
+
+
+def _score_op(request: dict, detectors: Detectors) -> dict:
+    """The `score` op body: the named detector (else the first) over `texts`,
+    one batch (D59); `stats` rides along when the detector keeps any."""
+    rid = request.get("id")
+    texts = request.get("texts")
+    if not isinstance(texts, list) or not all(isinstance(t, str) for t in texts):
+        return {"id": rid, "error": "'texts' must be a list of strings"}
+    name = request.get("detector") or next(iter(detectors))
+    detector = detectors.get(name)
+    if detector is None:
+        return {"id": rid, "error": f"unknown detector {name!r} (armed: {list(detectors)})"}
+    response = {
+        "id": rid,
+        "scores": [r["score"] for r in detect_many(detector, texts)],
+        "detector": name,
+    }
+    stats = getattr(detector, "stats", None)
+    if isinstance(stats, dict):
+        response["stats"] = dict(stats)
+    return response
+
+
 def handle_request(
     request: dict,
-    detector: Callable[[str], dict],
+    detectors: Detectors | Callable[[str], dict],
     meta: dict,
     *,
     rewriter: Callable[..., dict] | None = None,
@@ -130,11 +173,7 @@ def handle_request(
         if op == "info":
             return {"id": rid, "meta": meta}
         if op == "score":
-            texts = request.get("texts")
-            if not isinstance(texts, list) or not all(isinstance(t, str) for t in texts):
-                return {"id": rid, "error": "'texts' must be a list of strings"}
-            # One `encode` for the whole request, not one per text (D59).
-            return {"id": rid, "scores": [r["score"] for r in detect_many(detector, texts)]}
+            return _score_op(request, as_detectors(detectors, meta))
         if op == "segment":
             text = request.get("text")
             if not isinstance(text, str):
@@ -179,7 +218,7 @@ def handle_request(
 
 
 def serve_loop(
-    detector: Callable[[str], dict],
+    detectors: Detectors | Callable[[str], dict],
     stdin: IO[str],
     stdout: IO[str],
     *,
@@ -191,8 +230,10 @@ def serve_loop(
 ) -> None:
     """Serve NDJSON requests until EOF on `stdin`: one flushed line per
     response (the client blocks on it); blank lines ignored; an unparseable
-    line answers ``id: null``."""
+    line answers ``id: null``. `meta` is served as given (`sidecar_meta`
+    builds the multi-detector shape)."""
     meta = meta or {}
+    detectors = as_detectors(detectors, meta)
     for line in stdin:
         line = line.strip()
         if not line:
@@ -206,7 +247,7 @@ def serve_loop(
         else:
             response = handle_request(
                 request,
-                detector,
+                detectors,
                 meta,
                 rewriter=rewriter,
                 prefer=prefer,
@@ -236,9 +277,10 @@ def preference_recorder(
 def serve_sidecar(
     backend: BackendOpts,
     *,
-    detector: Callable[[str], dict],
+    detectors: Detectors | Callable[[str], dict],
     meta: dict,
     make_styler: Callable[[], Styler] | None,
+    reranker: Callable[[str], dict] | None = None,
     prefer: Callable[[dict], None] | None = None,
     div_is_prose: markdown.DivIsProse | None = None,
     html_comments: bool = False,
@@ -249,15 +291,16 @@ def serve_sidecar(
 
     The styler is built lazily on the first `rewrite`, so a backend that dials
     out cannot take scoring down at editor start; `None` leaves the op
-    unarmed. The reranker is `infer.detector_scorer(detector)`; the diet is
-    `backend`'s; `div_is_prose` reaches the `segment` op only.
+    unarmed, as does a `None` `reranker` — the marker's detectors never rerank
+    by default, since a hosted one is the wrong instrument and spends (D106).
+    The diet is `backend`'s; `div_is_prose` reaches the `segment` op only.
     """
     from stylebot import infer
 
     rewriter = None
-    if make_styler is not None:
+    if make_styler is not None and reranker is not None:
         styler = cache(make_styler)
-        scorer = infer.detector_scorer(detector)
+        scorer = infer.detector_scorer(reranker)
         chunk_chars, inline_headings = backend.chunk_chars(), backend.headings()
 
         def rewrite_op(text: str, *, context: str | None = None, best_of: int = 4) -> dict:
@@ -275,7 +318,7 @@ def serve_sidecar(
         rewriter = rewrite_op
 
     serve_loop(
-        detector,
+        detectors,
         stdin if stdin is not None else sys.stdin,
         stdout if stdout is not None else sys.stdout,
         meta=meta,

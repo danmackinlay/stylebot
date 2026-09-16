@@ -155,10 +155,8 @@ def eval_cmd(**kw) -> None:
     opts = replace(opts, pairs_path=parsed["view"].corpus_or_view(opts.pairs_path, required=True))
     emit = click_emitter()
     detector = ev.null_detector
-    if opts.detector_model is not None:
-        from stylebot import classify
-
-        detector = classify.sklearn_detector(opts.detector_model)
+    if opts.detector != "voice-clf" or opts.detector_model is not None:
+        detector = ev.build_detector(opts.detector, opts.detector_model)
     documents = None
     if doc_opts.documents:
         if doc_opts.documents_manifest is None:
@@ -246,14 +244,23 @@ def export_table_cmd(
 
 
 @main.command("serve", cls=SectionedCommand)
+@click.option(
+    "--detector",
+    "detector_kinds",
+    multiple=True,
+    type=click.Choice(list(ev.DETECTOR_KINDS)),
+    help="Arm a detector for the 'score' op (repeatable; the first is the default). voice-clf "
+    "needs --detector-model; sapling needs $SAPLING_API_KEY and spends per character.  "
+    "[default: voice-clf]",
+)
 # --detector-model is redeclared here: for `serve` it is the service itself.
 @click.option(
     "--detector-model",
     "detector_model",
-    required=True,
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="A trained voice-classifier artifact dir (head.json + meta.json); needs the "
-    "pinned embedder (sentence-transformers) installed.",
+    "pinned embedder (sentence-transformers) installed. Required with --detector voice-clf, "
+    "and the only rewrite reranker (D106).",
 )
 @click.option(
     "--preferences",
@@ -271,39 +278,39 @@ def export_table_cmd(
 )
 @backend_options(defaults=[BackendOpts(temperature=0.7)], exclude=["detector_model"])
 def serve_cmd(
-    detector_model: Path,
+    detector_kinds: tuple[str, ...],
+    detector_model: Path | None,
     preferences_path: Path | None,
     manifest_path: Path | None,
     **kw,
 ) -> None:
     """Score texts over stdin/stdout NDJSON (long-lived editor sidecar).
 
-    Loads the detector once, then serves one JSON object per line until EOF;
-    with a --backend the 'rewrite' op returns best-of candidates, with
-    --preferences the 'prefer' op records the choice. Protocol: stylebot.serve.
+    Arms each --detector once, then serves one JSON object per line until
+    EOF; with a --backend the 'rewrite' op returns best-of candidates (reranked
+    by the voice head only), with --preferences the 'prefer' op records the
+    choice. Protocol: stylebot.serve.
     """
     from stylebot import classify, serve
 
+    kinds = list(detector_kinds) or ["voice-clf"]
     manifest = backends.load_manifest(manifest_path)
     opts = backends.opts_from_manifest(
         manifest,
         replace(bundles_from_kwargs(kw, BACKEND_PARAMS)["opts"], detector_model=detector_model),
     )
-    try:
-        meta = classify.load_artifact_meta(detector_model)
-        detector = classify.sklearn_detector(detector_model)
-    except ImportError as exc:
-        raise click.ClickException(
-            f"--detector-model needs the embedder installed (sentence-transformers): {exc}"
-        ) from exc
+    detectors = ev.arm_detectors(kinds, detector_model)
+    base_meta = classify.load_artifact_meta(detector_model) if "voice-clf" in kinds else {}
+    reranker = dict(zip(kinds, detectors.values(), strict=True)).get("voice-clf")
     prefer = None
     if preferences_path is not None:
         prefer = serve.preference_recorder(preferences_path, run_id=manifest.get("run_id"))
     serve.serve_sidecar(
         opts,
-        detector=detector,
-        meta=meta,
+        detectors=detectors,
+        meta=serve.sidecar_meta(detectors, base_meta),
         make_styler=partial(backends.build_styler, opts) if opts.backend is not None else None,
+        reranker=reranker,
         prefer=prefer,
     )
 

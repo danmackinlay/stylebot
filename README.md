@@ -145,6 +145,14 @@ extension owns the process lifecycle: spawn on activation, status-bar spinner
 until the `info` handshake, capped-backoff restart on crash, kill on window
 close. You never launch the sidecar by hand.
 
+The sidecar can arm more than one instrument — `--detector voice-clf
+--detector sapling` adds [Sapling](https://sapling.ai/docs/api/detector/)'s
+hosted human-vs-AI detector (`$SAPLING_API_KEY`; spends per character, so the
+extension's *Switch Detector* command picks which one marks, its `trigger`
+setting can wait for a save, and unchanged paragraphs are answered from an
+in-process cache). The two are never blended: only the voice head reranks
+*Rewrite in Dan's Voice* (D106).
+
 The extension does **not** segment. It asks the sidecar: `{"op": "segment",
 "text": <document>}` returns the scoreable prose spans, computed by
 `stylebot.serve.prose_paragraphs` over `stylebot.markdown` — paragraphs are runs
@@ -214,8 +222,10 @@ the extension:
    with every retrain. `ai-style calibrate --detector-model DIR --pairs …
    --splits …` scores the eval role's real pairs (the ones the head never
    saw) with the fresh artifact and prints the edges under the quantile
-   rule (`--rule`, default Dan-p75, slop p50/p75/p95); paste them in.
-   Threshold changes apply live, no restart.
+   rule (`--rule`, default Dan-p75, slop p50/p75/p95); paste them in, keyed
+   by the instrument's name when the sidecar arms several
+   (`{"voice-clf": [...], "sapling-20251027": [...]}` — `--detector sapling`
+   calibrates that one). Threshold changes apply live, no restart.
 
 Rebuilding/reinstalling the `.vsix` is needed only when the **wire protocol**
 (`stylebot.serve`) changes — a segmentation change is now server-side and needs
