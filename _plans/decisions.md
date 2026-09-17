@@ -1268,6 +1268,6 @@ function per hosted kind plus a name on the `score` op. A hosted call spends, so
 make "which instrument, and what did it cost" explicit: `meta.detectors`, `score.detector`,
 `score.stats`, and the extension's `save`/`manual` trigger.
 
-**Re-evaluate if** Sapling saturates on Dan's prose the way Pangram did (the calibrate table in
-`findings.md`, once run), or a local hosted-quality detector (Fast-DetectGPT on MLX) lands —
-the same seam takes it.
+**Re-evaluate if** Sapling's tail separation goes too (`findings.md` "Sapling on the eval
+stratum": both sides human through the median, so its edges are tail cuts under their own rule),
+or a local hosted-quality detector (Fast-DetectGPT on MLX) lands — the same seam takes it.

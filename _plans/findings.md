@@ -1500,3 +1500,24 @@ only a tenth of Dan's prose is marked at all. The distribution is no longer narr
 is at the grid top (100, seven of eight folds — the D104 report), so scores run to the rails and
 a twentieth of Dan's own prose scores above 0.72. The rule still ascends; whether a near-binary
 head is what the marker wants is the open C-grid question, not the calibration's. Decided: D105.
+
+## Sapling on the eval stratum — 2026-09-16/17 (D106)
+
+`uv run dan-style calibrate --detector sapling` from the blog root: Sapling `20251027` on the
+eval role's real pairs, gated at `transform_sim ≤ 0.85`: 117 pairs on 12 posts, 234 passages,
+12 abstained under Sapling's 300-char floor; ≈ 330k characters, ≈ $1.60, then free from its cache.
+
+| side | p5 | p25 | p50 | p75 | p95 |
+|---|---|---|---|---|---|
+| dan | 0.000 | 0.000 | 0.001 | 0.020 | 0.828 |
+| slop | 0.000 | 0.000 | 0.006 | 0.187 | 0.996 |
+
+The D105 rule (Dan p75, slop p50/p75/p95) gives **[0.02, 0.01, 0.19, 1.00]**, not ascending — the
+first two edges are noise. Sapling calls both sides human through the median: three-quarters of
+our synthetic slop scores under 0.19, while a twentieth of Dan's real prose scores above 0.83.
+So it is blunt the opposite way to Pangram ("Pangram cross-check"): Pangram railed Dan's prose
+to 1.0, Sapling rails the paraphrased slop to 0. Separation exists only in the upper tail (slop
+p95 0.996 vs Dan p95 0.828), so the edges that mean anything are tail cuts: the landed rule is
+`slop:75,dan:95,slop:95` → **[0.19, 0.83, 1.00]** — faint above what most slop reaches, amber
+above what 5% of Dan reaches, red at the rail. A marker, not a verdict; the voice head is the
+instrument for Dan-vs-slop, this one answers a different question. Decided: D106.
