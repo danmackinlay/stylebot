@@ -1258,10 +1258,10 @@ before side are never sent. Three doors share it: `log recut --finish` finishes 
 `after.md` and re-lands it (D96); `log save --finish` finishes before archiving, so the archive
 holds what landed; the sidecar's `preen` op finishes one paragraph in the editor before the save,
 so file and archive agree. The bare group takes `--finish module:attr`; `dan-style log` and
-`dan-style serve` pin the blog's `preen_chunks` (D101) — preen's `_apply_edits` pass plus two
-guards: a chunk that gains `[TODO clarify]` or changes its `sem` marker count reverts. The
-pre-archive captures are minted once from their live draws, each chunk under its own heading as
-separator, by a scratch procedure recorded in `findings.md`, not by package code (D38).
+`dan-style serve` pin the blog's `preen_chunks` (D101): a proofreading instruction under preen's
+system prompt, then a gate that rebuilds the chunk from Dan's own tokens and admits only
+letter-scale word fixes (≤ 2 letter edits; punctuation, case and code-shaped tokens untouched)
+and doubled-word deletions. Pre-archive captures were minted once from their live draws (D38).
 
 **Alternatives.** *Fix at view build* — an LLM or aspell pass is not a function of draws and
 policy, so one `policy_sha` would name many views, and `drifted_archives` needs every live record
@@ -1269,11 +1269,12 @@ inside its archive. *Keep the raw archive, finish at landing* — a recut would 
 re-differ; the archive is what landed. *An aspell lint at save* — a detector, not a fix, and a
 second instrument beside the one Dan calibrated. *Drop typo'd real pairs* — a quarter of the
 scarce side. *The editor door alone* — relies on remembering; the save flag is the same hook.
+*Preen's own copy-edit prompt as the finisher* — at pair scale it re-registers the voice
+(`suck` → `struggle`, `pretty` → `quite`; `findings.md` "Preen at pair scale"), so it is gated.
 
-**Deciding constraint.** Preen is already chunk-scale inside (`segment_for_edit`), already guarded
-(sigils, placeholders, size delta) and already trusted on Dan's prose; the new mechanism is the
-splice and the doors. `save --finish` defaults off: after an editor preen it would re-edit approved
-text and spend on a no-op.
+**Deciding constraint.** Preen's prompt and call exist and are trusted on Dan's prose; the new
+mechanism is the splice, the gate and the doors. `save --finish` defaults off: after an editor
+preen it would re-edit approved text and spend on a no-op.
 
 **Re-evaluate if** the residual suspect rate after finishing stays above the synthetic stratum's
 (`findings.md`), or the editor door goes unused for a month (then `save --finish` defaults on).

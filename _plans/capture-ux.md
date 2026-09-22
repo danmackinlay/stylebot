@@ -3,6 +3,10 @@
 **Status 2026-09-10: opened; nothing built.** Follows D96, which made a real
 capture's archive the editable truth and shipped `ai-style log recut` plus the
 "archives edited since landing" line in `status`. Owner: Dan.
+**2026-09-22:** the typo half of item 2's acceptance ("fix a typo in a capture
+without leaving VS Code") is met from the other end by D107 — *Preen Paragraph*
+fixes it in the file before the pair exists, and `recut --finish` fixes an
+archive after. Locating a month-old archive from the editor is still open.
 
 ## The problem
 
