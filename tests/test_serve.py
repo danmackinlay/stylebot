@@ -25,7 +25,9 @@ def stub_detector(prose: str) -> dict:
     return {"score": 0.9 if "slop" in prose else 0.1, "p_dan": None, "configured": True}
 
 
-def run_lines(*requests: object, rewriter=None, prefer=None, div_is_prose=None) -> list[dict]:
+def run_lines(
+    *requests: object, rewriter=None, prefer=None, div_is_prose=None, finish=None
+) -> list[dict]:
     """Feed newline-joined requests through serve_loop, return parsed responses."""
     lines = [r if isinstance(r, str) else json.dumps(r) for r in requests]
     stdin = io.StringIO("\n".join(lines) + "\n")
@@ -38,6 +40,7 @@ def run_lines(*requests: object, rewriter=None, prefer=None, div_is_prose=None) 
         rewriter=rewriter,
         prefer=prefer,
         div_is_prose=div_is_prose,
+        finish=finish,
     )
     return [json.loads(line) for line in stdout.getvalue().splitlines()]
 
@@ -96,6 +99,26 @@ def test_rewrite_rejects_blank_text_and_survives_rewriter_errors():
     assert "'text' must be a non-empty string" in responses[0]["error"]
     assert "select prose only" in responses[1]["error"]
     assert responses[2] == {"id": 6, "scores": [0.9], "detector": "stub-clf"}  # loop survived
+
+
+def test_preen_unarmed_errors_and_armed_returns_the_finished_paragraph():
+    """The editor door of D107: one paragraph in, the finisher's text out."""
+    responses = run_lines(
+        {"id": 1, "op": "preen", "text": "We dig in, teh end."},
+        {"id": 2, "op": "preen", "text": "We dig in, teh end."},
+        {"id": 3, "op": "preen", "text": "  "},
+        {"id": 4, "op": "nope"},
+        finish=None,
+    )
+    assert "without a finisher" in responses[0]["error"]
+    assert "'preen'" in responses[3]["error"]
+    armed = run_lines(
+        {"id": 2, "op": "preen", "text": "We dig in, teh end."},
+        {"id": 3, "op": "preen", "text": "  "},
+        finish=lambda chunks: [c.replace("teh", "the") for c in chunks],
+    )
+    assert armed[0] == {"id": 2, "text": "We dig in, the end."}
+    assert "non-empty" in armed[1]["error"]
 
 
 def test_prefer_hands_decision_to_sink():

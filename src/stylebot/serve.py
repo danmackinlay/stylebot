@@ -12,6 +12,7 @@ line over stdin/stdout:
     <- {"id": 3, "input_score": 0.52, "candidates": [{"text", "score",
                  "anchors_lost", "anchors_gained"}, ...]}
     -> {"id": 4, "op": "prefer", "decision": {...}}  <- {"id": 4, "ok": true}
+    -> {"id": 6, "op": "preen", "text": ...}          <- {"id": 6, "text": ...}
 
 `segment` answers from `stylebot.markdown` under the sidecar's `div_is_prose`.
 Several detectors may be armed, named in `meta.detectors`; `score` picks one
@@ -27,7 +28,7 @@ from __future__ import annotations
 import bisect
 import json
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from functools import cache
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
@@ -160,12 +161,14 @@ def handle_request(
     prefer: Callable[[dict], None] | None = None,
     div_is_prose: markdown.DivIsProse | None = None,
     html_comments: bool = False,
+    finish: Callable[[Sequence[str]], Sequence[str]] | None = None,
 ) -> dict:
     """Compute the response for one parsed request object; pure.
 
     Unknown ops and detector failures come back as an ``error`` response with
     the ``id`` echoed. `div_is_prose` applies to the `segment` op and must be
-    the object the injected `rewriter` closed over.
+    the object the injected `rewriter` closed over; `finish` arms `preen`, the
+    caller's after-side pass over one paragraph (D107).
     """
     rid = request.get("id")
     op = request.get("op")
@@ -207,10 +210,18 @@ def handle_request(
                 return {"id": rid, "error": "'decision' must be an object"}
             prefer(decision)
             return {"id": rid, "ok": True}
+        if op == "preen":
+            if finish is None:
+                return {"id": rid, "error": "serve started without a finisher — no preen"}
+            text = request.get("text")
+            if not isinstance(text, str) or not text.strip():
+                return {"id": rid, "error": "'text' must be a non-empty string"}
+            return {"id": rid, "text": finish([text])[0]}
         return {
             "id": rid,
             "error": (
-                f"unknown op {op!r} (expected 'score', 'segment', 'info', 'rewrite', or 'prefer')"
+                f"unknown op {op!r} (expected 'score', 'segment', 'info', 'rewrite', "
+                "'prefer', or 'preen')"
             ),
         }
     except Exception as exc:  # a bad text must not kill the server
@@ -227,6 +238,7 @@ def serve_loop(
     prefer: Callable[[dict], None] | None = None,
     div_is_prose: markdown.DivIsProse | None = None,
     html_comments: bool = False,
+    finish: Callable[[Sequence[str]], Sequence[str]] | None = None,
 ) -> None:
     """Serve NDJSON requests until EOF on `stdin`: one flushed line per
     response (the client blocks on it); blank lines ignored; an unparseable
@@ -253,6 +265,7 @@ def serve_loop(
                 prefer=prefer,
                 div_is_prose=div_is_prose,
                 html_comments=html_comments,
+                finish=finish,
             )
         stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
         stdout.flush()
@@ -284,6 +297,7 @@ def serve_sidecar(
     prefer: Callable[[dict], None] | None = None,
     div_is_prose: markdown.DivIsProse | None = None,
     html_comments: bool = False,
+    finish: Callable[[Sequence[str]], Sequence[str]] | None = None,
     stdin: IO[str] | None = None,
     stdout: IO[str] | None = None,
 ) -> None:
@@ -326,4 +340,5 @@ def serve_sidecar(
         prefer=prefer,
         div_is_prose=div_is_prose,
         html_comments=html_comments,
+        finish=finish,
     )
