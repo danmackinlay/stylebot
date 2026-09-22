@@ -1521,3 +1521,71 @@ p95 0.996 vs Dan p95 0.828), so the edges that mean anything are tail cuts: the 
 `slop:75,dan:95,slop:95` → **[0.19, 0.83, 1.00]** — faint above what most slop reaches, amber
 above what 5% of Dan reaches, red at the rail. A marker, not a verdict; the voice head is the
 instrument for Dan-vs-slop, this one answers a different question. Decided: D106.
+
+## Typos on the after side — 2026-09-22 (D107)
+
+A scratch probe over the live view of `draws/captures.jsonl` (566 real pairs) and the accepted
+synthetic draws (7,750): a word on the after side, absent from the before side, that both aspell
+`en_GB` and `en_US` reject and that fewer than three blog posts use, or a same-line doubled word
+absent from the before side. Code, math, links, cites and headings stripped first.
+
+| stratum | live pairs | spelling suspect | doubled word | either | captures affected |
+|---|---|---|---|---|---|
+| real, archived | 333 | 81 | 11 | 84 | 60 of 154 |
+| real, pre-archive (no `captures/<id>/`) | 233 | 39 | 7 | 44 | 37 of 104 |
+| synthetic, accepted | 7,750 | 1,051 | 76 | 1,118 | — |
+
+The real suspects are slips (`woudl`, `rememebr`, `langauge`, `specializded`, `the the` ×6); the
+synthetic column is mostly jargon and `-ize` forms the dictionaries lack, its true rate near the
+doubled-word 1%. The synth selector takes `automation ≤ 0` posts — the ones `ai-preen` has never
+touched — so both strata are un-preened prose; the real one is un-proofread as well. Decided: D107.
+
+## Preen at pair scale — 2026-09-22 (D107)
+
+`dan-style log recut --finish --dry-run` on three archives with known slips (`ca32f59c`,
+`24218ef6`, `aa0a5950`; 24 chunks), first with `ai-preen`'s own `EDIT_INSTRUCTIONS`, then with
+`preen_chunks.PROOFREAD_INSTRUCTIONS` behind the letter-scale gate; `gemini-3.1-flash-lite`.
+
+| finisher | chunks changed | word runs changed | of which letter-scale slips |
+|---|---|---|---|
+| preen's copy-edit prompt | 23 of 24 | 49 | 6 |
+| proofread prompt + gate | 6 of 24 | 7 | 7 |
+
+The copy-edit prompt, calibrated on whole documents, re-registers a lone paragraph: `suck` →
+`struggle`, `stuff` → `items`, `pretty` → `quite`, `good` → `effective`, `kinda` → `kind`, spaced
+em dashes closed up — the very register the styler exists to undo. The gate keeps the seven slips
+and drops everything else. Decided: D107 (the finisher is the gated proofread, not preen's pass).
+
+## Minting archives for the pre-archive captures — 2026-09-22 (D107)
+
+Scratch procedure over the 104 live captures with no `captures/<id>/`: `before.md`/`after.md` are
+the live chunks in order, each preceded by its `meta.context` heading (or a comment sentinel when
+it has none), and the archive is written only if `capture.plan_pairs` re-cuts it to exactly the
+live pairs — heading context off for the 51 captures landed before it existed.
+
+| captures | pairs | outcome |
+|---|---|---|
+| 95 | 197 | reproduce exactly; minted, `meta.json` says `minted` |
+| 9 | 36 | re-cut differently (adjacent regions merge, or two chunks share one before); left as they are |
+
+## The real stratum finished — 2026-09-22 (D107)
+
+`finish_archive` + `recut_capture` over every archive with a live landing, each under the gap
+policy that best reproduced its landing (220 at 0/0, 23 at the blog's 2/800), then the wrong
+changes reverted by hand and the archives recut again; ≈ 600k characters through flash-lite.
+
+| | count |
+|---|---|
+| archives finished | 244 (1 error: an archive the finish left identical) |
+| archives changed / chunks / pairs re-landed | 134 / 186 / 409 |
+| word runs accepted | 250: 28 doubled words, 51 `-ise` → `-ize` (Vale's Oxford rule), the rest slips |
+| reverted by hand | 21 in 13 archives: 9 Americanisations (`behaviour`, `defence`, `licence`, `labelling`, `modelling`, `maths` ×4), 8 coinages (`citoms`, `scientillas`), 4 word swaps (`wear`→`bear`, `prised`→`prized`, `hip`→`hot`, `anything`→`nothing`) |
+| slips the finisher missed, fixed by hand | 4 (`flexiibltiy`, `odels`, `audiotned`, `geopolitcal`) |
+| residual, live real pairs (probe as above) | doubled words 18 → 3 pairs; spelling suspects 120 → 90 pairs, now coinages, slang and jargon (`citoms`, `shonky`, `petaflops`) plus `betwwen`/`appaz` in the 9 un-minted captures |
+
+The two reverted classes are refused by the gate since (`_AMERICANISATIONS`, `_recurs`); the four
+word swaps are real-word slips the gate cannot tell from `pack` → `back`, so ≈ 2% of accepted
+changes need a human eye, which `recut --finish --dry-run` gives. Three archives still read as
+"edited since landing" after a recut (`286a1add`, `9fa79003`, `abba8682`): their chunks straddle
+a protected block, so the landed text is never a contiguous substring — a `drifted_archives`
+false positive that predates today, left open. Decided: D107 stands; `save --finish` stays off.
