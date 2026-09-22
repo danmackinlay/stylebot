@@ -1,7 +1,7 @@
-# Design decisions — archive: D1–D65, and P1
+# Design decisions — archive: D1–D66, and P1
 
 Entries D1–D48, moved here 2026-09-04 in three passes, then D49, P1 and D50 on 2026-09-07, as `decisions.md` passed
-1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, D53–D55 the same day to make room for D97–D98, D57–D58 for D100, and D59–D60 for D102; then D61–D62 on 2026-09-15 for D103 and D63–D64 the same day for D105, then D65 on 2026-09-17 for D106 (P3).
+1,200 lines, then D51–D52 on 2026-09-10 as it passed 1,300, D53–D55 the same day to make room for D97–D98, D57–D58 for D100, and D59–D60 for D102; then D61–D62 on 2026-09-15 for D103 and D63–D64 the same day for D105, then D65 on 2026-09-17 for D106, and D66 on 2026-09-22 for D107 (P3).
 **They keep their numbers**; nothing was renumbered, and the
 index at the top of [`decisions.md`](decisions.md) carries a one-line summary of
 each with a pointer here. Text is verbatim as it stood at the move, including the
@@ -1839,3 +1839,30 @@ cell left filled is never refilled under the gate (D32's amendment).
 **Deciding constraint**: a synthetic pair is a draw and a captured pair is
 evidence. **Re-evaluate if** real captures become numerous enough that a few
 hundred are affordable to lose, or the synthesis gate gains its loss mirror.
+
+## D66: the `anthropic/` arms bill through OpenRouter BYOK
+
+**Decision (2026-08-16, recorded 2026-09-04).** An Anthropic key in OpenRouter's
+workspace BYOK settings bills those arms to the Anthropic account rather than to
+OpenRouter credits. Nothing in stylebot changes: `Arm.name` stays
+`openrouter/anthropic/…`, so `synth_key`s do not fork and the corpus dedupes.
+
+**The economics, which "effectively free" in the blog's `CLAUDE.md` stands for.**
+OpenRouter's BYOK fee is **5% of list**, waived under a **$25,000/month allowance
+measured in list-price inference** — orders of magnitude above this corpus, whose
+entire v1 generation cost about fifteen dollars (`findings.md` "Cost: forecast vs
+actual"). At this scale the fee is not payable.
+
+**Alternatives.** *Keep paying OpenRouter credits* — simpler, and it makes
+`meta.gen.cost` unambiguous; rejected because the blog is work output and the
+employer's Anthropic account is the right payer. *Route Anthropic direct* — forks
+`Arm.name` and therefore every `synth_key` on those arms, orphaning the pairs
+already drawn from them (D11).
+
+**Deciding constraint**: setup is console-only, and **"Always use for this
+provider" must be ticked** — otherwise a rate-limited BYOK key silently falls
+back to OpenRouter's shared capacity and spends credits. **Unverified,
+deliberately**: `meta.gen.cost` comes from OpenRouter's `usage.include`, so under
+BYOK it may report the fee or zero; the ledger records **list** prices
+throughout. **Re-evaluate if** the blog stops being essentially work output —
+the arrangement is justified only while it is.

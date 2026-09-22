@@ -36,7 +36,6 @@ keep their numbers — the second index below is how you find them.
 | D63 | orphan score rows are pruned where they are read | live |
 | D64 | `STYLE_SYSTEM` is frozen text with an author slot; a re-stamp is a rebuild | live |
 | D65 | `--include-real` defaults off — the two strata invent different things | live |
-| D66 | the `anthropic/` arms bill through OpenRouter BYOK | live |
 | D67 | the blog's Linux/CI machinery for `stylebot` is deleted | live |
 | D68 | segmenter tests run eleven hard-post excerpts; the sweep is opt-in | live; amended 2026-09-04 (F15) |
 | D69 | a closing code fence back-references its opener's length | live |
@@ -77,8 +76,9 @@ keep their numbers — the second index below is how you find them.
 | D104 | the near-identity gate computes `transform_sim` at assembly when a record stamps none | live; amends D18 |
 | D105 | marker thresholds are a command over the eval stratum's scores; the quantile rule is policy | live |
 | D106 | hosted detectors join the Detector seam; the marker picks its instrument per request; the reranker stays the voice head | live |
+| D107 | a pair's after side is finished at pair scale by the caller's preen; one hook, three doors | live |
 
-## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D65, plus P1)
+## Index — [`decisions-archive.md`](decisions-archive.md) (D1–D66, plus P1)
 
 | # | title | status |
 |---|---|---|
@@ -132,34 +132,9 @@ keep their numbers — the second index below is how you find them.
 | D47 | two error classes for the whole package, translated once at the group | live |
 | D48 | `Styler` is a Protocol; it types the call, not the tokens | live |
 
+| D66 | the `anthropic/` arms bill through OpenRouter BYOK | live |
 ---
 
-## D66: the `anthropic/` arms bill through OpenRouter BYOK
-
-**Decision (2026-08-16, recorded 2026-09-04).** An Anthropic key in OpenRouter's
-workspace BYOK settings bills those arms to the Anthropic account rather than to
-OpenRouter credits. Nothing in stylebot changes: `Arm.name` stays
-`openrouter/anthropic/…`, so `synth_key`s do not fork and the corpus dedupes.
-
-**The economics, which "effectively free" in the blog's `CLAUDE.md` stands for.**
-OpenRouter's BYOK fee is **5% of list**, waived under a **$25,000/month allowance
-measured in list-price inference** — orders of magnitude above this corpus, whose
-entire v1 generation cost about fifteen dollars (`findings.md` "Cost: forecast vs
-actual"). At this scale the fee is not payable.
-
-**Alternatives.** *Keep paying OpenRouter credits* — simpler, and it makes
-`meta.gen.cost` unambiguous; rejected because the blog is work output and the
-employer's Anthropic account is the right payer. *Route Anthropic direct* — forks
-`Arm.name` and therefore every `synth_key` on those arms, orphaning the pairs
-already drawn from them (D11).
-
-**Deciding constraint**: setup is console-only, and **"Always use for this
-provider" must be ticked** — otherwise a rate-limited BYOK key silently falls
-back to OpenRouter's shared capacity and spends credits. **Unverified,
-deliberately**: `meta.gen.cost` comes from OpenRouter's `usage.include`, so under
-BYOK it may report the fee or zero; the ledger records **list** prices
-throughout. **Re-evaluate if** the blog stops being essentially work output —
-the arrangement is justified only while it is.
 ## D67: the blog's Linux/CI machinery for `stylebot` is deleted
 
 **Decision.** The blog resolves `stylebot` from one source — the editable
@@ -1271,3 +1246,34 @@ make "which instrument, and what did it cost" explicit: `meta.detectors`, `score
 **Re-evaluate if** Sapling's tail separation goes too (`findings.md` "Sapling on the eval
 stratum": both sides human through the median, so its edges are tail cuts under their own rule),
 or a local hosted-quality detector (Fast-DetectGPT on MLX) lands — the same seam takes it.
+
+## D107: a pair's after side is finished at pair scale by the caller's preen; one hook, three doors
+
+**Decision (2026-09-22 by Dan).** A real pair's after side carries Dan's typing (`findings.md`
+"Typos on the after side": a quarter of live real pairs) and `ai-preen`, the calibrated fixer,
+runs over a document after `date-modified` moves — after the pair froze. stylebot grows one
+`Finisher`, `Callable[[Sequence[str]], Sequence[str]]`, which `capture.finish_after` applies to
+exactly the after-side chunks the differ would land and splices back; untouched prose and the
+before side are never sent. Three doors share it: `log recut --finish` finishes an archive's
+`after.md` and re-lands it (D96); `log save --finish` finishes before archiving, so the archive
+holds what landed; the sidecar's `preen` op finishes one paragraph in the editor before the save,
+so file and archive agree. The bare group takes `--finish module:attr`; `dan-style log` and
+`dan-style serve` pin the blog's `preen_chunks` (D101) — preen's `_apply_edits` pass plus two
+guards: a chunk that gains `[TODO clarify]` or changes its `sem` marker count reverts. The
+pre-archive captures are minted once from their live draws, each chunk under its own heading as
+separator, by a scratch procedure recorded in `findings.md`, not by package code (D38).
+
+**Alternatives.** *Fix at view build* — an LLM or aspell pass is not a function of draws and
+policy, so one `policy_sha` would name many views, and `drifted_archives` needs every live record
+inside its archive. *Keep the raw archive, finish at landing* — a recut would re-spend and
+re-differ; the archive is what landed. *An aspell lint at save* — a detector, not a fix, and a
+second instrument beside the one Dan calibrated. *Drop typo'd real pairs* — a quarter of the
+scarce side. *The editor door alone* — relies on remembering; the save flag is the same hook.
+
+**Deciding constraint.** Preen is already chunk-scale inside (`segment_for_edit`), already guarded
+(sigils, placeholders, size delta) and already trusted on Dan's prose; the new mechanism is the
+splice and the doors. `save --finish` defaults off: after an editor preen it would re-edit approved
+text and spend on a no-op.
+
+**Re-evaluate if** the residual suspect rate after finishing stays above the synthetic stratum's
+(`findings.md`), or the editor door goes unused for a month (then `save --finish` defaults on).
