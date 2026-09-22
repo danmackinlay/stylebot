@@ -537,3 +537,78 @@ def test_recut_archive_refuses_a_wholly_reverted_archive(tmp_path):
     with pytest.raises(RunError, match="identical"):
         capture.recut_archive(archive, pairs_path=data_dir / "pairs")
     assert len(list(draws.iter_draws(data_dir / "draws"))) == 1
+
+
+# ---- the after-side finisher (D107) ---------------------------------------
+
+
+def _fix_teh(chunks):
+    return [c.replace("teh", "the") for c in chunks]
+
+
+def test_finish_after_touches_only_the_landed_chunks():
+    """Untouched prose and the before side are never sent; the fix is spliced
+    back where the chunk sat, and the changed `(old, new)` pairs come back."""
+    before = "---\ntitle: T\n---\n## S\n\nKept teh paragraph.\n\nRich tapestry.\n\nAlso kept."
+    after = "---\ntitle: T\n---\n## S\n\nKept teh paragraph.\n\nWe dig in, teh end.\n\nAlso kept."
+    sent = []
+
+    def finish(chunks):
+        sent.extend(chunks)
+        return _fix_teh(chunks)
+
+    out, changed = capture.finish_after(before, after, finish)
+    assert sent == ["We dig in, teh end."]
+    assert out == after.replace("teh end", "the end") and "Kept teh" in out
+    assert changed == [("We dig in, teh end.", "We dig in, the end.")]
+
+
+def test_finish_after_keeps_a_chunk_the_finisher_blanks_or_loses():
+    before = "## S\n\nRich tapestry.\n"
+    after = "## S\n\nWe dig in.\n"
+    out, changed = capture.finish_after(before, after, lambda chunks: ["  "] * len(chunks))
+    assert (out, changed) == (after, [])
+    with pytest.raises(RunError, match="finisher returned 0"):
+        capture.finish_after(before, after, lambda chunks: [])
+
+
+def test_capture_pairs_with_finish_archives_what_landed(tmp_path):
+    """The archive's after.md is the finished text, so the record is a substring
+    of it and `drifted_archives` stays quiet (D107)."""
+    written = capture.capture_pairs(
+        "## S\n\nRich tapestry.\n",
+        "## S\n\nWe dig in, teh end.\n",
+        pairs_path=tmp_path / "pairs.jsonl",
+        source="post/foo.qmd",
+        snapped_at="2026-07-07T00:00:00+00:00",
+        finish=_fix_teh,
+    )
+    cap_id = written[0]["meta"]["capture_id"]
+    assert written[0]["messages"][2]["content"].endswith("We dig in, the end.")
+    after_md = (tmp_path / "captures" / cap_id / "after.md").read_text(encoding="utf-8")
+    assert after_md == "## S\n\nWe dig in, the end.\n"
+    assert capture.drifted_archives(tmp_path / "captures", written) == []
+
+
+def test_finish_archive_rewrites_after_md_only(tmp_path):
+    archive = tmp_path / "captures" / "abc12345"
+    capture.write_archive(
+        archive,
+        capture_id="abc12345",
+        source="post/foo.qmd",
+        snapped_at=None,
+        whole=False,
+        before_text="## S\n\nRich tapestry.\n",
+        after_text="## S\n\nWe dig in, teh end.\n",
+    )
+    meta_before = (archive / "meta.json").read_bytes()
+    assert capture.finish_archive(archive, _fix_teh, write=False) == [
+        ("We dig in, teh end.", "We dig in, the end.")
+    ]
+    assert "teh" in (archive / "after.md").read_text(encoding="utf-8")
+    assert len(capture.finish_archive(archive, _fix_teh)) == 1
+    assert (archive / "after.md").read_text(encoding="utf-8") == "## S\n\nWe dig in, the end.\n"
+    assert (archive / "meta.json").read_bytes() == meta_before
+    assert not list(archive.glob("*.tmp"))
+    with pytest.raises(RunError, match="no readable capture archive"):
+        capture.finish_archive(tmp_path / "captures" / "nope", _fix_teh)

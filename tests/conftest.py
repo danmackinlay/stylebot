@@ -172,3 +172,8 @@ def corpus_file(data_dir, out) -> Path:
     body = "".join(dumps_line(rec) + "\n" for rec in corpus_records(data_dir))
     Path(out).write_text(body, encoding="utf-8")
     return Path(out)
+
+
+def fix_teh(chunks):
+    """A `--finisher conftest:fix_teh` for the log CLI tests (D107)."""
+    return [c.replace("teh", "the") for c in chunks]

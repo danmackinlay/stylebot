@@ -258,6 +258,31 @@ def test_div_policy_flag_reaches_save(session_repo, temp_corpus):
     assert "1 pair" in result.output
 
 
+def test_finisher_flag_reaches_save_and_recut(session_repo, temp_corpus):
+    """`--finisher module:attr` on the group arms `save --finish` and `recut
+    --finish` (D107); the shell echoes what changed; `--finish` without a
+    finisher is a usage error."""
+    post = session_repo / "post" / "foo.qmd"
+    post.write_text("## S\n\nRich tapestry.\n", encoding="utf-8")
+    assert CliRunner().invoke(log.main, ["-q", "open", "post/foo.qmd"]).exit_code == 0
+    post.write_text("## S\n\nWe dig in, teh end.\n", encoding="utf-8")
+    bare = CliRunner().invoke(log.main, ["-q", "save", "--finish", "post/foo.qmd"])
+    assert bare.exit_code == 2 and "needs a finisher" in bare.output
+    result = CliRunner().invoke(
+        log.main, ["-q", "--finisher", "conftest:fix_teh", "save", "--finish", "post/foo.qmd"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "finished 1 chunk(s): 1 changed" in result.output and "'teh' -> 'the'" in result.output
+    records = corpus_records(temp_corpus)
+    assert records[-1]["messages"][2]["content"].endswith("We dig in, the end.")
+    cid = records[-1]["meta"]["capture_id"]
+    dry = CliRunner().invoke(
+        log.main, ["-q", "--finisher", "conftest:fix_teh", "recut", "--finish", "--dry-run", cid]
+    )
+    assert dry.exit_code == 0, dry.output
+    assert "would rewrite 0 chunk(s)" in dry.output and "Nothing written" in dry.output
+
+
 def test_policy_group_pins_div_policy_source_policy_and_data_dir(session_repo, tmp_path):
     """A `policy_group` runs every log subcommand under the caller's pins (D101):
     the callout pairs, the record carries the pinned prompt, the draws land in

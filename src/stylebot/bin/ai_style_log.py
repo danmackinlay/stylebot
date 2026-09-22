@@ -20,7 +20,7 @@ from pathlib import Path
 
 import click
 
-from stylebot import config, session
+from stylebot import capture, config, session
 from stylebot import splits as splits_mod
 from stylebot.capture import diff_chunks  # noqa: F401 — callers/tests reach it as log.diff_chunks
 from stylebot.cli_options import (
@@ -82,6 +82,39 @@ def _policy(key: str):
     """A pinned policy value off the group's context, None when the shell is bare."""
     ctx = click.get_current_context(silent=True)
     return (ctx.obj or {}).get(key) if ctx else None
+
+
+def _finisher(flag: bool) -> capture.Finisher | None:
+    """The pinned or `--finisher`ed after-side pass (D107) when `flag` asks for
+    it, wrapped to echo every chunk it changed; None when it does not."""
+    if not flag:
+        return None
+    finish = _policy("finish")
+    if finish is None:
+        raise click.UsageError(
+            "--finish needs a finisher: `ai-style log --finisher module:attr …`, or a "
+            "policy-bearing shell such as `dan-style log` (D101, D107)"
+        )
+
+    def echoing(chunks: Sequence[str]) -> Sequence[str]:
+        out = list(finish(chunks))
+        changed = [(a, b) for a, b in zip(chunks, out, strict=True) if a != b]
+        click.echo(f"finished {len(chunks)} chunk(s): {len(changed)} changed")
+        for old, new in changed:
+            _echo_word_changes(old, new)
+        return out
+
+    return echoing
+
+
+def _echo_word_changes(old: str, new: str) -> None:
+    """One indented line per run of words the finisher replaced."""
+    import difflib
+
+    a, b = old.split(), new.split()
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():
+        if tag != "equal":
+            click.echo(f"    {' '.join(a[i1:i2])!r} -> {' '.join(b[j1:j2])!r}")
 
 
 def _warn_if_eval_post(store: SessionStore, source: Path) -> None:
@@ -172,17 +205,27 @@ def _remind_open_sessions(ctx: click.Context) -> None:
     "that says whether the div's contents are prose (D100). Default: every div is protected; "
     "a blog-side shell pins its own (D101).",
 )
+@click.option(
+    "--finisher",
+    default=None,
+    help="module:attr of the after-side pass `save --finish` and `recut --finish` apply to "
+    "each landed chunk — a batch of texts in, the same number out (D107). Default: none; "
+    "a blog-side shell pins its own.",
+)
 @click.pass_context
-def main(ctx: click.Context, quiet: bool, div_policy: str | None):
+def main(ctx: click.Context, quiet: bool, div_policy: str | None, finisher: str | None):
     """Capture (slop -> Dan rewrite) training pairs for ai-style fine-tuning."""
     ctx.ensure_object(dict)
     ctx.obj["quiet"] = quiet
     ctx.obj["div_is_prose"] = config.resolve_div_policy(div_policy)
+    ctx.obj["finish"] = (
+        config.load_callable(finisher, param_hint="--finisher") if finisher else None
+    )
 
 
 def policy_group(name: str, pins: Callable[[], dict], *, help: str | None = None) -> click.Group:
     """`main`'s subcommands under a group whose policy is `pins()` (D101): a dict
-    of `div_is_prose`, `source_policy`, `data_dir`, read when the group runs."""
+    of `div_is_prose`, `source_policy`, `data_dir` and `finish`, read when the group runs."""
 
     @click.group(name=name, cls=ErrorTranslatingGroup, help=help or main.help)
     @click.option("--quiet", "-q", is_flag=True, help="Suppress the open-sessions reminder.")
@@ -269,6 +312,12 @@ def reopen_session(ctx: click.Context, file: Path):
     "do-over shorthand: you spotted a typo after saving and want the pair "
     "recaptured against the same base. No-op if a session is already open.",
 )
+@click.option(
+    "--finish",
+    is_flag=True,
+    help="Pass each landed after-side chunk through the finisher before archiving and "
+    "landing, so the archive holds what landed (D107). Off: preen in the editor first.",
+)
 @capture_options()
 @click.pass_context
 def save_session(
@@ -278,6 +327,7 @@ def save_session(
     force_replace: bool,
     force_append: bool,
     redo: bool,
+    finish: bool,
     **kw,
 ):
     """Save FILE's rewrite as draws (D84), then close the session.
@@ -305,6 +355,7 @@ def save_session(
         notify=click.echo,
         div_is_prose=_policy("div_is_prose"),
         source_policy=_policy("source_policy"),
+        finish=_finisher(finish),
     )
 
     _warn_if_eval_post(store, file)
@@ -565,6 +616,12 @@ def pair(
     is_flag=True,
     help="With --dry-run: after the table, print every pair as a line diff, before to after.",
 )
+@click.option(
+    "--finish",
+    is_flag=True,
+    help="First pass the archive's landed after-side chunks through the finisher and write "
+    "them back to after.md (D107); with --dry-run, only print what it would change.",
+)
 @capture_options(exclude=["whole"])
 @click.pass_context
 def recut(
@@ -574,13 +631,27 @@ def recut(
     gap_chars: int,
     dry_run: bool,
     full: bool,
+    finish: bool,
     **kw,
 ):
     """Re-land captures/ARCHIVE_ID after editing its before.md or after.md by
     hand (D96): fresh draws supersede the earlier landing, the archive's
-    whole/chunked mode is kept, and nothing under captures/ changes."""
+    whole/chunked mode is kept, and nothing under captures/ changes unless
+    --finish rewrites after.md first."""
     cap: CaptureOpts = bundles_from_kwargs(kw, {"capture": CaptureOpts})["capture"]
     store = _store()
+    if finish:
+        changed = capture.finish_archive(
+            store.captures_dir / archive_id,
+            _finisher(True),
+            write=not dry_run,
+            heading_context=cap.heading_context,
+            gap_paras=gap_paras,
+            gap_chars=gap_chars,
+            div_is_prose=_policy("div_is_prose"),
+        )
+        verb = "would rewrite" if dry_run else "rewrote"
+        click.echo(f"finish: {verb} {len(changed)} chunk(s) in captures/{archive_id}/after.md")
     if dry_run:
         planned = session.plan_recut(
             store,
@@ -589,7 +660,6 @@ def recut(
             gap_paras=gap_paras,
             gap_chars=gap_chars,
             div_is_prose=_policy("div_is_prose"),
-            source_policy=_policy("source_policy"),
         )
         _echo_recut_plan(planned)
         if full:

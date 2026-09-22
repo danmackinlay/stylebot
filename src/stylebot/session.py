@@ -57,9 +57,8 @@ __all__ = [
 Disposition = Literal["smart", "replace-all", "append"]
 
 
-# A snapshot is a DIRECTORY mirroring the source path,
-# `snapshots/post/foo.qmd/{content.md, meta.json}`: readable on disk rather
-# than JSON-escaped, and `.md` so the blog's `*.qmd` tooling cannot see it.
+# A snapshot is a directory mirroring the source path (`snapshots/post/foo.qmd/`),
+# readable on disk, and `.md` so the blog's `*.qmd` tooling cannot see it.
 SNAPSHOT_CONTENT = "content.md"
 SNAPSHOT_META = "meta.json"
 
@@ -490,13 +489,15 @@ def save_session(
     notify: Callable[[str], None] | None = None,
     div_is_prose=None,
     source_policy=None,
+    finish: capture.Finisher | None = None,
 ) -> SaveResult:
     """Diff `source` against its session snapshot and land the pair(s) as draws.
 
     Prior pairs are superseded, never rewritten (D84): by default the same
     session's (interim `keep_open` saves); `"replace-all"` earlier sessions'
     too; `"append"` none. `redo` reopens the last closed session first so the
-    re-diff is against the same base. `notify` receives the pre-capture lines.
+    re-diff is against the same base. `notify` receives the pre-capture lines;
+    `finish` is `capture_pairs`'s after-side pass (D107).
     """
     say = notify or (lambda _line: None)
     if disposition not in ("append", "replace-all", "smart"):  # pragma: no cover
@@ -526,6 +527,7 @@ def save_session(
             heading_context=heading_context,
             supersedes=_capture_ids(superseded),
             div_is_prose=div_is_prose,
+            finish=finish,
             **({"source_policy": source_policy} if source_policy else {}),
         )
     except RunError as exc:

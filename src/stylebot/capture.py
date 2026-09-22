@@ -287,6 +287,35 @@ def build_pair_record(
     }
 
 
+#: A caller's pass over the after side of the chunks a capture lands (D107):
+#: a batch in, the same number of texts out. The before side is never sent.
+Finisher = Callable[[Sequence[str]], Sequence[str]]
+
+
+def finish_after(
+    before_text: str, after_text: str, finish: Finisher, *, whole: bool = False, **knobs
+) -> tuple[str, list[tuple[str, str]]]:
+    """`after_text` with each after-side chunk the differ would land passed
+    through `finish` and spliced back at its first occurrence, plus the
+    `(old, new)` chunks that changed (D107). `knobs` are `_chunk_pairs`'s cut;
+    a blank result, or a chunk not found in the text, leaves it as it was."""
+    before_body, after_body = (
+        split_frontmatter_meta(before_text)[1],
+        split_frontmatter_meta(after_text)[1],
+    )
+    knobs = {"heading_context": True, "gap_paras": 0, "gap_chars": 0, "max_chars": None, **knobs}
+    afters = [a for _b, a, _c in _chunk_pairs(before_body, after_body, whole=whole, **knobs)]
+    finished = list(finish(afters)) if afters else []
+    if len(finished) != len(afters):
+        raise RunError(f"finisher returned {len(finished)} text(s) for {len(afters)} chunk(s)")
+    out, changed = after_text, []
+    for old, new in zip(afters, finished, strict=True):
+        if new != old and new.strip() and old in out:
+            out = out.replace(old, new, 1)
+            changed.append((old, new))
+    return out, changed
+
+
 def capture_pairs(
     before_text: str,
     after_text: str,
@@ -306,19 +335,19 @@ def capture_pairs(
     system_prompt: str | None = None,
     keep: Callable[[str, str], bool] | None = None,
     div_is_prose: DivIsProse | None = None,
+    finish: Finisher | None = None,
 ) -> list[dict]:
     """Strip frontmatter, diff, archive the texts and land one draw per chunk.
 
     Returns the records written; raises if nothing changed worth capturing
     and writes nothing when `keep` admits no chunk (D89). `whole` mode
     carries no context. The texts are archived under
-    `<data_dir>/captures/<capture_id>/` and each record becomes an accepted
-    draw naming the `capture_id`s it `supersedes` (D84), carrying
-    `meta.provenance` (D36) read under `source_policy`, whose prompt is
-    `messages[0]` unless `system_prompt` says otherwise.
+    `<data_dir>/captures/<capture_id>/` — the after side as `finish` left
+    it (D107) — and each record becomes an accepted draw naming the
+    `capture_id`s it `supersedes` (D84), carrying `meta.provenance` (D36)
+    read under `source_policy`, whose prompt is `messages[0]` unless
+    `system_prompt` says otherwise.
     """
-    before_meta, before_body = split_frontmatter_meta(before_text)
-    after_meta, after_body = split_frontmatter_meta(after_text)
     knobs = {
         "whole": whole,
         "heading_context": heading_context,
@@ -326,6 +355,12 @@ def capture_pairs(
         "gap_chars": coalesce_gap_chars,
         "max_chars": max_chars,
     }
+    if finish is not None:
+        after_text = finish_after(
+            before_text, after_text, finish, div_is_prose=div_is_prose, **knobs
+        )[0]
+    before_meta, before_body = split_frontmatter_meta(before_text)
+    after_meta, after_body = split_frontmatter_meta(after_text)
     chunk_pairs = _chunk_pairs(
         before_body, after_body, keep=keep, div_is_prose=div_is_prose, **knobs
     )
@@ -458,6 +493,26 @@ def recut_archive(
     )
     spans = [_span_of(arch["before_text"], b) for b, _a, _c in chunk_pairs]
     return _land(pairs_path, records, spans, supersedes=tuple(supersedes) or None)
+
+
+def finish_archive(
+    archive_dir: Path, finish: Finisher, *, write: bool = True, **knobs
+) -> list[tuple[str, str]]:
+    """Pass `captures/<id>/after.md`'s landed chunks through `finish` (D107),
+    rewriting only `after.md` when `write` and something changed, so the
+    archive's meta stands; returns the `(old, new)` chunks that changed.
+    `knobs` are `finish_after`'s; the archive's own `whole` applies."""
+    arch = read_archive(archive_dir)
+    if arch is None:
+        raise RunError(f"no readable capture archive at {archive_dir}")
+    after, changed = finish_after(
+        arch["before_text"], arch["after_text"], finish, whole=bool(arch.get("whole")), **knobs
+    )
+    if changed and write:
+        tmp = archive_dir / (ARCHIVE_AFTER + ".tmp")
+        tmp.write_text(after, encoding="utf-8")
+        os.replace(tmp, archive_dir / ARCHIVE_AFTER)
+    return changed
 
 
 def archive_id_of(meta: Mapping) -> str | None:

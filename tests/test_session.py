@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from stylebot import session
+from stylebot import capture, session
 from stylebot.errors import ConfigError
 from stylebot.session import SessionError, SessionStore, Snapshot
 
@@ -613,3 +613,34 @@ def test_save_pairs_a_callout_edit_only_under_a_div_policy(store, post):
         session.save_session(store, post)
     session.save_session(store, post, div_is_prose=lambda attrs: "callout" in attrs)
     assert _bodies(store) == ["We dig in."]
+
+
+# ---- the after-side finisher (D107) ---------------------------------------
+
+
+def _fix_teh(chunks):
+    return [c.replace("teh", "the") for c in chunks]
+
+
+def test_save_with_a_finisher_lands_and_archives_the_finished_after(store, post):
+    session.open_session(store, post)
+    post.write_text("## S\n\nWe dig in, teh end.\n", encoding="utf-8")
+    session.save_session(store, post, finish=_fix_teh)
+    assert _bodies(store) == ["We dig in, the end."]
+    cid = session.read_pairs(store)[0]["meta"]["capture_id"]
+    assert "the end" in (store.captures_dir / cid / "after.md").read_text(encoding="utf-8")
+    # The file on disk keeps Dan's typing; only the pair's moment was finished.
+    assert "teh" in post.read_text(encoding="utf-8")
+
+
+def test_finish_archive_then_recut_relands_the_fix(store, post):
+    """`recut --finish` in two library calls: the archive is finished in place,
+    the recut supersedes the typo'd landing (D96, D107)."""
+    session.open_session(store, post)
+    post.write_text("## S\n\nWe dig in, teh end.\n", encoding="utf-8")
+    session.save_session(store, post)
+    cid = session.read_pairs(store)[0]["meta"]["capture_id"]
+    assert len(capture.finish_archive(store.captures_dir / cid, _fix_teh)) == 1
+    result = session.recut_capture(store, cid)
+    assert result.superseded == 1 and _bodies(store) == ["We dig in, the end."]
+    assert capture.drifted_archives(store.captures_dir, session.read_pairs(store)) == []
