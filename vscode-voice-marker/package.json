@@ -2,7 +2,7 @@
   "name": "voice-marker",
   "displayName": "Voice Marker",
   "description": "Mark paragraphs with P(slop) and rewrite them in Dan's voice via a stylebot sidecar (ai-style/dan-style serve)",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "publisher": "danmackinlay",
   "private": true,
   "license": "MIT",
@@ -46,6 +46,10 @@
       {
         "command": "voiceMarker.markSemantic",
         "title": "Voice Marker: Mark Selection as Content Edit (sem)"
+      },
+      {
+        "command": "voiceMarker.preen",
+        "title": "Voice Marker: Preen Paragraph (fix typos before logging)"
       }
     ],
     "menus": {
@@ -59,6 +63,11 @@
           "command": "voiceMarker.markSemantic",
           "when": "editorLangId == markdown || editorLangId == quarto",
           "group": "1_modification@8"
+        },
+        {
+          "command": "voiceMarker.preen",
+          "when": "editorLangId == markdown || editorLangId == quarto",
+          "group": "1_modification@7"
         }
       ]
     },
@@ -169,6 +178,12 @@
         "command": "voiceMarker.markSemantic",
         "key": "ctrl+k ctrl+m",
         "mac": "cmd+k cmd+m",
+        "when": "editorTextFocus && (editorLangId == markdown || editorLangId == quarto)"
+      },
+      {
+        "command": "voiceMarker.preen",
+        "key": "ctrl+k ctrl+p",
+        "mac": "cmd+k cmd+p",
         "when": "editorTextFocus && (editorLangId == markdown || editorLangId == quarto)"
       }
     ]

@@ -433,6 +433,55 @@ async function rewriteCommand(): Promise<void> {
 
 /** Toggle the `sem` markers around each selection; an empty selection takes
  * its paragraph (stylebot D93). Pure text work in ./sem.ts. */
+/** Preen the paragraph under the cursor (or the selection) in place: the
+ * sidecar's `preen` op is the blog's copy-edit pass at chunk scale, so a typo
+ * is fixed in the file BEFORE `log save` freezes it into a pair (stylebot D107).
+ * Undo reverts it like any edit. */
+async function preenCommand(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !LANGS.has(editor.document.languageId)) {
+    return;
+  }
+  if (!sidecar) {
+    void vscode.window.showWarningMessage("Voice Marker: sidecar is not configured (voiceMarker.command).");
+    return;
+  }
+  const document = editor.document;
+  let segments: ProseSegment[];
+  try {
+    segments = await sidecar.segment(document.getText(), 0);
+  } catch (err) {
+    void vscode.window.showErrorMessage(`Voice Marker: segmentation failed — ${(err as Error).message}`);
+    return;
+  }
+  const target = rewriteTarget(editor, segments);
+  if (!target) {
+    void vscode.window.showInformationMessage("Voice Marker: put the cursor in a prose paragraph (or select prose).");
+    return;
+  }
+  const original = document.getText(target.range);
+  let finished: string;
+  try {
+    finished = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Voice Marker: preening the paragraph…" },
+      () => sidecar!.preen(original),
+    );
+  } catch (err) {
+    void vscode.window.showErrorMessage(`Voice Marker: preen failed — ${(err as Error).message}`);
+    return;
+  }
+  if (finished === original) {
+    vscode.window.setStatusBarMessage("Voice Marker: preen found nothing to fix", 4000);
+    return;
+  }
+  const ok = await editor.edit((edit) => edit.replace(target.range, finished));
+  if (!ok) {
+    void vscode.window.showErrorMessage("Voice Marker: buffer edit failed; the paragraph is unchanged.");
+    return;
+  }
+  vscode.window.setStatusBarMessage("Voice Marker: paragraph preened — undo reverts it", 4000);
+}
+
 async function markSemanticCommand(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
@@ -521,6 +570,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("voiceMarker.restartSidecar", () => sidecar?.restart()),
     vscode.commands.registerCommand("voiceMarker.rewrite", () => void rewriteCommand()),
     vscode.commands.registerCommand("voiceMarker.markSemantic", () => void markSemanticCommand()),
+    vscode.commands.registerCommand("voiceMarker.preen", () => void preenCommand()),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("voiceMarker.command") || e.affectsConfiguration("voiceMarker.cwd")) {
         output.appendLine("voiceMarker.command changed; respawning the sidecar");

@@ -110,6 +110,7 @@ const TIMEOUT_MS: Record<string, number> = {
   segment: 30_000,
   rewrite: 180_000,
   prefer: 15_000,
+  preen: 120_000,
 };
 const DEFAULT_TIMEOUT_MS = 60_000;
 
@@ -200,6 +201,14 @@ export class Sidecar {
   /** Record a human choice among candidates (server needs a preferences sink). */
   async prefer(decision: PreferenceDecision): Promise<void> {
     await this.request<{ ok: boolean }>({ op: "prefer", decision });
+  }
+
+  /** One paragraph through the server's finisher — the blog's `ai-preen` at
+   * chunk scale, run before `log save` so the pair never sees a typo
+   * (stylebot D107). Errors when the sidecar armed no finisher. */
+  async preen(text: string): Promise<string> {
+    const resp = await this.request<{ text: string }>({ op: "preen", text });
+    return resp.text;
   }
 
   private request<T>(body: Record<string, any>): Promise<T> {

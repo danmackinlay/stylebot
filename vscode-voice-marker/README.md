@@ -62,6 +62,16 @@ selected. The markers tell stylebot's view that the span changed what the text
 style (stylebot D93; the edit protocol is the blog's `_training_pairs/RUNBOOK.md`
 §0c). Pure text logic in `src/sem.ts`, tested without VS Code.
 
+## Preening a paragraph before you log it (`Cmd+K Cmd+P`)
+
+`Voice Marker: Preen Paragraph` sends the paragraph under the cursor (or the
+selection) through the sidecar's `preen` op and replaces it in place; undo
+reverts it. The op is the blog's `ai-preen` copy-edit at chunk scale, so a
+typo or doubled word is fixed in the *file* before `dan-style log save` freezes
+the paragraph into a training pair — otherwise the pair teaches the typo
+(stylebot D107). The sidecar arms the op from a caller-supplied finisher;
+`ai-style serve` alone has none and answers with an error.
+
 ## Build, test, install
 
 ```sh
