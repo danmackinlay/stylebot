@@ -1589,3 +1589,22 @@ changes need a human eye, which `recut --finish --dry-run` gives. Three archives
 "edited since landing" after a recut (`286a1add`, `9fa79003`, `abba8682`): their chunks straddle
 a protected block, so the landed text is never a contiguous substring — a `drifted_archives`
 false positive that predates today, left open. Decided: D107 stands; `save --finish` stays off.
+
+## A wider proofread — 2026-09-30 (D107)
+
+A scratch probe: `preen_chunks.PROOFREAD_INSTRUCTIONS`, extended to invite a dropped small word
+and a missing full stop, over 650 after-side passages of the view (596 synthetic targets, 54
+real), `gemini-3.1-flash-lite`, nothing written. First the raw proposals, then the widened gate.
+
+| class | proposed, ungated | admitted by the gate |
+|---|---|---|
+| letter-scale fix or doubled word | 249 | 196 |
+| full stop appended | 47 | 42 |
+| one small word inserted | 68 | 51 |
+| anything else (content words, `> `, rewrites) | 383 | 0 |
+
+Ungated, the 68 inserts were about three-quarters right; both `not` inserts reversed the claim
+and the eleven `it` inserts were mostly Dan's dropped subject (`If sounds useful`). With neither
+insertable, no insert at a line or sentence start, and a stop only on a prose line where a
+capital or a line end follows, the admitted 51 and 42 read ≈ 90% right; the rest is deliberate
+bad grammar in quoted speech and chunks cut mid-sentence. Decided: D107 amended, both admitted.

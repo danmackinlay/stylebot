@@ -1260,8 +1260,8 @@ holds what landed; the sidecar's `preen` op finishes one paragraph in the editor
 so file and archive agree. The bare group takes `--finish module:attr`; `dan-style log` and
 `dan-style serve` pin the blog's `preen_chunks` (D101): a proofreading instruction under preen's
 system prompt, then a gate that rebuilds the chunk from Dan's own tokens and admits only
-letter-scale word fixes (≤ 2 letter edits; punctuation, case and code-shaped tokens untouched)
-and doubled-word deletions. Pre-archive captures were minted once from their live draws (D38).
+letter-scale word fixes, doubled-word deletions and, since 2026-09-30, a sentence-final full stop
+and one restored closed-list word (no negation, no pronoun). Pre-archive captures were minted (D38).
 
 **Alternatives.** *Fix at view build* — an LLM or aspell pass is not a function of draws and
 policy, so one `policy_sha` would name many views, and `drifted_archives` needs every live record
