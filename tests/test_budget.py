@@ -15,6 +15,12 @@ class and function nodes; `#`-prefixed lines as comments; a docstring's whole
 source span counts as docstring (blank lines inside it included); blank lines
 outside a docstring count as neither prose nor code.
 
+This checker is also copied into the sibling blog repo's `tests/test_budget.py`
+with that repo's own allowlist, and its measuring and comparing half is pinned
+to this file by that repo's `tests/test_budget_conformance.py` (livingthing L2).
+A change to `measure`, `_functions`, `_modules`, `_check_*` or `_bullet_runs`
+lands in both copies or neither; the budgets and allowlists are each repo's own.
+
 Rules and rationale: `CLAUDE.md` "Budgets and layers" (P1-P8) and
 `_plans/decisions.md` D58.
 """
@@ -167,7 +173,9 @@ def _check_scalar(name: str, key: str, budget: int, actual: int, allowed: dict) 
             return [f"{name}: {key} is {actual} (budget {budget}) and is not allowlisted"]
         room = ceiling + (int(ceiling * ALLOWLIST_SLACK) if key == "lines" else 0)
         if actual > room:
-            return [f"{name}: {key} grew {ceiling} -> {actual}, past {room}; the allowlist only shrinks"]
+            return [
+                f"{name}: {key} grew {ceiling} -> {actual}, past {room}; the allowlist only shrinks"
+            ]
         if actual < ceiling:
             return [f"{name}: {key} is {actual}, under its allowance {ceiling} — lower the entry"]
     elif ceiling is not None:
@@ -326,7 +334,10 @@ def test_module_lines_may_sit_within_slack_of_their_allowance() -> None:
     assert _check_scalar("m.py", "lines", MODULE_LINES, 1030, allowed) == []
     assert "past 1030" in _check_scalar("m.py", "lines", MODULE_LINES, 1031, allowed)[0]
     assert "lower the entry" in _check_scalar("m.py", "lines", MODULE_LINES, 999, allowed)[0]
-    assert "past 40" in _check_scalar("m.py", "module_docstring", MODULE_DOCSTRING_LINES, 41, allowed)[0]
+    assert (
+        "past 40"
+        in _check_scalar("m.py", "module_docstring", MODULE_DOCSTRING_LINES, 41, allowed)[0]
+    )
 
 
 def test_decisions_stay_indexed_and_short() -> None:
